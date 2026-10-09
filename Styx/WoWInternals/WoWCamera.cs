@@ -282,7 +282,7 @@ namespace Styx.WoWInternals
 
             try
             {
-                uint worldFrame = ObjectManager.Wow.ReadRelative<uint>(CameraPtr);
+                uint worldFrame = ObjectManager.Wow.Read<uint>(CameraPtr);
                 if (worldFrame == 0)
                     return new CameraData();
 
@@ -308,11 +308,9 @@ namespace Styx.WoWInternals
             public uint Dword4;
             public Vector3 Position;
             public CameraMatrix3x3 Matrix;
-            public float FieldOfView;
-            public uint Model;
-            public int Timestamp;
             public float NearZ;
             public float FarZ;
+            public float FieldOfView;
             public float Aspect;
         }
 
