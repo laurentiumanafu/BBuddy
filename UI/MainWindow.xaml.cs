@@ -331,7 +331,7 @@ namespace CopilotBuddy.UI
             {
                 // Find ALL Wow processes (covers the standard client, the WoW.exe spelling,
                 // and the Luacct.exe variant used by some private-server clients)
-                string[] wowProcessNames = { "Wow", "WoW", "Luacct" };
+                string[] wowProcessNames = { "Wow", "WoW", "Luacct", "WowB" };
                 var wowProcesses = wowProcessNames.SelectMany(n => Process.GetProcessesByName(n)).ToArray();
 
                 foreach (var proc in wowProcesses)
@@ -341,7 +341,7 @@ namespace CopilotBuddy.UI
                         if (proc.HasExited) continue;
                         int build = proc.MainModule?.FileVersionInfo.FilePrivatePart ?? 0;
                         // build == 0 means no version resource (custom/private server client)
-                        if (build == ObjectManager.SupportedBuild || build == 0)
+                        if (ObjectManager.IsSupportedBuild(build) || build == 0)
                             candidates.Add(proc);
                     }
                     catch { /* Access denied or process exited */ }
@@ -359,7 +359,7 @@ namespace CopilotBuddy.UI
                         if (!proc.HasExited)
                         {
                             int build = proc.MainModule?.FileVersionInfo.FilePrivatePart ?? 0;
-                            if (build == ObjectManager.SupportedBuild)
+                            if (ObjectManager.IsSupportedBuild(build))
                                 candidates.Add(proc);
                         }
                     }

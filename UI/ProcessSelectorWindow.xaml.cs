@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Threading;
 using System.Windows;
 using GreenMagic;
@@ -87,9 +88,10 @@ namespace CopilotBuddy.UI
             _processes.Clear();
             cbProcesses.Items.Clear();
 
-            Process[] wowProcesses = Process.GetProcessesByName("Wow");
-            if (wowProcesses.Length == 0)
-                wowProcesses = Process.GetProcessesByName("WoW");
+            Process[] wowProcesses = new[] { "Wow", "WoW", "WowB" }
+                .SelectMany(n => Process.GetProcessesByName(n))
+                .DistinctBy(p => p.Id)
+                .ToArray();
 
             for (int i = 0; i < wowProcesses.Length; i++)
             {
@@ -102,7 +104,7 @@ namespace CopilotBuddy.UI
                     // Verify build matches 3.3.5a (12340)
                     int build = wowProcesses[i].MainModule?.FileVersionInfo.FilePrivatePart ?? 0;
                     // build == 0 means no version resource (custom/private server client)
-                    if (build != ObjectManager.SupportedBuild && build != 0)
+                    if (!ObjectManager.IsSupportedBuild(build) && build != 0)
                         continue;
 
                     using var memory = new Memory(wowProcesses[i].Id);

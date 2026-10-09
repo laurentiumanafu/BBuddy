@@ -17,6 +17,8 @@ namespace Styx.WoWInternals
     {
         #region Constants - WoW 3.3.5a Build 12340
         internal const int SupportedBuild = 12340;
+        internal const int SupportedBuildWowB = 70291;
+        internal static bool IsSupportedBuild(int build) => build == SupportedBuild || build == SupportedBuildWowB;
         
         // Offsets ObjectManager (WoW 3.3.5a Build 12340)
         private const uint CurMgrBase = 0xC79CE0;      // 13081824U - s_curMgr base pointer
@@ -255,10 +257,10 @@ namespace Styx.WoWInternals
                 try
                 {
                     int build = WoWProcess.MainModule?.FileVersionInfo.FilePrivatePart ?? 0;
-                    if (build != SupportedBuild)
+                    if (!IsSupportedBuild(build))
                     {
-                        Logging.Write($"[ObjectManager] Build {build} not supported (expected: {SupportedBuild})");
-                        throw new Exception($"WoW build {build} not supported. Required build: {SupportedBuild}");
+                        Logging.Write($"[ObjectManager] Build {build} not supported (expected: {SupportedBuild} or {SupportedBuildWowB})");
+                        throw new Exception($"WoW build {build} not supported. Required build: {SupportedBuild} or {SupportedBuildWowB}");
                     }
                     Logging.WriteDebug($"[ObjectManager] WoW build {build} detected - OK");
                 }
