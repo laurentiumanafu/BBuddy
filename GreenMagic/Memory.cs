@@ -72,7 +72,14 @@ namespace GreenMagic
                        | 0x100000; // SYNCHRONIZE
 
             _hProcess = Imports.OpenProcess(flags, false, processId);
-            
+
+            // Detect early whether the target is a native 64-bit process:
+            // ManagedFasm wraps fasmdll_managed.dll, a 32-bit native that
+            // cannot load into a 64-bit CopilotBuddy (BadImageFormatException).
+            // x64 targets use X64Emitter/Executor64 instead of FASM, so the
+            // assembler simply stays null there.
+            bool targetIs64 = DetectTargetIs64Bit(_hProcess, _process.MainModule.BaseAddress);
+
             if (_hProcess != IntPtr.Zero)
             {
                 // OpenThread: minimum rights for SuspendThread, ResumeThread,
@@ -85,10 +92,13 @@ namespace GreenMagic
                 _hThread = Imports.OpenThread(threadFlags, false, (uint)_process.Threads[0].Id);
                 _hWnd = _process.MainWindowHandle;
 
-                if (_asm == null)
-                    _asm = new ManagedFasm(_hProcess);
-                else
-                    _asm.SetProcessHandle(_hProcess);
+                if (!targetIs64)
+                {
+                    if (_asm == null)
+                        _asm = new ManagedFasm(_hProcess);
+                    else
+                        _asm.SetProcessHandle(_hProcess);
+                }
             }
 
             _patchManager = new PatchManager(this);
@@ -118,7 +128,7 @@ namespace GreenMagic
             // reads the PE machine field from the main module; if anything
             // goes wrong we silently fall back to classic 32-bit behavior
             // so the existing 3.3.5a attach path is unaffected.
-            _is64BitTarget = DetectTargetIs64Bit(_hProcess, _process.MainModule.BaseAddress);
+            _is64BitTarget = targetIs64;
             _imageBase64 = _is64BitTarget
                 ? (ulong)_process.MainModule.BaseAddress.ToInt64()
                 : _imageBase;
