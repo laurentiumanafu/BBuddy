@@ -30,7 +30,7 @@ namespace GreenMagic
         private readonly PeHeaderParser _peHeaderParser;
         private readonly bool _aslrEnabled;
         private readonly uint _imageBase;
-        private readonly ManagedFasm _asm;
+        private ManagedFasm _asm;
 
         // x64 target support (see "x64 Target Support" region at the bottom).
         private readonly bool _is64BitTarget;
@@ -73,13 +73,6 @@ namespace GreenMagic
 
             _hProcess = Imports.OpenProcess(flags, false, processId);
 
-            // Detect early whether the target is a native 64-bit process:
-            // ManagedFasm wraps fasmdll_managed.dll, a 32-bit native that
-            // cannot load into a 64-bit CopilotBuddy (BadImageFormatException).
-            // x64 targets use X64Emitter/Executor64 instead of FASM, so the
-            // assembler simply stays null there.
-            bool targetIs64 = DetectTargetIs64Bit(_hProcess, _process.MainModule.BaseAddress);
-
             if (_hProcess != IntPtr.Zero)
             {
                 // OpenThread: minimum rights for SuspendThread, ResumeThread,
@@ -92,13 +85,13 @@ namespace GreenMagic
                 _hThread = Imports.OpenThread(threadFlags, false, (uint)_process.Threads[0].Id);
                 _hWnd = _process.MainWindowHandle;
 
-                if (!targetIs64)
-                {
-                    if (_asm == null)
-                        _asm = new ManagedFasm(_hProcess);
-                    else
-                        _asm.SetProcessHandle(_hProcess);
-                }
+                // NOTE: no FASM init here. ManagedFasm must not even be
+                // *mentioned* in this constructor: the JIT resolves every
+                // type referenced in a method body when it compiles it,
+                // regardless of branch reachability — and fasmdll_managed.dll
+                // (a 32-bit native) cannot load into a 64-bit CopilotBuddy.
+                // The assembler is created lazily in the Asm property getter,
+                // which only the x86 injection path ever calls.
             }
 
             _patchManager = new PatchManager(this);
@@ -128,7 +121,7 @@ namespace GreenMagic
             // reads the PE machine field from the main module; if anything
             // goes wrong we silently fall back to classic 32-bit behavior
             // so the existing 3.3.5a attach path is unaffected.
-            _is64BitTarget = targetIs64;
+            _is64BitTarget = DetectTargetIs64Bit(_hProcess, _process.MainModule.BaseAddress);
             _imageBase64 = _is64BitTarget
                 ? (ulong)_process.MainModule.BaseAddress.ToInt64()
                 : _imageBase;
@@ -139,7 +132,28 @@ namespace GreenMagic
 
         #region Properties
 
-        public ManagedFasm Asm => _asm;
+        /// <summary>
+        /// FASM assembler for the target process — x86 injection path only.
+        /// Created lazily on first access: the ManagedFasm type lives in
+        /// fasmdll_managed.dll, a 32-bit native that must never be loaded
+        /// (or even JIT-resolved) while a 64-bit CopilotBuddy attaches to a
+        /// 64-bit client. x64 targets use X64Emitter/Executor64 instead.
+        /// </summary>
+        public ManagedFasm Asm
+        {
+            get
+            {
+                if (_asm == null)
+                {
+                    if (_is64BitTarget)
+                        throw new NotSupportedException("FASM is not available for 64-bit targets; use X64Emitter/Executor64.");
+                    if (_hProcess == IntPtr.Zero)
+                        throw new InvalidOperationException("Memory: no process handle available for FASM.");
+                    _asm = new ManagedFasm(_hProcess);
+                }
+                return _asm;
+            }
+        }
         internal PeHeaderParser PeHeaderParser => _peHeaderParser;
         public PatchManager PatchManager => _patchManager;
         public bool IsThreadOpen => _hThread != IntPtr.Zero;
