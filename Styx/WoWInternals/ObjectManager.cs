@@ -263,12 +263,15 @@ namespace Styx.WoWInternals
                 try
                 {
                     int build = WoWProcess.MainModule?.FileVersionInfo.FilePrivatePart ?? 0;
-                    if (!IsSupportedBuild(build))
+                    // WowB.exe reports FileVersion 1.60.1.x (FilePrivatePart = 1); its real
+                    // build number is not in that field, so trust the WowB process name.
+                    bool isWowBByName = WoWProcess.ProcessName.Equals("WowB", StringComparison.OrdinalIgnoreCase);
+                    if (!IsSupportedBuild(build) && !isWowBByName)
                     {
                         Logging.Write($"[ObjectManager] Build {build} not supported (expected: {SupportedBuild} or {SupportedBuildWowB})");
                         throw new Exception($"WoW build {build} not supported. Required build: {SupportedBuild} or {SupportedBuildWowB}");
                     }
-                    Logging.WriteDebug($"[ObjectManager] WoW build {build} detected - OK");
+                    Logging.WriteDebug($"[ObjectManager] WoW build {build} detected - OK{(isWowBByName ? " (WowB client, accepted by process name)" : "")}");
                 }
                 catch (Exception ex) when (ex is not InvalidOperationException)
                 {
