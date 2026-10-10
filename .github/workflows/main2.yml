@@ -29,7 +29,15 @@ jobs:
           git checkout -b "$NEW_BRANCH"
 
           # Apply the patch (use --3way fallback if files diverged)
-          git apply --3way new.patch
+          # Apply with 3-way merge, but don't immediately abort on conflict
+          git apply --3way new.patch || true
+          
+          # If there are unresolved conflict markers, take the patch's side (theirs)
+          git checkout --theirs GreenMagic/X64Emitter.cs Styx/WoWInternals/ObjectManager.cs
+          
+          # Mark them as resolved
+          git add GreenMagic/X64Emitter.cs Styx/WoWInternals/ObjectManager.cs
+          
 
       - name: Commit and push new branch
         run: |
