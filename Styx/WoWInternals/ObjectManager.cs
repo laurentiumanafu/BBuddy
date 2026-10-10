@@ -118,6 +118,12 @@ namespace Styx.WoWInternals
         public static Memory? Wow { get; private set; }
         public static ExecutorRand? Executor { get; set; }
         public static LocalPlayer? Me { get; set; }
+
+        /// <summary>
+        /// Read-only object-model view for native 64-bit targets
+        /// (WowB.exe). Only set when attached to a 64-bit client.
+        /// </summary>
+        public static WowBReader? WowB { get; private set; }
         public static bool IsInitialized => Wow != null;
 
         // cached collections (underlying data refreshed every ObjectManager.Update())
@@ -270,6 +276,33 @@ namespace Styx.WoWInternals
                 }
             }
             
+            // x64 / modern Classic guard: a native 64-bit client (e.g.
+            // WowB.exe build 70291) runs the modern engine, whose offsets
+            // live in Styx.Offsets.WowBOffsets. Until that table is
+            // complete, refuse to attach instead of reading garbage
+            // memory — and note there is no d3d9.dll to hook either.
+            if (memory.Is64BitTarget && !Styx.Offsets.WowBOffsets.IsComplete)
+            {
+                Logging.Write("[ObjectManager] 64-bit client detected, but the offset table for this build is not complete yet.");
+                Logging.Write("[ObjectManager] Fill in Styx/Offsets/WowBOffsets.cs (see X64_PORT_PLAN.md §6) before attaching.");
+                throw new NotSupportedException("64-bit client detected but its offsets are not available yet. See X64_PORT_PLAN.md §6.");
+            }
+
+            if (memory.Is64BitTarget)
+            {
+                // Modern Classic path (WowB.exe): READ-ONLY mode for now.
+                // There is no d3d9 EndScene to hook on a DX11/DX12 client;
+                // code execution will come through Executor64 /
+                // DX11PresentHook64 once the graphics offsets land
+                // (X64_PORT_PLAN.md §6). The reader validates the 64-bit
+                // read path and logs a full state snapshot on attach.
+                WowB = new WowBReader(memory);
+                Logging.Write("[ObjectManager] Attached to a 64-bit client (WowB) — read-only mode.");
+                Logging.Write($"[ObjectManager] WowB snapshot: {WowB.DescribeSnapshot()}");
+                Logging.WriteDebug("[ObjectManager] Initialized successfully (WowB read-only)");
+                return;
+            }
+
             // Hook EndScene for code execution
             HookEndscene();
             
