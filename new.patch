@@ -2433,7 +2433,7 @@ index 0000000..3f752b6
 +	}
 +}
 diff --git a/Styx/WoWInternals/ObjectManager.cs b/Styx/WoWInternals/ObjectManager.cs
-index 8e4a2bd..08190c8 100644
+index 8e4a2bd..2d146d4 100644
 --- a/Styx/WoWInternals/ObjectManager.cs
 +++ b/Styx/WoWInternals/ObjectManager.cs
 @@ -118,6 +118,12 @@ namespace Styx.WoWInternals
@@ -2449,7 +2449,25 @@ index 8e4a2bd..08190c8 100644
          public static bool IsInitialized => Wow != null;
  
          // cached collections (underlying data refreshed every ObjectManager.Update())
-@@ -270,6 +276,34 @@ namespace Styx.WoWInternals
+@@ -257,12 +263,15 @@ namespace Styx.WoWInternals
+                 try
+                 {
+                     int build = WoWProcess.MainModule?.FileVersionInfo.FilePrivatePart ?? 0;
+-                    if (!IsSupportedBuild(build))
++                    // WowB.exe reports FileVersion 1.60.1.x (FilePrivatePart = 1); its real
++                    // build number is not in that field, so trust the WowB process name.
++                    bool isWowBByName = WoWProcess.ProcessName.Equals("WowB", StringComparison.OrdinalIgnoreCase);
++                    if (!IsSupportedBuild(build) && !isWowBByName)
+                     {
+                         Logging.Write($"[ObjectManager] Build {build} not supported (expected: {SupportedBuild} or {SupportedBuildWowB})");
+                         throw new Exception($"WoW build {build} not supported. Required build: {SupportedBuild} or {SupportedBuildWowB}");
+                     }
+-                    Logging.WriteDebug($"[ObjectManager] WoW build {build} detected - OK");
++                    Logging.WriteDebug($"[ObjectManager] WoW build {build} detected - OK{(isWowBByName ? " (WowB client, accepted by process name)" : "")}");
+                 }
+                 catch (Exception ex) when (ex is not InvalidOperationException)
+                 {
+@@ -270,6 +279,34 @@ namespace Styx.WoWInternals
                  }
              }
              
@@ -2766,7 +2784,7 @@ index 0000000..a66dff6
 +    }
 +}
 diff --git a/UI/MainWindow.xaml.cs b/UI/MainWindow.xaml.cs
-index e311ea5..f1203dc 100644
+index e311ea5..8e7159b 100644
 --- a/UI/MainWindow.xaml.cs
 +++ b/UI/MainWindow.xaml.cs
 @@ -1,4 +1,4 @@
@@ -2783,7 +2801,7 @@ index e311ea5..f1203dc 100644
  
              if (pidArg == null)
              {
-@@ -333,16 +334,41 @@ namespace CopilotBuddy.UI
+@@ -333,16 +334,45 @@ namespace CopilotBuddy.UI
                  // and the Luacct.exe variant used by some private-server clients)
                  string[] wowProcessNames = { "Wow", "WoW", "Luacct", "WowB" };
                  var wowProcesses = wowProcessNames.SelectMany(n => Process.GetProcessesByName(n)).ToArray();
@@ -2795,6 +2813,8 @@ index e311ea5..f1203dc 100644
                      {
                          if (proc.HasExited) continue;
 -                        int build = proc.MainModule?.FileVersionInfo.FilePrivatePart ?? 0;
+-                        // build == 0 means no version resource (custom/private server client)
+-                        if (ObjectManager.IsSupportedBuild(build) || build == 0)
 +
 +                        int build;
 +                        try
@@ -2812,8 +2832,12 @@ index e311ea5..f1203dc 100644
 +                            continue;
 +                        }
 +
-                         // build == 0 means no version resource (custom/private server client)
-                         if (ObjectManager.IsSupportedBuild(build) || build == 0)
++                        // build == 0 means no version resource (custom/private server client).
++                        // WowB.exe reports FileVersion 1.60.1.x (FilePrivatePart = 1) — its
++                        // real build number (70291) is NOT in that field, so accept WowB by
++                        // process name: only the Classic Beta client is named WowB.
++                        if (ObjectManager.IsSupportedBuild(build) || build == 0
++                            || proc.ProcessName.Equals("WowB", StringComparison.OrdinalIgnoreCase))
 +                        {
                              candidates.Add(proc);
 +                            Logging.WriteDebug("Candidate: {0} (PID {1}), build {2}", proc.ProcessName, proc.Id, build);
@@ -2826,7 +2850,7 @@ index e311ea5..f1203dc 100644
                      }
                      catch { /* Access denied or process exited */ }
                  }
-@@ -358,9 +384,23 @@ namespace CopilotBuddy.UI
+@@ -358,9 +388,24 @@ namespace CopilotBuddy.UI
                          var proc = Process.GetProcessById(pid);
                          if (!proc.HasExited)
                          {
@@ -2845,14 +2869,15 @@ index e311ea5..f1203dc 100644
 +                                build = -1;
 +                            }
 +
-+                            if (ObjectManager.IsSupportedBuild(build) || build == 0)
++                            if (ObjectManager.IsSupportedBuild(build) || build == 0
++                                || proc.ProcessName.Equals("WowB", StringComparison.OrdinalIgnoreCase))
                                  candidates.Add(proc);
 +                            else if (build != -1)
 +                                Logging.Write(Colors.Orange, "PID {0} skipped: unsupported build {1} (expected {2} or {3}).", pid, build, ObjectManager.SupportedBuild, ObjectManager.SupportedBuildWowB);
                          }
                      }
                      catch
-@@ -372,7 +412,10 @@ namespace CopilotBuddy.UI
+@@ -372,7 +417,10 @@ namespace CopilotBuddy.UI
  
              if (candidates.Count == 0)
              {
@@ -2864,7 +2889,7 @@ index e311ea5..f1203dc 100644
                  Dispatcher.Invoke(() => SetStatus("WoW not found"));
                  return false;
              }
-@@ -383,12 +426,24 @@ namespace CopilotBuddy.UI
+@@ -383,12 +431,24 @@ namespace CopilotBuddy.UI
              {
                  try
                  {
@@ -2894,7 +2919,7 @@ index e311ea5..f1203dc 100644
  
                      // Try to claim the process via mutex
                      var mutex = ProcessMutex.Create(proc.Id, out bool createdNew);
-@@ -466,8 +521,9 @@ namespace CopilotBuddy.UI
+@@ -466,8 +526,9 @@ namespace CopilotBuddy.UI
              {
                  var memory = new Memory(wowPid);
  
