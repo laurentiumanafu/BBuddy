@@ -276,16 +276,17 @@ namespace Styx.WoWInternals
                 }
             }
             
-            // x64 / modern Classic guard: a native 64-bit client (e.g.
-            // WowB.exe build 70291) runs the modern engine, whose offsets
-            // live in Styx.Offsets.WowBOffsets. Until that table is
-            // complete, refuse to attach instead of reading garbage
-            // memory — and note there is no d3d9.dll to hook either.
+            // x64 / modern Classic: a native 64-bit client (e.g. WowB.exe
+            // build 70291) runs the modern engine, whose offsets live in
+            // Styx.Offsets.WowBOffsets. Until that table is complete we
+            // attach in READ-ONLY diagnostic mode — every WowBReader
+            // accessor degrades to 0/empty while its offset is still a
+            // placeholder, so this is safe and validates the 64-bit read
+            // path end-to-end. (There is no d3d9.dll to hook either way.)
             if (memory.Is64BitTarget && !Styx.Offsets.WowBOffsets.IsComplete)
             {
-                Logging.Write("[ObjectManager] 64-bit client detected, but the offset table for this build is not complete yet.");
-                Logging.Write("[ObjectManager] Fill in Styx/Offsets/WowBOffsets.cs (see X64_PORT_PLAN.md §6) before attaching.");
-                throw new NotSupportedException("64-bit client detected but its offsets are not available yet. See X64_PORT_PLAN.md §6.");
+                Logging.Write("[ObjectManager] 64-bit client detected, but its offset table is not complete yet.");
+                Logging.Write("[ObjectManager] Attaching in READ-ONLY diagnostic mode. Fill in Styx/Offsets/WowBOffsets.cs (X64_PORT_PLAN.md §6) to unlock real data.");
             }
 
             if (memory.Is64BitTarget)

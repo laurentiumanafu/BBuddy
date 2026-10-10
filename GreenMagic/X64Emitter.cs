@@ -162,7 +162,7 @@ namespace GreenMagic
         public void CallReg(int reg)
         {
             if (reg >= 8)
-                EmitBytes(0x41, (byte)(0xFF, 0xD0 + (reg - 8)));
+                EmitBytes(0x41, 0xFF, (byte)(0xD0 + (reg - 8)));
             else
                 EmitBytes(0xFF, (byte)(0xD0 + reg));
         }
@@ -171,7 +171,7 @@ namespace GreenMagic
         public void JmpReg(int reg)
         {
             if (reg >= 8)
-                EmitBytes(0x41, (byte)(0xFF, 0xE0 + (reg - 8)));
+                EmitBytes(0x41, 0xFF, (byte)(0xE0 + (reg - 8)));
             else
                 EmitBytes(0xFF, (byte)(0xE0 + reg));
         }
