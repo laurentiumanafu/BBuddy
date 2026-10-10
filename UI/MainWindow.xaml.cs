@@ -358,8 +358,17 @@ namespace CopilotBuddy.UI
                             continue;
                         }
 
+<<<<<<< ours
                         // build == 0 means no version resource (custom/private server client)
                         if (ObjectManager.IsSupportedBuild(build) || build == 0)
+=======
+                        // build == 0 means no version resource (custom/private server client).
+                        // WowB.exe reports FileVersion 1.60.1.x (FilePrivatePart = 1) — its
+                        // real build number (70291) is NOT in that field, so accept WowB by
+                        // process name: only the Classic Beta client is named WowB.
+                        if (ObjectManager.IsSupportedBuild(build) || build == 0
+                            || proc.ProcessName.Equals("WowB", StringComparison.OrdinalIgnoreCase))
+>>>>>>> theirs
                         {
                             candidates.Add(proc);
                             Logging.WriteDebug("Candidate: {0} (PID {1}), build {2}", proc.ProcessName, proc.Id, build);
@@ -397,7 +406,12 @@ namespace CopilotBuddy.UI
                                 build = -1;
                             }
 
+<<<<<<< ours
                             if (ObjectManager.IsSupportedBuild(build) || build == 0)
+=======
+                            if (ObjectManager.IsSupportedBuild(build) || build == 0
+                                || proc.ProcessName.Equals("WowB", StringComparison.OrdinalIgnoreCase))
+>>>>>>> theirs
                                 candidates.Add(proc);
                             else if (build != -1)
                                 Logging.Write(Colors.Orange, "PID {0} skipped: unsupported build {1} (expected {2} or {3}).", pid, build, ObjectManager.SupportedBuild, ObjectManager.SupportedBuildWowB);
