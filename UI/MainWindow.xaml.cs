@@ -342,17 +342,13 @@ namespace CopilotBuddy.UI
                     {
                         if (proc.HasExited) continue;
 
-                        int build;
-                        try
-                        {
-                            build = proc.MainModule?.FileVersionInfo.FilePrivatePart ?? 0;
-                        }
-                        catch (Exception ex)
+                        int build = ObjectManager.GetBuildNumber(proc);
+                        if (build < 0)
                         {
                             // Typical cause: 32-bit CopilotBuddy inspecting a native
                             // 64-bit client (e.g. WowB.exe) — the OS refuses module
                             // enumeration across the bitness boundary.
-                            Logging.Write(Colors.Orange, "{0} (PID {1}) found, but its build could not be read: {2}", proc.ProcessName, proc.Id, ex.Message);
+                            Logging.Write(Colors.Orange, "{0} (PID {1}) found, but its build could not be read.", proc.ProcessName, proc.Id);
                             if (!Environment.Is64BitProcess)
                                 Logging.Write(Colors.Orange, "CopilotBuddy is running as x86 — use the x64 build to attach to a 64-bit client.");
                             continue;
@@ -388,23 +384,17 @@ namespace CopilotBuddy.UI
                         var proc = Process.GetProcessById(pid);
                         if (!proc.HasExited)
                         {
-                            int build;
-                            try
+                            int build = ObjectManager.GetBuildNumber(proc);
+                            if (build < 0)
                             {
-                                build = proc.MainModule?.FileVersionInfo.FilePrivatePart ?? 0;
-                            }
-                            catch (Exception ex)
-                            {
-                                Logging.Write(Colors.Orange, "PID {0}: build could not be read: {1}", pid, ex.Message);
+                                Logging.Write(Colors.Orange, "PID {0}: build could not be read.", pid);
                                 if (!Environment.Is64BitProcess)
                                     Logging.Write(Colors.Orange, "CopilotBuddy is running as x86 — use the x64 build to attach to a 64-bit client.");
-                                build = -1;
                             }
-
-                            if (ObjectManager.IsSupportedBuild(build) || build == 0
+                            else if (ObjectManager.IsSupportedBuild(build) || build == 0
                                 || proc.ProcessName.Equals("WowB", StringComparison.OrdinalIgnoreCase))
                                 candidates.Add(proc);
-                            else if (build != -1)
+                            else
                                 Logging.Write(Colors.Orange, "PID {0} skipped: unsupported build {1} (expected {2} or {3}).", pid, build, ObjectManager.SupportedBuild, ObjectManager.SupportedBuildWowB);
                         }
                     }
@@ -455,13 +445,17 @@ namespace CopilotBuddy.UI
                     if (!createdNew)
                     {
                         // Another CopilotBuddy already owns this process
+                        Logging.Write(Colors.Orange, "PID {0} is already attached by another CopilotBuddy instance.", proc.Id);
                         mutex.Close();
                         continue;
                     }
 
                     available.Add(new KeyValuePair<int, Mutex>(proc.Id, mutex));
                 }
-                catch { /* Process exited or memory read failed */ }
+                catch (Exception ex)
+                {
+                    Logging.Write(Colors.Orange, "PID {0} dropped during availability check: {1}", proc.Id, ex.Message);
+                }
             }
 
             if (available.Count == 0)

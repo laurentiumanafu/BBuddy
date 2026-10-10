@@ -19,6 +19,31 @@ namespace Styx.WoWInternals
         internal const int SupportedBuild = 12340;
         internal const int SupportedBuildWowB = 70291;
         internal static bool IsSupportedBuild(int build) => build == SupportedBuild || build == SupportedBuildWowB;
+
+        /// <summary>
+        /// Extracts the client build number from the process version resource.
+        /// Modern clients (WowB) store the build across two 16-bit parts because
+        /// 70291 overflows a single part: FileVersionRaw 160.1.7029.1 means
+        /// FileBuildPart 7029 * 10 + FilePrivatePart 1 = 70291.
+        /// Returns 0 when there is no version resource, -1 when unreadable
+        /// (typically a 32-bit CopilotBuddy inspecting a 64-bit process).
+        /// </summary>
+        internal static int GetBuildNumber(Process proc)
+        {
+            try
+            {
+                var v = proc.MainModule?.FileVersionInfo;
+                if (v == null) return 0;
+                int build = v.FilePrivatePart;
+                if (build < 1000 && v.FileBuildPart >= 1000)
+                    build = v.FileBuildPart * 10 + v.FilePrivatePart;
+                return build;
+            }
+            catch
+            {
+                return -1;
+            }
+        }
         
         // Offsets ObjectManager (WoW 3.3.5a Build 12340)
         private const uint CurMgrBase = 0xC79CE0;      // 13081824U - s_curMgr base pointer
@@ -262,9 +287,10 @@ namespace Styx.WoWInternals
                 // Check the build
                 try
                 {
-                    int build = WoWProcess.MainModule?.FileVersionInfo.FilePrivatePart ?? 0;
-                    // WowB.exe reports FileVersion 1.60.1.x (FilePrivatePart = 1); its real
-                    // build number is not in that field, so trust the WowB process name.
+                    int build = GetBuildNumber(WoWProcess);
+                    if (build < 0) build = 0; // unreadable version resource — let later stages report
+                    // WowB.exe reports FileVersion 1.60.1.70291 as raw parts 160.1.7029.1;
+                    // GetBuildNumber recombines those into 70291.
                     bool isWowBByName = WoWProcess.ProcessName.Equals("WowB", StringComparison.OrdinalIgnoreCase);
                     if (!IsSupportedBuild(build) && !isWowBByName)
                     {
