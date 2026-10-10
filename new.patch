@@ -1,207 +1,115 @@
-From 7cf6037621486fd58d795bb4f217b4650296bc49 Mon Sep 17 00:00:00 2001
+From a4ebabeba311a66de92d464d85e1e475c526d497 Mon Sep 17 00:00:00 2001
 From: laurentiumanafu <290640090+laurentiumanafu@users.noreply.github.com>
-Date: Sat, 10 Oct 2026 18:53:18 +0000
-Subject: [PATCH] Attach: unblock x64 Memory construction + correct WowB build
- extraction
+Date: Sat, 10 Oct 2026 19:02:12 +0000
+Subject: [PATCH] =?UTF-8?q?Memory:=20create=20ManagedFasm=20lazily=20?=
+ =?UTF-8?q?=E2=80=94=20never=20JIT-reference=20it=20for=20x64=20attaches?=
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
 
-Two more blockers for the WowB availability filter:
+Guarding the FASM init behind an if-branch was not enough: the JIT
+resolves every type mentioned in a method body when compiling it,
+regardless of branch reachability, so the Memory ctor still triggered
+loading of fasmdll_managed.dll (a 32-bit native) and failed in the
+64-bit CopilotBuddy ('Could not load file or assembly fasmdll_managed').
 
-1. Memory ctor unconditionally created ManagedFasm, which P/Invokes
-   fasmdll_managed.dll — a 32-bit native that cannot load into a 64-bit
-   CopilotBuddy (BadImageFormatException). The exception was swallowed by
-   the availability filter's bare catch, dropping WowB as 'no available
-   processes'. 64-bit detection now runs before the FASM init and the
-   assembler is skipped for x64 targets (they use X64Emitter/Executor64).
-
-2. Build extraction: WowB's FileVersionRaw is 160.1.7029.1 — the build
-   number overflows one 16-bit version part. ObjectManager.GetBuildNumber
-   recombines FileBuildPart*10 + FilePrivatePart (= 70291); used by both
-   attach paths and Initialize. Name-based WowB acceptance stays as a
-   fallback.
-
-Also: the availability filter and mutex rejection now log the actual
-reason instead of failing silently.
+The ctor no longer mentions ManagedFasm at all; the Asm property getter
+creates it on first use and throws NotSupportedException for 64-bit
+targets. Only the x86 Executor path calls Asm, so 3.3.5a behavior is
+unchanged and WowB attaches never touch the FASM assembly.
 
 Co-authored-by: arena-agent <297053741+arena-agent@users.noreply.github.com>
 ---
- GreenMagic/Memory.cs               | 22 ++++++++++++++------
- Styx/WoWInternals/ObjectManager.cs | 32 +++++++++++++++++++++++++++---
- UI/MainWindow.xaml.cs              | 32 ++++++++++++------------------
- 3 files changed, 58 insertions(+), 28 deletions(-)
+ GreenMagic/Memory.cs | 48 ++++++++++++++++++++++++++++----------------
+ 1 file changed, 31 insertions(+), 17 deletions(-)
 
 diff --git a/GreenMagic/Memory.cs b/GreenMagic/Memory.cs
-index 0d56746..c5be661 100644
+index c5be661..77d500a 100644
 --- a/GreenMagic/Memory.cs
 +++ b/GreenMagic/Memory.cs
-@@ -72,7 +72,14 @@ namespace GreenMagic
-                        | 0x100000; // SYNCHRONIZE
+@@ -30,7 +30,7 @@ namespace GreenMagic
+         private readonly PeHeaderParser _peHeaderParser;
+         private readonly bool _aslrEnabled;
+         private readonly uint _imageBase;
+-        private readonly ManagedFasm _asm;
++        private ManagedFasm _asm;
+ 
+         // x64 target support (see "x64 Target Support" region at the bottom).
+         private readonly bool _is64BitTarget;
+@@ -73,13 +73,6 @@ namespace GreenMagic
  
              _hProcess = Imports.OpenProcess(flags, false, processId);
--            
-+
-+            // Detect early whether the target is a native 64-bit process:
-+            // ManagedFasm wraps fasmdll_managed.dll, a 32-bit native that
-+            // cannot load into a 64-bit CopilotBuddy (BadImageFormatException).
-+            // x64 targets use X64Emitter/Executor64 instead of FASM, so the
-+            // assembler simply stays null there.
-+            bool targetIs64 = DetectTargetIs64Bit(_hProcess, _process.MainModule.BaseAddress);
-+
+ 
+-            // Detect early whether the target is a native 64-bit process:
+-            // ManagedFasm wraps fasmdll_managed.dll, a 32-bit native that
+-            // cannot load into a 64-bit CopilotBuddy (BadImageFormatException).
+-            // x64 targets use X64Emitter/Executor64 instead of FASM, so the
+-            // assembler simply stays null there.
+-            bool targetIs64 = DetectTargetIs64Bit(_hProcess, _process.MainModule.BaseAddress);
+-
              if (_hProcess != IntPtr.Zero)
              {
                  // OpenThread: minimum rights for SuspendThread, ResumeThread,
-@@ -85,10 +92,13 @@ namespace GreenMagic
+@@ -92,13 +85,13 @@ namespace GreenMagic
                  _hThread = Imports.OpenThread(threadFlags, false, (uint)_process.Threads[0].Id);
                  _hWnd = _process.MainWindowHandle;
  
--                if (_asm == null)
--                    _asm = new ManagedFasm(_hProcess);
--                else
--                    _asm.SetProcessHandle(_hProcess);
-+                if (!targetIs64)
-+                {
-+                    if (_asm == null)
-+                        _asm = new ManagedFasm(_hProcess);
-+                    else
-+                        _asm.SetProcessHandle(_hProcess);
-+                }
+-                if (!targetIs64)
+-                {
+-                    if (_asm == null)
+-                        _asm = new ManagedFasm(_hProcess);
+-                    else
+-                        _asm.SetProcessHandle(_hProcess);
+-                }
++                // NOTE: no FASM init here. ManagedFasm must not even be
++                // *mentioned* in this constructor: the JIT resolves every
++                // type referenced in a method body when it compiles it,
++                // regardless of branch reachability — and fasmdll_managed.dll
++                // (a 32-bit native) cannot load into a 64-bit CopilotBuddy.
++                // The assembler is created lazily in the Asm property getter,
++                // which only the x86 injection path ever calls.
              }
  
              _patchManager = new PatchManager(this);
-@@ -118,7 +128,7 @@ namespace GreenMagic
+@@ -128,7 +121,7 @@ namespace GreenMagic
              // reads the PE machine field from the main module; if anything
              // goes wrong we silently fall back to classic 32-bit behavior
              // so the existing 3.3.5a attach path is unaffected.
--            _is64BitTarget = DetectTargetIs64Bit(_hProcess, _process.MainModule.BaseAddress);
-+            _is64BitTarget = targetIs64;
+-            _is64BitTarget = targetIs64;
++            _is64BitTarget = DetectTargetIs64Bit(_hProcess, _process.MainModule.BaseAddress);
              _imageBase64 = _is64BitTarget
                  ? (ulong)_process.MainModule.BaseAddress.ToInt64()
                  : _imageBase;
-diff --git a/Styx/WoWInternals/ObjectManager.cs b/Styx/WoWInternals/ObjectManager.cs
-index 2d146d4..1baa986 100644
---- a/Styx/WoWInternals/ObjectManager.cs
-+++ b/Styx/WoWInternals/ObjectManager.cs
-@@ -19,6 +19,31 @@ namespace Styx.WoWInternals
-         internal const int SupportedBuild = 12340;
-         internal const int SupportedBuildWowB = 70291;
-         internal static bool IsSupportedBuild(int build) => build == SupportedBuild || build == SupportedBuildWowB;
-+
+@@ -139,7 +132,28 @@ namespace GreenMagic
+ 
+         #region Properties
+ 
+-        public ManagedFasm Asm => _asm;
 +        /// <summary>
-+        /// Extracts the client build number from the process version resource.
-+        /// Modern clients (WowB) store the build across two 16-bit parts because
-+        /// 70291 overflows a single part: FileVersionRaw 160.1.7029.1 means
-+        /// FileBuildPart 7029 * 10 + FilePrivatePart 1 = 70291.
-+        /// Returns 0 when there is no version resource, -1 when unreadable
-+        /// (typically a 32-bit CopilotBuddy inspecting a 64-bit process).
++        /// FASM assembler for the target process — x86 injection path only.
++        /// Created lazily on first access: the ManagedFasm type lives in
++        /// fasmdll_managed.dll, a 32-bit native that must never be loaded
++        /// (or even JIT-resolved) while a 64-bit CopilotBuddy attaches to a
++        /// 64-bit client. x64 targets use X64Emitter/Executor64 instead.
 +        /// </summary>
-+        internal static int GetBuildNumber(Process proc)
++        public ManagedFasm Asm
 +        {
-+            try
++            get
 +            {
-+                var v = proc.MainModule?.FileVersionInfo;
-+                if (v == null) return 0;
-+                int build = v.FilePrivatePart;
-+                if (build < 1000 && v.FileBuildPart >= 1000)
-+                    build = v.FileBuildPart * 10 + v.FilePrivatePart;
-+                return build;
-+            }
-+            catch
-+            {
-+                return -1;
++                if (_asm == null)
++                {
++                    if (_is64BitTarget)
++                        throw new NotSupportedException("FASM is not available for 64-bit targets; use X64Emitter/Executor64.");
++                    if (_hProcess == IntPtr.Zero)
++                        throw new InvalidOperationException("Memory: no process handle available for FASM.");
++                    _asm = new ManagedFasm(_hProcess);
++                }
++                return _asm;
 +            }
 +        }
-         
-         // Offsets ObjectManager (WoW 3.3.5a Build 12340)
-         private const uint CurMgrBase = 0xC79CE0;      // 13081824U - s_curMgr base pointer
-@@ -262,9 +287,10 @@ namespace Styx.WoWInternals
-                 // Check the build
-                 try
-                 {
--                    int build = WoWProcess.MainModule?.FileVersionInfo.FilePrivatePart ?? 0;
--                    // WowB.exe reports FileVersion 1.60.1.x (FilePrivatePart = 1); its real
--                    // build number is not in that field, so trust the WowB process name.
-+                    int build = GetBuildNumber(WoWProcess);
-+                    if (build < 0) build = 0; // unreadable version resource — let later stages report
-+                    // WowB.exe reports FileVersion 1.60.1.70291 as raw parts 160.1.7029.1;
-+                    // GetBuildNumber recombines those into 70291.
-                     bool isWowBByName = WoWProcess.ProcessName.Equals("WowB", StringComparison.OrdinalIgnoreCase);
-                     if (!IsSupportedBuild(build) && !isWowBByName)
-                     {
-diff --git a/UI/MainWindow.xaml.cs b/UI/MainWindow.xaml.cs
-index 8e7159b..573c82b 100644
---- a/UI/MainWindow.xaml.cs
-+++ b/UI/MainWindow.xaml.cs
-@@ -342,17 +342,13 @@ namespace CopilotBuddy.UI
-                     {
-                         if (proc.HasExited) continue;
- 
--                        int build;
--                        try
--                        {
--                            build = proc.MainModule?.FileVersionInfo.FilePrivatePart ?? 0;
--                        }
--                        catch (Exception ex)
-+                        int build = ObjectManager.GetBuildNumber(proc);
-+                        if (build < 0)
-                         {
-                             // Typical cause: 32-bit CopilotBuddy inspecting a native
-                             // 64-bit client (e.g. WowB.exe) — the OS refuses module
-                             // enumeration across the bitness boundary.
--                            Logging.Write(Colors.Orange, "{0} (PID {1}) found, but its build could not be read: {2}", proc.ProcessName, proc.Id, ex.Message);
-+                            Logging.Write(Colors.Orange, "{0} (PID {1}) found, but its build could not be read.", proc.ProcessName, proc.Id);
-                             if (!Environment.Is64BitProcess)
-                                 Logging.Write(Colors.Orange, "CopilotBuddy is running as x86 — use the x64 build to attach to a 64-bit client.");
-                             continue;
-@@ -388,23 +384,17 @@ namespace CopilotBuddy.UI
-                         var proc = Process.GetProcessById(pid);
-                         if (!proc.HasExited)
-                         {
--                            int build;
--                            try
-+                            int build = ObjectManager.GetBuildNumber(proc);
-+                            if (build < 0)
-                             {
--                                build = proc.MainModule?.FileVersionInfo.FilePrivatePart ?? 0;
--                            }
--                            catch (Exception ex)
--                            {
--                                Logging.Write(Colors.Orange, "PID {0}: build could not be read: {1}", pid, ex.Message);
-+                                Logging.Write(Colors.Orange, "PID {0}: build could not be read.", pid);
-                                 if (!Environment.Is64BitProcess)
-                                     Logging.Write(Colors.Orange, "CopilotBuddy is running as x86 — use the x64 build to attach to a 64-bit client.");
--                                build = -1;
-                             }
--
--                            if (ObjectManager.IsSupportedBuild(build) || build == 0
-+                            else if (ObjectManager.IsSupportedBuild(build) || build == 0
-                                 || proc.ProcessName.Equals("WowB", StringComparison.OrdinalIgnoreCase))
-                                 candidates.Add(proc);
--                            else if (build != -1)
-+                            else
-                                 Logging.Write(Colors.Orange, "PID {0} skipped: unsupported build {1} (expected {2} or {3}).", pid, build, ObjectManager.SupportedBuild, ObjectManager.SupportedBuildWowB);
-                         }
-                     }
-@@ -455,13 +445,17 @@ namespace CopilotBuddy.UI
-                     if (!createdNew)
-                     {
-                         // Another CopilotBuddy already owns this process
-+                        Logging.Write(Colors.Orange, "PID {0} is already attached by another CopilotBuddy instance.", proc.Id);
-                         mutex.Close();
-                         continue;
-                     }
- 
-                     available.Add(new KeyValuePair<int, Mutex>(proc.Id, mutex));
-                 }
--                catch { /* Process exited or memory read failed */ }
-+                catch (Exception ex)
-+                {
-+                    Logging.Write(Colors.Orange, "PID {0} dropped during availability check: {1}", proc.Id, ex.Message);
-+                }
-             }
- 
-             if (available.Count == 0)
+         internal PeHeaderParser PeHeaderParser => _peHeaderParser;
+         public PatchManager PatchManager => _patchManager;
+         public bool IsThreadOpen => _hThread != IntPtr.Zero;
 -- 
 2.39.5
 
