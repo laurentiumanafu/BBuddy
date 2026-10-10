@@ -1,0 +1,72 @@
+From d3541a2718f22743c3286f33076a8cd97d19f18d Mon Sep 17 00:00:00 2001
+From: laurentiumanafu <290640090+laurentiumanafu@users.noreply.github.com>
+Date: Sat, 10 Oct 2026 18:29:45 +0000
+Subject: [PATCH] Attach: accept WowB.exe by process name (its version resource
+ reports build 1)
+
+WowB.exe's FileVersion is 1.60.1.x, so FileVersionInfo.FilePrivatePart
+returns 1 instead of 70291 and the build gate rejected it. Only the
+Classic Beta client is named WowB, so accept that process name in the
+candidate filter, the /pid= path, and the ObjectManager.Initialize
+build check. The 3.3.5a path (build 12340) is unchanged.
+
+Co-authored-by: arena-agent <297053741+arena-agent@users.noreply.github.com>
+---
+ Styx/WoWInternals/ObjectManager.cs |  7 +++++--
+ UI/MainWindow.xaml.cs              | 11 ++++++++---
+ 2 files changed, 13 insertions(+), 5 deletions(-)
+
+diff --git a/Styx/WoWInternals/ObjectManager.cs b/Styx/WoWInternals/ObjectManager.cs
+index 08190c8..2d146d4 100644
+--- a/Styx/WoWInternals/ObjectManager.cs
++++ b/Styx/WoWInternals/ObjectManager.cs
+@@ -263,12 +263,15 @@ namespace Styx.WoWInternals
+                 try
+                 {
+                     int build = WoWProcess.MainModule?.FileVersionInfo.FilePrivatePart ?? 0;
+-                    if (!IsSupportedBuild(build))
++                    // WowB.exe reports FileVersion 1.60.1.x (FilePrivatePart = 1); its real
++                    // build number is not in that field, so trust the WowB process name.
++                    bool isWowBByName = WoWProcess.ProcessName.Equals("WowB", StringComparison.OrdinalIgnoreCase);
++                    if (!IsSupportedBuild(build) && !isWowBByName)
+                     {
+                         Logging.Write($"[ObjectManager] Build {build} not supported (expected: {SupportedBuild} or {SupportedBuildWowB})");
+                         throw new Exception($"WoW build {build} not supported. Required build: {SupportedBuild} or {SupportedBuildWowB}");
+                     }
+-                    Logging.WriteDebug($"[ObjectManager] WoW build {build} detected - OK");
++                    Logging.WriteDebug($"[ObjectManager] WoW build {build} detected - OK{(isWowBByName ? " (WowB client, accepted by process name)" : "")}");
+                 }
+                 catch (Exception ex) when (ex is not InvalidOperationException)
+                 {
+diff --git a/UI/MainWindow.xaml.cs b/UI/MainWindow.xaml.cs
+index f1203dc..8e7159b 100644
+--- a/UI/MainWindow.xaml.cs
++++ b/UI/MainWindow.xaml.cs
+@@ -358,8 +358,12 @@ namespace CopilotBuddy.UI
+                             continue;
+                         }
+ 
+-                        // build == 0 means no version resource (custom/private server client)
+-                        if (ObjectManager.IsSupportedBuild(build) || build == 0)
++                        // build == 0 means no version resource (custom/private server client).
++                        // WowB.exe reports FileVersion 1.60.1.x (FilePrivatePart = 1) — its
++                        // real build number (70291) is NOT in that field, so accept WowB by
++                        // process name: only the Classic Beta client is named WowB.
++                        if (ObjectManager.IsSupportedBuild(build) || build == 0
++                            || proc.ProcessName.Equals("WowB", StringComparison.OrdinalIgnoreCase))
+                         {
+                             candidates.Add(proc);
+                             Logging.WriteDebug("Candidate: {0} (PID {1}), build {2}", proc.ProcessName, proc.Id, build);
+@@ -397,7 +401,8 @@ namespace CopilotBuddy.UI
+                                 build = -1;
+                             }
+ 
+-                            if (ObjectManager.IsSupportedBuild(build) || build == 0)
++                            if (ObjectManager.IsSupportedBuild(build) || build == 0
++                                || proc.ProcessName.Equals("WowB", StringComparison.OrdinalIgnoreCase))
+                                 candidates.Add(proc);
+                             else if (build != -1)
+                                 Logging.Write(Colors.Orange, "PID {0} skipped: unsupported build {1} (expected {2} or {3}).", pid, build, ObjectManager.SupportedBuild, ObjectManager.SupportedBuildWowB);
+-- 
+2.39.5
+
