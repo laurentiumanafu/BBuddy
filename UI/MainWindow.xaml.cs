@@ -239,7 +239,9 @@ namespace CopilotBuddy.UI
                             catch { /* Ignore, just ensure assembly is loaded */ }
                             
                             // Load previously enabled plugins from CharacterSettings
-                            var enabledPlugins = CharacterSettings.Instance.EnabledPlugins ?? new string[0];
+                            // CharacterSettings.Instance is null until a player is detected
+                            // (never, in WowB read-only mode) — tolerate it.
+                            var enabledPlugins = CharacterSettings.Instance?.EnabledPlugins ?? new string[0];
                             Styx.Plugins.PluginManager.Initialize(enabledPlugins);
                         }
                         catch (Exception ex)
@@ -260,11 +262,12 @@ namespace CopilotBuddy.UI
                             // Restore last selected bot (HB 4.3.4 pattern)
                             if (cmbBotSelector.Items.Count > 0)
                             {
-                                int selectedIndex = CharacterSettings.Instance.SelectedBotIndex;
+                                int selectedIndex = CharacterSettings.Instance?.SelectedBotIndex ?? 0;
                                 if (selectedIndex < 0 || selectedIndex >= cmbBotSelector.Items.Count)
                                 {
                                     // Invalid index, reset to 0
-                                    CharacterSettings.Instance.SelectedBotIndex = 0;
+                                    if (CharacterSettings.Instance != null)
+                                        CharacterSettings.Instance.SelectedBotIndex = 0;
                                     selectedIndex = 0;
                                 }
                                 cmbBotSelector.SelectedIndex = selectedIndex;
@@ -805,7 +808,7 @@ namespace CopilotBuddy.UI
                         // cmbBotSelector.SelectedItem = value at 4.3.4 Start():856.
                         if (cmbBotSelector.Items.Contains(match.Key))
                             cmbBotSelector.SelectedItem = match.Key;
-                        else
+                        else if (CharacterSettings.Instance != null)
                             CharacterSettings.Instance.SelectedBotIndex = 0;
                     }
                     else
@@ -1010,7 +1013,8 @@ namespace CopilotBuddy.UI
                 btnBotConfig.Visibility = Visibility.Visible;
                 
                 // Update selected bot index (no immediate save - HB 4.3.4 pattern)
-                CharacterSettings.Instance.SelectedBotIndex = cmbBotSelector.SelectedIndex;
+                if (CharacterSettings.Instance != null)
+                    CharacterSettings.Instance.SelectedBotIndex = cmbBotSelector.SelectedIndex;
             }
         }
 
@@ -1186,7 +1190,7 @@ namespace CopilotBuddy.UI
                     return;
 
                 UISettings.Instance.Save();
-                CharacterSettings.Instance.Save();
+                CharacterSettings.Instance?.Save(); // null in WowB read-only mode
                 StyxSettings.Instance.Save();
                 LevelbotSettings.Instance.Save();
                 
