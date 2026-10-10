@@ -1,0 +1,22 @@
+name: Apply Patch
+
+on:
+  workflow_dispatch:
+
+jobs:
+  apply-patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check and apply patch
+        run: |
+          # Verify that the patch can apply cleanly without making changes
+          git apply --check repopush.patch
+          
+          # Apply the patch to the working directory
+          git apply repopush.patch
+
+      - name: Verify working tree
+        run: git status
