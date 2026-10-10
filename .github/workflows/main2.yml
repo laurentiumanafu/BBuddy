@@ -1,0 +1,47 @@
+name: Apply Patch to New Branch
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch_name:
+        description: 'New branch name'
+        required: true
+        default: 'patch-updates'
+
+permissions:
+  contents: write
+
+jobs:
+  apply-patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0 # Fetches full history for 3-way merge support if needed
+
+      - name: Create new branch and apply patch
+        run: |
+          NEW_BRANCH="${{ inputs.branch_name }}"
+
+          # Create and switch to the new branch from master
+          git checkout -b "$NEW_BRANCH"
+
+          # Apply the patch (use --3way fallback if files diverged)
+          git apply --3way new.patch
+
+      - name: Commit and push new branch
+        run: |
+          NEW_BRANCH="${{ inputs.branch_name }}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add -A
+          if ! git diff --cached --quiet; then
+            git commit -m "Apply new.patch changes"
+            git push -u origin "$NEW_BRANCH"
+          else
+            echo "No changes detected to commit."
+          fi
