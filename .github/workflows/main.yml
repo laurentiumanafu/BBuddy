@@ -6,6 +6,8 @@ on:
 jobs:
   apply-patch:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -20,3 +22,18 @@ jobs:
 
       - name: Verify working tree
         run: git status
+      - name: Commit and push changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Stage all modified and untracked files
+          git add -A
+          
+          # Commit only if there are changes present
+          if ! git diff --cached --quiet; then
+            git commit -m "Apply repopush.patch changes"
+            git push origin master
+          else
+            echo "No changes to commit."
+          fi
