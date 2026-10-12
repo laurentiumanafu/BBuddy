@@ -295,6 +295,127 @@ namespace Styx.Offsets
 		public const ulong FnEnumerateFrames = 0x4573010;    // [S]
 		public const ulong FnGetFrameMetatable = 0x4578730;  // [S]
 
+		// ---- FrameScript API handler RVAs harvested from the hunt9
+		// registration-table dump ([S] = from static table, semantics
+		// follow the public API names). FrameScript state object +0xE0
+		// is read by FnFrameScriptShutdownTail (simple getter).
+
+		// Movement (JumpOrAscendStart table, cluster ~0x23Cxxxx)
+		public const ulong FnJumpOrAscendStart = 0x23C5560;
+		public const ulong FnAscendStop = 0x23C6840;
+		public const ulong FnDescendStop = 0x23C7160;
+		public const ulong FnToggleRun = 0x23C76C0;
+		public const ulong FnToggleAutoRun = 0x23C7F50;
+		public const ulong FnStartAutoRun = 0x23C83A0;
+		public const ulong FnStopAutoRun = 0x23C87C0;
+		public const ulong FnMoveForwardStart = 0x23C8BE0;
+		public const ulong FnMoveForwardStop = 0x23C9000;
+		public const ulong FnMoveBackwardStart = 0x23C9410;
+		public const ulong FnMoveBackwardStop = 0x23C9830;
+		public const ulong FnTurnLeftStart = 0x23C9C40;
+		public const ulong FnTurnLeftStop = 0x23CA060;
+		public const ulong FnTurnRightStart = 0x23CA470;
+		public const ulong FnTurnRightStop = 0x23CA890;
+		public const ulong FnStrafeLeftStart = 0x23CACA0;
+		public const ulong FnStrafeLeftStop = 0x23CB0D0;
+		public const ulong FnStrafeRightStart = 0x23CB500;
+		public const ulong FnStrafeRightStop = 0x23CB930;
+		public const ulong FnPitchUpStart = 0x23CBD60;
+		public const ulong FnPitchUpStop = 0x23CC180;
+		public const ulong FnPitchDownStart = 0x23CC590;
+		public const ulong FnPitchDownStop = 0x23CC9B0;
+		public const ulong FnMouselookStart = 0x23D1110;
+		public const ulong FnMouselookStop = 0x23D1580;
+		public const ulong FnIsMouselooking = 0x23D1A40;
+		public const ulong FnVehicleExit = 0x23D2340;
+		public const ulong FnSetMoveEnabled = 0x23D9340;
+		public const ulong FnSetTurnEnabled = 0x23D97E0;
+
+		// Camera (CameraZoomIn table; matches hunt7 handler RVAs)
+		public const ulong FnCameraZoomIn = 0x312CB70;
+		public const ulong FnCameraZoomOut = 0x312CC70;
+		public const ulong FnMoveViewInStart = 0x312CFA0;
+		public const ulong FnSetView = 0x312D060;
+		public const ulong FnSaveView = 0x312D0F0;
+		public const ulong FnResetView = 0x312D180;
+		public const ulong FnNextView = 0x312D200;
+		public const ulong FnPrevView = 0x312D250;
+		public const ulong FnFlipCameraYaw = 0x312D2A0;
+		public const ulong FnCenterCamera = 0x312D320;
+
+		// Spell casting (SetSpellbookPetAction table)
+		public const ulong FnCastSpell = 0x2C231E0;
+		public const ulong FnCastSpellByName = 0x2C24040;
+		public const ulong FnCastSpellByID = 0x2C27AD0;
+		public const ulong FnGetShapeshiftForm = 0x2C23A90;
+		public const ulong FnGetShapeshiftFormID = 0x2C23AF0;
+		public const ulong FnGetSpellBaseCooldown = 0x2C22F00;
+
+		// Spell targeting (SpellIsTargeting table)
+		public const ulong FnSpellIsTargeting = 0x25E0E80;
+		public const ulong FnSpellTargetUnit = 0x25E3070;
+		public const ulong FnSpellStopTargeting = 0x25E7FC0;
+		public const ulong FnSpellStopCasting = 0x25E8870;
+		public const ulong FnCancelUnitBuff = 0x25E9430;
+
+		// Action bar (GetActionInfo table)
+		public const ulong FnGetActionInfo = 0x2CD5E60;
+		public const ulong FnUseAction = 0x2CDA340;
+		public const ulong FnPickupAction = 0x2CDB4A0;
+		public const ulong FnPlaceAction = 0x2CDBEA0;
+
+		// Macros (SecureCmdOptionParse table)
+		public const ulong FnSecureCmdOptionParse = 0x2CC2C80;
+		public const ulong FnRunMacro = 0x2CC2DB0;
+		public const ulong FnCreateMacro = 0x2CC2E60;
+		public const ulong FnGetNumMacros = 0x2CC4640;
+		public const ulong FnGetMacroBody = 0x2CC4730;
+		public const ulong FnGetMacroIndexByName = 0x2CC7170;
+
+		// Loot (SetLootPortrait table)
+		public const ulong FnGetNumLootItems = 0x2C3E390;
+		public const ulong FnGetLootSlotInfo = 0x2C3E3C0;
+		public const ulong FnLootSlot = 0x2C3EC40;
+		public const ulong FnCloseLoot = 0x2C3ED90;
+
+		// Quests (CloseQuest + GetQuestLogQuestText tables)
+		public const ulong FnGetQuestID = 0x2F8BD80;
+		public const ulong FnGetActiveQuestID = 0x2F8C490;
+		public const ulong FnAcceptQuest = 0x2F8C9B0;
+		public const ulong FnDeclineQuest = 0x2F8C9C0;
+		public const ulong FnIsQuestCompletable = 0x2F8C9D0;
+		public const ulong FnCompleteQuest = 0x2F8CA20;
+		public const ulong FnGetQuestReward = 0x2F8CAC0;
+		public const ulong FnGetQuestUiMapID = 0x2B9FA80;
+
+		// Bindings (GetNumBindings table)
+		public const ulong FnGetBindingKey = 0x23EA320;
+		public const ulong FnGetBindingAction = 0x23EA3B0;
+		public const ulong FnRunBinding = 0x23EA630;
+
+		// Inventory / items
+		public const ulong FnUseInventoryItem = 0x2F5F600;
+		public const ulong FnGetInventoryItemID = 0x2F5F2B0;
+		public const ulong FnGetInventoryItemCooldown = 0x2F5ECA0;
+
+		// Taxi
+		public const ulong FnNumTaxiNodes = 0x2FCC3C0;
+		public const ulong FnTakeTaxiNode = 0x2FCC600;
+
+		// Lua C-API wrapper cluster (RegisterFunction decompile; [S]
+		// semantics guessed from usage — verify before Phase-3 use)
+		public const ulong FnLuaPushHandlerCandidate = 0x471B800;
+		public const ulong FnLuaSetFieldishCandidate = 0x471D240;
+		public const ulong FnLuaRawSetCandidate = 0x471C370;
+		public const ulong FnLuaGetTopCandidate = 0x471E1B0;
+		public const ulong FnLuaIndexToAddrCandidate = 0x471DA00;
+		public const ulong FnLuaPushNumber = 0x471BD60;
+		public const ulong FnLuaPushString = 0x471BDD0;
+		public const ulong FnLuaPushLString = 0x471BC20;
+		public const ulong FnLuaType = 0x471E270;
+		public const ulong FnLuaArgCheck = 0x471AF10;
+		public const ulong FrameScriptRegistryGlobal2 = 0x589B984; // [S]
+
 		// ---- Unit token / object resolution (hunt7) ----
 
 		/// <summary>[S] UnitGUID handler's token -> GUID128 resolver
