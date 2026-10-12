@@ -218,19 +218,28 @@ namespace Styx.Offsets
 		public const ulong LuaStateGlobal = 0x7B56AB8;
 		public const ulong FnLuaCloseCandidate = 0x471BD00;
 
-		/// <summary>[S] Dispatcher tail-called by EVERY Lua API handler
-		/// as FUN(L, 0, "ApiName", ...). Decompiling this is the key to
-		/// the real handler lookup table (and to IsPlayerInWorld-style
-		/// state checks). RVA 0x749800.</summary>
-		public const ulong FnFrameScriptDispatch = 0x749800;
+		/// <summary>[S] FrameScript error reporter — tail-called by the
+		/// small taint/error stub handlers as FUN(L, 0, "ApiName").
+		/// Formats "%s(): %s" from FrameScriptErrorMsgPtr/Flag and pushes
+		/// the string to Lua via FnFrameScriptPushErrorString.
+		/// NOT the API dispatcher (hunt8 corrected hunt7's guess).</summary>
+		public const ulong FnFrameScriptReportError = 0x749800;
+		public const ulong FrameScriptErrorMsgPtr = 0x589B720;   // [S] char* buffer
+		public const ulong FrameScriptErrorMsgFlag = 0x589B728;  // [S]
+		public const ulong FnFrameScriptPushErrorString = 0x471BDD0; // [S]
 
 		/// <summary>[S] FrameScript_RegisterFunction(name, handler).
-		/// Walked over (namePtr, handlerPtr) 16-byte tables.</summary>
-		public const ulong FnFrameScriptRegisterFunction = 0xE9AF40;
+		/// Walked over (namePtr, handlerPtr) 16-byte tables.
+		/// (hunt8: corrected from a bad RVA transcription.)</summary>
+		public const ulong FnFrameScriptRegisterFunction = 0x75AF40;
 
 		/// <summary>[S] FrameScript namespace registration
 		/// (table, count, "C_XXX").</summary>
-		public const ulong FnFrameScriptRegisterNamespace = 0xE9A930;
+		public const ulong FnFrameScriptRegisterNamespace = 0x75A930;
+
+		/// <summary>[S] FrameScript shutdown tail call (called after the
+		/// state object's [+0x28]+8 u16 is zeroed).</summary>
+		public const ulong FnFrameScriptShutdownTail = 0x4718E50;
 
 		/// <summary>[S] FrameScript_HandleError (string-confirmed).
 		/// lua_State layout hints: stack ptrs at L+0x40 / L+0x68,
@@ -249,34 +258,48 @@ namespace Styx.Offsets
 		public const ulong FrameScriptApiContextGlobal = 0x5AA2BB8;
 
 		// ---- API registration tables in .data (namePtr, handlerPtr) pairs,
-		// 16 bytes per entry. Reading these LIVE yields handler RVAs for
+		// 16 bytes per entry. FORMAT CONFIRMED by live-image dump of the
+		// GetText table (hunt8). Reading these yields handler RVAs for
 		// dozens of APIs (movement APIs live in the JumpOrAscendStart table).
-		public const ulong RegTableGetText = 0x5DF7480;              // 14 entries
-		public const ulong RegTableGetNumBindings = 0x58AFBF0;       // 27
-		public const ulong RegTableSecureCmdOptionParse = 0x58EC2A0; // 21
-		public const ulong RegTableJumpOrAscendStart = 0x58AF2B0;    // 58 (movement!)
-		public const ulong RegTableCameraZoomIn = 0x5938FE0;         // 22 (camera)
-		public const ulong RegTablePlayMusic = 0x58A5D50;            // 16
-		public const ulong RegTableSpellIsTargeting = 0x58BE300;     // 25
-		public const ulong RegTableGetActionInfo = 0x58ECB20;        // 9
-		public const ulong RegTableGetNumFlyouts = 0x591B0B0;        // 5
-		public const ulong RegTableIsChatAFK = 0x58DA800;            // 66
-		public const ulong RegTableSetSpellbookPetAction = 0x58E95F0;// 31
-		public const ulong RegTableGetInventoryItemsForSlot = 0x5920780;
-		public const ulong RegTableSetLootPortrait = 0x58E9AB0;      // 23
-		public const ulong RegTableItemTextGetItem = 0x5930880;      // 10
-		public const ulong RegTableCloseQuest = 0x5924C80;           // 65
-		public const ulong RegTableGetQuestLogQuestText = 0x58E49F0; // 68
-		public const ulong RegTableSetTaxiMap = 0x5926160;           // 16
-		public const ulong RegTableGetTrainerServiceInfo = 0x5927280;// 7
-		public const ulong RegTableOpenTrainer = 0x59273C0;          // 15
+		// hunt9 round: addresses corrected (+0x20000 arithmetic fix).
+		public const ulong RegTableGetText = 0x5DF7480;              // 14 entries (dumped OK)
+		public const ulong RegTableGetNumBindings = 0x58CFBF0;       // 27
+		public const ulong RegTableSecureCmdOptionParse = 0x590C2A0; // 21
+		public const ulong RegTableJumpOrAscendStart = 0x58CF2B0;    // 58 (movement!)
+		public const ulong RegTableCameraZoomIn = 0x5958FE0;         // 22 (camera)
+		public const ulong RegTablePlayMusic = 0x58C5D50;            // 16
+		public const ulong RegTableSpellIsTargeting = 0x58DE300;     // 25
+		public const ulong RegTableGetActionInfo = 0x590CB20;        // 9
+		public const ulong RegTableGetNumFlyouts = 0x593B0B0;        // 5
+		public const ulong RegTableIsChatAFK = 0x58FA800;            // 66
+		public const ulong RegTableSetSpellbookPetAction = 0x59095F0;// 31
+		public const ulong RegTableGetInventoryItemsForSlot = 0x5940780; // 29
+		public const ulong RegTableSetLootPortrait = 0x5909AB0;      // 23
+		public const ulong RegTableItemTextGetItem = 0x5950880;      // 10
+		public const ulong RegTableCloseQuest = 0x5944C80;           // 65
+		public const ulong RegTableGetQuestLogQuestText = 0x59049F0; // 68
+		public const ulong RegTableSetTaxiMap = 0x5946160;           // 16
+		public const ulong RegTableGetTrainerServiceInfo = 0x5947280;// 7
+		public const ulong RegTableOpenTrainer = 0x59473C0;          // 15
 		public const ulong RegTableCountMax = 68;
+
+		// Known handlers harvested from the GetText table (hunt8 dump):
+		// GetText 0x4572780, EnumerateFrames 0x4573010, CreateFont 0x4573D90,
+		// CreateFrame 0x4575E10, CreateForbiddenFrame 0x4575E20,
+		// DoesTemplateExist 0x4575E30, GetFramesRegisteredForEvent 0x4576650,
+		// GetCurrentKeyBoardFocus 0x4576F90, StoreSecureReference 0x45777F0,
+		// GetFontStringMetatable 0x45786F0, GetEditBoxMetatable 0x4578710,
+		// GetFrameMetatable 0x4578730, GetButtonMetatable 0x4578750,
+		// GetTextureMetatable 0x4578770.  (Frame/XML API cluster ~0x457xxxx.)
+		public const ulong FnCreateFrame = 0x4575E10;        // [S] from table dump
+		public const ulong FnEnumerateFrames = 0x4573010;    // [S]
+		public const ulong FnGetFrameMetatable = 0x4578730;  // [S]
 
 		// ---- Unit token / object resolution (hunt7) ----
 
 		/// <summary>[S] UnitGUID handler's token -> GUID128 resolver
-		/// (returns pointer to 16-byte GUID128).</summary>
-		public const ulong FnUnitTokenToGuid = 0x206ACAA0;
+		/// (returns pointer to 16-byte GUID128). RVA corrected hunt9.</summary>
+		public const ulong FnUnitTokenToGuid = 0x26ACAA0;
 
 		/// <summary>[S] FrameScript unit-token argument parser
 		/// ("Usage: local result = UnitGUID(unit)").</summary>
@@ -285,8 +308,10 @@ namespace Styx.Offsets
 		/// <summary>[S] GUID/handle -> unit object resolver (used by the
 		/// mouseover emitter FUN_2D61100, which reads the GUID at
 		/// param+0x10). Decompiling this should expose the handle-pool /
-		/// ObjMgr lookup path.</summary>
-		public const ulong FnGuidToUnitObject = 0x20CA15A0;
+		/// ObjMgr lookup path. RVA corrected hunt9. Companion emitter
+		/// helper (unit -> token string) at 0x2CC2150.</summary>
+		public const ulong FnGuidToUnitObject = 0x2CC15A0;
+		public const ulong FnUnitObjectToToken = 0x2CC2150;
 
 		/// <summary>[S] Unit token id -> token name switch table fn
 		/// (player/target/mouseover/focus/raid1..40/...).</summary>
@@ -301,7 +326,10 @@ namespace Styx.Offsets
 		// checked non-null before camera ops.
 		public const ulong CameraRigInitFlag = 0x1ACF650;
 		public const ulong CameraRigPointer = 0x5FF19F8;
-		public const ulong FnCameraZoomImpl = 0x269B450;   // [S] tail call of zoom handlers
+		// [!] 0x269B450 (tail call of the zoom handlers) decompiles to
+		// OBFUSCATED code (pcode errors, self-modifying bytes) — do not
+		// rely on static analysis there; use the live-verified chain above.
+		public const ulong FnCameraZoomImpl = 0x269B450;
 
 		/// <summary>FrameScript_ExecuteBuffer — runs a Lua string.</summary>
 		public const ulong FrameScriptExecuteBuffer = 0;
