@@ -125,7 +125,10 @@ namespace Styx.Offsets
 		public const ulong CameraLeftOffset = 0x28;      // vec3 float
 		public const ulong CameraUpOffset = 0x34;        // vec3 float
 		public const ulong CameraFovOffset = 0x40;       // horizontal FOV, radians
-		public const ulong CameraZoomOffset = 0x74;      // zoom factor (GetCameraZoom)
+		public const ulong CameraZoomOffset = 0x274;     // zoom factor (GetCameraZoom)
+		// NOTE: decompiled GetCameraZoom (fn 0x312CD70) pushes *(float*)(camera+0x274).
+		// An earlier live probe read 1.0 at +0x74 by coincidence (default zoom is 1.0);
+		// +0x274 is authoritative per the decompilation.
 
 		/// <summary>Legacy aliases used by the camera reader.</summary>
 		public const ulong CameraManager = CameraWorldFrameGlobal;
@@ -194,15 +197,111 @@ namespace Styx.Offsets
 		public const ulong HardwareEventPtr = 0;
 
 		// ==================== Lua (FrameScript) ====================
-		/// <summary>[C] Frame base pointer; the Lua state hangs off a
-		/// chain from it. Registration table (luaL_Reg pairs) confirmed
-		/// in .data — e.g. CameraZoomIn entry observed; handlers live in
-		/// decrypted .text. Full FrameScript globals TO FIND.</summary>
+		/// <summary>[C] Frame base pointer. On 70291 the FrameScript
+		/// subsystem is GLOBAL-based, not FrameBase-chain-based:
+		/// see LuaStateGlobal / registration tables below. Left 0 until
+		/// hunt8 confirms whether a frame base exists at all.</summary>
 		public const ulong FrameBase = 0;
 
-		// Classic-era chain (verify on 70291): FrameBase -> +0xF18 -> +0x148 -> Lua state
+		// Classic-era chain (kept for reference; likely NOT used on 70291)
 		public const ulong FrameOffset1 = 0xF18;
 		public const ulong FrameOffset2 = 0x148;
+
+		// ---- FrameScript core (hunt7, Ghidra decompilation) ----
+
+		/// <summary>[S] The FrameScript Lua state pointer global. The
+		/// API-unregistration/shutdown function (0x2995320) ends by
+		/// null-checking this and passing it to the lua_close-like
+		/// function FnLuaCloseCandidate. Live-verify: [base+this] should
+		/// be a heap pointer whose +0x40/+0x68 fields are stack ptrs
+		/// (stride 0x38 per lua value, see FnFrameScriptHandleError).</summary>
+		public const ulong LuaStateGlobal = 0x7B56AB8;
+		public const ulong FnLuaCloseCandidate = 0x471BD00;
+
+		/// <summary>[S] Dispatcher tail-called by EVERY Lua API handler
+		/// as FUN(L, 0, "ApiName", ...). Decompiling this is the key to
+		/// the real handler lookup table (and to IsPlayerInWorld-style
+		/// state checks). RVA 0x749800.</summary>
+		public const ulong FnFrameScriptDispatch = 0x749800;
+
+		/// <summary>[S] FrameScript_RegisterFunction(name, handler).
+		/// Walked over (namePtr, handlerPtr) 16-byte tables.</summary>
+		public const ulong FnFrameScriptRegisterFunction = 0xE9AF40;
+
+		/// <summary>[S] FrameScript namespace registration
+		/// (table, count, "C_XXX").</summary>
+		public const ulong FnFrameScriptRegisterNamespace = 0xE9A930;
+
+		/// <summary>[S] FrameScript_HandleError (string-confirmed).
+		/// lua_State layout hints: stack ptrs at L+0x40 / L+0x68,
+		/// TValue stride 0x38. Error-halt flag at 0x617C94F,
+		/// error count at 0x61A5BD8 (halt at 100).</summary>
+		public const ulong FnFrameScriptHandleError = 0x759520;
+		public const ulong FrameScriptErrorHaltFlag = 0x617C94F;
+		public const ulong FrameScriptErrorCount = 0x61A5BD8;
+
+		/// <summary>[S] FrameScript_GetGlobalString(name) — e.g. used
+		/// for "ERROR_SCRIPT_EXECUTION_HALT".</summary>
+		public const ulong FnFrameScriptGetGlobalString = 0x7618B0;
+
+		/// <summary>[S] Global zeroed by every API handler prologue
+		/// (secure/taint context).</summary>
+		public const ulong FrameScriptApiContextGlobal = 0x5AA2BB8;
+
+		// ---- API registration tables in .data (namePtr, handlerPtr) pairs,
+		// 16 bytes per entry. Reading these LIVE yields handler RVAs for
+		// dozens of APIs (movement APIs live in the JumpOrAscendStart table).
+		public const ulong RegTableGetText = 0x5DF7480;              // 14 entries
+		public const ulong RegTableGetNumBindings = 0x58AFBF0;       // 27
+		public const ulong RegTableSecureCmdOptionParse = 0x58EC2A0; // 21
+		public const ulong RegTableJumpOrAscendStart = 0x58AF2B0;    // 58 (movement!)
+		public const ulong RegTableCameraZoomIn = 0x5938FE0;         // 22 (camera)
+		public const ulong RegTablePlayMusic = 0x58A5D50;            // 16
+		public const ulong RegTableSpellIsTargeting = 0x58BE300;     // 25
+		public const ulong RegTableGetActionInfo = 0x58ECB20;        // 9
+		public const ulong RegTableGetNumFlyouts = 0x591B0B0;        // 5
+		public const ulong RegTableIsChatAFK = 0x58DA800;            // 66
+		public const ulong RegTableSetSpellbookPetAction = 0x58E95F0;// 31
+		public const ulong RegTableGetInventoryItemsForSlot = 0x5920780;
+		public const ulong RegTableSetLootPortrait = 0x58E9AB0;      // 23
+		public const ulong RegTableItemTextGetItem = 0x5930880;      // 10
+		public const ulong RegTableCloseQuest = 0x5924C80;           // 65
+		public const ulong RegTableGetQuestLogQuestText = 0x58E49F0; // 68
+		public const ulong RegTableSetTaxiMap = 0x5926160;           // 16
+		public const ulong RegTableGetTrainerServiceInfo = 0x5927280;// 7
+		public const ulong RegTableOpenTrainer = 0x59273C0;          // 15
+		public const ulong RegTableCountMax = 68;
+
+		// ---- Unit token / object resolution (hunt7) ----
+
+		/// <summary>[S] UnitGUID handler's token -> GUID128 resolver
+		/// (returns pointer to 16-byte GUID128).</summary>
+		public const ulong FnUnitTokenToGuid = 0x206ACAA0;
+
+		/// <summary>[S] FrameScript unit-token argument parser
+		/// ("Usage: local result = UnitGUID(unit)").</summary>
+		public const ulong FnUnitTokenArgParser = 0x1FDDF40;
+
+		/// <summary>[S] GUID/handle -> unit object resolver (used by the
+		/// mouseover emitter FUN_2D61100, which reads the GUID at
+		/// param+0x10). Decompiling this should expose the handle-pool /
+		/// ObjMgr lookup path.</summary>
+		public const ulong FnGuidToUnitObject = 0x20CA15A0;
+
+		/// <summary>[S] Unit token id -> token name switch table fn
+		/// (player/target/mouseover/focus/raid1..40/...).</summary>
+		public const ulong FnUnitTokenNameMap = 0x414DA10;
+
+		/// <summary>[C] Zone/map state root loaded by GetRealZoneText
+		/// handler right before dispatch.</summary>
+		public const ulong ZoneStateRoot = 0x7DF8190;
+
+		// Camera rig globals seen in the zoom-handler prologues:
+		// DAT 0x1ACF650 = init flag, DAT 0x5FF19F8 = rig/frame pointer
+		// checked non-null before camera ops.
+		public const ulong CameraRigInitFlag = 0x1ACF650;
+		public const ulong CameraRigPointer = 0x5FF19F8;
+		public const ulong FnCameraZoomImpl = 0x269B450;   // [S] tail call of zoom handlers
 
 		/// <summary>FrameScript_ExecuteBuffer — runs a Lua string.</summary>
 		public const ulong FrameScriptExecuteBuffer = 0;
