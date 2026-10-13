@@ -15,10 +15,10 @@ jobs:
       - name: Check and apply patch
         run: |
           # Verify that the patch can apply cleanly without making changes
-          git apply --check repopush.patch
+          git apply --check new.patch
           
           # Apply the patch to the working directory
-          git apply repopush.patch
+          git apply new.patch
 
       - name: Verify working tree
         run: git status
