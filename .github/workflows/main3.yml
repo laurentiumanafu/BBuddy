@@ -1,0 +1,65 @@
+name: Apply Patch to New Branch
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch_name:
+        description: 'New branch name'
+        required: true
+        default: 'patch-updates2'
+      patch_path:
+        description: 'Path to patch file'
+        required: false
+        default: 'new.patch'
+
+permissions:
+  contents: write
+
+jobs:
+  apply-patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Create and switch to new branch
+        run: |
+          git checkout -b "${{ inputs.branch_name }}"
+
+      - name: Normalize line endings
+        run: |
+          # Strip Windows CRLF (\r\n) from the patch file so it matches Linux checkout
+          sed -i 's/\r$//' "${{ inputs.patch_path }}"
+
+      - name: Remove files that the patch marks as new
+        run: |
+          # Finds files declared as "new file mode" in the patch and removes them
+          # from the workspace to prevent "already exists in working directory" errors
+          awk '/^diff --git / { file=$4; sub(/^b\//, "", file) } /^new file mode/ { if (file) print file }' "${{ inputs.patch_path }}" | while read -r f; do
+            if [ -n "$f" ] && [ -e "$f" ]; then
+              echo "Removing existing file to allow patch creation: $f"
+              rm -f "$f"
+            fi
+          done
+
+      - name: Verify patch cleanly (dry run)
+        run: |
+          git apply --check --ignore-whitespace --whitespace=nowarn "${{ inputs.patch_path }}"
+
+      - name: Apply patch
+        run: |
+          # Clean apply only: fails completely rather than inserting merge markers
+          git apply --ignore-whitespace --whitespace=nowarn "${{ inputs.patch_path }}"
+
+      - name: Commit and push new branch
+        run: |
+          git add -A
+          git commit -m "Apply changes from ${{ inputs.patch_path }}"
+          git push origin "${{ inputs.branch_name }}"
