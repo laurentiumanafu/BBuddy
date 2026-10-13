@@ -19,31 +19,6 @@ namespace Styx.WoWInternals
         internal const int SupportedBuild = 12340;
         internal const int SupportedBuildWowB = 70291;
         internal static bool IsSupportedBuild(int build) => build == SupportedBuild || build == SupportedBuildWowB;
-
-        /// <summary>
-        /// Extracts the client build number from the process version resource.
-        /// Modern clients (WowB) store the build across two 16-bit parts because
-        /// 70291 overflows a single part: FileVersionRaw 160.1.7029.1 means
-        /// FileBuildPart 7029 * 10 + FilePrivatePart 1 = 70291.
-        /// Returns 0 when there is no version resource, -1 when unreadable
-        /// (typically a 32-bit CopilotBuddy inspecting a 64-bit process).
-        /// </summary>
-        internal static int GetBuildNumber(Process proc)
-        {
-            try
-            {
-                var v = proc.MainModule?.FileVersionInfo;
-                if (v == null) return 0;
-                int build = v.FilePrivatePart;
-                if (build < 1000 && v.FileBuildPart >= 1000)
-                    build = v.FileBuildPart * 10 + v.FilePrivatePart;
-                return build;
-            }
-            catch
-            {
-                return -1;
-            }
-        }
         
         // Offsets ObjectManager (WoW 3.3.5a Build 12340)
         private const uint CurMgrBase = 0xC79CE0;      // 13081824U - s_curMgr base pointer
@@ -143,12 +118,6 @@ namespace Styx.WoWInternals
         public static Memory? Wow { get; private set; }
         public static ExecutorRand? Executor { get; set; }
         public static LocalPlayer? Me { get; set; }
-
-        /// <summary>
-        /// Read-only object-model view for native 64-bit targets
-        /// (WowB.exe). Only set when attached to a 64-bit client.
-        /// </summary>
-        public static WowBReader? WowB { get; private set; }
         public static bool IsInitialized => Wow != null;
 
         // cached collections (underlying data refreshed every ObjectManager.Update())
@@ -287,17 +256,13 @@ namespace Styx.WoWInternals
                 // Check the build
                 try
                 {
-                    int build = GetBuildNumber(WoWProcess);
-                    if (build < 0) build = 0; // unreadable version resource — let later stages report
-                    // WowB.exe reports FileVersion 1.60.1.70291 as raw parts 160.1.7029.1;
-                    // GetBuildNumber recombines those into 70291.
-                    bool isWowBByName = WoWProcess.ProcessName.Equals("WowB", StringComparison.OrdinalIgnoreCase);
-                    if (!IsSupportedBuild(build) && !isWowBByName)
+                    int build = WoWProcess.MainModule?.FileVersionInfo.FilePrivatePart ?? 0;
+                    if (!IsSupportedBuild(build))
                     {
                         Logging.Write($"[ObjectManager] Build {build} not supported (expected: {SupportedBuild} or {SupportedBuildWowB})");
                         throw new Exception($"WoW build {build} not supported. Required build: {SupportedBuild} or {SupportedBuildWowB}");
                     }
-                    Logging.WriteDebug($"[ObjectManager] WoW build {build} detected - OK{(isWowBByName ? " (WowB client, accepted by process name)" : "")}");
+                    Logging.WriteDebug($"[ObjectManager] WoW build {build} detected - OK");
                 }
                 catch (Exception ex) when (ex is not InvalidOperationException)
                 {
@@ -305,34 +270,6 @@ namespace Styx.WoWInternals
                 }
             }
             
-            // x64 / modern Classic: a native 64-bit client (e.g. WowB.exe
-            // build 70291) runs the modern engine, whose offsets live in
-            // Styx.Offsets.WowBOffsets. Until that table is complete we
-            // attach in READ-ONLY diagnostic mode — every WowBReader
-            // accessor degrades to 0/empty while its offset is still a
-            // placeholder, so this is safe and validates the 64-bit read
-            // path end-to-end. (There is no d3d9.dll to hook either way.)
-            if (memory.Is64BitTarget && !Styx.Offsets.WowBOffsets.IsComplete)
-            {
-                Logging.Write("[ObjectManager] 64-bit client detected, but its offset table is not complete yet.");
-                Logging.Write("[ObjectManager] Attaching in READ-ONLY diagnostic mode. Fill in Styx/Offsets/WowBOffsets.cs (X64_PORT_PLAN.md §6) to unlock real data.");
-            }
-
-            if (memory.Is64BitTarget)
-            {
-                // Modern Classic path (WowB.exe): READ-ONLY mode for now.
-                // There is no d3d9 EndScene to hook on a DX11/DX12 client;
-                // code execution will come through Executor64 /
-                // DX11PresentHook64 once the graphics offsets land
-                // (X64_PORT_PLAN.md §6). The reader validates the 64-bit
-                // read path and logs a full state snapshot on attach.
-                WowB = new WowBReader(memory);
-                Logging.Write("[ObjectManager] Attached to a 64-bit client (WowB) — read-only mode.");
-                Logging.Write($"[ObjectManager] WowB snapshot: {WowB.DescribeSnapshot()}");
-                Logging.WriteDebug("[ObjectManager] Initialized successfully (WowB read-only)");
-                return;
-            }
-
             // Hook EndScene for code execution
             HookEndscene();
             

@@ -1,4 +1,4 @@
-﻿// Source: .hb 4.3.4/Honorbuddy/Honorbuddy/ns23/Class51.cs
+// Source: .hb 4.3.4/Honorbuddy/Honorbuddy/ns23/Class51.cs
 using System;
 using System.Linq;
 using Bots.BGBuddy.Helpers;

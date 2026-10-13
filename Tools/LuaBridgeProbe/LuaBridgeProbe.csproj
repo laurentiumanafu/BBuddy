@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows7.0</TargetFramework>
+    <!-- the probe drives a NATIVE 64-BIT client: a 32-bit process cannot
+         CreateRemoteThread into it or allocate above 4 GB -->
+    <PlatformTarget>x64</PlatformTarget>
+    <Platforms>x64</Platforms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>LuaBridgeProbe</AssemblyName>
+    <RootNamespace>LuaBridgeProbe</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- the bridge class itself is shared with the bot build -->
+    <Compile Include="..\..\GreenMagic\LuaBridge64.cs" />
+  </ItemGroup>
+
+</Project>

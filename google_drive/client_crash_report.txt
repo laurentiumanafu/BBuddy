@@ -1,0 +1,469 @@
+﻿==============================================================================
+World of Warcraft: Beta Build (build 70291)
+------------------------------------------------------------------------------
+==============================================================================
+Exception: ACCESS_VIOLATION - The instruction at "0x0000000000000000" referenced memory at "0x0000000000000000".
+The memory could not be "executed".
+ProcessID: 17960
+ThreadID: 18376
+------------------------------------------------------------------------------
+
+<Exception.IssueType> Exception
+<ExceptionType> Crash
+<Exception.Summary:>
+ACCESS_VIOLATION - The instruction at "0x0000000000000000" referenced memory at "0x0000000000000000".
+The memory could not be "executed".
+(DBG-OPTIONS<FunctionsOnly SingleLine> DBG-ADDR<0000000000000000>("<unknown>") DBG-OPTIONS<>)
+<:Exception.Summary>
+<Exception.Assertion:>
+Trace is estimated
+DBG-ADDR<0000000000000000>("<unknown>")
+<:Exception.Assertion>
+<Exception.HashBlock:>
+DBG-OPTIONS<NoImage NoAddress NoFileLine NoFuncOffset NoDbgAddr>
+0xc0000005
+<unknown>
+DBG-OPTIONS<>
+<:Exception.HashBlock>
+<EstimatedTrace> Yes
+<Jira.JiraProjectId> 11701
+<Jira.JiraProjectKey> WOW11
+<Exception.ProjectId> 10
+
+------------------------------------------------------------------------------
+==============================================================================
+<Version> 1.60.1.70291
+<Config> Beta
+<Exception.BuildNumber> 70291
+<Exception.Branch> 1.60.1
+<WowProject> Camelot
+<Application> World of Warcraft
+<ApplicationType> Client
+Gpu Info:
+	Adapter 0: "Intel(R) Arc(TM) B570 Graphics" location:3 driver_date:24-Sep-2026 driver_ver:32.0.101.9033 vendor:0x8086 device:0xe20c
+	Adapter 1: "Microsoft Basic Render Driver" location:0 driver_date:21-Jun-2006 driver_ver:10.0.26100.8972 vendor:0x0000 device:0x0000
+------------------------------------------------------------------------------
+Waiting for the remote logging thread timed out
+External Logging
+
+------------------------------------------------------------------------------
+=== Unloaded Modules ===
+Unloaded Module: 00007ff9b36d0000 00008000 "psapi.dll"
+Unloaded Module: 00007ff9b36d0000 00008000 "psapi.dll"
+Unloaded Module: 00007ff9b36d0000 00008000 "psapi.dll"
+Unloaded Module: 00007ff9b36d0000 00008000 "psapi.dll"
+Unloaded Module: 00007ff985390000 0002A000 "igdgmmstaging_64.dll"
+Unloaded Module: 00007ff983030000 000B0000 "igdgmm2_64.dll"
+Unloaded Module: 00007ff982c90000 0039B000 "igdgmm64.dll"
+Unloaded Module: 00007ff9751c0000 000BD000 "igd12umd64.dll"
+Unloaded Module: 000001baeb3d0000 02875000 "igd12um64xe2.dll"
+Unloaded Module: 00007ff975120000 0009B000 "UniversalAdapter64.dll"
+Unloaded Module: 00007ff981f10000 000B9000 "IntelControlLib.dll"
+Unloaded Module: 00007ff937ad0000 00439000 "igd12dxva64.dll"
+Unloaded Module: 00007ff95dfb0000 017F1000 "igddxvacommon64.dll"
+Unloaded Module: 00007ff95c040000 01F65000 "media_bin_64.dll"
+Unloaded Module: 00007ff985390000 0002A000 "igdgmmstaging_64.dll"
+Unloaded Module: 00007ff983030000 000B0000 "igdgmm2_64.dll"
+Unloaded Module: 00007ff982c90000 0039B000 "igdgmm64.dll"
+Unloaded Module: 00007ff9aac20000 00027000 "igdinfo64.dll"
+Unloaded Module: 00007ff93e5a0000 00164000 "dxilconv.dll"
+Unloaded Module: 00007ff985390000 0002A000 "igdgmmstaging_64.dll"
+Unloaded Module: 00007ff983030000 000B0000 "igdgmm2_64.dll"
+Unloaded Module: 00007ff982c90000 0039B000 "igdgmm64.dll"
+Unloaded Module: 00007ff985950000 0051A000 "igd10iumd64.dll"
+Unloaded Module: 00007ff985390000 0002A000 "igdgmmstaging_64.dll"
+Unloaded Module: 00007ff983030000 000B0000 "igdgmm2_64.dll"
+Unloaded Module: 00007ff982c90000 0039B000 "igdgmm64.dll"
+Unloaded Module: 00007ff9825f0000 0004A000 "ControlLib.dll"
+Unloaded Module: 00007ff981f10000 000B9000 "IntelControlLib.dll"
+Unloaded Module: 00007ff97a170000 00389000 "iga64.dll"
+Unloaded Module: 00007ff97b9d0000 05155000 "igc-default64.dll"
+Unloaded Module: 00007ff985390000 0002A000 "igdgmmstaging_64.dll"
+Unloaded Module: 00007ff983030000 000B0000 "igdgmm2_64.dll"
+Unloaded Module: 00007ff982c90000 0039B000 "igdgmm64.dll"
+Unloaded Module: 00007ff9ae090000 00014000 "resourcepolicyclient.dll"
+Unloaded Module: 00007ff9b0b60000 00015000 "UMPDC.dll"
+Unloaded Module: 00007ff9b0b80000 0005E000 "powrprof.dll"
+------------------------------------------------------------------------------
+------------------------------------------------------------------------------
+
+----------------------------------------
+Registers
+----------------------------------------
+
+RAX=0000000000000000  RCX=00007FF73F79A983  RDX=000001BB93A6C750  RBX=000001BB4C3B0600
+RSP=000000AC864CF718  RBP=0000000000000000  RSI=000001BB4C3B0600  RDI=0000000000000000
+R8 =0000000000000018  R9 =0000000000000000  R10=000001BB93A6C750  R11=000000AC864CF3C0
+R12=0000000000000000  R13=00007FF73F79B5C0  R14=000001BABFAA8358  R15=000001BB93A6C738
+RIP=0000000000000000  CSR=00001FA0          FLG=00010200
+CS =0033      DS =002B      ES =002B      SS =002B      FS =0053      GS =002B
+
+XMM0 =00000000000000004108F29416872B02  XMM1 =00000000000000004108F29416872B02
+XMM2 =00000000000000000000000000000000  XMM3 =00000000000000000000000000000000
+XMM4 =00000000000000000000000000000000  XMM5 =00000000000000000000000000000000
+XMM6 =00000000000000000000000000000000  XMM7 =00000000000000000000000000000000
+XMM8 =00000000000000000000000000000000  XMM9 =00000000000000000000000000000000
+XMM10=00000000000000000000000000000000  XMM11=00000000000000000000000000000000
+XMM12=00000000000000000000000000000000  XMM13=00000000000000000000000000000000
+XMM14=00000000000000000000000000000000  XMM15=00000000000000000000000000000000
+CSR=00001FA0  MSK=0000FFFF
+
+----------------------------------------
+Stack Trace (Manual)
+----------------------------------------
+
+--- Thread ID: 12852 ---
+DBG-ADDR<00007ff9b3c61444>("ntdll.dll")
+
+--- Thread ID: 15584 ---
+DBG-ADDR<00007ff9b3c64a74>("ntdll.dll")
+
+--- Thread ID: 9908 ---
+DBG-ADDR<00007ff9b3c64a74>("ntdll.dll")
+
+--- Thread ID: 15660 ---
+DBG-ADDR<00007ff9b3c64a74>("ntdll.dll")
+
+--- Thread ID: 20408 ---
+DBG-ADDR<00007ff9b3c60e44>("ntdll.dll")
+
+--- Thread ID: 14016 ---
+DBG-ADDR<00007ff9b3c61444>("ntdll.dll")
+
+--- Thread ID: 17708 ---
+DBG-ADDR<00007ff9b3bacac0>("ntdll.dll")
+
+--- Thread ID: 4500 ---
+DBG-ADDR<00007ff9b3bacac0>("ntdll.dll")
+
+--- Thread ID: 8564 ---
+DBG-ADDR<00007ff9b3c60e44>("ntdll.dll")
+
+--- Thread ID: 6388 ---
+DBG-ADDR<00007ff9b3c60e44>("ntdll.dll")
+
+--- Thread ID: 16216 ---
+DBG-ADDR<00007ff9b3c60e44>("ntdll.dll")
+
+--- Thread ID: 16108 ---
+DBG-ADDR<00007ff9b3c60ee4>("ntdll.dll")
+
+--- Thread ID: 7900, Name: WowConnWork 0 ---
+DBG-ADDR<00007ff9b3c60e44>("ntdll.dll")
+
+--- Thread ID: 2936, Name: WowConnMain ---
+DBG-ADDR<00007ff9b3c60e44>("ntdll.dll")
+
+--- Thread ID: 8960, Name: NetThread 0 ---
+DBG-ADDR<00007ff9b3c60e44>("ntdll.dll")
+
+--- Thread ID: 2684, Name: bs Network ---
+DBG-ADDR<00007ff9112b30d0>("<unknown>")
+
+--- Thread ID: 14972, Name: bs Resolver ---
+DBG-ADDR<00007ff9b3c60e44>("ntdll.dll")
+
+--- Thread ID: 10960, Name: cxplat_worker ---
+DBG-ADDR<00007ff9b3c63d94>("ntdll.dll")
+
+--- Thread ID: 10224, Name: cxplat_worker ---
+DBG-ADDR<00007ff9b3c63d94>("ntdll.dll")
+
+--- Thread ID: 18968, Name: cxplat_worker ---
+DBG-ADDR<00007ff9b3c63d94>("ntdll.dll")
+
+--- Thread ID: 19404, Name: cxplat_worker ---
+DBG-ADDR<00007ff9b3c63d94>("ntdll.dll")
+
+--- Thread ID: 11212, Name: cxplat_worker ---
+DBG-ADDR<00007ff9b3c63d94>("ntdll.dll")
+
+--- Thread ID: 15836, Name: cxplat_worker ---
+DBG-ADDR<00007ff9b3c63d94>("ntdll.dll")
+
+--- Thread ID: 2500, Name: cxplat_worker ---
+DBG-ADDR<00007ff9b3c63d94>("ntdll.dll")
+
+--- Thread ID: 7620, Name: cxplat_worker ---
+DBG-ADDR<00007ff9b3c63d94>("ntdll.dll")
+
+--- Thread ID: 11060, Name: ThreadPool Low 0 ---
+DBG-ADDR<00007ff9b3c64a14>("ntdll.dll")
+
+--- Thread ID: 13636, Name: ThreadPool Low 1 ---
+DBG-ADDR<00007ff9b3c64a14>("ntdll.dll")
+
+--- Thread ID: 17860, Name: ThreadPool Low 2 ---
+DBG-ADDR<00007ff9b3c64a14>("ntdll.dll")
+
+--- Thread ID: 10808, Name: ThreadPool Mid 0 ---
+DBG-ADDR<00007ff9b3c64a14>("ntdll.dll")
+
+--- Thread ID: 9072, Name: ThreadPool Mid 1 ---
+DBG-ADDR<00007ff9b3c64a14>("ntdll.dll")
+
+--- Thread ID: 2128, Name: ThreadPool Mid 2 ---
+DBG-ADDR<00007ff9b3c64a14>("ntdll.dll")
+
+--- Thread ID: 7272, Name: ThreadPool High 0 ---
+DBG-ADDR<00007ff9b3c64a14>("ntdll.dll")
+
+--- Thread ID: 18740, Name: ThreadPool High 1 ---
+DBG-ADDR<00007ff9b3c64a14>("ntdll.dll")
+
+--- Thread ID: 16232, Name: ThreadPool High 2 ---
+DBG-ADDR<00007ff9b3c64a14>("ntdll.dll")
+
+--- Thread ID: 5384, Name: WowDownloadDispatcher 1 ---
+DBG-ADDR<00007ff9b3c60e44>("ntdll.dll")
+
+--- Thread ID: 13132, Name: AIO Thread ---
+DBG-ADDR<00007ff9b3c63d94>("ntdll.dll")
+
+--- Thread ID: 7096, Name: TACT Task Thread ---
+DBG-ADDR<00007ff9b3c64a14>("ntdll.dll")
+
+--- Thread ID: 12320, Name: TACT Task Thread ---
+DBG-ADDR<00007ff9b3c64a14>("ntdll.dll")
+
+--- Thread ID: 15652, Name: TACT Curl Downloader Thread ---
+DBG-ADDR<00007ff9b3c60e44>("ntdll.dll")
+
+--- Thread ID: 2460 ---
+DBG-ADDR<00007ff9b3c64a74>("ntdll.dll")
+
+--- Thread ID: 19668 ---
+DBG-ADDR<00007ff9b3c64a74>("ntdll.dll")
+
+--- Thread ID: 18124, Name: Disk Queue 0 ---
+DBG-ADDR<00007ff9b3c60e44>("ntdll.dll")
+
+--- Thread ID: 18488, Name: Net Queue 0 ---
+DBG-ADDR<00007ff9b3c60e44>("ntdll.dll")
+
+--- Thread ID: 12808, Name: Net Queue 1 ---
+DBG-ADDR<00007ff9b3c60e44>("ntdll.dll")
+
+--- Thread ID: 17740, Name: Net Queue 2 ---
+DBG-ADDR<00007ff9b3c60e44>("ntdll.dll")
+
+--- Thread ID: 12672, Name: Async Pending ---
+DBG-ADDR<00007ff9b3c60e44>("ntdll.dll")
+
+--- Thread ID: 7788 ---
+DBG-ADDR<00007ff9b3c60e44>("ntdll.dll")
+
+--- Thread ID: 17624 ---
+DBG-ADDR<00007ff9b3c64a14>("ntdll.dll")
+
+--- Thread ID: 14320 ---
+DBG-ADDR<00007ff9b17f6084>("win32u.dll")
+
+--- Thread ID: 14448 ---
+DBG-ADDR<00007ff9b3c64a14>("ntdll.dll")
+
+--- Thread ID: 16244 ---
+DBG-ADDR<00007ff9b3c64a14>("ntdll.dll")
+
+--- Thread ID: 20064 ---
+DBG-ADDR<00007ff9b3c64a14>("ntdll.dll")
+
+--- Thread ID: 1712 ---
+DBG-ADDR<00007ff9b3c64a14>("ntdll.dll")
+
+--- Thread ID: 19688 ---
+DBG-ADDR<00007ff9b3c64a14>("ntdll.dll")
+
+--- Thread ID: 14308 ---
+DBG-ADDR<00007ff9b3c64a14>("ntdll.dll")
+
+--- Thread ID: 15636 ---
+DBG-ADDR<00007ff9b3c64a14>("ntdll.dll")
+
+--- Thread ID: 2752 ---
+DBG-ADDR<00007ff9b3c64a14>("ntdll.dll")
+
+--- Thread ID: 15780 ---
+DBG-ADDR<00007ff9b3c64a14>("ntdll.dll")
+
+--- Thread ID: 100 ---
+DBG-ADDR<00007ff9b3c64a14>("ntdll.dll")
+
+--- Thread ID: 20124 ---
+DBG-ADDR<00007ff9b3c60e44>("ntdll.dll")
+
+--- Thread ID: 19496 ---
+DBG-ADDR<00007ff9b3c60e44>("ntdll.dll")
+
+--- Thread ID: 17844 ---
+DBG-ADDR<00007ff9b3c61444>("ntdll.dll")
+
+--- Thread ID: 7188 ---
+DBG-ADDR<00007ff9b3c61444>("ntdll.dll")
+
+--- Thread ID: 3564, Name: SDL_joystick ---
+DBG-ADDR<00007ff9b17f1344>("win32u.dll")
+
+--- Thread ID: 16304 ---
+DBG-ADDR<00007ff9b3c61914>("ntdll.dll")
+
+--- Thread ID: 14204, Name: VoiceSpeakThread ---
+DBG-ADDR<00007ff9b3c64a14>("ntdll.dll")
+
+--- Thread ID: 12104 ---
+DBG-ADDR<00007ff9b3c60e44>("ntdll.dll")
+
+--- Thread ID: 2440 ---
+DBG-ADDR<00007ff9b3c61444>("ntdll.dll")
+
+--- Thread ID: 1932, Name: WatchdogThread ---
+DBG-ADDR<00007ff9b3c64a14>("ntdll.dll")
+
+--- Thread ID: 8792 ---
+DBG-ADDR<00007ff9b3c64a74>("ntdll.dll")
+
+--- Thread ID: 2700 ---
+DBG-ADDR<00007ff9b3c61444>("ntdll.dll")
+
+--- Thread ID: 19308 ---
+DBG-ADDR<00007ff9b3c61444>("ntdll.dll")
+
+--- Thread ID: 4284 ---
+DBG-ADDR<00007ff9b3c61444>("ntdll.dll")
+
+--- Thread ID: 7148, Name: Combat Log Thread ---
+DBG-ADDR<00007ff9b3c64a14>("ntdll.dll")
+
+--- Thread ID: 18376 [Current Thread] ---
+DBG-ADDR<0000000000000000>("<unknown>")
+
+----------------------------------------
+Loaded Modules
+----------------------------------------
+
+<Exception.DebugModules:>
+DBG-MODULE<000001baab920000 00003000 "sfc.dll" "sfc.pdb" 0 {987527c0-a59d-b349-3666a2893b0696bb} 1 14688905>
+DBG-MODULE<00007ff73b080000 0863C000 "WowB.exe" "WowB.pdb" 0 {fcdd95cc-71da-4a10-8fa38d6dde10f1f8} 1 1791423696>
+DBG-MODULE<00007ff90f2b0000 029E0000 "WowB_loader.dll" "loader.pdb" 0 {84872b35-b52e-8635-4c4c44205044422e} 1 1784233019>
+DBG-MODULE<00007ff920cb0000 004A7000 "D3D12Core.dll" "D3D12Core.pdb" 0 {966b1101-8ea1-45c7-9c81fc80950bdb48} 1 1760548404>
+DBG-MODULE<00007ff93e590000 00173000 "sapi.dll" "sapi.pdb" 0 {d4aad7af-9711-3375-3d2491c14dbd842f} 1 1403434900>
+DBG-MODULE<00007ff969080000 0003B000 "cryptnet.dll" "cryptnet.pdb" 0 {14b383b3-f799-ac5d-390068cac4943572} 1 887507683>
+DBG-MODULE<00007ff976ad0000 00075000 "Oleacc.dll" "oleacc.pdb" 0 {0af4b88a-abab-411e-d77d7e611b1e340d} 1 1885857243>
+DBG-MODULE<00007ff97a170000 00389000 "iga64.dll" "iga64.pdb" 0 {9fa43f1a-f799-4580-a8ecf987c4646b2e} 1 1790209392>
+DBG-MODULE<00007ff97b9d0000 05155000 "igc-default64.dll" "igc-default64.pdb" 0 {5710a6ed-8476-4575-aa5e07b75fdb8149} 1 1790209839>
+DBG-MODULE<00007ff9816d0000 00037000 "winmmbase.dll" "WINMMBASE.pdb" 0 {507dec78-775a-45ea-97cffdd64bccd5bc} 1 4159462350>
+DBG-MODULE<00007ff981f10000 000B9000 "IntelControlLib.dll" "IntelControlLib.pdb" 0 {330055f8-c5c8-4a96-becf20bb82cefbb4} 1 1786448042>
+DBG-MODULE<00007ff9825f0000 0004A000 "ControlLib.dll" "ControlLib.pdb" 0 {d2279e2e-ce9b-4a98-b0fcc5a308068e3d} 1 1786448045>
+DBG-MODULE<00007ff982c90000 0039B000 "igdgmm64.dll" "igdgmm64.pdb" 0 {1905bff5-f2a1-4bca-97c07d41a7986b31} 1 1790209194>
+DBG-MODULE<00007ff983030000 000B0000 "igdgmm2_64.dll" "igdgmm2_64.pdb" 0 {6f2d274b-d26c-4e1b-9346b201d4e20c87} 1 1790209383>
+DBG-MODULE<00007ff983310000 02069000 "igd10umt64xe.DLL" "igd10umt64xe.pdb" 0 {631582a6-b165-46ec-aad7ea319275421d} 1 1790210011>
+DBG-MODULE<00007ff985390000 0002A000 "igdgmmstaging_64.dll" "igdgmmstaging_64.pdb" 0 {0e7dd97e-8f15-446e-823c0999f34f7324} 1 1790209453>
+DBG-MODULE<00007ff9853c0000 00024000 "igc64.dll" "igc64.pdb" 0 {2db9a9aa-193d-41fd-b622eaa1c10f3d56} 1 1790209130>
+DBG-MODULE<00007ff985950000 0051A000 "igd10iumd64.dll" "igd10iumd64.pdb" 0 {78a6987b-3ece-40f4-acd4f3c47b1dc3df} 1 1790209506>
+DBG-MODULE<00007ff98f500000 000DF000 "D3DSCache.dll" "D3DSCache.pdb" 0 {7c6e3a50-d818-6a96-991d43f1458eee10} 1 38721473>
+DBG-MODULE<00007ff992130000 00080000 "igdext64.dll" "igdext64.pdb" 0 {f2ae0da1-f368-47dc-beb9ce3a66bdc295} 1 1790208979>
+DBG-MODULE<00007ff992c40000 0004B000 "icm32.dll" "icm32.pdb" 0 {e3988bb2-031e-e90d-b648577450fd08aa} 1 905015230>
+DBG-MODULE<00007ff992d70000 0005C000 "libxell.dll" "libxell.pdb" 0 {b07579b4-7956-47b6-b833fa836a2c1ec8} 1 1752787791>
+DBG-MODULE<00007ff9980c0000 0001B000 "XInput1_4.dll" "XInput1_4.pdb" 0 {6493a423-360e-0407-17e5e5fcf0a11a17} 1 3406959078>
+DBG-MODULE<00007ff99abd0000 0009D000 "MSVCP140.dll" "msvcp140.amd64.pdb" 0 {81a826a7-6053-36d1-a2da7a2100aa48aa} 1 954962031>
+DBG-MODULE<00007ff99ae90000 00048000 "ncryptsslp.dll" "ncryptsslp.pdb" 0 {1170877b-f3bb-44c5-25be545909cbda7f} 1 1259946681>
+DBG-MODULE<00007ff99b940000 0004C000 "wdmaud.drv" "wdmaud.pdb" 0 {77f1971b-f72d-a045-ea502c5b7736d414} 1 2099350810>
+DBG-MODULE<00007ff99c380000 00142000 "textinputframework.dll" "TextInputFramework.pdb" 0 {34a2c0a7-da23-212e-70024181adfb5b3c} 1 360785011>
+DBG-MODULE<00007ff99c620000 00023000 "d3d12.dll" "d3d12.pdb" 0 {391dd6dc-bc5d-4c7f-782684f5ecb3985b} 1 115991057>
+DBG-MODULE<00007ff99cc10000 0000A000 "sfc_os.DLL" "sfc_os.pdb" 0 {afa675fa-ca02-3c05-680f533b8a7f2c04} 1 3024352412>
+DBG-MODULE<00007ff99dbb0000 001E3000 "inputhost.dll" "InputHost.pdb" 0 {abcdd088-62c8-3dbf-2ee2f171207bbb2f} 1 41609020>
+DBG-MODULE<00007ff99ee00000 0003B000 "dbgcore.DLL" "dbgcore.pdb" 0 {f03c9107-01f6-1f94-6ffb4606ffd8958e} 1 811737392>
+DBG-MODULE<00007ff9a2140000 00036000 "WINMM.dll" "winmm.pdb" 0 {004b1e80-61be-fde5-a0e1f421b384246e} 1 2251690161>
+DBG-MODULE<00007ff9a2180000 00290000 "COMCTL32.dll" "comctl32.pdb" 0 {8592c3f5-2253-049d-ab5e6274ca4e384d} 1 4255066635>
+DBG-MODULE<00007ff9a2f30000 0002C000 "VCRUNTIME140.dll" "vcruntime140.amd64.pdb" 0 {372a71f2-0351-d8e0-3fddea56aab7f238} 1 3277708404>
+DBG-MODULE<00007ff9a3230000 0000C000 "midimap.dll" "midimap.pdb" 0 {c7b0877f-e26d-569a-c7627fdc73bdc2e1} 1 4166834399>
+DBG-MODULE<00007ff9a3460000 00026000 "wdmaud2.drv" "wdmaud2.pdb" 0 {5c0590c5-37ee-682a-3c1d40a78b4c60dc} 1 1950339854>
+DBG-MODULE<00007ff9a3620000 00019000 "tbs.dll" "tbs.pdb" 0 {2d374a8b-a58d-e9e3-f6037926931cad67} 1 203832161>
+DBG-MODULE<00007ff9a3680000 0000F000 "msacm32.drv" "msacm32.pdb" 0 {ba07ec63-4c80-6cc8-bb8a4eb45e7d350a} 1 2763227619>
+DBG-MODULE<00007ff9a4110000 001B7000 "AUDIOSES.DLL" "audioses.pdb" 0 {f188ca8b-c383-a28a-e82934a3f525fb46} 1 2646899618>
+DBG-MODULE<00007ff9a47c0000 0000B000 "VERSION.dll" "version.pdb" 0 {440dd63b-e2b0-21f8-0fd0c78ef0aecef2} 1 2275202464>
+DBG-MODULE<00007ff9a4ce0000 000A5000 "MMDevApi.dll" "MMDevAPI.pdb" 0 {9fc6b20b-b2e0-d767-8028c01bf707ed54} 1 247280673>
+DBG-MODULE<00007ff9a5370000 0000C000 "VCRUNTIME140_1.dll" "vcruntime140_1.amd64.pdb" 0 {9aea08d0-3bc4-d555-680bb28b6896ed92} 1 3691554600>
+DBG-MODULE<00007ff9a5df0000 000BF000 "mscms.dll" "mscms.pdb" 0 {17cc3219-f36f-24c0-2d2dd371dec7f981} 1 2852211675>
+DBG-MODULE<00007ff9a5ec0000 0017A000 "drvstore.dll" "drvstore.pdb" 0 {6f28eedd-cb2e-e6a0-372820952d9e1d2c} 1 756374459>
+DBG-MODULE<00007ff9a77c0000 0000B000 "rasadhlp.dll" "rasadhlp.pdb" 0 {46810fdd-ef4a-c3b5-31e89259f2d94a0c} 1 158316011>
+DBG-MODULE<00007ff9a8790000 00086000 "fwpuclnt.dll" "fwpuclnt.pdb" 0 {7bfc378b-554f-1fef-ca263f6e159abd9b} 1 245929549>
+DBG-MODULE<00007ff9a91f0000 00025000 "dhcpcsvc.DLL" "dhcpcsvc.pdb" 0 {51b42bfc-ac67-b058-cb57e186944a825a} 1 1124682484>
+DBG-MODULE<00007ff9a9220000 0001D000 "dhcpcsvc6.DLL" "dhcpcsvc6.pdb" 0 {da04b0e1-5e4e-f325-f719581dde901c22} 1 4218805422>
+DBG-MODULE<00007ff9a9980000 0012A000 "WINHTTP.dll" "winhttp.pdb" 0 {0b998b55-bd53-57b7-79887c5dc5badaaf} 1 3456803258>
+DBG-MODULE<00007ff9a9c30000 0005E000 "directxdatabasehelper.dll" "directxdatabasehelper.pdb" 0 {9747aaf5-67dc-615c-a025165f35b52ff1} 1 2273281722>
+DBG-MODULE<00007ff9ac3e0000 00260000 "d3d11.dll" "d3d11.pdb" 0 {69dd4774-b442-adfc-c7ed384d7c231d80} 1 2497598362>
+DBG-MODULE<00007ff9acda0000 0012B000 "CoreMessaging.dll" "CoreMessaging.pdb" 0 {46238a8b-3f58-b1b4-dfe8cf4cb68533c0} 1 974823412>
+DBG-MODULE<00007ff9ad580000 0000B000 "AVRT.dll" "avrt.pdb" 0 {58fb2648-7ff2-661c-c5a0d5b568216e87} 1 2310781783>
+DBG-MODULE<00007ff9ad750000 00021000 "MSACM32.dll" "msacm32.pdb" 0 {0f7f24ee-2ca6-4b36-b76647b8e10a5b77} 1 2705859800>
+DBG-MODULE<00007ff9ad820000 0000D000 "Secur32.dll" "secur32.pdb" 0 {4086d48d-454c-b5a5-5d7006fdff298d3c} 1 3076803899>
+DBG-MODULE<00007ff9ad870000 0009F000 "apphelp.dll" "apphelp.pdb" 0 {a83cbc70-3f6d-fc6d-d8907f70c41790a0} 1 958601479>
+DBG-MODULE<00007ff9ada70000 000A8000 "uxtheme.dll" "uxtheme.pdb" 0 {e2bbbda0-30fb-0fca-f20fa485d62a7a56} 1 734920565>
+DBG-MODULE<00007ff9adb40000 0013B000 "dxgi.dll" "dxgi.pdb" 0 {7ac009cc-e236-6a45-d1510090c3276d89} 1 2734512402>
+DBG-MODULE<00007ff9adcc0000 0002F000 "dwmapi.dll" "dwmapi.pdb" 0 {0e66c8dc-2bad-e510-db2339870eedd5df} 1 1534219485>
+DBG-MODULE<00007ff9add10000 00044000 "dxcore.dll" "DXCore.pdb" 0 {bdf563bb-bdef-88cc-c1479c0552714a2c} 1 1771679452>
+DBG-MODULE<00007ff9ae090000 00014000 "resourcepolicyclient.dll" "ResourcePolicyClient.pdb" 0 {184339a5-bd82-d718-8563a99a73a663cf} 1 306439316>
+DBG-MODULE<00007ff9ae4b0000 0024C000 "dbghelp.dll" "dbghelp.pdb" 0 {0ac121db-e64f-be20-dcc0054d5dc14165} 1 2384527248>
+DBG-MODULE<00007ff9ae740000 008AE000 "windows.storage.dll" "Windows.Storage.pdb" 0 {ef42e52b-ba15-cefd-a22cb070b2fb6988} 1 890365058>
+DBG-MODULE<00007ff9af000000 0000F000 "hid.dll" "hid.pdb" 0 {1b0d0ef7-4f5b-b037-151898bec7e67fab} 1 1120154832>
+DBG-MODULE<00007ff9af340000 00033000 "IPHLPAPI.DLL" "iphlpapi.pdb" 0 {23648dda-4c96-dccc-e139dc2340f3030b} 1 2286535387>
+DBG-MODULE<00007ff9af3d0000 00158000 "DNSAPI.dll" "dnsapi.pdb" 0 {50dd7074-162a-7a95-9e3e4d82c49e3cbe} 1 2199532320>
+DBG-MODULE<00007ff9af7c0000 000C6000 "schannel.DLL" "schannel.pdb" 0 {25746d35-b390-3fac-c7d34a0cedd87b4b} 1 556608590>
+DBG-MODULE<00007ff9af8f0000 00039000 "rsaenh.dll" "rsaenh.pdb" 0 {c1cbdcff-3d39-0da0-721fdd1fe5f444de} 1 1744229608>
+DBG-MODULE<00007ff9af990000 0001B000 "kernel.appcore.dll" "Kernel.Appcore.pdb" 0 {6e8ea6dd-53e1-2966-620c37875551e6f6} 1 246514534>
+DBG-MODULE<00007ff9afac0000 00036000 "ntmarta.dll" "ntmarta.pdb" 0 {a1e053a1-582c-2346-3f30df9cec4fb869} 1 3598506564>
+DBG-MODULE<00007ff9afc50000 00049000 "SSPICLI.DLL" "sspicli.pdb" 0 {3edd48ff-bfd3-ae1f-dde522ab7c3f659d} 1 1263343596>
+DBG-MODULE<00007ff9afd30000 0000D000 "DSPARSE.dll" "dsparse.pdb" 0 {8fa49081-bbe4-3d8c-bff3d9797d087db2} 1 3779774972>
+DBG-MODULE<00007ff9aff30000 0006C000 "mswsock.dll" "mswsock.pdb" 0 {a3e5c0ba-2810-b53b-2646fe9284927d82} 1 2853914095>
+DBG-MODULE<00007ff9affb0000 00025000 "gpapi.dll" "gpapi.pdb" 0 {b437f9e4-4b81-6044-56e980a6a2909e38} 1 220278649>
+DBG-MODULE<00007ff9affe0000 00034000 "USERENV.dll" "userenv.pdb" 0 {68b1c8d1-7b22-fe9e-7d6e5a28ff763527} 1 1246422943>
+DBG-MODULE<00007ff9b0190000 0000C000 "cryptbase.dll" "cryptbase.pdb" 0 {d796d145-0e6c-390a-e346f535748b7f60} 1 3727022991>
+DBG-MODULE<00007ff9b0250000 0006A000 "wldp.dll" "wldp.pdb" 0 {4a20ef5f-b6bd-17d1-06dbf1e769fd77ec} 1 1777933762>
+DBG-MODULE<00007ff9b0350000 0001B000 "CRYPTSP.dll" "cryptsp.pdb" 0 {45b42b6a-d9a5-ca49-c5f18ca4042f9666} 1 421397379>
+DBG-MODULE<00007ff9b03c0000 00013000 "MSASN1.dll" "msasn1.pdb" 0 {bf21e504-3be9-355a-c195fc29148e9cb9} 1 180739746>
+DBG-MODULE<00007ff9b0470000 0003F000 "NTASN1.dll" "ntasn1.pdb" 0 {5858845a-c890-e5f0-cb04f2303dd78b3e} 1 2667946327>
+DBG-MODULE<00007ff9b04c0000 00030000 "ncrypt.dll" "ncrypt.pdb" 0 {4b53b035-33da-42b4-b095438af1c14380} 1 570619639>
+DBG-MODULE<00007ff9b0820000 0002F000 "DEVOBJ.dll" "devobj.pdb" 0 {7d956111-a463-9de7-537e122c350d3bf7} 1 1316201479>
+DBG-MODULE<00007ff9b0860000 00052000 "cfgmgr32.DLL" "cfgmgr32.pdb" 0 {c1d2bd65-5ada-b3e7-46b89d6ebd417a4b} 1 712946775>
+DBG-MODULE<00007ff9b08f0000 000FE000 "ServicingCommon.dll" "ServicingCommon.pdb" 0 {53e0d993-79ae-8f4d-2695c3b2b10530da} 1 2232338586>
+DBG-MODULE<00007ff9b0b60000 00015000 "UMPDC.dll" "UMPDC.pdb" 0 {550f2f22-934b-186c-699cf195cfe5e5ad} 1 3847741064>
+DBG-MODULE<00007ff9b0b80000 0005E000 "powrprof.dll" "powrprof.pdb" 0 {4c3ca276-1b95-af4f-1653318f5e717999} 1 2858637235>
+DBG-MODULE<00007ff9b0bf0000 0002A000 "bcrypt.dll" "bcrypt.pdb" 0 {5f1077ed-8d3a-bc83-ad7d378f94ea4190} 1 1159279676>
+DBG-MODULE<00007ff9b0c20000 00029000 "profapi.dll" "profapi.pdb" 0 {4b07c0cd-d420-c2b2-1ab58f272cce3b6d} 1 3813789498>
+DBG-MODULE<00007ff9b0d00000 00129000 "gdi32full.dll" "gdi32full.pdb" 0 {a6245e4f-5c78-eb06-438ea4820f1f6eb4} 1 890656319>
+DBG-MODULE<00007ff9b0e30000 0014C000 "ucrtbase.dll" "ucrtbase.pdb" 0 {158f9f38-cc49-2128-fe8c9354a209cfb5} 1 733937011>
+DBG-MODULE<00007ff9b1050000 000A3000 "msvcp_win.dll" "msvcp_win.pdb" 0 {f7d54e93-0c80-bfb0-8820802872942811} 1 801462590>
+DBG-MODULE<00007ff9b1100000 00082000 "WINTRUST.dll" "wintrust.pdb" 0 {79420ca7-ba8d-140b-549434332a96709a} 1 1553879383>
+DBG-MODULE<00007ff9b1190000 000AC000 "bcryptprimitives.dll" "bcryptprimitives.pdb" 0 {e63663f3-6c3a-bfbf-74eacd102dc13dbb} 1 3672939517>
+DBG-MODULE<00007ff9b1250000 00402000 "KERNELBASE.dll" "kernelbase.pdb" 0 {72cce506-944d-e026-7c172ad64287f9bd} 1 677407521>
+DBG-MODULE<00007ff9b1660000 0017E000 "CRYPT32.dll" "crypt32.pdb" 0 {aab4dc21-32d0-67ed-d58ea7ac1c4e6db7} 1 861530059>
+DBG-MODULE<00007ff9b17f0000 00027000 "win32u.dll" "win32u.pdb" 0 {6295787d-0b7e-537e-98f77f31f4426d1c} 1 2922534025>
+DBG-MODULE<00007ff9b1820000 00385000 "combase.dll" "combase.pdb" 0 {da1dc0c4-f35c-ee58-f672cbb20460d11d} 1 2349147981>
+DBG-MODULE<00007ff9b1bb0000 001CF000 "USER32.dll" "user32.pdb" 0 {cdb947d1-b96b-8797-7915de04cf54279c} 1 1277537702>
+DBG-MODULE<00007ff9b1d90000 000FB000 "SHCORE.dll" "shcore.pdb" 0 {c04498be-c5b5-bae9-744b1db825bc9c04} 1 3129514382>
+DBG-MODULE<00007ff9b2070000 00798000 "SHELL32.dll" "shell32.pdb" 0 {011de059-cf3d-0b81-74fa9b5324ea7654} 1 138090267>
+DBG-MODULE<00007ff9b2810000 00118000 "RPCRT4.dll" "rpcrt4.pdb" 0 {0204a8a1-37c4-2b7d-f1f0811a3a8277b2} 1 3146881180>
+DBG-MODULE<00007ff9b2930000 0015B000 "msctf.dll" "msctf.pdb" 0 {c53c99be-cadf-b830-1612a532743a5988} 1 848042006>
+DBG-MODULE<00007ff9b2bf0000 0019A000 "ole32.dll" "ole32.pdb" 0 {8dca42cc-7139-634d-36cdbda769bfa179} 1 2028696108>
+DBG-MODULE<00007ff9b2d90000 000A9000 "msvcrt.dll" "msvcrt.pdb" 0 {3d6633e0-2a7a-1306-a00d36101110a822} 1 2222928953>
+DBG-MODULE<00007ff9b2f50000 0000A000 "NSI.dll" "nsi.pdb" 0 {662a028f-57a7-c702-b11f583ce15a8e63} 1 206955086>
+DBG-MODULE<00007ff9b2f60000 000BC000 "ADVAPI32.dll" "advapi32.pdb" 0 {43ec8dcd-3f9c-b692-fe88343843c32820} 1 736674132>
+DBG-MODULE<00007ff9b3030000 00487000 "SETUPAPI.dll" "setupapi.pdb" 0 {ad406bec-9710-ecde-c3cc156f0cc21577} 1 3676286105>
+DBG-MODULE<00007ff9b34c0000 000AE000 "clbcatq.dll" "CLBCatQ.pdb" 0 {d74dc830-9d90-ec91-79ac107c6a32b0aa} 1 2564454094>
+DBG-MODULE<00007ff9b35f0000 000D9000 "OLEAUT32.dll" "oleaut32.pdb" 0 {2bfbdef3-a64d-b819-445a236ea5943e20} 1 62109679>
+DBG-MODULE<00007ff9b36e0000 00080000 "WS2_32.dll" "ws2_32.pdb" 0 {38723397-6bd4-22d1-39f79cc741880825} 1 536873802>
+DBG-MODULE<00007ff9b3770000 000A9000 "sechost.dll" "sechost.pdb" 0 {0e8bac43-6697-4479-88fb72c706d1f163} 1 2925099912>
+DBG-MODULE<00007ff9b3820000 0002B000 "GDI32.dll" "gdi32.pdb" 0 {92c6ec2a-be47-8836-c99bc83c2f3ae355} 1 1557283195>
+DBG-MODULE<00007ff9b3930000 000CB000 "KERNEL32.DLL" "kernel32.pdb" 0 {ae9e9d8f-7ac1-467a-645320fdc23235d0} 1 1053609746>
+DBG-MODULE<00007ff9b3a10000 00031000 "IMM32.dll" "imm32.pdb" 0 {fce5e7a9-b450-4eb0-8bf6492a4ad1e07b} 1 2376539079>
+DBG-MODULE<00007ff9b3a50000 00066000 "shlwapi.dll" "shlwapi.pdb" 0 {6cad183d-3c25-e609-3bb4b2f3a01d8164} 1 3184337242>
+DBG-MODULE<00007ff9b3b00000 00267000 "ntdll.dll" "ntdll.pdb" 0 {c3093720-177d-a685-1519dcffe8df53fe} 1 1809777610>
+<:Exception.DebugModules>
+
+----------------------------------------
+System Info
+----------------------------------------
+
+
+
+------------------------------------------------------------------------------

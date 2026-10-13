@@ -3,7 +3,6 @@ using System;
 using System.CodeDom.Compiler;
 using System.Collections.Generic;
 using System.IO;
-using System.Linq;
 using System.Reflection;
 using Styx.Helpers;
 using Styx.Logic.BehaviorTree;
@@ -80,22 +79,7 @@ namespace Styx
 
                 Logging.WriteDebug("Loading built-in bots from assembly: {0}", currentAssembly.GetName().Name);
 
-                // GetTypes() throws ReflectionTypeLoadException when some types
-                // cannot be loaded (e.g. on a 64-bit attach where types reference
-                // x86-only dependencies). Keep the loadable ones and continue.
-                Type[] assemblyTypes;
-                try
-                {
-                    assemblyTypes = currentAssembly.GetTypes();
-                }
-                catch (ReflectionTypeLoadException ex)
-                {
-                    assemblyTypes = ex.Types.Where(t => t != null).ToArray();
-                    Logging.WriteDebug("Some assembly types could not be loaded ({0} skipped)",
-                        ex.Types.Length - assemblyTypes.Length);
-                }
-
-                foreach (Type type in assemblyTypes)
+                foreach (Type type in currentAssembly.GetTypes())
                 {
                     if (type.IsSubclassOf(botBaseType) && !type.IsAbstract)
                     {

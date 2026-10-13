@@ -1,0 +1,133 @@
+﻿[HDR] hunt44 - trampoline call + stuck-thread RIP sampling + GetTime/UnitHealth/allocation probes
+[HDR] pid=5428 base=0x7FF73B080000 moduleSize=0x863C000 threads=70
+[HDR] lua_State [base+0x7B76AB8] = 0x1A9E83B5358
+[CAN] base+0 = 4d5a90000300000004000000ffff0000
+[CAN] lua_gettop live   = 488b512848b8abaaaaaaaaaaaa2a482b
+[CAN]        warm should = 488b512848b8abaaaaaaaaaaaa2a482b
+[CAN]        cold looks  = d8cd98580328593680f39ac81c7098e3
+[CAN] Lua cluster is WARM (plaintext, matches the decoded dump)
+[CAN] L->top=0x1AAD51F17B8 L->base=0x1AAD51F17B8 delta=0x0 (mod 24 = 0; 0 is normal, the stack is just empty)
+[CAN] G=0x1A9E83B5440  totalbytes(G+0x78)=115880619  threshold(G+0x70)=115881515  debt(G+0x88)=602
+[CAN] the collector is not due at this instant (totalbytes < threshold)
+
+== [0] read-only state: allocator, globals table, callee pages ==
+[ST] G            = 0x1A9E83B5440
+[ST] G->frealloc  = 0x7FF73B7E14E0   module+0x7614E0   <- every Lua allocation goes through this
+[ST] G->ud        = 0x1A987ED4860
+[ST] L+0x90 (L->l_gt) value=0x1A9E83C1340 tt=5 (table)   <- the globals table getfield will read
+[ST] L->top=0x1AAD51F17B8  L->base=0x1AAD51F17B8  L->ci=0x1AAC7333430
+[ST] L->top sampled 3x: 0x1AAD51F17B8 0x1AAD51F17B8 0x1AAD51F17B8  stable=True   (unstable = the client is running Lua right now; the calls below would race with it)
+[CAL] lua_getfield(3-arg)  0x0471A370 prot=0x20 WARM   (the way in: globals[name])
+[CAL] getfield w/ len      0x0471A500 prot=0x20 WARM   (fallback: same lookup, explicit length)
+[CAL] lua_pushlstring      0x0471BC20 prot=0x20 WARM   (pushes the argument (no alloc if interned))
+[CAL] lua_pcall            0x0471B5C0 prot=0x20 WARM   (calls the handler with a real CallInfo)
+[CAL] luaS_newlstr         0x0472BA70 prot=0x20 WARM   (interning (-Diag allocation probe))
+[CAL] CClosure factory     0x04720B50 prot=0x20 WARM   (what pushcclosure wedges in (-Diag probe))
+[CAL] luaM_realloc_        0x0472FB50 prot=0x20 WARM   (calls qword [G+0x10])
+[CAL] UnitHealth           0x01D63190 prot=0x20 WARM   (target handler)
+[CAL] UnitName             0x01D7B840 prot=0x20 WARM   (target handler)
+[CAL] UnitExists           0x01D596F0 prot=0x20 WARM   (target handler)
+[CAL] lua_gettop           0x0471A960 prot=0x20 WARM   (the proven leaf probe)
+[CAL] every callee is warm
+
+== [1] remote-thread proof: lua_gettop on a FAKE state must return 123 ==
+No coercion operator is defined between types 'System.IntPtr' and 'System.UInt64'.
+At C:\ghidra-scripts\hunt44.ps1:435 char:9
++     if (-not ((W64 ($fake + [uint64]0x28) ($fake + [uint64]0xC88)) -a ...
++         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : OperationStopped: (:) [], InvalidOperationException
+    + FullyQualifiedErrorId : System.InvalidOperationException
+
+[ALIVE] after [1]: alive, 70 threads
+
+== [2] find a warm `jmp qword ptr [rcx]` (FF 21) in module code ==
+[G] gadget = module+0x7932CD  page prot=0x20  bytes ff 21 verified live
+
+== [3] page, payload and the gadget jump proof ==
+[PG] page=0x1AA16E80000  block=0x1AA16E80600  payload=0x1AA16E80300
+[PG] pattern read-back = 404142434445464748494a4b4c4d4e4f match=True
+[G3] tid=18136 wait=0 exit=0x11223344 stage=0x3000
+[G3] VERDICT: module-start thread -> our page. The gadget vector WORKS.
+[PG] bridge payload 431 bytes placed=True read-back=True  page prot=0x40
+[ALIVE] after [3]: alive, 70 threads
+
+== [2b] the protector call-site check and the trampoline that satisfies it ==
+[PT] luaD_call / lua_pcall / luaD_pcall / rawrunprotected all end by entering 0x1D8E80 with their return address.
+[PT] That routine range-checks it against a descriptor, classifies the call shape (E8 / FF2) and, on a
+[PT] mismatch, falls into 0x1D9115 `movzx eax,[rbx]` with rbx=0 - a deliberate null dereference (hunt42 died there).
+[PT] dword[base+0x5FF6B30] = 0x0  (the range descriptor; 0 would skip the check)
+[PT] qword[base+0x5FF0B08] = 0x7FF913E210A0   (its byte +0x50B feeds the final canary test)
+[PT] canary byte [that+0x50B] = 0x43
+[PT] candidate 1 = module+0x471A983 (the real ret that ends lua_gettop); bytes at X-5 = e83f4803c2c3  (need e8......c3)
+[PT] candidate 1 ACCEPTED: lua_pcall will see a module return address with the E8 call shape
+[PT] trampoline mode = 1  X = 0x7FF73F79A983  (module+0x471A983)
+
+== [4] PROBE: lua_getfield alone - does the globals lookup work from our thread? ==
+Cannot convert value "-1" to type "System.UInt64". Error: "Value was either too large or too small for a UInt64."
+At C:\ghidra-scripts\hunt44.ps1:697 char:3
++   $res.pcall = [int]($pv -band [uint64]0xFFFFFFFF)
++   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidArgument: (:) [], RuntimeException
+    + FullyQualifiedErrorId : InvalidCastIConvertible
+
+[A1] exit=0x4200CAFE stage=0x4020 (COMPLETE - ran to the end)  tt=6 (function) value=0x1AA08046BE8  topB=0x1AAD51F17B8
+[A1] why=
+[A1] VERDICT: the globals lookup WORKS - the real CClosure pointer is on the stack (and the stack was restored)
+Cannot convert value "-1" to type "System.UInt64". Error: "Value was either too large or too small for a UInt64."
+At C:\ghidra-scripts\hunt44.ps1:697 char:3
++   $res.pcall = [int]($pv -band [uint64]0xFFFFFFFF)
++   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidArgument: (:) [], RuntimeException
+    + FullyQualifiedErrorId : InvalidCastIConvertible
+
+[A2] (length-taking twin) stage=0x4020 tt=6 (function) value=0x1AA08046BE8
+Cannot convert value "-1" to type "System.UInt64". Error: "Value was either too large or too small for a UInt64."
+At C:\ghidra-scripts\hunt44.ps1:697 char:3
++   $res.pcall = [int]($pv -band [uint64]0xFFFFFFFF)
++   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidArgument: (:) [], RuntimeException
+    + FullyQualifiedErrorId : InvalidCastIConvertible
+
+[A3] (a second name)    stage=0x4020 tt=6 (function)
+[ALIVE] after [4]: alive, 70 threads
+
+== [5] minimal bridge: GetTime() - no arguments, no unit lookup, no allocation ==
+[B0] trampoline = module+0x471A983   stage 0x4004A = entering lua_pcall, 0x4004B = it returned
+Cannot convert value "-1" to type "System.UInt64". Error: "Value was either too large or too small for a UInt64."
+At C:\ghidra-scripts\hunt44.ps1:697 char:3
++   $res.pcall = [int]($pv -band [uint64]0xFFFFFFFF)
++   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidArgument: (:) [], RuntimeException
+    + FullyQualifiedErrorId : InvalidCastIConvertible
+
+[B0] tid=17996 STILL RUNNING after 8 s  last stage=0x4004A exit=0x103
+[B0] the thread is left alone on purpose - TerminateThread is what killed the client in hunt40/hunt41,
+[B0] and freeing the page under a live payload thread is what killed it after hunt43. Sampling where it is:
+Cannot convert value "-1" to type "System.UInt32". Error: "Value was either too large or too small for a UInt32."
+At C:\ghidra-scripts\hunt44.ps1:204 char:11
++       if ($sr -eq [uint32]0xFFFFFFFF) {
++           ~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidArgument: (:) [], RuntimeException
+    + FullyQualifiedErrorId : InvalidCastIConvertible
+
+[B0] exit=0x103 stage=0x4004A (entering lua_pcall - a wedge HERE is inside the call machinery/protector) pcall=-999 -> [CALL] GetTime() : did not complete (stage=0x4004A exit=0x103 why=STILL RUNNING)
+[B0] VERDICT: even this call wedges - the RIP sample above names the exact instruction
+[ALIVE] after [5]: alive, 72 threads
+
+== [6] bridge target: UnitHealth("player") ==
+[B1] skipped
+[ALIVE] after [6]: alive, 72 threads
+
+== [7] allocation probe: luaS_newlstr with a string the client has never interned ==
+[D1] skipped
+[ALIVE] after [7]: alive, 72 threads
+
+== [8] read-only snapshot through the same bridge (one thread each) ==
+[S] skipped: no call has completed yet
+[ALIVE] after [8]: alive, 72 threads
+
+== [10] summary ==
+[SUM] execOk=True  gadgetProof=True  payloadOk=True  getfieldProbe=True  tramp=1  callOk=False  snapshotOk=0/11  stuck=True
+[SUM] a payload thread WEDGED - read the last stage stamp AND the RIP sample; then restart the client
+[CLEAN] page NOT freed - a payload thread is still live inside it (freeing it under the thread is what killed the client after hunt43)
+[DONE] upload C:\ghidra-scripts\hunt44-out.txt

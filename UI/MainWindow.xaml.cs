@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
@@ -239,9 +239,7 @@ namespace CopilotBuddy.UI
                             catch { /* Ignore, just ensure assembly is loaded */ }
                             
                             // Load previously enabled plugins from CharacterSettings
-                            // CharacterSettings.Instance is null until a player is detected
-                            // (never, in WowB read-only mode) — tolerate it.
-                            var enabledPlugins = CharacterSettings.Instance?.EnabledPlugins ?? new string[0];
+                            var enabledPlugins = CharacterSettings.Instance.EnabledPlugins ?? new string[0];
                             Styx.Plugins.PluginManager.Initialize(enabledPlugins);
                         }
                         catch (Exception ex)
@@ -262,12 +260,11 @@ namespace CopilotBuddy.UI
                             // Restore last selected bot (HB 4.3.4 pattern)
                             if (cmbBotSelector.Items.Count > 0)
                             {
-                                int selectedIndex = CharacterSettings.Instance?.SelectedBotIndex ?? 0;
+                                int selectedIndex = CharacterSettings.Instance.SelectedBotIndex;
                                 if (selectedIndex < 0 || selectedIndex >= cmbBotSelector.Items.Count)
                                 {
                                     // Invalid index, reset to 0
-                                    if (CharacterSettings.Instance != null)
-                                        CharacterSettings.Instance.SelectedBotIndex = 0;
+                                    CharacterSettings.Instance.SelectedBotIndex = 0;
                                     selectedIndex = 0;
                                 }
                                 cmbBotSelector.SelectedIndex = selectedIndex;
@@ -329,7 +326,6 @@ namespace CopilotBuddy.UI
 
             _selectedWoWProc = null;
             var candidates = new List<Process>();
-            int wowProcessesFound = 0;
 
             if (pidArg == null)
             {
@@ -337,41 +333,16 @@ namespace CopilotBuddy.UI
                 // and the Luacct.exe variant used by some private-server clients)
                 string[] wowProcessNames = { "Wow", "WoW", "Luacct", "WowB" };
                 var wowProcesses = wowProcessNames.SelectMany(n => Process.GetProcessesByName(n)).ToArray();
-                wowProcessesFound = wowProcesses.Length;
 
                 foreach (var proc in wowProcesses)
                 {
                     try
                     {
                         if (proc.HasExited) continue;
-
-                        int build = ObjectManager.GetBuildNumber(proc);
-                        if (build < 0)
-                        {
-                            // Typical cause: 32-bit CopilotBuddy inspecting a native
-                            // 64-bit client (e.g. WowB.exe) — the OS refuses module
-                            // enumeration across the bitness boundary.
-                            Logging.Write(Colors.Orange, "{0} (PID {1}) found, but its build could not be read.", proc.ProcessName, proc.Id);
-                            if (!Environment.Is64BitProcess)
-                                Logging.Write(Colors.Orange, "CopilotBuddy is running as x86 — use the x64 build to attach to a 64-bit client.");
-                            continue;
-                        }
-
-                        // build == 0 means no version resource (custom/private server client).
-                        // WowB.exe reports FileVersion 1.60.1.x (FilePrivatePart = 1) — its
-                        // real build number (70291) is NOT in that field, so accept WowB by
-                        // process name: only the Classic Beta client is named WowB.
-                        if (ObjectManager.IsSupportedBuild(build) || build == 0
-                            || proc.ProcessName.Equals("WowB", StringComparison.OrdinalIgnoreCase))
-                        {
+                        int build = proc.MainModule?.FileVersionInfo.FilePrivatePart ?? 0;
+                        // build == 0 means no version resource (custom/private server client)
+                        if (ObjectManager.IsSupportedBuild(build) || build == 0)
                             candidates.Add(proc);
-                            Logging.WriteDebug("Candidate: {0} (PID {1}), build {2}", proc.ProcessName, proc.Id, build);
-                        }
-                        else
-                        {
-                            Logging.Write(Colors.Orange, "{0} (PID {1}) skipped: unsupported build {2} (expected {3} or {4}).",
-                                proc.ProcessName, proc.Id, build, ObjectManager.SupportedBuild, ObjectManager.SupportedBuildWowB);
-                        }
                     }
                     catch { /* Access denied or process exited */ }
                 }
@@ -387,18 +358,9 @@ namespace CopilotBuddy.UI
                         var proc = Process.GetProcessById(pid);
                         if (!proc.HasExited)
                         {
-                            int build = ObjectManager.GetBuildNumber(proc);
-                            if (build < 0)
-                            {
-                                Logging.Write(Colors.Orange, "PID {0}: build could not be read.", pid);
-                                if (!Environment.Is64BitProcess)
-                                    Logging.Write(Colors.Orange, "CopilotBuddy is running as x86 — use the x64 build to attach to a 64-bit client.");
-                            }
-                            else if (ObjectManager.IsSupportedBuild(build) || build == 0
-                                || proc.ProcessName.Equals("WowB", StringComparison.OrdinalIgnoreCase))
+                            int build = proc.MainModule?.FileVersionInfo.FilePrivatePart ?? 0;
+                            if (ObjectManager.IsSupportedBuild(build))
                                 candidates.Add(proc);
-                            else
-                                Logging.Write(Colors.Orange, "PID {0} skipped: unsupported build {1} (expected {2} or {3}).", pid, build, ObjectManager.SupportedBuild, ObjectManager.SupportedBuildWowB);
                         }
                     }
                     catch
@@ -410,10 +372,7 @@ namespace CopilotBuddy.UI
 
             if (candidates.Count == 0)
             {
-                if (wowProcessesFound == 0)
-                    Logging.WriteQuiet(Colors.Red, "WoW.exe not found! Please launch WoW (3.3.5a) or WowB (Classic Beta) first.");
-                else
-                    Logging.WriteQuiet(Colors.Red, "{0} WoW process(es) found but none could be used — see the messages above.", wowProcessesFound);
+                Logging.WriteQuiet(Colors.Red, "WoW.exe not found! Please launch WoW 3.3.5a first.");
                 Dispatcher.Invoke(() => SetStatus("WoW not found"));
                 return false;
             }
@@ -424,41 +383,25 @@ namespace CopilotBuddy.UI
             {
                 try
                 {
-                        using var tempMemory = new Memory(proc.Id);
+                    using var tempMemory = new Memory(proc.Id);
 
-                        // Check if player is logged in
-                        bool isLoggedIn;
-                        if (tempMemory.Is64BitTarget)
-                        {
-                            // WowB (modern x64 client): the 3.3.5a InGame offset does
-                            // not apply here. Accept the process for now — the
-                            // build-specific check arrives with the WowB offset table.
-                            isLoggedIn = true;
-                            Logging.WriteDebug("Login check skipped for 64-bit client PID {0} (no InGame offset for this build yet).", proc.Id);
-                        }
-                        else
-                        {
-                            isLoggedIn = tempMemory.Read<byte>(Styx.Offsets.GlobalOffsets.InGame) != 0;
-                        }
-                        if (!isLoggedIn)
-                            continue;
+                    // Check if player is logged in
+                    bool isLoggedIn = tempMemory.Read<byte>(Styx.Offsets.GlobalOffsets.InGame) != 0;
+                    if (!isLoggedIn)
+                        continue;
 
                     // Try to claim the process via mutex
                     var mutex = ProcessMutex.Create(proc.Id, out bool createdNew);
                     if (!createdNew)
                     {
                         // Another CopilotBuddy already owns this process
-                        Logging.Write(Colors.Orange, "PID {0} is already attached by another CopilotBuddy instance.", proc.Id);
                         mutex.Close();
                         continue;
                     }
 
                     available.Add(new KeyValuePair<int, Mutex>(proc.Id, mutex));
                 }
-                catch (Exception ex)
-                {
-                    Logging.Write(Colors.Orange, "PID {0} dropped during availability check: {1}", proc.Id, ex.Message);
-                }
+                catch { /* Process exited or memory read failed */ }
             }
 
             if (available.Count == 0)
@@ -523,9 +466,8 @@ namespace CopilotBuddy.UI
             {
                 var memory = new Memory(wowPid);
 
-                // Verify still logged in before committing. 3.3.5a only —
-                // WowB has no InGame offset yet (its login check was skipped above).
-                if (!memory.Is64BitTarget && memory.Read<byte>(Styx.Offsets.GlobalOffsets.InGame) == 0)
+                // Verify still logged in before committing
+                if (memory.Read<byte>(Styx.Offsets.GlobalOffsets.InGame) == 0)
                 {
                     memory.Dispose();
                     Logging.Write(Colors.Red, "Process ID {0} is not logged in game!", wowPid);
@@ -808,7 +750,7 @@ namespace CopilotBuddy.UI
                         // cmbBotSelector.SelectedItem = value at 4.3.4 Start():856.
                         if (cmbBotSelector.Items.Contains(match.Key))
                             cmbBotSelector.SelectedItem = match.Key;
-                        else if (CharacterSettings.Instance != null)
+                        else
                             CharacterSettings.Instance.SelectedBotIndex = 0;
                     }
                     else
@@ -1013,8 +955,7 @@ namespace CopilotBuddy.UI
                 btnBotConfig.Visibility = Visibility.Visible;
                 
                 // Update selected bot index (no immediate save - HB 4.3.4 pattern)
-                if (CharacterSettings.Instance != null)
-                    CharacterSettings.Instance.SelectedBotIndex = cmbBotSelector.SelectedIndex;
+                CharacterSettings.Instance.SelectedBotIndex = cmbBotSelector.SelectedIndex;
             }
         }
 
@@ -1190,7 +1131,7 @@ namespace CopilotBuddy.UI
                     return;
 
                 UISettings.Instance.Save();
-                CharacterSettings.Instance?.Save(); // null in WowB read-only mode
+                CharacterSettings.Instance.Save();
                 StyxSettings.Instance.Save();
                 LevelbotSettings.Instance.Save();
                 
