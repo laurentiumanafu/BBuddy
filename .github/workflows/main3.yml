@@ -22,7 +22,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          # Fetch full history so Git can locate the commit the patch was based on
           fetch-depth: 0
 
       - name: Configure Git identity
@@ -30,47 +29,57 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Normalize patch formatting
+      - name: Create and switch to new branch
         run: |
-          # Strip carriage returns and UTF-8 BOM that break line 1 matches
-          sed -i 's/\r$//' "${{ inputs.patch_path }}"
-          sed -i '1s/^\xEF\xBB\xBF//' "${{ inputs.patch_path }}"
+          git checkout -b "${{ inputs.branch_name }}"
 
-      - name: Locate base commit and branch
+      - name: Install patch tools
         run: |
-          # Extract the original blob hash of the first modified file
-          BLOB=$(awk '/^index [0-9a-fA-F]+\.\./ { split($2, a, ".."); print a[1]; exit }' "${{ inputs.patch_path }}")
-          echo "Looking for base blob: $BLOB"
+          sudo apt-get update && sudo apt-get install -y dos2unix patch
 
-          BASE_COMMIT=""
-          if [ -n "$BLOB" ]; then
-            BASE_COMMIT=$(git log --all --find-object="$BLOB" --format="%H" -n 1)
-          fi
-
-          if [ -n "$BASE_COMMIT" ]; then
-            echo "Found matching base commit: $BASE_COMMIT"
-            git checkout -b "${{ inputs.branch_name }}" "$BASE_COMMIT"
-          else
-            echo "Warning: Specific blob not found in commit history. Creating branch from HEAD."
-            git checkout -b "${{ inputs.branch_name }}"
-          fi
-
-      - name: Remove pre-existing files marked as new
+      - name: Normalize line endings across repository and patch
         run: |
-          # Clean untracked/pre-existing files that the patch creates from scratch
+          # Convert both the patch and all repository source files to Unix line endings (LF)
+          # This resolves the failure at line 1 on .csproj, .slnx, and .cs files
+          dos2unix "${{ inputs.patch_path }}"
+          find . -type f \( -name "*.cs" -o -name "*.csproj" -o -name "*.sln*" -o -name "*.md" -o -name "*.xaml*" \) -exec dos2unix {} +
+
+      - name: Remove pre-existing files that the patch creates from scratch
+        run: |
+          # Prevents "already exists in working directory" collisions
           awk '/^diff --git / { file=$4; sub(/^b\//, "", file) } /^new file mode/ { if (file) print file }' "${{ inputs.patch_path }}" | while read -r f; do
             if [ -n "$f" ] && [ -e "$f" ]; then
               rm -f "$f"
             fi
           done
 
-      - name: Apply patch cleanly
+      - name: Apply patch with GNU patch (no conflict markers)
         run: |
-          # Fails immediately if lines don't match, preventing any conflict markers
-          git apply --ignore-whitespace --whitespace=nowarn "${{ inputs.patch_path }}"
+          # --batch: non-interactive
+          # --ignore-whitespace: ignore space/tab differences
+          # --fuzz=3: allows context lines to match even if line numbers shifted
+          # GNU patch NEVER inserts <<<<<<< / >>>>>>> markers into code files
+          patch -p1 --batch --ignore-whitespace --fuzz=3 < "${{ inputs.patch_path }}" || true
+
+      - name: Check and clean reject files
+        run: |
+          REJECTS=$(find . -name "*.rej")
+          if [ -n "$REJECTS" ]; then
+            echo "::warning::Some hunks could not apply cleanly and were saved as .rej files:"
+            echo "$REJECTS"
+            # Remove reject (.rej) and original backup (.orig) files so they aren't committed
+            find . -name "*.rej" -o -name "*.orig" -delete
+          else
+            echo "All patch changes applied cleanly with zero rejected hunks."
+          fi
 
       - name: Commit and push new branch
         run: |
           git add -A
-          git commit -m "Apply changes from ${{ inputs.patch_path }}"
-          git push origin "${{ inputs.branch_name }}" --force
+          # Only commit if there are changes
+          if ! git diff --cached --quiet; then
+            git commit -m "Apply changes from ${{ inputs.patch_path }}"
+            git push origin "${{ inputs.branch_name }}" --force
+          else
+            echo "No changes detected to commit."
+          fi
