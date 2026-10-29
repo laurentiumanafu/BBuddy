@@ -192,28 +192,37 @@ def index_header() -> bytes:
     return bytes(header)
 
 
-def build_index_block(entries: list) -> bytes:
+def build_index_block(entries: list, gap: int = 0) -> bytes:
+    """Single guarded block of entries. `gap` inserts the 8 bytes of padding that
+    CascLib skips after the header and that some writers omit, so both offsets get
+    exercised."""
     header = index_header()
     payload = b"".join(entries)
     out = bytearray()
     out += struct.pack("<I", len(header)) + struct.pack("<I", hashlittle(header, 0)) + header
+    out += bytes(gap)
     out += struct.pack("<I", len(payload)) + struct.pack("<I", hashlittle(payload, 0))
     out += payload
     return bytes(out)
 
 
-def build_index_pages(entries: list) -> bytes:
+def build_index_pages(entries: list, guarded: bool = True) -> bytes:
+    """Pages start on a 4 KB boundary. Guarded pages put a 32-bit hash in front of
+    every entry with 2 bytes of padding; unguarded pages pack the 18-byte entries."""
     header = index_header()
     out = bytearray()
     out += struct.pack("<I", len(header)) + struct.pack("<I", hashlittle(header, 0)) + header
-    out += bytes(8)                                 # padding before the first page
-    out += bytes(0x1000 - 24 - 8)                   # pages start on a 4 KB boundary
+    out += bytes(0x1000 - 24)                       # pages start on a 4 KB boundary
+
+    record_size = 24 if guarded else 18
     for e in entries:
         record = (e + b"\x00" * 18)[:18]
-        # The guard hashes the 18-byte entry plus one more byte.
-        guard = hashlittle(record + b"\x00", 0) | 0x80000000
-        out += struct.pack("<I", guard) + record + bytes(2)
-    out += bytes(0x200 - (len(entries) * 24) % 0x200)
+        if guarded:
+            guard = hashlittle(record + b"\x00", 0) | 0x80000000
+            out += struct.pack("<I", guard) + record + bytes(2)
+        else:
+            out += record
+    out += bytes((0x200 - (len(entries) * record_size) % 0x200) % 0x200)
     return bytes(out)
 
 
@@ -246,6 +255,8 @@ def main() -> int:
                                                       placements=False, chunk_positions=True)))
     wdt = add("c1c1c1c1c1c1c1c1c1", blte_zlib(build_wdt()))
     txt = add("d1d1d1d1d1d1d1d1d1", blte_stored(b"this is not terrain, just a stored blob"))
+    # A second stored blob so the unguarded page layout has two records to judge by.
+    x1 = add("e2e2e2e2e2e2e2e2e2", blte_stored(b"also not terrain"))
     skip = add("e1e1e1e1e1e1e1e1e1", b"")             # zero length: span head, skipped
 
     # Lay the payloads out in one archive.
@@ -266,10 +277,17 @@ def main() -> int:
         return entry(name, offset, size)
 
     (data_dir / "data.000").write_bytes(bytes(archive))
-    (data_dir / "0000000001.idx").write_bytes(build_index_block([make_entry(p[0]) for p in payloads[:5]]))
-    (data_dir / "0000000002.idx").write_bytes(build_index_pages([make_entry(p[0]) for p in payloads[5:]]))
+    # Four index files, one per layout the tool has to recognise on its own.
+    (data_dir / "0000000001.idx").write_bytes(
+        build_index_block([make_entry(p[0]) for p in payloads[0:2]]))
+    (data_dir / "0000000002.idx").write_bytes(
+        build_index_block([make_entry(p[0]) for p in payloads[2:4]], gap=8))
+    (data_dir / "0000000003.idx").write_bytes(
+        build_index_pages([make_entry(p[0]) for p in payloads[4:6]], guarded=True))
+    (data_dir / "0000000004.idx").write_bytes(
+        build_index_pages([make_entry(p[0]) for p in payloads[6:]], guarded=False))
 
-    print(f"wrote {data_dir}/data.000 ({len(archive)} bytes) and two index files")
+    print(f"wrote {data_dir}/data.000 ({len(archive)} bytes) and four index files")
     print(f"  continent A: tiles (32,32) height 50/72, (32,34) height 60 by chunk position")
     print(f"  tile (32,33) has no placement data, so it must come out as unknown")
     print(f"  continent B: tile (32,32), height 150")

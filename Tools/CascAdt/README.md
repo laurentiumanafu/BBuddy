@@ -62,6 +62,38 @@ Tools\NavGrid\bin-x64\navbake.exe bakeall --adts C:\export\adt --map 1 --out C:\
 Tools\NavMeshBuilder\bin-x64\mmapbuild.exe --tiles C:\tiles --map 1 --out <game dir>\mmaps
 ```
 
+## When the index does not parse
+
+Stores differ in how the entries are laid out, and the tool does not assume: it
+scores every layout it knows against the store's own limits (archive number below the
+archive count, offset below the segment size, size below 64 MB) and also tries
+neighbouring widths for the span split. `--verbose` says which combination won:
+
+```
+0000000001.idx: layout block+guard, first record at 32, stride 18, span split at 30 bits, score 1.75
+0000000004.idx: layout paged, first record at 4096, stride 18, span split at 30 bits, score 1.05
+```
+
+Known layouts:
+
+| name | shape |
+| --- | --- |
+| `block+guard` | u32 block length + u32 hash, then 18-byte entries back to back (hash verified, worth +1.5) |
+| `block` | the same entries with no block guard |
+| `paged+guard` | 0x200-byte pages, 4-byte hash in front of each entry, 2 bytes of padding |
+| `paged` | 0x200-byte pages with the entries packed and no per-entry hash |
+
+If nothing matches, run:
+
+```bat
+cascdump.exe inspect --data "B:\World of Warcraft\Data\data"
+```
+
+It prints, for the first three index files, the header fields, the first 48 bytes, the
+first 48 bytes at offset 0x1000, the detected layout, and the first three entries it
+can read. That output identifies the format - it is the report to keep if the
+extractor still finds nothing.
+
 ## Files
 
 | file | role |
@@ -135,6 +167,8 @@ mmaps answer a real Detour query — the seam test in `Tools/NavMeshBuilder/READ
 * Encrypted (`E`) entries and multi-archive spans (encoded size 0) are skipped.
 * An ADT with no doodads *and* no chunk positions is written as `unknown_*`; it cannot
   be placed on the world grid.
+* Stores whose index files use a layout beyond the four below will report no entries;
+  `inspect` exists for that case.
 * The tool has been tested against generated stores, not against a real 70291 install.
   The first run on real data is the actual test: `list` should report hundreds of
   thousands of entries, and `dump` should report thousands of ADTs with very few

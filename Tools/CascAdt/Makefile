@@ -30,6 +30,7 @@ test: cascdump
 	python3 make_test_casc.py /tmp/cascdump-test
 	mkdir -p /tmp/cascdump-test/out
 	./cascdump list --data /tmp/cascdump-test/data --verbose
+	@./cascdump list --data /tmp/cascdump-test/data | grep -q "entries: 7" || (echo "FAIL: expected 7 entries across the four index layouts"; ./cascdump list --data /tmp/cascdump-test/data; exit 1)
 	./cascdump dump --data /tmp/cascdump-test/data --out /tmp/cascdump-test/out --ref -100,-100,50
 	@test -f /tmp/cascdump-test/out/1_32_32.adt || (echo "FAIL: tile (32,32) was not written"; exit 1)
 	@test -f /tmp/cascdump-test/out/1_32_34.adt || (echo "FAIL: chunk-position tile (32,34) was not written"; exit 1)

@@ -57,8 +57,13 @@ mkdir "%ADT%" 2>nul
 mkdir "%TILES%" 2>nul
 
 echo [1/4] reading %DATA%
-"%CASC%" list --data "%DATA%"
-if errorlevel 1 exit /b 1
+"%CASC%" list --data "%DATA%" --verbose
+if errorlevel 1 (
+  echo.
+  echo no index entries could be read. Here is the header report, keep it:
+  "%CASC%" inspect --data "%DATA%"
+  exit /b 1
+)
 echo.
 echo       extracting ADTs, this reads the whole store once
 "%CASC%" dump --data "%DATA%" --out "%ADT%" --map %MAP% --ref %REF%
