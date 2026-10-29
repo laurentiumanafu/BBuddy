@@ -805,7 +805,7 @@ public static class ClickAimDiagnostics
                 {
                     // Winkr's scanner + resig.py, ported: see WowBSigScan. Runs once, in the
                     // attached client, and answers "does this function exist on THIS build".
-                    var scan = new Thread(WowBSigScan.Run);
+                    var scan = new Thread(Styx.WoWInternals.WowBSigScan.Run);
                     scan.IsBackground = true;
                     scan.Name = "WowBSigScan";
                     scan.Start();

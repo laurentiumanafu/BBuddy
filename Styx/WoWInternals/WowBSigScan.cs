@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Text;
 using System.Threading;
 using GreenMagic;
+using Styx.Helpers;
 
 namespace Styx.WoWInternals
 {
@@ -121,7 +122,7 @@ namespace Styx.WoWInternals
         {
             try
             {
-                Memory mem = StyxWoW.Memory;
+                Memory? mem = StyxWoW.Memory;
                 if (mem == null)
                 {
                     Logging.Write("[Sig] no memory reader attached, so there is nothing to scan");
