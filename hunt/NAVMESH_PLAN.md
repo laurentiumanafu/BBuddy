@@ -13,8 +13,10 @@ before any of them are useful.
 > them back with the same Detour sources and runs real queries (two ADTs with a wall
 > between the points: 451.5 yd route around the wall vs 330 yd straight).
 > What is still missing is **the ADT export for map 70291** — the CASC→ADT extractor
-> is not in this repo and upstream keeps it private. Export `world\maps\<map>\*.adt`
-> with CASCExplorer, then `Tools\NavMeshBuilder\make-mmaps.cmd <dir> 1 <game dir>`.
+> upstream points at is private, so this repo now has its own:
+> `Tools/CascAdt/cascdump.exe` reads `Data\data` without a listfile or the CDN and
+> writes `Kalimdor_<x>_<y>.adt` files, solving each tile from the doodad placements or
+> the MCHK chunk positions. Then `Tools\NavMeshBuilder\make-mmaps.cmd <dir> 1 <game dir>`.
 > Details: `Tools/NavMeshBuilder/README.md`.
 
 ## What a mesh buys, in this bot's own numbers

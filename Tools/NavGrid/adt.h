@@ -16,6 +16,7 @@
 #ifndef ADT_H
 #define ADT_H
 
+#include <stddef.h>
 #include <stdint.h>
 #include "navgrid.h"
 
@@ -32,6 +33,12 @@ typedef struct
  * Returns 1 on success, 0 when no MCNK was found, <0 on a malformed file. */
 int ng_bake_adt(const char *path, int32_t map_id, int32_t tile_x, int32_t tile_y,
                 float max_slope_deg, ng_tile *out, adt_stats *stats);
+
+/* Same, on an ADT already in memory (the CASC extractor decodes a payload and
+ * has no file to hand over). */
+int ng_bake_adt_buffer(const uint8_t *data, size_t size, int32_t map_id,
+                       int32_t tile_x, int32_t tile_y, float max_slope_deg,
+                       ng_tile *out, adt_stats *stats);
 
 /* Tile indices for a world position, using the client's own convention. */
 void ng_adt_tile_of(float x, float y, int32_t *tile_x, int32_t *tile_y);

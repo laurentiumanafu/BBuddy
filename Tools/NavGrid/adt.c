@@ -48,36 +48,45 @@ typedef struct
     float h[9][9];
 } mcnk_grid;
 
+/* Reads MCVT at a given offset inside the MCNK body. */
+static int mcvt_at(const uint8_t *body, uint32_t body_size, uint32_t offset, mcnk_grid *grid)
+{
+    if (offset + 8 > body_size) return 0;
+    const uint8_t *sub = body + offset;
+    if (!fourcc_is(sub, "MCVT")) return 0;
+
+    uint32_t size = rd32(sub + 4);
+    if (size < ADT_MCVT_FLOATS * 4 || offset + 8 + size > body_size) return 0;
+
+    const uint8_t *values = sub + 8;
+    static const int row_offset[9] = { 0, 17, 34, 51, 68, 85, 102, 119, 136 };
+    mcnk_grid scratch;
+    for (int i = 0; i < 9; i++)
+    {
+        for (int j = 0; j < 9; j++)
+        {
+            float value = rdf(values + (size_t)(row_offset[i] + j) * 4);
+            if (!isfinite(value)) return 0;
+            scratch.h[i][j] = value;
+        }
+    }
+    *grid = scratch;
+    return 1;
+}
+
 static int read_mcvt(const uint8_t *body, uint32_t body_size, mcnk_grid *grid)
 {
-    if (body_size <= ADT_MCNK_HEADER) return 0;
+    if (body_size <= 0x20) return 0;
 
-    uint32_t offset = ADT_MCNK_HEADER;
-    while (offset + 8 <= body_size)
-    {
-        const uint8_t *sub = body + offset;
-        uint32_t size = rd32(sub + 4);
-        if (size > body_size || offset + 8 + size > body_size) return 0;
+    /* ofsHeight at 0x14 has been in the MCNK header since 1.x and points at MCVT,
+     * so it is the one reliable way in. */
+    if (mcvt_at(body, body_size, rd32(body + 0x14), grid)) return 1;
 
-        if (fourcc_is(sub, "MCVT"))
-        {
-            if (size < ADT_MCVT_FLOATS * 4) return 0;
-            const uint8_t *values = sub + 8;
-            static const int row_offset[9] = { 0, 17, 34, 51, 68, 85, 102, 119, 136 };
-            for (int i = 0; i < 9; i++)
-            {
-                for (int j = 0; j < 9; j++)
-                {
-                    float value = rdf(values + (size_t)(row_offset[i] + j) * 4);
-                    if (!isfinite(value)) return 0;
-                    grid->h[i][j] = value;
-                }
-            }
-            return 1;
-        }
-
-        offset += 8 + size;
-    }
+    /* Some builds (Legion onwards) grew the MCNK header, and the fixed 128-byte
+     * walk then starts inside a subchunk. MCVT is unique and its size is fixed, so
+     * scanning for it is both cheap and version independent. */
+    for (uint32_t offset = 0x20; offset + 8 <= body_size; offset += 4)
+        if (mcvt_at(body, body_size, offset, grid)) return 1;
     return 0;
 }
 
@@ -104,26 +113,11 @@ static float sample_grid(const mcnk_grid *grid, float v, float u)
     return a * (1.0f - ti) + b * ti;
 }
 
-int ng_bake_adt(const char *path, int32_t map_id, int32_t tile_x, int32_t tile_y,
-                float max_slope_deg, ng_tile *out, adt_stats *stats)
+static int bake_from_buffer(const uint8_t *data, size_t size, int32_t map_id,
+                            int32_t tile_x, int32_t tile_y, float max_slope_deg,
+                            ng_tile *out, adt_stats *stats)
 {
-    if (path == NULL || out == NULL) return -1;
-
-    FILE *f = fopen(path, "rb");
-    if (f == NULL)
-    {
-        fprintf(stderr, "navgrid: cannot open %s\n", path);
-        return -1;
-    }
-    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return -1; }
-    long size = ftell(f);
-    if (size <= 0 || size > 64 * 1024 * 1024) { fclose(f); return -1; }
-    rewind(f);
-
-    uint8_t *data = (uint8_t *)malloc((size_t)size);
-    if (data == NULL) { fclose(f); return -1; }
-    if (fread(data, 1, (size_t)size, f) != (size_t)size) { free(data); fclose(f); return -1; }
-    fclose(f);
+    if (data == NULL || out == NULL || size < 16) return -1;
 
     ng_tile_init(out, map_id, tile_x, tile_y);
     memset(out->flags, 0, sizeof(out->flags));
@@ -219,9 +213,43 @@ int ng_bake_adt(const char *path, int32_t map_id, int32_t tile_x, int32_t tile_y
         offset += 8 + chunk_size;
     }
 
-    free(data);
-
     if (chunks == 0) return 0;
     ng_tile_mark_slopes(out, max_slope_deg);
     return 1;
+}
+
+/* Bakes an ADT file from disk. */
+int ng_bake_adt(const char *path, int32_t map_id, int32_t tile_x, int32_t tile_y,
+                float max_slope_deg, ng_tile *out, adt_stats *stats)
+{
+    if (path == NULL || out == NULL) return -1;
+
+    FILE *f = fopen(path, "rb");
+    if (f == NULL)
+    {
+        fprintf(stderr, "navgrid: cannot open %s\n", path);
+        return -1;
+    }
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return -1; }
+    long size = ftell(f);
+    if (size <= 0 || size > 64 * 1024 * 1024) { fclose(f); return -1; }
+    rewind(f);
+
+    uint8_t *data = (uint8_t *)malloc((size_t)size);
+    if (data == NULL) { fclose(f); return -1; }
+    if (fread(data, 1, (size_t)size, f) != (size_t)size) { free(data); fclose(f); return -1; }
+    fclose(f);
+
+    int rc = bake_from_buffer(data, (size_t)size, map_id, tile_x, tile_y, max_slope_deg, out, stats);
+    free(data);
+    return rc;
+}
+
+/* Bakes an ADT that is already in memory - the CASC extractor decodes a payload
+ * and has no file to hand over. */
+int ng_bake_adt_buffer(const uint8_t *data, size_t size, int32_t map_id,
+                       int32_t tile_x, int32_t tile_y, float max_slope_deg,
+                       ng_tile *out, adt_stats *stats)
+{
+    return bake_from_buffer(data, size, map_id, tile_x, tile_y, max_slope_deg, out, stats);
 }
