@@ -37,6 +37,11 @@ win: bin-x64/mmapbuild.exe bin-x64/mmapcheck.exe bin-x64/legacyfixture.exe
 ../NavGrid/navgrid-win.o: ../NavGrid/navgrid.c ../NavGrid/navgrid.h
 	$(ZIG) cc -target x86_64-windows-gnu -std=c99 -O2 -w -c -I ../NavGrid -o $@ ../NavGrid/navgrid.c
 
+# navgrid.c is C99: zig c++ would reject it as C++, so it is compiled separately
+# as a C object (navgrid.h carries the extern "C" guards that make the link work).
+../NavGrid/navgrid-win.o: ../NavGrid/navgrid.c ../NavGrid/navgrid.h
+	$(ZIG) cc -target x86_64-windows-gnu -std=c99 -O2 -w -c -I ../NavGrid -o $@ ../NavGrid/navgrid.c
+
 bin-x64/mmapbuild.exe: mmapbuild.cpp ../NavGrid/navgrid-win.o
 	mkdir -p bin-x64
 	$(ZIG) c++ -target x86_64-windows-gnu $(CFLAGS) -static-libgcc -static-libstdc++ \

@@ -33,6 +33,7 @@ Tools\NavMeshBuilder\make-mmaps.cmd C:\export\kalimdor 1 C:\CopilotBuddy
 | `legacyfixture.cpp` | Writes one 533 yd Detour tile in the **stock** (MaNGOS/TC/AC) single-tile container: a flat square with a wall and one doorway, so the legacy loader path can be tested against a real mesh. `--header 16\|20` picks the header size, `--closed` removes the doorway. |
 | `test_legacy_mmaps.py` | Acceptance test for the legacy path: both header sizes route *around* the wall (not through it), a walled-off tile returns Detour's partial path instead of a straight line, a blob built for another Detour version is rejected, and an overrunning size field is refused without a blind read. |
 | `make-mmaps.cmd` | Windows end-to-end driver with error checks at each step. |
+| `../UseExistingMmaps.cmd` | Points the DLL at an mmaps folder that already exists (junction beside every `Navigation.dll`), reports the naming scheme it finds, then load-checks every tile of map 1. |
 | `Makefile` | Linux/macOS build of both tools against a `Navigation-C-` checkout. |
 | `bin-x64/*.exe` | Prebuilt x64 tools: `mmapbuild.exe`, `mmapcheck.exe`. |
 
