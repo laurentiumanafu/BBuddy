@@ -76,6 +76,10 @@ public sealed class ClickAimMover : IPlayerMover
     {
         _cal = ClickAimCalibration.Load();
         _p.DegPerPx = _cal.Ok ? _cal.DegPerPx : -0.115;
+        // A measured click scale is worth having from the first click of a session:
+        // the runtime learner needs a leg to settle before it knows anything, and
+        // the assumed value is 30% out on this client.
+        if (_cal.ScaleSamples > 0 && _cal.YdPerDyPx > 0.01) _p.YdPerDyPx = _cal.YdPerDyPx;
         _p.DegPerDragPx = _cal.DragSamples > 0 ? _cal.DegPerDragPx : -0.21;
         _p.DegPerKeyMs = _cal.KeySamples > 0 ? _cal.DegPerKeyMs : 0.0;
         _p.DegPerPxRef = _p.DegPerPx;

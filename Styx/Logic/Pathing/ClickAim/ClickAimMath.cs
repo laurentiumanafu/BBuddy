@@ -441,8 +441,17 @@ public sealed class ClickAimParams
     /// </summary>
     public double YdPerDyPx { get; set; }
 
-    /// <summary>Starting guess for the click scale; deliberately pessimistic.</summary>
-    public double AssumedYdPerDyPx { get; set; } = 1.1;
+    /// <summary>
+    /// Starting guess for the click scale, used until a leg measures it.
+    ///
+    /// It used to be 1.1 yd/px, which comes from the field tool's numbers (-60 px is
+    /// 5-10 yd, -140 is 20-45) and assumes a camera pitched well down. Measured on
+    /// this client on 2026-10-29: -60 px walked 10.1, 11.3 and 13.2 yd, i.e. 0.17 to
+    /// 0.22 yd/px. 0.28 is deliberately on the high side of that: over-estimating the
+    /// scale makes the first click SHORTER than wanted, and one wasted click is a lot
+    /// cheaper than a 60 yd sprint past the goal.
+    /// </summary>
+    public double AssumedYdPerDyPx { get; set; } = 0.28;
 
     /// <summary>How much further than the distance left a hop should land.</summary>
     public double HopFactor { get; set; } = 1.2;

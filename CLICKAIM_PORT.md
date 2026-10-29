@@ -231,7 +231,22 @@ keyboard:
 ```
 
 That is the road test: pick the far end of a road, run it, and compare the printed
-waypoints with the map. A path that follows the road comes back with
+waypoints with the map. Done on the client on 2026-10-29 from `(-636.0, -4246.2)`:
+
+```
+[Route] 6 points, 141.3 yd for a 120.0 yd straight line (0.8 ms)
+[Route]    1: (   -636.0,   -4246.2,    38.4)
+[Route]    2: (   -633.3,   -4258.1,    38.7)
+[Route]    3: (   -608.5,   -4283.4,    38.0)
+[Route]    4: (   -608.5,   -4316.8,    38.2)
+[Route]    5: (   -627.9,   -4341.8,    41.8)
+[Route]    6: (   -643.0,   -4366.0,    46.3)
+```
+
+141 yd for 120 yd straight, terrain climbing 38 -> 46 yd over the last two points,
+and `polygons within 25 yd: 160 (area 4 x55, ground x105)` - area 4 is `Road`. That
+is Detour following the ground it was given. **The mesh side is done**; what is left
+is the mover. A path that follows the road comes back with
 `(points, length)` where the length is a few percent over the straight line and the
 waypoints run down the middle of it. A path that ignores the mountain and goes
 straight up it means the tiles for that area are missing or the height data is flat,
@@ -249,19 +264,43 @@ CopilotBuddy.exe --clickaim-calibrate        (or write  calibrate  into Settings
 
 `Settings\clickaim-cal.txt` was empty on this install - `calibration click 0.00000
 (0 samples)` in every log - so every walk ran on constants from a different camera.
-`ClickAimSelfCalibration` measures both channels by walking four legs of about 20 yd
-and reading where the character actually went:
+`ClickAimSelfCalibration` measures the model by walking five probe legs and reading
+where the character actually went:
 
 ```
-[Calibrate] centre click: 21.3 yd at heading 54.2 deg - that heading is the zero
-[Calibrate] a 240 px drag turned the walk -11.8 deg -> -0.04917 deg/px
-[Calibrate] clicks: +200 px gives -0.06033 deg/px, -200 px gives -0.05874 deg/px
-[Calibrate] wrote degPerPx=-0.059535 degPerDragPx=-0.049167 to ...\Settings\clickaim-cal.txt
+[Calibrate] centre click: 28.4 yd at heading -101.4 deg
+[Calibrate] click +200 px: 27.9 yd at heading -113.9 deg
+[Calibrate] +200 px moved the walk -12.5 deg from the centre heading -> -0.06250 deg/px
+[Calibrate] click -200 px: 26.1 yd at heading -89.0 deg
+[Calibrate] -200 px moved the walk -12.4 deg from the centre heading -> -0.06200 deg/px
+[Calibrate] drag +200 px: 27.2 yd at heading -108.7 deg
+[Calibrate] drag +200 px turned the walk -7.3 deg -> -0.03650 deg/px
+[Calibrate] the -200 px drag brought the camera -7.1 deg back -> -0.03550 deg/px
+[Calibrate] a -140 px click is worth 0.2036 yd/px over 5 probe(s)
+[Calibrate] wrote degPerPx=-0.062250 degPerDragPx=-0.036000 ydPerDyPx=0.2036 to ...\clickaim-cal.txt
 ```
 
-It refuses to write when the two click probes disagree in sign (a deflected walk) or
-when any probe walked less than 4 yd, and it says which probe failed. That is the
-whole point: a wrong number is worse than no number, because no number is logged.
+Three things make the numbers trustworthy, and the first version of this had none of
+them (it produced a 240 px drag "turning" a 6.3 yd walk by 146 deg):
+
+* **Long probes.** Every probe clicks -140 px, which walks 20-40 yd here. A 10 yd
+  walk is a direction with tens of degrees of error in it.
+* **A measured centre.** The zero comes from a plain centre click, and each channel
+  is measured against it, so the camera's own heading cancels.
+* **Drags are measured twice.** A drag rotates the camera and the rotation stays, so
+  the second drag is measured against where the first left the camera. Two estimates
+  of one number: if they disagree by more than half, the channel is discarded rather
+  than guessed.
+
+Plausibility bands (|click| 0.03-0.60 deg/px, |drag| 0.03-1.00) come from the field
+runs, and a channel outside them is not written. A wrong number is worse than no
+number, because no number is logged - so a refused write always says why.
+
+The file also carries the **click scale** (`ydPerDyPx`), which no field calibration
+ever recorded. Measured here: -60 px walked 10.1, 11.3 and 13.2 yd, i.e. 0.17-0.22
+yd/px, against the 1.1 yd/px the old model assumed. `ClickAimParams.AssumedYdPerDyPx`
+is now 0.28 - deliberately high, because over-estimating makes the first click
+*shorter* than wanted, and one wasted click is cheaper than a 60 yd sprint.
 
 ### Two more numbers the field log got wrong
 

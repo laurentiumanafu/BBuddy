@@ -20,10 +20,22 @@
     output sits when the Tools folder is copied beside the exe.
 #>
 param(
-    [Parameter(Mandatory = $true, Position = 0)][string]$Goal,
+    [string]$Goal = "",
     [string]$Root = "",
-    [int]$Seconds = 60
+    [int]$Seconds = 0
 )
+
+# Walk.cmd passes these in the environment, because PowerShell splits an argument
+# on commas: "route:-495.3,-4221.1" arrives as two arguments and the second is read
+# as a parameter name. Bare parameters still work when the script is called directly.
+if (-not $Goal)    { $Goal = $env:CLICKAIM_GOAL }
+if (-not $Root)    { $Root = $env:CLICKAIM_ROOT }
+if ($Seconds -le 0 -and $env:CLICKAIM_SECONDS) { $Seconds = [int]$env:CLICKAIM_SECONDS }
+if ($Seconds -le 0) { $Seconds = 60 }
+if (-not $Goal) {
+    Write-Host 'usage: Walk.ps1 -Goal <yards|x,y|route:x,y|calibrate> [-Seconds N] [-Root "exe folder"]'
+    exit 2
+}
 
 $ErrorActionPreference = "Stop"
 
@@ -58,8 +70,9 @@ $settings = Join-Path $Root "Settings"
 $request = Join-Path $settings "clickaim-walk.txt"
 if (-not (Test-Path $settings)) { New-Item -ItemType Directory -Path $settings | Out-Null }
 
+Write-Host "goal '$Goal'"
 Set-Content -Path $request -Value $Goal -NoNewline -Encoding ASCII
-Write-Host "wrote '$Goal' to $request"
+Write-Host "wrote it to $request"
 
 $logDir = Join-Path $Root "Logs"
 $log = Get-ChildItem $logDir -Filter *.log -ErrorAction SilentlyContinue |

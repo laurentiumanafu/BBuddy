@@ -37,18 +37,29 @@ public static class ClickAimCalibration
         public double DegPerPx { get; set; }
         public double DegPerDragPx { get; set; }
         public double DegPerKeyMs { get; set; }
+
+        /// <summary>
+        /// Yards walked per pixel of click height. Optional fourth channel: the field
+        /// tool never wrote it, and a file without it simply leaves the mover to
+        /// measure the scale at runtime.
+        /// </summary>
+        public double YdPerDyPx { get; set; }
+
         public int ClickSamples { get; set; }
         public int DragSamples { get; set; }
         public int KeySamples { get; set; }
+        public int ScaleSamples { get; set; }
         public double ClickSpread { get; set; }
         public bool Ok { get { return ClickSamples > 0; } }
 
         public override string ToString()
         {
             return string.Format(CultureInfo.InvariantCulture,
-                "click {0:F5} ({1} sample{2}), drag {3:F5} ({4}), key {5:F5} ({6})",
+                "click {0:F5} ({1} sample{2}), drag {3:F5} ({4}), key {5:F5} ({6}), "
+                + "scale {7:F3} yd/px ({8})",
                 DegPerPx, ClickSamples, ClickSamples == 1 ? "" : "s",
-                DegPerDragPx, DragSamples, DegPerKeyMs, KeySamples);
+                DegPerDragPx, DragSamples, DegPerKeyMs, KeySamples,
+                YdPerDyPx, ScaleSamples);
         }
     }
 
@@ -63,15 +74,18 @@ public static class ClickAimCalibration
             var clicks = new List<double>();
             var drags = new List<double>();
             var keys = new List<double>();
+            var scales = new List<double>();
             foreach (var line in File.ReadAllLines(path))
             {
-                double a, b, c;
-                if (!TryParseLine(line, out a, out b, out c)) continue;
+                double a, b, c, d;
+                if (!TryParseLine(line, out a, out b, out c, out d)) continue;
                 clicks.Add(a); drags.Add(b); keys.Add(c);
+                if (d > 0) scales.Add(d);
             }
             r.ClickSamples = PoolMedian(clicks, out double cp); r.DegPerPx = cp;
             r.DragSamples = PoolMedian(drags, out double dp); r.DegPerDragPx = dp;
             r.KeySamples = PoolMedian(keys, out double kp); r.DegPerKeyMs = kp;
+            r.ScaleSamples = PoolMedian(scales, out double sp); r.YdPerDyPx = sp;
             if (clicks.Count > 1)
             {
                 double lo = clicks[0], hi = clicks[0];
@@ -90,14 +104,27 @@ public static class ClickAimCalibration
     public static bool Append(double degPerPx, double degPerDragPx, double degPerKeyMs,
                               string? path = null)
     {
+        return Append(degPerPx, degPerDragPx, degPerKeyMs, 0.0, path);
+    }
+
+    /// <summary>
+    /// Appends one line, including the click scale when it was measured. Older
+    /// readers ignore the extra field, and a line without it pools to no samples
+    /// rather than to zero.
+    /// </summary>
+    public static bool Append(double degPerPx, double degPerDragPx, double degPerKeyMs,
+                              double ydPerDyPx, string? path = null)
+    {
         path = path ?? DefaultPath;
         try
         {
             string? dir = Path.GetDirectoryName(path);
             if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir)) Directory.CreateDirectory(dir);
+            string extra = ydPerDyPx > 0 ? string.Format(CultureInfo.InvariantCulture,
+                " ydPerDyPx={0:F4}", ydPerDyPx) : "";
             File.AppendAllText(path, string.Format(CultureInfo.InvariantCulture,
-                "degPerPx={0:F6} degPerDragPx={1:F6} degPerKeyMs={2:F6}{3}",
-                degPerPx, degPerDragPx, degPerKeyMs, Environment.NewLine));
+                "degPerPx={0:F6} degPerDragPx={1:F6} degPerKeyMs={2:F6}{3}{4}",
+                degPerPx, degPerDragPx, degPerKeyMs, extra, Environment.NewLine));
             return true;
         }
         catch
@@ -123,9 +150,10 @@ public static class ClickAimCalibration
         return n;
     }
 
-    private static bool TryParseLine(string line, out double click, out double drag, out double key)
+    private static bool TryParseLine(string line, out double click, out double drag, out double key,
+                                     out double scale)
     {
-        click = drag = key = 0;
+        click = drag = key = scale = 0;
         if (string.IsNullOrWhiteSpace(line)) return false;
         try
         {
@@ -141,6 +169,7 @@ public static class ClickAimCalibration
                 if (name == "degPerPx") click = v;
                 else if (name == "degPerDragPx") drag = v;
                 else if (name == "degPerKeyMs") key = v;
+                else if (name == "ydPerDyPx") scale = v;
             }
             return Math.Abs(click) > 1e-9;
         }

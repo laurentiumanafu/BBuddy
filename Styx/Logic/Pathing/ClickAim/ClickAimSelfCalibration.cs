@@ -7,51 +7,63 @@ using Styx.WoWInternals;
 namespace Styx.Logic.Pathing;
 
 /// <summary>
-/// Measures the two numbers the click model needs, by walking four short legs and
-/// measuring where the character actually went.
+/// Measures the three numbers the click model needs, by walking five short legs and
+/// reading where the character actually went.
 ///
-/// Why this exists: <c>Settings\clickaim-cal.txt</c> is empty on the client
-/// ("calibration click 0.00000 (0 samples)"), so every walk runs on constants copied
-/// from a field run with a different camera. On 2026-10-29 that produced a 120 yd
-/// sprint on a 20 yd goal and, worse, clicks that aimed a few degrees wide on every
-/// leg - small enough to look like bad luck, large enough that the character circled
-/// the target instead of reaching it.
+/// Why this exists: <c>Settings\clickaim-cal.txt</c> had never been written on this
+/// install ("calibration click 0.00000 (0 samples)"), so every walk ran on constants
+/// from a field run with a different camera. That produced a 120 yd sprint on a 20 yd
+/// goal and clicks that aimed a few degrees wide on every leg.
 ///
-/// The model has two channels and both are pure geometry:
+/// The first version of this measured too subtly and produced nonsense: a 6-13 yd
+/// probe walk has so much angular noise that a 240 px drag "turned" the walk 146 deg.
+/// Three things are different now, and each of them removes a way to be wrong:
 ///
-///   * a click at screen offset <c>px</c> from the centre walks <c>degPerPx * px</c>
-///     away from the heading a centre click walks;
-///   * a right-drag of <c>px</c> rotates the camera by <c>degPerDragPx * px</c>.
+///   * **long probes.** Every probe clicks <see cref="ProbeDy"/> pixels down, which on
+///     this client walks 20-40 yd. Ten yards of walk is a direction with tens of
+///     degrees of error in it; thirty yards is a direction.
+///   * **a measured centre.** The zero is taken from a plain centre click, not from
+///     its own past state, and each channel is then measured against it.
+///   * **drags are measured twice.** A drag rotates the camera and the rotation
+///     *stays*, so the second drag's measurement is relative to where the first one
+///     left the camera, and the two must agree. That disagreement is what caught the
+///     146 deg nonsense.
 ///
-/// So: click the centre and measure the heading it walked, drag a known number of
-/// pixels and click the centre again, then click either side of the centre by a
-/// known number of pixels. Four walks of about 20 yd each, and the file stops being
-/// a guess.
-///
-/// The result goes into the calibration file, which every <see cref="ClickAimMover"/>
-/// reads when it is constructed. Run it with <c>--clickaim-calibrate</c> before any
-/// walk in the session.
+/// Nothing here talks to the mover: the result goes into the calibration file, which
+/// every <see cref="ClickAimMover"/> reads when it is constructed. Run it with
+/// <c>--clickaim-calibrate</c> (or <c>calibrate</c> in the request file) before
+/// walking.
 /// </summary>
 internal static class ClickAimSelfCalibration
 {
-    /// <summary>Height of the probe clicks: a short hop, so a mistake stays short.</summary>
-    private const int ProbeDy = -60;
+    /// <summary>Height of the probe clicks. Long on purpose: see the class comment.</summary>
+    private const int ProbeDy = -140;
 
-    /// <summary>Camera drag for the drag channel. Large enough that the angle is unambiguous.</summary>
-    private const int ProbeDragPx = 240;
+    /// <summary>Camera drag for the drag channel.</summary>
+    private const int ProbeDragPx = 200;
 
     /// <summary>Click offset for the click channel, either side of the centre.</summary>
     private const int ProbeClickPx = 200;
 
-    /// <summary>A walk shorter than this says nothing about a direction.</summary>
-    private const double MinProbeYd = 4.0;
+    /// <summary>A probe walk shorter than this says nothing useful about a direction.</summary>
+    private const double MinProbeYd = 12.0;
 
     /// <summary>How long one probe walk may take before it is called a failure.</summary>
-    private const int ProbeTimeoutMs = 9000;
+    private const int ProbeTimeoutMs = 12000;
+
+    // What a plausible answer looks like. The field runs measured -0.107 to -0.127
+    // deg/px for clicks and -0.18 to -0.22 for drags, and a camera drag cannot be
+    // slower than 0.02 deg/px without the session being frozen. Outside these bands
+    // the number is a measurement artefact, and writing it would be worse than
+    // leaving the mover to measure the scale itself.
+    private const double MinClickDeg = 0.03;
+    private const double MaxClickDeg = 0.60;
+    private const double MinDragDeg = 0.03;
+    private const double MaxDragDeg = 1.00;
 
     public static void Run()
     {
-        Logging.Write("[Calibrate] measuring the click model: four short walks, about 20 yd each");
+        Logging.Write("[Calibrate] measuring the click model: five probe walks of 20-40 yd");
 
         IntPtr hwnd = Handle();
         if (hwnd == IntPtr.Zero) { Logging.Write("[Calibrate] no game window"); return; }
@@ -62,73 +74,131 @@ internal static class ClickAimSelfCalibration
             return;
         }
 
-        double zero, firstDistance;
-        if (!Probe("centre click", hwnd, false, 0, out zero, out firstDistance))
+        double h0, d0;
+        if (!Probe("centre click", hwnd, new Effect(EffectKind.None, 0), 0, out h0, out d0))
         {
             Logging.Write("[Calibrate] the centre click did not walk anywhere useful; nothing was written");
             return;
         }
 
-        Logging.Write(string.Format(CultureInfo.InvariantCulture,
-            "[Calibrate] centre click: {0:F1} yd at heading {1:F1} deg - that heading is the zero",
-            firstDistance, zero));
+        double hR, dR;
+        bool rightOk = Probe("click +" + ProbeClickPx + " px", hwnd, new Effect(EffectKind.Click, ProbeClickPx),
+                             ProbeClickPx, out hR, out dR);
 
-        double afterDrag, dragDistance;
-        if (!Probe("drag +" + ProbeDragPx + " px", hwnd, true, ProbeDragPx, out afterDrag, out dragDistance))
+        double hL, dL;
+        bool leftOk = Probe("click -" + ProbeClickPx + " px", hwnd, new Effect(EffectKind.Click, -ProbeClickPx),
+                            -ProbeClickPx, out hL, out dL);
+
+        double hD1, dD1;
+        bool drag1Ok = Probe("drag +" + ProbeDragPx + " px", hwnd, new Effect(EffectKind.Drag, ProbeDragPx),
+                             0, out hD1, out dD1);
+
+        double hD2, dD2;
+        bool drag2Ok = Probe("drag -" + ProbeDragPx + " px", hwnd, new Effect(EffectKind.Drag, -ProbeDragPx),
+                             0, out hD2, out dD2);
+
+        /* ---- the click channel ------------------------------------------------
+         * Both offsets are compared with the same centre-click heading, so the
+         * camera's own heading cancels and what is left is the click's share. */
+        double clickEst = 0.0;
+        int clickSamples = 0;
+        if (rightOk)
         {
-            Logging.Write("[Calibrate] the drag probe did not walk; a drag calibration needs that walk");
-            return;
-        }
-
-        double dragDelta = ClickAimMath.WrapDeg(afterDrag - zero);
-        double degPerDragPx = dragDelta / ProbeDragPx;
-        Logging.Write(string.Format(CultureInfo.InvariantCulture,
-            "[Calibrate] a {0} px drag turned the walk {1:F1} deg -> {2:F5} deg/px",
-            ProbeDragPx, dragDelta, degPerDragPx));
-
-        double rightHeading, rightDistance;
-        bool rightOk = Probe("click +" + ProbeClickPx + " px", hwnd, false, ProbeClickPx,
-                             out rightHeading, out rightDistance);
-
-        double leftHeading, leftDistance;
-        bool leftOk = Probe("click -" + ProbeClickPx + " px", hwnd, false, -ProbeClickPx,
-                            out leftHeading, out leftDistance);
-
-        // The zero is the heading the last centre click walked, which was the drag
-        // probe's. A click at +N px should walk a heading of zero + degPerPx*N, and
-        // degPerPx is negative when clicking right turns right - the same sign the
-        // planner uses in ClickAimMath.PlanLeg (px = delta / degPerPx).
-        double fromRight = rightOk ? ClickAimMath.WrapDeg(rightHeading - afterDrag) / ProbeClickPx : 0.0;
-        double fromLeft = leftOk ? ClickAimMath.WrapDeg(leftHeading - afterDrag) / -ProbeClickPx : 0.0;
-
-        double degPerPx;
-        if (rightOk && leftOk)
-        {
-            if ((fromRight > 0) != (fromLeft > 0))
-            {
-                Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                    "[Calibrate] the two click probes disagree in sign ({0:F5} and {1:F5} deg/px), so one "
-                    + "of them was deflected; not writing a click value", fromRight, fromLeft));
-                return;
-            }
-            degPerPx = 0.5 * (fromRight + fromLeft);
+            double s = ClickAimMath.WrapDeg(hR - h0) / ProbeClickPx;
             Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                "[Calibrate] clicks: +{0} px gives {1:F5} deg/px, -{0} px gives {2:F5} deg/px",
-                ProbeClickPx, fromRight, fromLeft));
+                "[Calibrate] +{0} px moved the walk {1:F2} deg from the centre heading -> {2:F5} deg/px",
+                ProbeClickPx, ClickAimMath.WrapDeg(hR - h0), s));
+            if (Plausible(s, MinClickDeg, MaxClickDeg)) { clickEst += s; clickSamples++; }
         }
-        else if (rightOk) degPerPx = fromRight;
-        else if (leftOk) degPerPx = fromLeft;
+        if (leftOk)
+        {
+            double s = ClickAimMath.WrapDeg(h0 - hL) / ProbeClickPx;
+            Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                "[Calibrate] -{0} px moved the walk {1:F2} deg from the centre heading -> {2:F5} deg/px",
+                ProbeClickPx, ClickAimMath.WrapDeg(h0 - hL), s));
+            if (Plausible(s, MinClickDeg, MaxClickDeg)) { clickEst += s; clickSamples++; }
+        }
+        if (clickSamples == 0)
+        {
+            Logging.Write("[Calibrate] neither click probe gave a plausible angle; the click channel is not "
+                          + "written and the field default is used");
+        }
         else
         {
-            Logging.Write("[Calibrate] neither click probe walked; nothing was written");
+            clickEst /= clickSamples;
+        }
+
+        /* ---- the drag channel -------------------------------------------------
+         * A drag rotates the camera and it stays rotated, so the first drag is
+         * measured against the centre heading and the second against where the first
+         * one left the camera. Two independent estimates of the same number, which is
+         * the check that the first version of this needed. */
+        double dragEst = 0.0;
+        int dragSamples = 0;
+        if (drag1Ok)
+        {
+            double s = ClickAimMath.WrapDeg(hD1 - h0) / ProbeDragPx;
+            Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                "[Calibrate] drag +{0} px turned the walk {1:F2} deg from the centre heading -> {2:F5} deg/px",
+                ProbeDragPx, ClickAimMath.WrapDeg(hD1 - h0), s));
+            if (Plausible(s, MinDragDeg, MaxDragDeg)) { dragEst += s; dragSamples++; }
+        }
+        if (drag1Ok && drag2Ok)
+        {
+            double s = ClickAimMath.WrapDeg(hD1 - hD2) / ProbeDragPx;
+            Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                "[Calibrate] the -{0} px drag brought the camera {1:F2} deg back -> {2:F5} deg/px",
+                ProbeDragPx, ClickAimMath.WrapDeg(hD1 - hD2), s));
+            if (Plausible(s, MinDragDeg, MaxDragDeg))
+            {
+                if (dragSamples > 0 && Math.Abs(s - dragEst / dragSamples) > 0.5 * Math.Abs(s))
+                {
+                    Logging.Write("[Calibrate] the two drag measurements disagree by more than half; "
+                                  + "discarding the drag channel rather than guessing");
+                    dragSamples = 0;
+                    dragEst = 0.0;
+                }
+                else { dragEst += s; dragSamples++; }
+            }
+        }
+        if (dragSamples > 0) dragEst /= dragSamples;
+        else Logging.Write("[Calibrate] no plausible drag angle; the drag channel is not written");
+
+        /* ---- the click scale --------------------------------------------------
+         * All five probes clicked the same height, so the distances they walked are
+         * repeats of one measurement - and they are the numbers that say how much
+         * ground a click is worth, which no calibration file has ever recorded. */
+        double scaleEst = 0.0;
+        int scaleSamples = 0;
+        AddScale(ref scaleEst, ref scaleSamples, d0, ProbeDy);
+        if (rightOk) AddScale(ref scaleEst, ref scaleSamples, dR, ProbeDy);
+        if (leftOk) AddScale(ref scaleEst, ref scaleSamples, dL, ProbeDy);
+        if (drag1Ok) AddScale(ref scaleEst, ref scaleSamples, dD1, ProbeDy);
+        if (drag2Ok) AddScale(ref scaleEst, ref scaleSamples, dD2, ProbeDy);
+        if (scaleSamples > 0)
+        {
+            scaleEst /= scaleSamples;
+            Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                "[Calibrate] a {0} px click is worth {1:F2} yd/px over {2} probe(s)",
+                ProbeDy, scaleEst, scaleSamples));
+        }
+
+        if (clickSamples == 0 && dragSamples == 0 && scaleSamples == 0)
+        {
+            Logging.Write("[Calibrate] nothing was plausible; the calibration file was not touched");
             return;
         }
 
-        if (ClickAimCalibration.Append(degPerPx, degPerDragPx, 0.0))
+        double clickValue = clickSamples > 0 ? clickEst : 0.0;
+        double dragValue = dragSamples > 0 ? dragEst : 0.0;
+        if (ClickAimCalibration.Append(clickValue, dragValue, 0.0,
+                                       scaleSamples > 0 ? scaleEst : 0.0))
         {
             Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                "[Calibrate] wrote degPerPx={0:F6} degPerDragPx={1:F6} to {2}",
-                degPerPx, degPerDragPx, ClickAimCalibration.DefaultPath));
+                "[Calibrate] wrote degPerPx={0:F6} degPerDragPx={1:F6}{2} to {3}",
+                clickValue, dragValue,
+                scaleSamples > 0 ? string.Format(CultureInfo.InvariantCulture, " ydPerDyPx={0:F4}", scaleEst) : "",
+                ClickAimCalibration.DefaultPath));
         }
         else
         {
@@ -138,17 +208,49 @@ internal static class ClickAimSelfCalibration
         Logging.Write("[Calibrate] the file now pools to: " + ClickAimCalibration.Load());
     }
 
+    private static void AddScale(ref double sum, ref int count, double distance, int dy)
+    {
+        if (dy == 0 || distance < MinProbeYd) return;
+        double s = distance / Math.Abs(dy);
+        if (s <= 0.01 || s > 5.0) return;
+        sum += s;
+        count++;
+    }
+
+    private static bool Plausible(double value, double min, double max)
+    {
+        double m = Math.Abs(value);
+        return m >= min && m <= max;
+    }
+
+    private enum EffectKind { None, Click, Drag }
+
+    private struct Effect
+    {
+        public readonly EffectKind Kind;
+        public readonly int Offset;
+
+        public Effect(EffectKind kind, int offset)
+        {
+            Kind = kind;
+            Offset = offset;
+        }
+    }
+
     /// <summary>
-    /// One probe: a drag or a click, then a wait for the character to stop, then the
-    /// heading it walked and how far.
+    /// One probe: wait for rest, apply the effect (a drag, then a click, or just a
+    /// click) and report the heading the character walked and how far.
+    ///
+    /// <paramref name="clickOffset"/> is the horizontal offset of the click that ends
+    /// the probe: the mover aims with that offset, so the probe has to as well.
     /// </summary>
-    private static bool Probe(string what, IntPtr hwnd, bool drag, int offset,
+    private static bool Probe(string what, IntPtr hwnd, Effect effect, int clickOffset,
                               out double heading, out double distance)
     {
         heading = 0.0;
         distance = 0.0;
 
-        if (!WaitForRest(4000))
+        if (!WaitForRest(5000))
         {
             Logging.Write("[Calibrate] " + what + ": the character is still moving, skipping the probe");
             return false;
@@ -161,15 +263,12 @@ internal static class ClickAimSelfCalibration
             return false;
         }
 
-        if (drag)
+        if (effect.Kind == EffectKind.Drag)
         {
-            ClickAimInput.Drag(hwnd, offset);
-            ClickAimInput.Click(hwnd, 0, ProbeDy);
+            ClickAimInput.Drag(hwnd, effect.Offset);
+            Thread.Sleep(120);
         }
-        else
-        {
-            ClickAimInput.Click(hwnd, offset, ProbeDy);
-        }
+        ClickAimInput.Click(hwnd, clickOffset, ProbeDy);
 
         int started = Environment.TickCount;
         bool moved = false;
@@ -179,7 +278,7 @@ internal static class ClickAimSelfCalibration
             double x, y;
             if (!ClickAimPositions.TryRead(out x, out y)) { Thread.Sleep(80); continue; }
             if (ClickAimMath.Len(x - x0, y - y0) > 1.0) moved = true;
-            if (moved && WaitForRest(800)) break;
+            if (moved && WaitForRest(900)) break;
             Thread.Sleep(80);
         }
 
@@ -188,14 +287,17 @@ internal static class ClickAimSelfCalibration
 
         double dx = x1 - x0, dy = y1 - y0;
         distance = ClickAimMath.Len(dx, dy);
+        heading = ClickAimMath.HeadingDeg(dx, dy);
+
         if (distance < MinProbeYd)
         {
             Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                "[Calibrate] {0}: only {1:F1} yd of movement - not enough to measure", what, distance));
+                "[Calibrate] {0}: only {1:F1} yd of movement, needs {2:F0} - not used (was something in "
+                + "the way, or is the camera pitched almost straight down?)",
+                what, distance, MinProbeYd));
             return false;
         }
 
-        heading = ClickAimMath.HeadingDeg(dx, dy);
         Logging.Write(string.Format(CultureInfo.InvariantCulture,
             "[Calibrate] {0}: {1:F1} yd at heading {2:F1} deg", what, distance, heading));
         return true;
