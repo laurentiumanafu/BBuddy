@@ -1101,6 +1101,17 @@ namespace Tripper.Navigation
         /// <returns>True if a polygon was found.</returns>
         public bool FindNearestPolyRef(uint mapId, Vector3 position, out PolygonReference polyRef, out Vector3 nearestPoint)
         {
+            return FindNearestPolyRef(mapId, position, Extents, out polyRef, out nearestPoint);
+        }
+
+        /// <summary>
+        /// Finds the nearest polygon with caller-chosen search extents, in WoW axis
+        /// order (X, Y, Z) like <see cref="RaycastWithExtents"/>, so a caller can
+        /// allow a tall vertical search without widening the horizontal one.
+        /// </summary>
+        public bool FindNearestPolyRef(uint mapId, Vector3 position, Vector3 extents,
+                                      out PolygonReference polyRef, out Vector3 nearestPoint)
+        {
             polyRef = PolygonReference.Invalid;
             nearestPoint = Vector3.Zero;
 
@@ -1112,7 +1123,7 @@ namespace Tripper.Navigation
                 try
                 {
                     var posC = new NativeMethods.XYZ(position);
-                    var extentsC = new NativeMethods.XYZ(Extents.Z, Extents.X, Extents.Y);
+                    var extentsC = new NativeMethods.XYZ(extents);
                     NativeMethods.XYZ nearestC;
                     bool success = NativeMethods.FindNearestPolyRef(mapId, posC, extentsC, out ulong refId, out nearestC);
                     if (success)

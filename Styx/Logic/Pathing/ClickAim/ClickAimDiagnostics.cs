@@ -448,6 +448,14 @@ public static class ClickAimDiagnostics
             // Ask Detour what is actually under the player.
             ProbePolys(nav, mapId, from);
 
+            /* Put the probe on the same footing as a real route: snap the player's
+             * point onto the mesh first and say how far it moved. If this line
+             * reports a large correction, the NO PATH below was a Z problem, not a
+             * missing tile - which is exactly the ambiguity that cost a session. */
+            var snappedFrom = from;
+            bool onMesh = MeshQuery.SnapLogged(nav, mapId, from, "player", out snappedFrom);
+            if (onMesh) from = snappedFrom;
+
             // Two lengths: 40 yd stays inside a few tiles, 120 yd crosses seams and
             // exercises the on-demand loader while the search runs.
             double[] legs = { 40.0, 120.0 };
@@ -458,7 +466,7 @@ public static class ClickAimDiagnostics
             foreach (double leg in legs)
             {
                 var to = new System.Numerics.Vector3(
-                    (float)(x + dx * leg), (float)(y + dy * leg), (float)z);
+                    (float)(from.X + dx * leg), (float)(from.Y + dy * leg), from.Z);
                 nav.EnsureTilesAroundPosition(mapId, to, 1);
 
                 Tripper.Navigation.PathFindResult result;
@@ -473,9 +481,10 @@ public static class ClickAimDiagnostics
                     || result.Points == null || result.Points.Length < 2)
                 {
                     Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                        "[MeshProbe] {0:F0} yd: NO PATH (status {1}) - the file {2}{3}{4}.mmtile "
-                        + "for map {5} is what the loader asked for; see the polygon report above for "
-                        + "whether the mesh has anything walkable here",
+                        "[MeshProbe] {0:F0} yd: NO PATH (status {1}) - tile {2}{3}{4}.mmtile for map "
+                        + "{5} is loaded, so read the polygon report above: 'none' means the mesh is "
+                        + "empty here (rebuild), a large snap correction means the Z was wrong, and "
+                        + "'blackspot' polygons mean an earlier walk marked this ground bad",
                         leg, result == null ? "null" : result.Status.ToString(),
                         mapId.ToString("000"), tileX.ToString("00"), tileY.ToString("00"), mapId));
                     continue;

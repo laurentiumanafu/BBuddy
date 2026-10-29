@@ -440,6 +440,21 @@ public static class RouteRunner
             nav.EnsureTilesAroundPosition(mapId, from, Navigator.LoadTilesAroundRadius);
             nav.EnsureTilesAroundPosition(mapId, to, Navigator.LoadTilesAroundRadius);
 
+            /* Both ends are snapped to the mesh before asking for a path. Detour's own
+             * start search only looks 20 yd up and down, so a Z that is a little wrong
+             * - and on the x64 client the Z is whatever the reader last saw - makes
+             * findNearestPoly return nothing and the request come back Failed. The
+             * snap is the difference between "no mesh here" and "the number was off",
+             * and MeshQuery.SnapLogged prints which one it was. */
+            var snappedFrom = from;
+            var snappedTo = to;
+            if (!MeshQuery.SnapLogged(nav, mapId, from, "player", out snappedFrom))
+                return null;
+            if (!MeshQuery.SnapLogged(nav, mapId, to, "goal", out snappedTo))
+                return null;
+            from = snappedFrom;
+            to = snappedTo;
+
             Tripper.Navigation.PathFindResult result = nav.FindPath(mapId, from, to, true);
             if (result == null || !result.Status.Succeeded)
             {
