@@ -14,8 +14,8 @@
  *
  * WoW map files are addressed by ADT index (tx, ty). One ADT covers 533.3333 yd.
  * The client's own mapping (TrinityCore's Map2GridCoord) is
- *     tx = 32 - floor(y / 533.3333)
- *     ty = 32 - floor(x / 533.3333)
+ *     tx = floor(32 - y / 533.3333)
+ *     ty = floor(32 - x / 533.3333)
  * so tile (tx, ty) spans
  *     x in [ (32 - ty - 1) * SIZE , (32 - ty) * SIZE )
  *     y in [ (32 - tx - 1) * SIZE , (32 - tx) * SIZE )

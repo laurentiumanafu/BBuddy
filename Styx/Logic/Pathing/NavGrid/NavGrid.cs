@@ -203,9 +203,12 @@ public sealed class NavGridFinder
 
     public static void TileOf(double x, double y, out int tileX, out int tileY)
     {
-        // Truncation toward zero, matching the client's Map2GridCoord.
-        tileX = 32 - (int)(y / NavGridTile.AdtYd);
-        tileY = 32 - (int)(x / NavGridTile.AdtYd);
+        // The truncation applies to the difference, which is how both server cores do
+        // it: (int)(32 - coord / 533.3333). Subtracting after truncating is off by one
+        // for every positive coordinate, so tile 25 would be looked up for a position
+        // that is in tile 24.
+        tileX = (int)(32.0 - y / NavGridTile.AdtYd);
+        tileY = (int)(32.0 - x / NavGridTile.AdtYd);
     }
 
     public bool WorldToGlobal(double x, double y, out int gcol, out int grow)

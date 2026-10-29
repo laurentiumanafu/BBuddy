@@ -445,8 +445,16 @@ static int convert_one(const char *path, const char *name, const char *out_dir,
     ng_tile *tile = (ng_tile *)malloc(sizeof(ng_tile));
     if (tile == NULL) { free(data); return -1; }
 
-    /* MaNGOS grid index from world Y is navgrid's tile_x; from world X is tile_y. */
-    ng_tile_init(tile, id.map_id, id.gy, id.gx);
+    /* The file name is "%03u%02u%02u" = map, gy, gx, and the server computes
+     *
+     *     gy = (int)(32 - worldX / 533.33)      gx = (int)(32 - worldY / 533.33)
+     *
+     * so the SECOND number indexes world X and the THIRD indexes world Y. navgrid
+     * stores tile_y from world X (it sets origin_x from it) and tile_x from world Y,
+     * which means the readable name maps across one place: file gy -> tile_y,
+     * file gx -> tile_x. Getting this backwards mirrors every continent about its
+     * diagonal while still passing every per-tile check. */
+    ng_tile_init(tile, id.map_id, /*tile_x=*/id.gx, /*tile_y=*/id.gy);
 
     int unwalkable = 0, hole_cells = 0;
     float min_h = 1e9f, max_h = -1e9f;

@@ -137,14 +137,20 @@ def write_map(path, gx, gy, kind):
         f.write(header + area + height + liquid + holes)
 
 
-def write_map_terrain(path, gx, gy, func):
+def write_map_terrain(path, x_index, y_index, func):
     """A tile whose heights come from a function of world position, so neighbouring
-    tiles are continuous across the shared edge."""
+    tiles are continuous across the shared edge.
+
+    The two indices are the numbers in the server's file name, in that order:
+    `%03u%02u%02u` is map, x index, y index. Inside the file the first index runs
+    along world X (`i`) and the second along world Y (`j`), which is the order the
+    server itself uses in GridMap::getHeightFromFloat.
+    """
     v9 = []
     for i in range(RES + 1):
         for j in range(RES + 1):
-            x = MAP_SIZE_OF_GRIDS * ((32 - gx) - i / float(RES))
-            y = MAP_SIZE_OF_GRIDS * ((32 - gy) - j / float(RES))
+            x = MAP_SIZE_OF_GRIDS * ((32 - x_index) - i / float(RES))
+            y = MAP_SIZE_OF_GRIDS * ((32 - y_index) - j / float(RES))
             v9.append(func(x, y))
     height = block(int.from_bytes(b"MHGT", "little"), 0, 0.0, 0.0, v9, v8_float(v9), "float")
     area = struct.pack("<256H", *([0] * 256))
@@ -209,6 +215,11 @@ def main():
     out_dir = os.path.join(work, "navtiles")
     os.makedirs(maps_dir, exist_ok=True)
     os.makedirs(out_dir, exist_ok=True)
+    for folder in (maps_dir, out_dir):          # a stale tile hides a naming change
+        for name in os.listdir(folder):
+            path = os.path.join(folder, name)
+            if os.path.isfile(path):
+                os.remove(path)
 
     print("map feature test")
     print("build")
@@ -230,8 +241,8 @@ def main():
     print(converted.stdout.strip())
     check("convert exits clean", converted.returncode == 0, converted.stderr)
     names = sorted(os.listdir(out_dir))
-    check("four tiles converted, other map ignored", names == ["1_32_32.navtile", "1_33_32.navtile",
-                                                               "1_34_32.navtile", "1_35_32.navtile"],
+    check("four tiles converted, other map ignored", names == ["1_32_32.navtile", "1_32_33.navtile",
+                                                               "1_32_34.navtile", "1_32_35.navtile"],
           str(names))
 
     if len(names) != 4:
@@ -243,6 +254,8 @@ def main():
     check("tile keeps the map id", t1["map_id"] == 1)
     check("tile_x is the Y grid index", t1["tile_x"] == 32)
     check("tile_y is the X grid index", t1["tile_y"] == 32)
+    t_second = read_navtile(os.path.join(out_dir, "1_32_33.navtile"))
+    check("the file's second number is the X grid index", t_second["tile_y"] == 33)
 
     # height grows along world -X, and col walks toward -X
     west = cell_height(t1, 0, 10)
@@ -271,7 +284,7 @@ def main():
           "%d of %d" % (walkable, len(t1["flags"])))
 
     print("int16 heights")
-    t2 = read_navtile(os.path.join(out_dir, "1_33_32.navtile"))
+    t2 = read_navtile(os.path.join(out_dir, "1_32_33.navtile"))
     worst = 0.0
     for row in (0, 60, 150, 260):
         for col in (0, 60, 150, 260):
@@ -285,14 +298,14 @@ def main():
           cell_height(t2, 0, 0) < cell_height(t2, t2["cells"] // 2, t2["cells"] // 2))
 
     print("flat terrain")
-    t3 = read_navtile(os.path.join(out_dir, "1_34_32.navtile"))
+    t3 = read_navtile(os.path.join(out_dir, "1_32_34.navtile"))
     vals = set(t3["heights"])
     check("no height field gives one constant height", len(vals) == 1, str(sorted(vals)[:4]))
     check("flat terrain is fully walkable", all(f & NG_WALK for f in t3["flags"]))
     check("flat height is the header value", abs(cell_height(t3, 5, 5) - 250.0) < 0.3)
 
     print("holes")
-    t4 = read_navtile(os.path.join(out_dir, "1_35_32.navtile"))
+    t4 = read_navtile(os.path.join(out_dir, "1_32_35.navtile"))
     holes = sum(1 for f in t4["flags"] if f & NG_HOLE)
     check("the mask produces holes", holes > 0, "%d cells" % holes)
     check("hole cells are not walkable",
@@ -320,8 +333,8 @@ def main():
     def terrain(x, y):
         return 300.0 + 0.02 * x + 0.03 * y + 18.0 * ((x / 400.0) % 1.0)
 
-    for gx, gy in ((32, 32), (33, 32), (32, 33), (33, 33)):
-        write_map_terrain(os.path.join(seam_maps, "001%02d%02d.map" % (gy, gx)), gx, gy, terrain)
+    for xi, yi in ((32, 32), (33, 32), (32, 33), (33, 33)):
+        write_map_terrain(os.path.join(seam_maps, "001%02d%02d.map" % (xi, yi)), xi, yi, terrain)
 
     subprocess.run([binary, "convert", "--maps", seam_maps, "--out", seam_tiles, "--map", "1"],
                    capture_output=True, text=True)

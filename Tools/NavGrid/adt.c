@@ -35,11 +35,19 @@ static int fourcc_is(const uint8_t *p, const char *name)
 
 void ng_adt_tile_of(float x, float y, int32_t *tile_x, int32_t *tile_y)
 {
-    /* Truncation toward zero, not floorf: the client's own Map2GridCoord is
-     * 32 - (int)(coord / 533.3333), and for negative coordinates floorf would
-     * shift every western tile by one. */
-    if (tile_x != NULL) *tile_x = 32 - (int32_t)(y / NG_ADT_YD);
-    if (tile_y != NULL) *tile_y = 32 - (int32_t)(x / NG_ADT_YD);
+    /* Both server implementations compute the grid index the same way, and it is
+     * not `32 - (int)(coord / 533.33)` - that is off by one for every positive
+     * coordinate:
+     *
+     *   TrinityCore  int gx = (int)(CENTER_GRID_ID - x / SIZE_OF_GRIDS);
+     *   VMaNGOS      int gx = (int)(32 - y / SIZE_OF_GRIDS);
+     *
+     * The truncation applies to the difference, so tile 31 covers (0, 533] and
+     * tile 32 covers (-533, 0]. Subtracting after truncating instead makes x = 4000
+     * land in tile 25, whose cells span 3200..3733 - a whole tile away from where
+     * the client would look. */
+    if (tile_x != NULL) *tile_x = (int32_t)(32.0f - y / NG_ADT_YD);
+    if (tile_y != NULL) *tile_y = (int32_t)(32.0f - x / NG_ADT_YD);
 }
 
 /* 9x9 heights of one chunk, copied out of the interleaved 17-row MCVT layout. */

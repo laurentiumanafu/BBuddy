@@ -66,6 +66,46 @@ static int all_segments_walkable(const ng_map *map, const ng_point *points, int 
 
 /* ------------------------------------------------------------------ tests */
 
+/* The tile index decides which .navtile the fallback reads and which file the
+ * extracted ADT is named after, so it has to match the client exactly. The trap is
+ * `32 - (int)(x / 533.33)` instead of `(int)(32 - x / 533.33)`: they differ by one
+ * for every positive coordinate. Each case below is checked against the tile's own
+ * cell range, so the two formulas cannot drift apart without failing here. */
+static void test_tile_of_world(void)
+{
+    static const struct { float x, y; int32_t tx, ty; } cases[] = {
+        {  4000.0f,  4000.0f, 24, 24 },
+        {  5000.0f,    -1.0f, 32, 22 },
+        {    -1.0f,   -600.0f, 33, 32 },
+        { -600.0f,  -600.0f, 33, 33 },
+        { -4254.0f, -614.0f, 33, 39 },   /* the Ashenvale position from the logs */
+        {  1000.0f,  1000.0f, 30, 30 },
+    };
+
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++)
+    {
+        int32_t tx = 0, ty = 0;
+        ng_adt_tile_of(cases[i].x, cases[i].y, &tx, &ty);
+
+        char name[96];
+        snprintf(name, sizeof(name), "tile of (%.0f,%.0f) is (%d,%d)", cases[i].x, cases[i].y,
+                 (int)cases[i].tx, (int)cases[i].ty);
+        check(name, tx == cases[i].tx && ty == cases[i].ty);
+
+        /* The position must fall inside the tile the index names. */
+        ng_tile *tile = (ng_tile *)malloc(sizeof(ng_tile));
+        check("tile allocates", tile != NULL);
+        if (tile == NULL) continue;
+        ng_tile_init(tile, 1, tx, ty);
+        int col = 0, row = 0;
+        int inside = ng_tile_world_to_cell(tile, cases[i].x, cases[i].y, &col, &row);
+        snprintf(name, sizeof(name), "  (%.0f,%.0f) lands in tile (%d,%d)", cases[i].x, cases[i].y,
+                 (int)tx, (int)ty);
+        check(name, inside == 1 && col >= 0 && col < NG_CELLS && row >= 0 && row < NG_CELLS);
+        free(tile);
+    }
+}
+
 static void test_open_ground(void)
 {
     printf("open ground\n");
@@ -414,6 +454,7 @@ static void test_adt_bake(void)
 int main(void)
 {
     printf("navgrid self-test\n");
+    test_tile_of_world();
     test_open_ground();
     test_wall_with_gap();
     test_enclosed_goal();

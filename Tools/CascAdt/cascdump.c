@@ -924,18 +924,19 @@ typedef struct
     int ref_inside;
 } adt_info;
 
-/* Tile index of a world position, the client's own convention:
- *
- *   tile_x = 32 - (int)(y / 533.3333)
- *   tile_y = 32 - (int)(x / 533.3333)
+/* Tile index of a world position, the client's own convention. The truncation
+ * applies to the difference, not to the coordinate: TrinityCore writes
+ * `(int)(32 - x / 533.3333)` and VMaNGOS the same. Doing `32 - (int)(x / 533.33)`
+ * instead is off by one for every positive coordinate, which names every extracted
+ * eastern tile after its neighbour.
  */
 static int tile_of_world(float x, float y, int *tile_x, int *tile_y)
 {
     if (!isfinite(x) || !isfinite(y)) return 0;
     if (x <= -20000.0f || x >= 20000.0f || y <= -20000.0f || y >= 20000.0f) return 0;
 
-    int tx = 32 - (int)(y / ADT_YD);
-    int ty = 32 - (int)(x / ADT_YD);
+    int tx = (int)(32.0f - y / ADT_YD);
+    int ty = (int)(32.0f - x / ADT_YD);
     if (tx < 0 || tx >= ADT_GRID || ty < 0 || ty >= ADT_GRID) return 0;
 
     *tile_x = tx;
