@@ -847,3 +847,33 @@ itself (PostMessage right-click) is the same code the field tool proved, but it 
 never been driven from *inside* the bot process - that is the next acceptance step,
 `--clickaim-walk <visible point 30-60 yd>`, expecting `[ClickAim] from … to …`,
 then `arrived: … yd remaining, N legs`.
+
+## 2026-10-29 (v19) — profile waypoint chains, and the mesh verdict
+
+Asked for: "load a profile like ashenvale.xml and make the bot run to a point in the
+world using the mesh". The profile half is now implemented; the mesh half is not
+possible on this client, for two verifiable reasons:
+
+* `Lib/Navigation.dll` PE machine is `0x014C` (i386) - the x64 bot cannot load it,
+  so Tripper/Detour never initialises there.
+* Its tiles are V5 `.mmtile` from 3.3.5a map data; no tile set exists for 70291 and
+  3.3.5a tiles cannot be reused.
+
+New:
+* `ProfileRoute` - parses Hotspot/RunTo in document order, quest filter, cluster
+  split (gap > 150 yd starts a new cluster), nearest-cluster pick, `Describe`.
+  Measured on `Ashenvale (22-24).xml`: 50 waypoints, 20 clusters
+  ([5,8,1,1,2,1,2,2,1,3,8,8,1,1,1,1,1,1,1,1]), 86,343 yd naive chain, longest leg
+  17,705 yd (a RunTo transport hop).
+* `RouteRunner` - per leg: `Navigator.GeneratePath` when a mesh is loaded and the
+  polyline is followed point by point; otherwise the waypoint is walked directly,
+  and legs > 100 yd are refused rather than attempted.
+* `ClickAimDiagnostics` - `--clickaim-profile <xml>` (`--profile-quest`,
+  `--profile-legs`, `--profile-nearest`, `--profile-all`), plus `.xml` / `profile:`
+  in `clickaim-walk.txt`; profile jobs are a single job, not a point queue.
+* `ClickAimPilot.WalkTo(mover, ...)` overload so a route reuses one mover and the
+  calibration is read once; the self-test is logged once per process.
+
+Not compiled (no C# toolchain here). Not run: the parser was mirrored in Python
+against the real file to check counts/ordering, which is why the 20-cluster and
+17,705 yd numbers above are measurements rather than guesses.

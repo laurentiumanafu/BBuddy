@@ -121,6 +121,46 @@ The pilot reports progress every 15 s, and stops on arrival, timeout, repeated
 blocking or a runaway leg. Everything it uses is the same `ClickAimMover` the tree
 will call.
 
+## Loading a profile (waypoint chain)
+
+A profile is a *waypoint source*; the mover is the driver.
+
+```
+--clickaim-profile "C:\Profiles\Ashenvale (22-24).xml"
+```
+
+or write the `.xml` path (or `profile:<path>`) into `Settings\clickaim-walk.txt`.
+`ProfileRoute` reads `Hotspot` and `RunTo` elements in document order;
+`--profile-quest <id>` narrows to one quest's cluster, `--profile-nearest` starts at
+the closest waypoint, `--profile-legs <n>` caps the number of legs, `--profile-all`
+walks the file as one chain.
+
+The default is *the cluster you are standing in*. Measured on
+`Ashenvale (22-24).xml`: 50 waypoints in **20 separate clusters** (5, 8, 1, 1, 2, 1,
+2, 2, 1, 3, 8, 8, and eight singletons), 86,343 yd of naive chain, because the seven
+`RunTo` elements hop across continents - the longest single leg in the file is
+17,705 yd. Walking the file as one chain is therefore meaningless even with a mesh;
+that is the transport problem, not a pathfinding problem.
+
+`RouteRunner` walks a leg with `Navigator.GeneratePath` **when a mesh is loaded**,
+and refuses legs beyond `ProfileRoute.MaxClickWalkYd` (100 yd) when one is not,
+instead of aiming a click at something 600 yd away.
+
+### Why there is no mesh on build 70291
+
+Two independent blockers, both verifiable in the repo:
+
+* `Lib/Navigation.dll` has PE machine `0x014C` (i386). The bot is x64; a 32-bit
+  native library cannot be loaded into it, so the Detour engine is inert there.
+* Its tiles are V5 `.mmtile` / MaNGOS ADT files generated from 3.3.5a map data.
+  There is no tile set for build 70291, and the 3.3.5a tiles cannot be reused - the
+  terrain and the map ids are different.
+
+So on this client the mesh path is dead code that has been left correct for the day
+a mesh exists. The honest options are in `hunt/NAVMESH_PLAN.md`: an x64 Detour build
+plus CASC-extracted terrain for 70291, or a learned occupancy grid. Until then the
+profile's own hotspots are the path, which is exactly what they are.
+
 ## Where the position comes from
 
 `ClickAimPositions.TryRead` prefers the 3.3.5a object model (`ObjectManager.Me`),

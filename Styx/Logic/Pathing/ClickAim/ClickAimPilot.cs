@@ -16,6 +16,8 @@ namespace Styx.Logic.Pathing;
 /// </summary>
 public static class ClickAimPilot
 {
+    private static int _selfTestLogged;
+
     /// <summary>
     /// Walks to a world X/Y and blocks until it arrives, gives up or times out.
     /// Intended for a console/UI action, not for the bot thread.
@@ -23,9 +25,19 @@ public static class ClickAimPilot
     public static bool WalkTo(double x, double y, double tolerance = 2.0, int timeoutMs = 300000,
                               bool verbose = true)
     {
-        Logging.Write(ClickAimMath.SelfTest());
-        var mover = new ClickAimMover();
-        var goal = new WoWPoint((float)x, (float)y, 0f);
+        LogSelfTestOnce();
+        return WalkTo(new ClickAimMover(), new WoWPoint((float)x, (float)y, 0f), tolerance, timeoutMs, verbose);
+    }
+
+    /// <summary>
+    /// Same walk with a caller-owned mover, so a route can reuse one mover (and one
+    /// calibration read) for every leg instead of building one per waypoint.
+    /// </summary>
+    public static bool WalkTo(ClickAimMover mover, WoWPoint goal, double tolerance, int timeoutMs,
+                              bool verbose)
+    {
+        if (mover == null) throw new ArgumentNullException(nameof(mover));
+
         int started = Environment.TickCount;
         int lastReport = started;
 
@@ -64,5 +76,13 @@ public static class ClickAimPilot
                 mover.LastRemaining, mover.Legs));
         }
         return false;
+    }
+
+    /// <summary>The 26-check report belongs in the log once per process, not once per leg.</summary>
+    public static void LogSelfTestOnce()
+    {
+        if (Interlocked.Exchange(ref _selfTestLogged, 1) != 0) return;
+        try { Logging.Write(ClickAimMath.SelfTest()); }
+        catch (Exception ex) { Logging.Write("[ClickAim] self-test threw: " + ex.Message); }
     }
 }

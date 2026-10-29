@@ -32,6 +32,10 @@ public static class ClickAimDiagnostics
     private static readonly Queue<double[]> Pending = new Queue<double[]>();
     private static bool _walking;
 
+    // A profile route is one job, not a queue of points: it owns its own ordering.
+    private static List<RoutePoint>? _pendingRoute;
+    private static int _pendingRouteLegs;
+
     public static string RequestPath
     {
         get
@@ -111,15 +115,111 @@ public static class ClickAimDiagnostics
         return false;
     }
 
+    /// <summary>
+    /// Loads a profile and queues its waypoint chain. Returns false when the file has
+    /// no movement elements or a walk is already running.
+    /// </summary>
+    public static bool StartProfile(string path, int questId, int maxLegs, bool startNearest, bool wholeFile)
+    {
+        List<RoutePoint> route;
+        try
+        {
+            route = ProfileRoute.Load(path, questId);
+        }
+        catch (Exception ex)
+        {
+            Logging.Write("[Route] could not load " + path + ": " + ex.Message);
+            return false;
+        }
+
+        if (route.Count == 0)
+        {
+            Logging.Write("[Route] " + path + " has no Hotspot/RunTo waypoints"
+                          + (questId != 0 ? " for quest " + questId : ""));
+            return false;
+        }
+
+        Logging.Write("[Route] " + Path.GetFileName(path) + ": " + ProfileRoute.Describe(route));
+
+        double px, py;
+        bool havePosition = ClickAimPositions.TryRead(out px, out py);
+
+        // A profile's waypoints are separate grind areas plus continent-scale RunTo
+        // hops. Unless the whole file was asked for, walk the cluster we are
+        // standing in - the alternative is "walk 17,705 yd to Darkshore".
+        if (questId == 0 && !wholeFile && havePosition)
+        {
+            int clusterIndex, clusterCount;
+            List<RoutePoint> cluster = ProfileRoute.NearestCluster(route, px, py, out clusterIndex, out clusterCount);
+            if (clusterCount > 1 && cluster.Count > 0)
+            {
+                Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                    "[Route] the file has {0} separate walkable clusters; using #{1} - {2}. "
+                    + "Use --profile-all to walk the file as one chain",
+                    clusterCount, clusterIndex + 1, ProfileRoute.Describe(cluster)));
+                route = cluster;
+            }
+        }
+
+        if (havePosition)
+        {
+            int nearest = ProfileRoute.NearestIndex(route, px, py);
+            double distance = ClickAimMath.Len(route[nearest].X - px, route[nearest].Y - py);
+            Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                "[Route] nearest waypoint is {0}/{1} at {2:F0} yd; use --profile-nearest to start there",
+                nearest + 1, route.Count, distance));
+
+            if (startNearest && nearest > 0)
+            {
+                route = route.GetRange(nearest, route.Count - nearest);
+                Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                    "[Route] starting at waypoint {0}, {1} waypoints to walk", nearest + 1, route.Count));
+            }
+        }
+
+        lock (Gate)
+        {
+            if (_walking || _pendingRoute != null)
+            {
+                Logging.Write("[Route] a walk is already running; the profile request was ignored");
+                return false;
+            }
+            _pendingRoute = route;
+            _pendingRouteLegs = maxLegs;
+        }
+        return true;
+    }
+
     private static void ParseCommandLine()
     {
         try
         {
             string[] args = Environment.GetCommandLineArgs();
+
+            // Pre-pass: --clickaim-profile depends on these, and argument order
+            // is the user's business, not ours.
+            int questId = 0;
+            int profileLegs = 0;
+            bool startNearest = false;
+            bool wholeProfile = false;
+            for (int i = 0; i < args.Length; i++)
+            {
+                string a = args[i] ?? "";
+                if (a.Equals("--profile-quest", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+                    int.TryParse(args[i + 1], out questId);
+                else if (a.Equals("--profile-legs", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+                    int.TryParse(args[i + 1], out profileLegs);
+                else if (a.Equals("--profile-nearest", StringComparison.OrdinalIgnoreCase))
+                    startNearest = true;
+                else if (a.Equals("--profile-all", StringComparison.OrdinalIgnoreCase))
+                    wholeProfile = true;
+            }
+
             for (int i = 0; i < args.Length; i++)
             {
                 string arg = args[i] ?? "";
                 string spec = null;
+                string profile = null;
                 if (arg.Equals("--clickaim-walk", StringComparison.OrdinalIgnoreCase))
                 {
                     if (i + 1 < args.Length) spec = args[i + 1];
@@ -127,6 +227,20 @@ public static class ClickAimDiagnostics
                 else if (arg.StartsWith("--clickaim-walk=", StringComparison.OrdinalIgnoreCase))
                 {
                     spec = arg.Substring("--clickaim-walk=".Length);
+                }
+                else if (arg.Equals("--clickaim-profile", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (i + 1 < args.Length) profile = args[i + 1];
+                }
+                else if (arg.StartsWith("--clickaim-profile=", StringComparison.OrdinalIgnoreCase))
+                {
+                    profile = arg.Substring("--clickaim-profile=".Length);
+                }
+
+                if (profile != null)
+                {
+                    StartProfile(profile, questId, profileLegs, startNearest, wholeProfile);
+                    continue;
                 }
 
                 if (spec == null) continue;
@@ -146,6 +260,25 @@ public static class ClickAimDiagnostics
     /// </summary>
     private static bool TryQueueSpec(string spec, string origin)
     {
+        // A profile is a list of waypoints, not a point: "Settings\Ashenvale.xml"
+        // or "profile:<path>" in clickaim-walk.txt loads and walks it.
+        string trimmed = (spec ?? "").Trim();
+        if (trimmed.Length > 4 &&
+            (trimmed.EndsWith(".xml", StringComparison.OrdinalIgnoreCase) ||
+             trimmed.StartsWith("profile:", StringComparison.OrdinalIgnoreCase)))
+        {
+            string path = trimmed.StartsWith("profile:", StringComparison.OrdinalIgnoreCase)
+                ? trimmed.Substring("profile:".Length).Trim()
+                : trimmed;
+            if (path.Length >= 2 && path.StartsWith("\"", StringComparison.Ordinal) &&
+                path.EndsWith("\"", StringComparison.Ordinal))
+            {
+                path = path.Substring(1, path.Length - 2);
+            }
+            Logging.Write("[Route] " + origin + " request: profile " + path);
+            return StartProfile(path, 0, 0, false, false);
+        }
+
         double yards;
         if (TryParseRelative(spec, out yards))
         {
@@ -211,17 +344,37 @@ public static class ClickAimDiagnostics
             {
                 CheckRequestFile(ref lastSeen);
 
+                List<RoutePoint> route = null;
+                int routeLegs = 0;
                 double[] request = null;
                 lock (Gate)
                 {
-                    if (Pending.Count > 0 && !_walking)
+                    if (!_walking && _pendingRoute != null)
+                    {
+                        route = _pendingRoute;
+                        routeLegs = _pendingRouteLegs;
+                        _pendingRoute = null;
+                        _walking = true;
+                    }
+                    else if (!_walking && Pending.Count > 0)
                     {
                         request = Pending.Dequeue();
                         _walking = true;
                     }
                 }
 
-                if (request != null)
+                if (route != null)
+                {
+                    try
+                    {
+                        RouteRunner.Run(route, routeLegs);
+                    }
+                    finally
+                    {
+                        lock (Gate) { _walking = false; }
+                    }
+                }
+                else if (request != null)
                 {
                     try
                     {
