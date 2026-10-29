@@ -88,7 +88,7 @@ namespace CopilotBuddy.UI
             _processes.Clear();
             cbProcesses.Items.Clear();
 
-            Process[] wowProcesses = new[] { "Wow", "WoW", "WowB" }
+            Process[] wowProcesses = new[] { "Wow", "WoW", "Luacct", "WowB" }
                 .SelectMany(n => Process.GetProcessesByName(n))
                 .DistinctBy(p => p.Id)
                 .ToArray();
@@ -101,21 +101,35 @@ namespace CopilotBuddy.UI
                     if (wowProcesses[i].HasExited)
                         continue;
 
-                    // Verify build matches 3.3.5a (12340)
-                    int build = wowProcesses[i].MainModule?.FileVersionInfo.FilePrivatePart ?? 0;
-                    // build == 0 means no version resource (custom/private server client)
-                    if (!ObjectManager.IsSupportedBuild(build) && build != 0)
+                    // Match the auto-attach discovery rules, including build
+                    // 70291's split version number and the WowB process name.
+                    Process process = wowProcesses[i];
+                    int build = ObjectManager.GetBuildNumber(process);
+                    if (build < 0 || (!ObjectManager.IsSupportedBuild(build) && build != 0 &&
+                        !process.ProcessName.Equals("WowB", StringComparison.OrdinalIgnoreCase)))
                         continue;
 
-                    using var memory = new Memory(wowProcesses[i].Id);
-
-                    // Check if player is logged in (InGame offset)
-                    bool isLoggedIn = memory.Read<byte>(GlobalOffsets.InGame) != 0;
-                    if (!isLoggedIn)
+                    using var memory = new Memory(process.Id);
+                    if (!memory.IsProcessOpen)
                         continue;
 
-                    // Read character name
-                    string characterName = memory.ReadString(GlobalOffsets.PlayerName);
+                    string? characterName;
+                    if (memory.Is64BitTarget)
+                    {
+                        // The 3.3.5a InGame and PlayerName offsets do not
+                        // apply to WowB. Like auto-attach, do not assume a
+                        // login offset; read the known name only for 70291.
+                        characterName = build == ObjectManager.SupportedBuildWowB &&
+                            process.ProcessName.Equals("WowB", StringComparison.OrdinalIgnoreCase)
+                            ? memory.ReadString64(memory.GetAbsolute64(WowBOffsets.PlayerNamePrimary), 48)
+                            : null;
+                    }
+                    else
+                    {
+                        if (memory.Read<byte>(GlobalOffsets.InGame) == 0)
+                            continue;
+                        characterName = memory.ReadString(GlobalOffsets.PlayerName);
+                    }
                     if (string.IsNullOrEmpty(characterName))
                         characterName = "Unknown";
 

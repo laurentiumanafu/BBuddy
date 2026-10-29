@@ -180,6 +180,27 @@ namespace CopilotBuddy.UI
                     {
                         Logging.Write("Attached to WoW with ID {0}", _selectedWoWProc!.Value);
 
+                        if (ObjectManager.Wow?.Is64BitTarget == true)
+                        {
+                            // Until the x64 object model and dependencies are
+                            // ported, plugin/bot constructors and legacy SQLite
+                            // cannot be treated as safe or available. Leave
+                            // normal x86 startup unchanged.
+                            Logging.Write("[Attach] WowB diagnostic mode: bot, routine and plugin startup is disabled; x64 gameplay is not available yet.");
+                            Dispatcher.Invoke(() =>
+                            {
+                                SetStatus("Attached (read-only)");
+                                // The legacy Developer Tools uses 32-bit
+                                // wrappers. Expose the separate read-only
+                                // x64 snapshot viewer instead.
+                                btnDevTools.Content = "World snapshot";
+                                btnDevTools.ToolTip = "View a read-only WowB snapshot";
+                                btnDevTools.Visibility = Visibility.Visible;
+                                btnDevTools.IsEnabled = true;
+                            });
+                            return;
+                        }
+
                         // HB 6.2.3 smethod_3: Start minimize guard thread + event handlers
                         TreeRoot.Initialize();
                         BotEvents.OnBotStarted += BotEvents_OnBotStarted;
@@ -322,6 +343,9 @@ namespace CopilotBuddy.UI
         private bool FindAndAttachToWoW()
         {
             Logging.Write("Searching for WoW process...");
+            Logging.Write("[Attach] Executable: {0} ({1})",
+                Environment.ProcessPath ?? AppDomain.CurrentDomain.BaseDirectory,
+                Environment.Is64BitProcess ? "x64" : "x86");
 
             // Step 1: Check for /pid= command line argument
             string? pidArg = Environment.GetCommandLineArgs()
@@ -336,7 +360,8 @@ namespace CopilotBuddy.UI
                 // Find ALL Wow processes (covers the standard client, the WoW.exe spelling,
                 // and the Luacct.exe variant used by some private-server clients)
                 string[] wowProcessNames = { "Wow", "WoW", "Luacct", "WowB" };
-                var wowProcesses = wowProcessNames.SelectMany(n => Process.GetProcessesByName(n)).ToArray();
+                var wowProcesses = wowProcessNames.SelectMany(n => Process.GetProcessesByName(n))
+                    .DistinctBy(p => p.Id).ToArray();
                 wowProcessesFound = wowProcesses.Length;
 
                 foreach (var proc in wowProcesses)
@@ -1114,6 +1139,12 @@ namespace CopilotBuddy.UI
 
         private void btnDevTools_Click(object sender, RoutedEventArgs e)
         {
+            if (ObjectManager.Wow?.Is64BitTarget == true)
+            {
+                var snapshotWindow = new WowBSnapshotWindow { Owner = this };
+                snapshotWindow.Show();
+                return;
+            }
             var devTools = new DeveloperToolsWindow();
             devTools.Owner = this;
             devTools.Show();

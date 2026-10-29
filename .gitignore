@@ -53,3 +53,9 @@ datadb/*.backup
 # Runtime content shipped as release zip (replaces the tracked output/ tree)
 output/
 
+
+# Field-tool build artifacts and local transfers
+*.pdb
+WowBCTM-*.zip
+output.zip
+google_drive/

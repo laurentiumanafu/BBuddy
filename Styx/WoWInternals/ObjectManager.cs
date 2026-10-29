@@ -149,6 +149,13 @@ namespace Styx.WoWInternals
         /// (WowB.exe). Only set when attached to a 64-bit client.
         /// </summary>
         public static WowBReader? WowB { get; private set; }
+
+        /// <summary>
+        /// Latest best-effort 70291 read-only observation; null when capture
+        /// fails. Separate from legacy ObjectList, whose uint addresses and
+        /// 64-bit GUID keys cannot represent modern objects safely.
+        /// </summary>
+        public static WowBWorldSnapshot? WowBWorld { get; private set; }
         public static bool IsInitialized => Wow != null;
 
         // cached collections (underlying data refreshed every ObjectManager.Update())
@@ -275,6 +282,8 @@ namespace Styx.WoWInternals
                 throw new ArgumentNullException(nameof(memory));
             
             Wow = memory;
+            WowB = null;
+            WowBWorld = null;
             
             // Trouver le processus WoW
             WoWProcess = Process.GetProcesses()
@@ -327,7 +336,37 @@ namespace Styx.WoWInternals
                 // (X64_PORT_PLAN.md §6). The reader validates the 64-bit
                 // read path and logs a full state snapshot on attach.
                 WowB = new WowBReader(memory);
+                Update();
                 Logging.Write("[ObjectManager] Attached to a 64-bit client (WowB) — read-only mode.");
+                WowBWorldSnapshot? world = WowBWorld;
+                Logging.Write(world == null
+                    ? "[ObjectManager] WowB pool snapshot unavailable (capture failed or changed during scan)."
+                    : $"[ObjectManager] WowB pool snapshot: {world.Units.Count} validated units, {world.PoolSlotsScanned} slots scanned, local={world.LocalGuid}, target={world.TargetGuid}.");
+                if (world != null && !world.TargetGuid.IsEmpty)
+                {
+                    if (world.TryGetSelectedTarget(out WowBObservedUnit selected))
+                    {
+                        string distance = "unknown";
+                        if (world.TryGetLocalPlayer(out WowBObservedUnit player))
+                            distance = player.Location.Distance(selected.Location).ToString("F1", System.Globalization.CultureInfo.InvariantCulture);
+                        Logging.Write($"[ObjectManager] Selected target found in snapshot: guid={selected.Guid}, pos=({selected.Location.X:F1}, {selected.Location.Y:F1}, {selected.Location.Z:F1}), distance={distance} yd, playerVtable={selected.HasPlayerVtable}.");
+                    }
+                    else
+                    {
+                        Logging.Write("[ObjectManager] Selected target is not in the validated unit snapshot (type or layout may be unsupported).");
+                        // A second read-only scan can help distinguish an
+                        // absent record from a rejected layout. Do not let
+                        // optional diagnostics prevent the actual attach.
+                        try
+                        {
+                            Logging.Write($"[ObjectManager] Target diagnostic (separate rescan): {WowB.DiagnoseTarget(world.TargetGuid)}");
+                        }
+                        catch (Exception ex)
+                        {
+                            Logging.Write($"[ObjectManager] Target diagnostic unavailable: {ex.Message}");
+                        }
+                    }
+                }
                 Logging.Write($"[ObjectManager] WowB snapshot: {WowB.DescribeSnapshot()}");
                 Logging.WriteDebug("[ObjectManager] Initialized successfully (WowB read-only)");
                 return;
@@ -433,6 +472,24 @@ namespace Styx.WoWInternals
             
             lock (_updateLock)
             {
+                if (Wow.Is64BitTarget)
+                {
+                    // Never enter the 3.3.5a linked-list/uint pointer path.
+                    // Publish only successful captures; do not retain stale
+                    // objects when the player disappears or a read fails.
+                    WowBWorld = null;
+                    try
+                    {
+                        if (WowB != null && WowB.TryCaptureWorldSnapshot(out WowBWorldSnapshot? snapshot))
+                            WowBWorld = snapshot;
+                    }
+                    catch (Exception ex)
+                    {
+                        Logging.WriteDebug($"[ObjectManager] WowB snapshot unavailable: {ex.Message}");
+                    }
+                    return;
+                }
+
                 try
                 {
                     // Mark all objects as potentially invalid.  HB originally ran on a single
