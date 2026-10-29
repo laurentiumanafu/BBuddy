@@ -36,6 +36,20 @@ public static class ClickAimPilot
     public static bool WalkTo(ClickAimMover mover, WoWPoint goal, double tolerance, int timeoutMs,
                               bool verbose)
     {
+        return WalkTo(mover, goal, tolerance, timeoutMs, verbose, false);
+    }
+
+    /// <summary>
+    /// Same walk, but returns as soon as the mover has spent its detour budget.
+    ///
+    /// A caller that can re-plan wants this: "the character cannot get there by
+    /// clicking" is information, and waiting out the timeout turns it into a minute
+    /// of standing against a wall. The default overload keeps waiting, because a
+    /// caller with no mesh to re-plan on has nothing better to do with the time.
+    /// </summary>
+    public static bool WalkTo(ClickAimMover mover, WoWPoint goal, double tolerance, int timeoutMs,
+                              bool verbose, bool stopWhenBlocked)
+    {
         if (mover == null) throw new ArgumentNullException(nameof(mover));
 
         int started = Environment.TickCount;
@@ -44,6 +58,18 @@ public static class ClickAimPilot
         while (unchecked(Environment.TickCount - started) < timeoutMs)
         {
             mover.MoveTowards(goal);
+
+            if (stopWhenBlocked && mover.Blocked)
+            {
+                mover.MoveStop();
+                if (verbose)
+                {
+                    Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                        "[ClickAim] blocked with {0:F1} yd remaining, {1} legs, {2} detours spent",
+                        mover.LastRemaining, mover.Legs, mover.Detours));
+                }
+                return false;
+            }
 
             if (mover.LastRemaining <= tolerance)
             {

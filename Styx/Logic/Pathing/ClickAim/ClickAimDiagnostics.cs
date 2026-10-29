@@ -258,6 +258,99 @@ public static class ClickAimDiagnostics
     /// mmap set that is nearly always a name/size mismatch, which the numbers below
     /// make obvious.
     /// </summary>
+    /// <summary>
+    /// Reports what the navmesh holds around a point: how many polygons the query
+    /// returns, which areas they are typed as, and whether the point itself is on
+    /// the mesh.
+    ///
+    /// This exists because "NO PATH (status Failed)" with the tile loaded is
+    /// ambiguous. A tile can be loaded and hold nothing under the character (a hole
+    /// in the geometry, a bridge the extrude step dropped), or hold polygons whose
+    /// area the query filter costs out. One query separates the cases, and the
+    /// difference decides whether the fix is a rebuild or a filter setting.
+    /// </summary>
+    private static void ProbePolys(Tripper.Navigation.Navigator nav, uint mapId, System.Numerics.Vector3 at)
+    {
+        try
+        {
+            float[] radii = { 5.0f, 25.0f };
+            foreach (float r in radii)
+            {
+                var extents = new System.Numerics.Vector3(r, 30.0f, r);
+                Tripper.Navigation.PolygonReference[] polys;
+                try { polys = nav.QueryPolygons(mapId, at, extents, 256); }
+                catch (Exception ex)
+                {
+                    Logging.Write("[MeshProbe] polygon query failed: " + ex.Message);
+                    return;
+                }
+
+                if (polys == null || polys.Length == 0)
+                {
+                    Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                        "[MeshProbe] polygons within {0:F0} yd: none - the tile is loaded but there is "
+                        + "no mesh here at all ({1:F1},{2:F1},{3:F1})", r, at.X, at.Y, at.Z));
+                    continue;
+                }
+
+                var counts = new Dictionary<byte, int>();
+                foreach (Tripper.Navigation.PolygonReference poly in polys)
+                {
+                    byte area;
+                    try { if ((nav.GetPolyArea(mapId, poly, out area) & 0x80000000u) != 0) continue; }
+                    catch { continue; }
+
+                    int seen;
+                    counts.TryGetValue(area, out seen);
+                    counts[area] = seen + 1;
+                }
+
+                var parts = new List<string>();
+                foreach (KeyValuePair<byte, int> kv in counts)
+                {
+                    string name = kv.Key == (byte)Tripper.Navigation.AreaType.Blackspot ? "blackspot"
+                                : kv.Key == (byte)Tripper.Navigation.AreaType.Blocked ? "blocked"
+                                : kv.Key == (byte)Tripper.Navigation.AreaType.Water ? "water"
+                                : kv.Key == (byte)Tripper.Navigation.AreaType.Ground ? "ground"
+                                : "area " + kv.Key.ToString(CultureInfo.InvariantCulture);
+                    parts.Add(name + " x" + kv.Value.ToString(CultureInfo.InvariantCulture));
+                }
+                parts.Sort(StringComparer.Ordinal);
+
+                Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                    "[MeshProbe] polygons within {0:F0} yd: {1} ({2})", r, polys.Length, string.Join(", ", parts.ToArray())));
+            }
+
+            bool onMesh;
+            try { onMesh = nav.IsPointOnNavMesh(mapId, at, 3.0f); }
+            catch { onMesh = false; }
+
+            Tripper.Navigation.PolygonReference nearest;
+            System.Numerics.Vector3 snapped;
+            bool found;
+            try { found = nav.FindNearestPolyRef(mapId, at, out nearest, out snapped); }
+            catch { found = false; snapped = at; }
+
+            if (found)
+            {
+                double dx = snapped.X - at.X, dy = snapped.Y - at.Y, dz = snapped.Z - at.Z;
+                Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                    "[MeshProbe] point on mesh: {0}; nearest polygon is {1:F2} yd away at "
+                    + "({2:F1},{3:F1},{4:F1})", onMesh ? "yes" : "no (within 3 yd)",
+                    Math.Sqrt(dx * dx + dy * dy + dz * dz), snapped.X, snapped.Y, snapped.Z));
+            }
+            else
+            {
+                Logging.Write("[MeshProbe] point on mesh: no; no polygon within the search box - "
+                              + "the character is standing where the mesh has a hole");
+            }
+        }
+        catch (Exception ex)
+        {
+            Logging.Write("[MeshProbe] polygon report failed: " + ex.Message);
+        }
+    }
+
     private static void MeshProbe()
     {
         try
@@ -348,6 +441,13 @@ public static class ClickAimDiagnostics
             Logging.Write("[MeshProbe] tiles loaded for map " + mapId + ": " + loadedTiles
                           + "; tile (" + tileX + "," + tileY + ") loaded: " + tileLoaded);
 
+            // A loaded tile says the file is there. It does not say that anything
+            // walkable exists at this spot, and "NO PATH" cannot tell those apart -
+            // it is the same answer for an empty tile, a tile whose polygons the
+            // query filter refuses, and a floor twenty yards below the character.
+            // Ask Detour what is actually under the player.
+            ProbePolys(nav, mapId, from);
+
             // Two lengths: 40 yd stays inside a few tiles, 120 yd crosses seams and
             // exercises the on-demand loader while the search runs.
             double[] legs = { 40.0, 120.0 };
@@ -373,9 +473,9 @@ public static class ClickAimDiagnostics
                     || result.Points == null || result.Points.Length < 2)
                 {
                     Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                        "[MeshProbe] {0:F0} yd: NO PATH (status {1}) - the mesh under the player "
-                        + "is missing or not walkable; check that {2}{3}{4}.mmtile exists and was "
-                        + "built for the {5}.mmap beside it",
+                        "[MeshProbe] {0:F0} yd: NO PATH (status {1}) - the file {2}{3}{4}.mmtile "
+                        + "for map {5} is what the loader asked for; see the polygon report above for "
+                        + "whether the mesh has anything walkable here",
                         leg, result == null ? "null" : result.Status.ToString(),
                         mapId.ToString("000"), tileX.ToString("00"), tileY.ToString("00"), mapId));
                     continue;

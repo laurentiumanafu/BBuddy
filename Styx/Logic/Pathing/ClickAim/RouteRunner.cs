@@ -28,6 +28,31 @@ public static class RouteRunner
     private const double StepTolerance = 2.5;
 
     /// <summary>
+    /// How long one polyline point gets when the leg is mesh-routed. Shorter than
+    /// <see cref="LegTimeoutMs"/> on purpose: the points are 5-20 yd apart and a
+    /// point that takes 30 s is a point the character cannot reach, so waiting
+    /// longer only delays the re-plan.
+    /// </summary>
+    private const int MeshPointTimeoutMs = 30000;
+
+    /// <summary>
+    /// How many times a leg may be re-planned after the character is stopped by
+    /// something the mmaps do not know about. Each re-plan blackspots the place it
+    /// got stuck, so the third one is a genuinely closed route, not a stubborn one.
+    /// </summary>
+    private const int MaxReplans = 3;
+
+    /// <summary>
+    /// Longest hop actually clicked along a mesh polyline. Shorter than
+    /// <see cref="MaxClickStepYd"/> because a mesh corner is a place the client
+    /// walks through, not a place to aim past.
+    /// </summary>
+    private const double FollowStepYd = 15.0;
+
+    /// <summary>Radius marked as bad around a point the character could not pass.</summary>
+    private const float BlackspotRadius = 8.0f;
+
+    /// <summary>
     /// Longest single click-walk step used when a baked grid turns a long leg into
     /// waypoints: field legs beyond ~45 yd start missing. 40 leaves margin.
     /// </summary>
@@ -92,9 +117,11 @@ public static class RouteRunner
                 "[Route] waypoint {0}/{1} {2} - {3:F1} yd", i + 1, route.Count, target, leg));
 
             bool arrived;
-            WoWPoint[]? path = mesh ? TryMeshPath(px, py, target) : null;
-
-            if (path == null && !mesh)
+            if (mesh)
+            {
+                arrived = WalkMesh(mover, target, leg);
+            }
+            else
             {
                 System.Collections.Generic.List<WoWPoint> grid = TryGridPath(px, py, target);
                 if (grid != null && grid.Count > 1)
@@ -109,41 +136,16 @@ public static class RouteRunner
                         continue;
                     }
                 }
-            }
 
-            if (path != null && path.Length > 1)
-            {
-                double meshLength = 0.0;
-                for (int q = 1; q < path.Length; q++)
-                    meshLength += ClickAimMath.Len(path[q].X - path[q - 1].X, path[q].Y - path[q - 1].Y);
-                Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                    "[Route] mesh path: {0} points, {1:F1} yd for a {2:F1} yd leg{3}",
-                    path.Length, meshLength, leg,
-                    meshLength > leg + 1.0 ? " (detours around terrain)" : " (nearly straight)"));
-                arrived = true;
-                for (int p = 1; p < path.Length; p++)
+                if (leg > ProfileRoute.MaxClickWalkYd)
                 {
-                    WoWPoint step = path[p];
-                    if (!ClickAimPilot.WalkTo(mover, step, StepTolerance, LegTimeoutMs, false))
-                    {
-                        Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                            "[Route] gave up on mesh point {0}/{1} at ({2:F1}, {3:F1})",
-                            p, path.Length - 1, step.X, step.Y));
-                        arrived = false;
-                        break;
-                    }
+                    Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                        "[Route] refusing a {0:F0} yd leg to {1}: one click reaches about {2:F0} yd, "
+                        + "and with no mesh there is nothing to route the middle with",
+                        leg, target, ProfileRoute.MaxClickWalkYd));
+                    return walked > 0;
                 }
-            }
-            else if (leg > ProfileRoute.MaxClickWalkYd)
-            {
-                Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                    "[Route] refusing a {0:F0} yd leg to {1}: one click reaches about {2:F0} yd, "
-                    + "and with no mesh there is nothing to route the middle with",
-                    leg, target, ProfileRoute.MaxClickWalkYd));
-                return walked > 0;
-            }
-            else
-            {
+
                 arrived = ClickAimPilot.WalkTo(mover, target.ToWoWPoint(), StepTolerance, LegTimeoutMs, true);
             }
 
@@ -161,6 +163,145 @@ public static class RouteRunner
 
         Logging.Write(string.Format(CultureInfo.InvariantCulture, "[Route] route complete: {0} waypoints walked", walked));
         return true;
+    }
+
+    /// <summary>
+    /// Walks one leg along the mesh, and plans again when the character is stopped.
+    ///
+    /// A click-walk is a request, not a command: the client walks in a straight line
+    /// from where the character stands and stops at the first thing it meets. The
+    /// mmaps know about terrain and building interiors, not about the cart, the fence
+    /// post or the mob standing in the way, so even a correct polyline occasionally
+    /// ends with the character pressed against something the path did not predict.
+    ///
+    /// The answer is what a person does: note where the thing that stopped you is,
+    /// treat that ground as bad, and ask for a route that avoids it. Each re-plan
+    /// blackspots the stuck spot (area 17, cost 60 in the DLL's own filter), so a
+    /// second attempt is a different path rather than the same click harder.
+    ///
+    /// When the mesh has no route at all from here and the goal is inside one click,
+    /// the straight click is still taken - that is the pre-existing behaviour for
+    /// open ground, and refusing it would strand a character over a data gap.
+    /// </summary>
+    private static bool WalkMesh(ClickAimMover mover, RoutePoint target, double leg)
+    {
+        // One blind detour, then come back here and re-plan instead of spending six
+        // more legs being stuck in the same place. This is the change that turns a
+        // 90 s walk into a wall into a 40 s walk into a wall plus a way around it.
+        mover.DetourBudget = 1;
+
+        double lastPx = double.NaN;
+        double lastPy = double.NaN;
+
+        for (int plan = 0; plan <= MaxReplans; plan++)
+        {
+            double px, py;
+            if (!ClickAimPositions.TryRead(out px, out py))
+            {
+                Logging.Write("[Route] lost the player position while re-planning");
+                return false;
+            }
+
+            double remaining = ClickAimMath.Len(target.X - px, target.Y - py);
+            if (remaining <= StepTolerance) return true;
+
+            if (plan > 0)
+            {
+                double moved = double.IsNaN(lastPx) ? double.MaxValue
+                                                     : ClickAimMath.Len(px - lastPx, py - lastPy);
+                if (moved < 1.5)
+                {
+                    Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                        "[Route] re-plan {0} made no progress ({1:F1} yd): the way out is closed in "
+                        + "every direction Detour can see from ({2:F1}, {3:F1})", plan, moved, px, py));
+                    return false;
+                }
+                Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                    "[Route] re-plan {0}/{1} from ({2:F1}, {3:F1}), {4:F1} yd still to go",
+                    plan, MaxReplans, px, py, remaining));
+            }
+
+            lastPx = px;
+            lastPy = py;
+
+            WoWPoint[]? path = TryMeshPath(px, py, target);
+            if (path == null || path.Length < 2)
+            {
+                if (plan == 0 && leg <= ProfileRoute.MaxClickWalkYd)
+                {
+                    Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                        "[Route] no route on the mesh from ({0:F1}, {1:F1}); the goal is {2:F0} yd "
+                        + "away, inside one click, so clicking straight at it", px, py, remaining));
+                    return ClickAimPilot.WalkTo(mover, target.ToWoWPoint(), StepTolerance, LegTimeoutMs, true);
+                }
+
+                Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                    "[Route] no route on the mesh from ({0:F1}, {1:F1}) to ({2:F1}, {3:F1}) after "
+                    + "{4} re-plan(s)", px, py, target.X, target.Y, plan));
+                return false;
+            }
+
+            double meshLength = 0.0;
+            for (int q = 1; q < path.Length; q++)
+                meshLength += ClickAimMath.Len(path[q].X - path[q - 1].X, path[q].Y - path[q - 1].Y);
+            Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                "[Route] mesh path: {0} points, {1:F1} yd for a {2:F1} yd leg{3}",
+                path.Length, meshLength, leg,
+                meshLength > leg + 1.0 ? " (detours around terrain)" : " (nearly straight)"));
+
+            mover.ResetBlocked();
+
+            /* Detour's corners can be 40 yd apart on open ground, and every yard of
+             * a click is a yard the aim calibration can be wrong by. Cutting the
+             * polyline into <= FollowStepYd hops keeps the error small and means the
+             * character is re-aimed every few seconds instead of walking a whole
+             * straight segment on one click. It is also what makes the path
+             * "followed" rather than "aimed at". */
+            WoWPoint[] follow = Resample(path, FollowStepYd);
+
+            int atPoint = 0;
+            WoWPoint failed = default(WoWPoint);
+            bool complete = true;
+
+            for (int p = 1; p < follow.Length; p++)
+            {
+                if (ClickAimPilot.WalkTo(mover, follow[p], StepTolerance, MeshPointTimeoutMs, false, true))
+                    continue;
+
+                atPoint = p;
+                failed = follow[p];
+                complete = false;
+                break;
+            }
+
+            if (complete) return true;
+
+            double sx, sy;
+            double sz = ClickAimPositions.Z();
+            if (!ClickAimPositions.TryRead(out sx, out sy))
+            {
+                Logging.Write("[Route] lost the player position; cannot mark the stuck spot");
+                return false;
+            }
+            if (double.IsNaN(sz)) sz = failed.Z;
+
+            Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                "[Route] stopped at mesh point {0}/{1} of {2} - ({3:F1}, {4:F1}) was {5:F1} yd away",
+                atPoint, follow.Length - 1, plan + 1, failed.X, failed.Y,
+                ClickAimMath.Len(failed.X - sx, failed.Y - sy)));
+
+            if (MeshBlackspots.Mark(Navigator.TripperNavigator,
+                    ClickAimDiagnostics.ResolveMap((uint)NavGridStore.MapId, sx, sy),
+                    sx, sy, sz, BlackspotRadius) == 0 && plan == MaxReplans)
+            {
+                Logging.Write("[Route] the stuck spot is off the mesh, so re-planning cannot help");
+            }
+        }
+
+        Logging.Write(string.Format(CultureInfo.InvariantCulture,
+            "[Route] out of re-plans after {0} attempts; the character is at the waypoint's "
+            + "neighbourhood but something keeps blocking it", MaxReplans + 1));
+        return false;
     }
 
     private static System.Collections.Generic.List<WoWPoint>? TryGridPath(double px, double py, RoutePoint target)
@@ -209,6 +350,46 @@ public static class RouteRunner
             }
         }
         return true;
+    }
+
+    /// <summary>
+    /// Splits a polyline so no hop is longer than <paramref name="maxStep"/>, keeping
+    /// every original corner. A hop shorter than half a step is folded into the next
+    /// one, otherwise a corner 2 yd after another produces a click that is all aim
+    /// error and no travel.
+    /// </summary>
+    private static WoWPoint[] Resample(WoWPoint[] path, double maxStep)
+    {
+        if (path == null || path.Length < 2 || maxStep <= 0.0) return path;
+
+        var outPoints = new System.Collections.Generic.List<WoWPoint>(path.Length * 2);
+        outPoints.Add(path[0]);
+
+        for (int i = 1; i < path.Length; i++)
+        {
+            WoWPoint from = outPoints[outPoints.Count - 1];
+            WoWPoint to = path[i];
+            double length = ClickAimMath.Len(to.X - from.X, to.Y - from.Y);
+
+            if (length <= maxStep * 0.5)
+            {
+                // Too short to steer at; jump to the next corner instead and let the
+                // hop that follows be the one that gets subdivided.
+                if (i == path.Length - 1) outPoints.Add(to);
+                continue;
+            }
+
+            int steps = (int)Math.Ceiling(length / maxStep);
+            for (int s = 1; s <= steps; s++)
+            {
+                double t = (double)s / steps;
+                outPoints.Add(new WoWPoint((float)(from.X + (to.X - from.X) * t),
+                                           (float)(from.Y + (to.Y - from.Y) * t),
+                                           (float)(from.Z + (to.Z - from.Z) * t)));
+            }
+        }
+
+        return outPoints.ToArray();
     }
 
     private static bool _meshProbed;

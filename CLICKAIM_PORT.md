@@ -166,6 +166,55 @@ around the player on demand, and Detour returned a 42.8 yd path (4 points) and a
 `RouteRunner` and a plain `x,y` walk both route on the mesh when it is queryable;
 the straight click is the fallback, and the log says which one was used.
 
+### Following the polyline, and what happens when something is in the way
+
+Routing a leg and *walking* it are two problems, and the first version only solved
+the first one: a 40 yd leg came back as a 3-point polyline and then the mover aimed
+one click at the far end, so the character walked the straight line and the 55°
+"detour" ladder fired when it hit something. Measured on the client, 2026-10-29:
+11 yd of 40 in 90 s, two detours, `gave up on mesh point 1/2`. The mesh was right;
+the movement ignored it.
+
+What the walk does now:
+
+* **The polyline is resampled** so no click is longer than 15 yd
+  (`RouteRunner.Resample`). Detour's corners can be 40 yd apart on open ground and
+  every yard of a click is aim error. Aiming 15 yd ahead instead of 40 makes the
+  same calibration three times less wrong, and it is what "follows the path" means
+  in practice.
+* **A stopped character re-plans instead of detouring.** `ClickAimMover.DetourBudget`
+  is 6 when there is no mesh (the blind ladder is the only escape), and 1 on a
+  routed leg - on a routed leg the answer is a new path, not another heading.
+  `ClickAimPilot.WalkTo(..., stopWhenBlocked: true)` returns the moment the budget is
+  spent, so the mover's own 20 s legs are not burned on a place it cannot pass.
+* **The place that stopped it is marked bad.** `MeshBlackspots.Mark` queries the
+  polygons within 8 yd and re-types them as `NavTerrain::NAV_BLACKSPOT` (area 17,
+  cost 60 in the DLL's own filter), so the re-plan is genuinely a different route
+  and not the same click harder. Marks live in the loaded `dtNavMesh`: they vanish
+  with the tile after the one-minute idle unload, so a mob in a doorway does not
+  poison the map for the session.
+* **Re-planning is bounded.** Three attempts, and it gives up when a re-plan gains
+  less than 1.5 yd - a closed route is reported as closed instead of being retried
+  for another two minutes.
+* **No route is not always failure.** If Detour has no route from here and the goal
+  is inside one click (40 yd), the straight click is still taken. That is the old
+  fallback and it exists for data gaps, not for walls.
+
+The log tells the four outcomes apart:
+
+```
+[Route] mesh path: 4 points, 41.2 yd for a 40.0 yd leg (nearly straight)
+[Route] stopped at mesh point 3/7 of 1 - (-583.5, -4433.2) was 12.1 yd away
+[Blackspot] marked 9 polygons within 8 yd of (-586.2, -4437.0, 44.8) - the next path will go around it
+[Route] re-plan 1/3 from (-586.2, -4437.0), 34.7 yd still to go
+```
+
+or, when there is nothing to save:
+
+```
+[Route] re-plan 2 made no progress (0.4 yd): the way out is closed in every direction Detour can see from (...)
+```
+
 ## Where the position comes from
 
 `ClickAimPositions.TryRead` prefers the 3.3.5a object model (`ObjectManager.Me`),
@@ -181,9 +230,14 @@ attach and per walk (`[wowb]` or `[legacy]`).
 * **Combat.** A hotspot in a mob camp is unwalkable for this bot: nothing fights,
   so the character is attacked, dazed and killed, and no navigation change fixes
   that.
-* **Routing.** Waypoints come from the caller (`MeshNavigator`, or the pilot's
-  single goal). The navmesh is live (see above); what is missing is a caller that
-  turns a quest into waypoints.
+* **Turning a quest into waypoints.** The navmesh pathing is live and the walk
+  follows it (see above), but the waypoints still come from the caller
+  (`MeshNavigator`, a profile, or the pilot's single goal). There is no quest
+  objective that produces them by itself.
+* **Obstacles the mesh does not contain.** Trees, carts, fences and player
+  characters are not in the mmaps. They are handled as *reactions* - stop, mark,
+  re-plan - which costs a few seconds per obstacle. A real avoidance provider
+  (mob positions fed into the filter) is the dedicated fix and is not written.
 * **Z.** Only X and Y are used. A hotspot on a tower floor needs interior geometry.
 * **Transports, portals, taxis.** Profile `<RunTo>` chains that cross a continent
   are not movement problems and are not handled.
@@ -212,10 +266,15 @@ for is named, so a failure points at one thing instead of "movement is broken".
    100.0 yd leg (detours around terrain)` - X larger than the leg means it went
    around. A straight click would have been exactly 100.
 4. **A real goal.** Put `x,y` in the file. Expect `[ClickAim] routing N yd on the
-   mesh`, a polyline, and the character walking it. Watch for `[ClickAim] BLOCKED`
-   (the mover's own detours exhausted) or `gave up on mesh point` (the walk stopped
-   physically, e.g. a fence the mmap does not know about).
-5. Only when that works: `ClickAimMover.Install()` in a session where the tree runs.
+   mesh`, a polyline, and the character walking it in 15 yd hops. When something the
+   mesh does not know about is in the way, the log shows `[Route] stopped at mesh
+   point k/n`, `[Blackspot] marked ... polygons`, `[Route] re-plan 1/3` - and then
+   either arrival or `no progress`. Both are answers; the failure that is no longer
+   possible is standing still for 90 s.
+5. **Obstacle proof.** Walk into a tree or a fence on purpose with a 40 yd goal, and
+   confirm the character ends up beside it rather than against it. That is the
+   blackspot loop doing its job.
+6. Only when that works: `ClickAimMover.Install()` in a session where the tree runs.
 
 If step 2 fails but step 1's probe passed, the problem is the mover, not the mesh.
 If the probe fails, nothing downstream can work - send that log.

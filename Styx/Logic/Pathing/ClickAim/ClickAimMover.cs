@@ -78,7 +78,38 @@ public sealed class ClickAimMover : IPlayerMover
     }
 
     public int Legs { get; private set; }
+
+    /// <summary>Blind detours spent on the current goal; the budget is <see cref="DetourBudget"/>.</summary>
+    public int Detours => _detourAttempt;
     public int Runaways { get; private set; }
+
+    /// <summary>
+    /// How many of the mover's own blind detours to spend before admitting that
+    /// clicking harder is not going to work.
+    ///
+    /// Six is right when nothing else can plan: it is the only way out of a bad
+    /// spot. On a mesh-routed leg it is wrong - each detour costs a whole leg
+    /// (up to 20 s) and the answer is a new path, not another heading, so the
+    /// caller drops this to 1 and re-plans on the first refusal.
+    /// </summary>
+    public int DetourBudget { get; set; } = MaxDetours;
+
+    /// <summary>
+    /// True once <see cref="DetourBudget"/> is spent without reaching the goal.
+    /// A caller that can re-plan watches this instead of waiting out its timeout,
+    /// which is what turned a stuck leg into ninety seconds of walking into a wall.
+    /// </summary>
+    public bool Blocked { get; private set; }
+
+    /// <summary>Forgets the budget and the blocked flag, e.g. for a fresh goal.</summary>
+    public void ResetBlocked()
+    {
+        Blocked = false;
+        _detourAttempt = 0;
+        _warnedStuck = false;
+        _stuck = 0;
+    }
+
     /// <summary>
     /// Distance to the last target that was asked for. Starts at MaxValue so a
     /// caller waiting for "arrived" cannot be satisfied before the first read.
@@ -153,8 +184,9 @@ public sealed class ClickAimMover : IPlayerMover
 
         if (_stuck >= 2)
         {
-            if (_detourAttempt >= MaxDetours)
+            if (_detourAttempt >= DetourBudget)
             {
+                Blocked = true;
                 if (!_warnedStuck)
                 {
                     _warnedStuck = true;
@@ -288,7 +320,7 @@ public sealed class ClickAimMover : IPlayerMover
         }
         Logging.Write(string.Format(CultureInfo.InvariantCulture,
             "[ClickAim] detour {0}/{1}: {2} {3:F0} deg, then a far click",
-            _detourAttempt, MaxDetours, side > 0 ? "right" : "left", DetourDeg));
+            _detourAttempt, DetourBudget, side > 0 ? "right" : "left", DetourDeg));
         Dispatch(leg, px, py, now);
         _stuck = 0;
     }
