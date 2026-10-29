@@ -523,6 +523,75 @@ static int blte_decode(const uint8_t *data, size_t size, uint8_t **out, size_t *
     return 1;
 }
 
+/* Cheap "is this worth decoding" test.
+ *
+ * A full install has hundreds of thousands of index entries and inflating all of
+ * them is minutes of CPU for nothing. Every WoW data file type that matters here
+ * starts with MVER, and that is in the first few bytes of the first BLTE frame, so
+ * reading a few KB and inflating just the start of frame 0 rejects almost
+ * everything without a full decode.
+ *
+ * Returns 1 when the payload definitely starts with MVER. A zero means "not
+ * interesting", so a false negative would silently lose a tile - which is why the
+ * caller can turn the pre-filter off with --no-prefilter. */
+static int payload_starts_with_mver(FILE *archive, long offset, uint32_t enc_size)
+{
+    static const size_t attempts[2] = { 4096, 65536 };
+    uint8_t *head = (uint8_t *)malloc(attempts[1]);
+    if (head == NULL) return 1;              /* no memory: do not lose the entry */
+
+    int verdict = 0;
+    for (int attempt = 0; attempt < 2 && !verdict; attempt++)
+    {
+        size_t want = attempts[attempt];
+        if (want > enc_size) want = enc_size;
+
+        if (fseek(archive, offset, SEEK_SET) != 0) break;
+        if (fread(head, 1, want, archive) != want) break;
+
+        size_t start = 0;
+        if (want >= 4 && memcmp(head, "BLTE", 4) == 0) start = 0;
+        else if (want >= 0x1E + 4 && memcmp(head + 0x1E, "BLTE", 4) == 0) start = 0x1E;
+        else break;                                            /* not BLTE at all */
+
+        const uint8_t *blte = head + start;
+        size_t avail = want - start;
+        uint32_t header_size = be32(blte + 4);
+        size_t data_at = header_size == 0 ? 8 : header_size;
+        if (data_at + 1 >= avail) continue;                     /* need a bigger read */
+
+        char mode = (char)blte[data_at];
+        if (mode == 'N')
+        {
+            verdict = avail >= data_at + 5 && memcmp(blte + data_at + 1, "MVER", 4) == 0;
+        }
+        else if (mode == 'Z')
+        {
+            uint8_t out[8];
+            z_stream stream;
+            memset(&stream, 0, sizeof(stream));
+            if (inflateInit(&stream) == Z_OK)
+            {
+                stream.next_in = (Bytef *)(blte + data_at + 1);
+                stream.avail_in = (uInt)(avail - data_at - 1);
+                stream.next_out = out;
+                stream.avail_out = sizeof(out);
+                inflate(&stream, Z_SYNC_FLUSH);
+                size_t produced = sizeof(out) - stream.avail_out;
+                inflateEnd(&stream);
+                verdict = produced >= 4 && memcmp(out, "MVER", 4) == 0;
+            }
+        }
+        else
+        {
+            break;                                              /* E, F: skip */
+        }
+    }
+
+    free(head);
+    return verdict;
+}
+
 /* ------------------------------------------------------------------------- */
 /* ADT inspection                                                            */
 /* ------------------------------------------------------------------------- */
@@ -784,7 +853,8 @@ static int cmd_list(const char *data_dir, int verbose)
     return 0;
 }
 
-static int cmd_dump(const char *data_dir, const char *out_dir, int32_t map_id, const float *ref, long limit, int verbose)
+static int cmd_dump(const char *data_dir, const char *out_dir, int32_t map_id, const float *ref,
+                    long limit, int verbose, int prefilter)
 {
     char names[64][256];
     int idx_count = collect_indexes(data_dir, names, 64);
@@ -822,7 +892,7 @@ static int cmd_dump(const char *data_dir, const char *out_dir, int32_t map_id, c
     int open_archive = -1;
     uint8_t *payload = (uint8_t *)malloc(MAX_PAYLOAD);
 
-    long read = 0, adts = 0, tiles = 0, wrote = 0, at_ref = 0, alternatives = 0;
+    long read = 0, adts = 0, tiles = 0, wrote = 0, at_ref = 0, alternatives = 0, skipped = 0;
     for (size_t i = 0; i < list.count; i++)
     {
         if (limit > 0 && wrote >= limit) break;
@@ -846,6 +916,12 @@ static int cmd_dump(const char *data_dir, const char *out_dir, int32_t map_id, c
             }
         }
         if (entry->enc_size > MAX_PAYLOAD) continue;
+
+        if (prefilter && !payload_starts_with_mver(archive, (long)offset, entry->enc_size))
+        {
+            skipped++;
+            continue;
+        }
 
         if (verbose && i < 8) fprintf(stderr, "  entry %zu: archive %u offset %llu size %u\n",
                                      i, archive_index, (unsigned long long)offset, entry->enc_size);
@@ -939,6 +1015,7 @@ static int cmd_dump(const char *data_dir, const char *out_dir, int32_t map_id, c
     free(payload);
     free(list.items);
 
+    printf("%ld entries screened out by the MVER pre-filter\n", skipped);
     printf("%ld payloads decoded, %ld ADTs, %ld with a solved tile, %ld written (%ld as alternates)\n",
            read, adts, tiles, wrote, alternatives);
     if (ref != NULL) printf("%ld tiles cover the reference point and report a height\n", at_ref);
@@ -967,12 +1044,14 @@ int main(int argc, char **argv)
     int verbose = 0;
     long limit = 0;
     int32_t map_id = 1;
+    int prefilter = 1;
 
     if (argc < 2)
     {
         fprintf(stderr,
                 "usage: cascdump list --data <dir> [--verbose]\n"
-                "       cascdump dump --data <dir> --out <dir> [--map id] [--ref x,y,z] [--limit n] [--verbose]\n"
+                "       cascdump dump --data <dir> --out <dir> [--map id] [--ref x,y,z] [--limit n]\n"
+                "                     [--no-prefilter] [--verbose]\n"
                 "\n"
                 "  --data   folder holding data.000 and the .idx files, usually \"<wow>\\Data\\data\"\n"
                 "  --out    folder for the extracted ADTs (created by the caller)\n"
@@ -991,6 +1070,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--ref") && i + 1 < argc) have_ref = parse_xyz(argv[++i], ref);
         else if (!strcmp(argv[i], "--limit") && i + 1 < argc) limit = atol(argv[++i]);
         else if (!strcmp(argv[i], "--verbose")) verbose = 1;
+        else if (!strcmp(argv[i], "--no-prefilter")) prefilter = 0;
     }
 
     if (data_dir == NULL)
@@ -1008,7 +1088,7 @@ int main(int argc, char **argv)
             fprintf(stderr, "cascdump: --out is required for dump\n");
             return 2;
         }
-        return cmd_dump(data_dir, out_dir, map_id, have_ref ? ref : NULL, limit, verbose);
+        return cmd_dump(data_dir, out_dir, map_id, have_ref ? ref : NULL, limit, verbose, prefilter);
     }
 
     fprintf(stderr, "cascdump: unknown command %s\n", command);

@@ -39,12 +39,23 @@ cascdump.exe dump --data "C:\Games\WoW\Data\data" --out C:\export\adt --map 1 ^
                   --ref -614.8,-4254.2,39
 ```
 
+A full install has hundreds of thousands of index entries, so before decoding
+anything the tool reads a few KB per entry and inflates only the first BLTE frame: a
+data file that does not start with `MVER` cannot be terrain, and it is dropped without
+a full decode. `--no-prefilter` turns that off if a tile ever goes missing.
+
 `--ref` prints the terrain height of every candidate tile that covers that point. The
 continent you are standing on is the one whose height matches the Z the bot logs, so
 two candidates that both claim tile (32,32) become distinguishable: Kalimdor's terrain
 at a given spot and Eastern Kingdoms' terrain at the same coordinates are different.
 
-Then the normal pipeline:
+Or run the whole chain in one go:
+
+```bat
+Tools\build-navmesh.cmd "C:\Games\WoW" 1 -614.8,-4254.2,39 "C:\BBuddy"
+```
+
+The pieces it calls:
 
 ```bat
 Tools\NavGrid\bin-x64\navbake.exe bakeall --adts C:\export\adt --map 1 --out C:\tiles
