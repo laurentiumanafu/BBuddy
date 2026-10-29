@@ -204,7 +204,7 @@ The log tells the four outcomes apart:
 
 ```
 [Route] mesh path: 4 points, 41.2 yd for a 40.0 yd leg (nearly straight)
-[Route] stopped at mesh point 3/7 of 1 - (-583.5, -4433.2) was 12.1 yd away
+[Route] stopped at mesh point 3/7, attempt 1 - (-583.5, -4433.2) was 12.1 yd away
 [Blackspot] marked 9 polygons within 8 yd of (-586.2, -4437.0, 44.8) - the next path will go around it
 [Route] re-plan 1/3 from (-586.2, -4437.0), 34.7 yd still to go
 ```

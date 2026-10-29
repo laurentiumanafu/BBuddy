@@ -286,7 +286,7 @@ public static class RouteRunner
             if (double.IsNaN(sz)) sz = failed.Z;
 
             Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                "[Route] stopped at mesh point {0}/{1} of {2} - ({3:F1}, {4:F1}) was {5:F1} yd away",
+                "[Route] stopped at mesh point {0}/{1}, attempt {2} - ({3:F1}, {4:F1}) was {5:F1} yd away",
                 atPoint, follow.Length - 1, plan + 1, failed.X, failed.Y,
                 ClickAimMath.Len(failed.X - sx, failed.Y - sy)));
 
