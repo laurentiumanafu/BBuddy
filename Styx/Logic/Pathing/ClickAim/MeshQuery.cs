@@ -19,6 +19,12 @@ namespace Styx.Logic.Pathing;
 /// </summary>
 internal static class MeshQuery
 {
+    // The two extents are passed as separate numbers to Navigator.FindNearestPolyRef:
+    // the DLL swizzles the XYZ it receives {Y, Z, X} before handing it to Detour, so
+    // the vertical extent has to travel in the Z slot. Sending Vector3(5, 400, 5)
+    // meant "400 yd wide and 5 yd tall", which is why a goal 50 yd above the height
+    // in the request found nothing on 2026-10-29.
+
     /// <summary>Horizontal half-extent of the snap box: wants the ground under the feet.</summary>
     private const float SnapHorizontal = 5.0f;
 
@@ -58,14 +64,10 @@ internal static class MeshQuery
 
         PolygonReference poly;
         Vector3 nearest;
-        bool found = TryFind(nav, mapId, point,
-                             new Vector3(SnapHorizontal, SnapVertical, SnapHorizontal),
-                             out poly, out nearest);
+        bool found = TryFind(nav, mapId, point, SnapHorizontal, SnapVertical, out poly, out nearest);
         if (!found)
         {
-            found = TryFind(nav, mapId, point,
-                            new Vector3(SnapHorizontal, WideVertical, SnapHorizontal),
-                            out poly, out nearest);
+            found = TryFind(nav, mapId, point, SnapHorizontal, WideVertical, out poly, out nearest);
             if (!found) return false;
             widened = true;
         }
@@ -79,11 +81,12 @@ internal static class MeshQuery
     }
 
     private static bool TryFind(Tripper.Navigation.Navigator nav, uint mapId, Vector3 point,
-                                Vector3 extents, out PolygonReference poly, out Vector3 nearest)
+                                float horizontal, float vertical,
+                                out PolygonReference poly, out Vector3 nearest)
     {
         poly = PolygonReference.Invalid;
         nearest = point;
-        try { return nav.FindNearestPolyRef(mapId, point, extents, out poly, out nearest); }
+        try { return nav.FindNearestPolyRef(mapId, point, horizontal, vertical, out poly, out nearest); }
         catch (Exception ex)
         {
             Logging.Write("[MeshQuery] snap failed: " + ex.Message);

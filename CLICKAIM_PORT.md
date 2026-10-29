@@ -241,6 +241,58 @@ The walking test is separate and has to pass first: see the click-scale section
 below, because on 2026-10-29 the mesh was already correct while the walk ran 120 yd
 past a 20 yd goal.
 
+### Calibrate first: four walks that measure the model
+
+```
+CopilotBuddy.exe --clickaim-calibrate        (or write  calibrate  into Settings\clickaim-walk.txt)
+```
+
+`Settings\clickaim-cal.txt` was empty on this install - `calibration click 0.00000
+(0 samples)` in every log - so every walk ran on constants from a different camera.
+`ClickAimSelfCalibration` measures both channels by walking four legs of about 20 yd
+and reading where the character actually went:
+
+```
+[Calibrate] centre click: 21.3 yd at heading 54.2 deg - that heading is the zero
+[Calibrate] a 240 px drag turned the walk -11.8 deg -> -0.04917 deg/px
+[Calibrate] clicks: +200 px gives -0.06033 deg/px, -200 px gives -0.05874 deg/px
+[Calibrate] wrote degPerPx=-0.059535 degPerDragPx=-0.049167 to ...\Settings\clickaim-cal.txt
+```
+
+It refuses to write when the two click probes disagree in sign (a deflected walk) or
+when any probe walked less than 4 yd, and it says which probe failed. That is the
+whole point: a wrong number is worse than no number, because no number is logged.
+
+### Two more numbers the field log got wrong
+
+* **A leg measured while the character is still walking is not a measurement.**
+  `[ClickAim] click scale: 0.42 yd/px from 12.6 yd walked on a -30 px click` appeared
+  2 s after a click whose hop was still running; the next leg then walked 40 yd, so
+  0.42 was roughly half the truth. The scale is now settled at the moment the
+  character really is standing still (`ClickAimMover.ResolvePendingClick`), and a
+  click that is still carrying it past `3 x the wanted hop + 10 yd` is braked with
+  the stop key instead of being watched.
+* **`HeadingAtZero` was being overwritten with the wrong number.** It means "the
+  heading a click at the centre of the screen walks", but every leg stored the
+  heading it actually walked - including legs whose click was 48 px off centre. The
+  offset (`DegPerPx * ClickPx`) now gets backed out, which removes a few degrees of
+  aim bias that accumulated over a walk and looked like "it circles the target".
+
+### The extents were transposed in the snap, so a route to a road waypoint was refused
+
+```
+[MeshQuery] no polygon within 5 yd of the goal at (-495.3, -4221.1, 0.0), even after searching 400 yd up and down
+```
+
+The goal was fine - the probe reported a path ending at exactly that point, 50.4 yd
+up. The snap searched a box that was 400 yd *wide* and 5 yd *tall*: `_C` entry
+points swizzle the XYZ they receive into `{Y, Z, X}` before handing it to Detour,
+whose extents are `(horizontal, vertical, horizontal)`, so the vertical extent has to
+travel in the **Z** slot. `Navigator.FindNearestPolyRef` now takes two scalars
+(`horizontal`, `vertical`) for the new overload, and `MeshQuery`, `MeshBlackspots`
+and the polygon report all pass `(H, H, V)`. `NavigatorTerrainHeightProvider` had
+this right all along and is the reference for the convention.
+
 ### The click scale was the real reason a 20 yd walk ran 120 yd
 
 Field log, 2026-10-29 20:33, standing in `(-825.5, -5054.0)`:
@@ -334,7 +386,11 @@ for is named, so a failure points at one thing instead of "movement is broken".
 0. `Tools\SelfCheck.cmd` - no game needed. DLL hash, tile counts per naming scheme,
    `mmapcheck` over one map, and the navmesh lines from the newest log.
 1. `dotnet build -c Release -p:Platform=x64 .` - the first real compiler pass over
-   the ClickAim files. Then start the bot and check the attach lines:
+   the ClickAim files. Then, before any walking test, run `CopilotBuddy.exe
+   --clickaim-calibrate` once (or `Tools\Walk.cmd calibrate`): it writes real
+   `degPerPx`/`degPerDragPx` numbers into `Settings\clickaim-cal.txt`, and every
+   walk after that plans with measured values instead of field defaults from
+   another camera. Then start the bot and check the attach lines:
    `[ClickAim] self-test 26/26 passed`, `NavGrid self-test` all passed,
    `[NavMesh] ... N tile files`, then the `[MeshProbe]` block. Two `mesh path OK`
    lines mean the mesh is real and queryable from inside the process.

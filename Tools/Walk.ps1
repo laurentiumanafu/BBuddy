@@ -7,6 +7,8 @@
     report, the blackspot marks, the re-plans and the mover's own legs.
 
     Usage (from anywhere):
+        Tools\Walk.cmd calibrate         measure the click model (do this first)
+        Tools\Walk.cmd route:100,200     plan only, print the route, do not walk
         Tools\Walk.cmd 20                20 yd straight ahead of the facing
         Tools\Walk.cmd 100               100 yd, so the mesh has something to route
         Tools\Walk.cmd 1977.5,232         walk to a world position
@@ -66,7 +68,7 @@ if (-not $log) { throw "no log in $logDir - is the bot running?" }
 Write-Host "tailing $($log.Name) for $Seconds s"
 Write-Host ("-" * 78)
 
-$filter = 'ClickAim|Route|Blackspot|MeshProbe|MeshQuery|NavGrid self-test'
+$filter = 'ClickAim|Route|Blackspot|MeshProbe|MeshQuery|Calibrate|NavGrid self-test'
 $position = $log.Length
 $deadline = (Get-Date).AddSeconds($Seconds)
 $seen = 0

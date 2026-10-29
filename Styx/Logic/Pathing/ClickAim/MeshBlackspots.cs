@@ -50,7 +50,9 @@ internal static class MeshBlackspots
         if (radius <= 0f) radius = DefaultRadius;
 
         var center = new Vector3((float)x, (float)y, (float)z);
-        var extents = new Vector3(radius, VerticalExtent, radius);
+        // (horizontal, horizontal, vertical): QueryPolygons swizzles the XYZ it is
+        // given into {Y, Z, X} for Detour, whose extents are (x, vertical, z).
+        var extents = new Vector3(radius, radius, VerticalExtent);
 
         PolygonReference[] polys;
         try { polys = nav.QueryPolygons(mapId, center, extents, MaxPolys); }

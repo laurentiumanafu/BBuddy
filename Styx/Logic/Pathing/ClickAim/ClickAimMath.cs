@@ -107,6 +107,10 @@ public static class ClickAimMath
         if (moved < minMove) return false;
         if (maxMove > minMove && moved > maxMove) return false;
         double candidate = measured / driver;
+        // NaN sneaks through every comparison below (NaN > x and NaN < x are both
+        // false), and one NaN turns the slope into NaN and the next click pixel
+        // into whatever (int) casts a NaN to.
+        if (double.IsNaN(candidate) || double.IsInfinity(candidate)) return false;
         if (Math.Abs(candidate) < 1e-6) return false;
         double refMag = Math.Abs(reference);
         if (refMag > 1e-6)

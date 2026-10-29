@@ -1105,12 +1105,19 @@ namespace Tripper.Navigation
         }
 
         /// <summary>
-        /// Finds the nearest polygon with caller-chosen search extents, in WoW axis
-        /// order (X, Y, Z) like <see cref="RaycastWithExtents"/>, so a caller can
-        /// allow a tall vertical search without widening the horizontal one.
+        /// Finds the nearest polygon with caller-chosen search extents.
+        ///
+        /// The two extents are scalars on purpose. The <c>_C</c> entry point takes
+        /// an XYZ and swizzles it <c>{Y, Z, X}</c> before handing it to Detour, whose
+        /// extents are <c>(x, vertical, z)</c> - so the vertical extent is the Z
+        /// component of what we send, and <see cref="Extents"/> (which is stored as
+        /// horizontal/vertical/horizontal and swizzled at some call sites but not
+        /// others) has already cost one debugging session. Two numbers cannot be
+        /// passed in the wrong order.
         /// </summary>
-        public bool FindNearestPolyRef(uint mapId, Vector3 position, Vector3 extents,
-                                      out PolygonReference polyRef, out Vector3 nearestPoint)
+        public bool FindNearestPolyRef(uint mapId, Vector3 position, float horizontalExtent,
+                                      float verticalExtent, out PolygonReference polyRef,
+                                      out Vector3 nearestPoint)
         {
             polyRef = PolygonReference.Invalid;
             nearestPoint = Vector3.Zero;
@@ -1123,7 +1130,7 @@ namespace Tripper.Navigation
                 try
                 {
                     var posC = new NativeMethods.XYZ(position);
-                    var extentsC = new NativeMethods.XYZ(extents);
+                    var extentsC = new NativeMethods.XYZ(horizontalExtent, horizontalExtent, verticalExtent);
                     NativeMethods.XYZ nearestC;
                     bool success = NativeMethods.FindNearestPolyRef(mapId, posC, extentsC, out ulong refId, out nearestC);
                     if (success)

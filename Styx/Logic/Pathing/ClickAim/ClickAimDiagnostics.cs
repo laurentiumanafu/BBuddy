@@ -276,7 +276,11 @@ public static class ClickAimDiagnostics
             float[] radii = { 5.0f, 25.0f };
             foreach (float r in radii)
             {
-                var extents = new System.Numerics.Vector3(r, 30.0f, r);
+                // Same swizzle trap as the snap: the DLL turns the XYZ it receives
+                // into {Y, Z, X}, so the vertical half-extent is the Z component here.
+                // (r, 30, r) searched 30 yd sideways and r yd tall, which is how the
+                // report read "within 5 yd" while looking 30 yd around.
+                var extents = new System.Numerics.Vector3(r, r, 30.0f);
                 Tripper.Navigation.PolygonReference[] polys;
                 try { polys = nav.QueryPolygons(mapId, at, extents, 256); }
                 catch (Exception ex)
@@ -797,6 +801,14 @@ public static class ClickAimDiagnostics
                 {
                     spec = arg.Substring("--clickaim-walk=".Length);
                 }
+                else if (arg.Equals("--clickaim-calibrate", StringComparison.OrdinalIgnoreCase))
+                {
+                    var cal = new Thread(ClickAimSelfCalibration.Run);
+                    cal.IsBackground = true;
+                    cal.Name = "ClickAimSelfCalibration";
+                    cal.Start();
+                    continue;
+                }
                 else if (arg.Equals("--clickaim-route", StringComparison.OrdinalIgnoreCase))
                 {
                     // Plan and print, never walk. This is the mesh test: the mover
@@ -865,6 +877,17 @@ public static class ClickAimDiagnostics
 
         // "route:x,y[,z]" in clickaim-walk.txt plans and prints without walking,
         // which is how the mesh gets checked while the mover is still being worked on.
+        // "calibrate" in the request file runs the four-probe measurement.
+        if (trimmed.Equals("calibrate", StringComparison.OrdinalIgnoreCase))
+        {
+            Logging.Write("[Calibrate] " + origin + " request: measuring the click model");
+            var cal = new Thread(ClickAimSelfCalibration.Run);
+            cal.IsBackground = true;
+            cal.Name = "ClickAimSelfCalibration";
+            cal.Start();
+            return true;
+        }
+
         if (trimmed.StartsWith("route:", StringComparison.OrdinalIgnoreCase))
         {
             Logging.Write("[Route] " + origin + " request: plan only, no walking");

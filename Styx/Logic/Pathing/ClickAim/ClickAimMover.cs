@@ -60,6 +60,13 @@ public sealed class ClickAimMover : IPlayerMover
     private double _bestRemaining;
     private double _legWantYd;              // distance left when the leg was clicked
     private int _scaleSamples;              // accepted click-scale measurements
+
+    // A click whose reach has not been measured yet: from where it was clicked,
+    // how tall it was, and how far the character has gone since.
+    private int _pendingDy;
+    private double _pendingX, _pendingY;
+    private double _pendingWantYd;
+    private int _pendingStops;
     private int _stuck;
     private int _detourAttempt;
     private bool _warnedStuck;
@@ -178,6 +185,12 @@ public sealed class ClickAimMover : IPlayerMover
 
         if (_phase == Phase.Walking) { ContinueLeg(px, py, rem, now); return; }
 
+        // A click that has not been measured yet is settled here: while the
+        // character keeps walking it is braked if it runs far past what the click
+        // was asked to do, and once it is standing still the click's real reach is
+        // known and the next hop can be planned with it.
+        ResolvePendingClick(px, py, moving, now);
+
         // Between legs: nothing is dispatched until the character is standing
         // still, or the next click lands on top of a walk that is still running.
         if (moving || (now - _lastMoveMs) < RestGapMs) return;
@@ -263,7 +276,16 @@ public sealed class ClickAimMover : IPlayerMover
             {
                 double heading = ClickAimMath.HeadingDeg(px - _legX, py - _legY);
                 double turn = ClickAimMath.WrapDeg(heading - _p.HeadingAtZero);
-                _p.HeadingAtZero = heading;
+
+                /* Back the click offset out. HeadingAtZero means "the heading a click
+                 * at the centre of the screen walks", and this leg's click was at
+                 * ClickPx, so the heading it produced is offset by DegPerPx*ClickPx.
+                 * Storing the raw heading instead put that offset into the zero on
+                 * every off-centre click, and the model then aimed wide by the same
+                 * amount for the rest of the walk - a bias that accumulates into
+                 * "it walks off in the wrong direction" with no single bad click. */
+                double zero = ClickAimMath.WrapDeg(heading - _p.DegPerPx * _leg.ClickPx);
+                if (!double.IsNaN(zero)) _p.HeadingAtZero = zero;
                 if (Math.Abs(_leg.ClickPx) >= 40)
                 {
                     // A property cannot be passed by ref, and the learner needs a
@@ -279,26 +301,26 @@ public sealed class ClickAimMover : IPlayerMover
             }
         }
 
-        /* Measure the click scale. This is the number that made a 20 yd walk sprint
-         * 120 yd: the old model assumed a -100 px click was 20-45 yd, and on this
-         * client it was more than 120. Only pure click legs say anything about it,
-         * only legs that walked far enough are trusted, and the learner throws away
-         * candidates that disagree wildly with what is already known. */
+        /* The click scale is measured later, not here.
+         *
+         * This is the number that made a 20 yd walk sprint 120 yd: the old model
+         * assumed a -100 px click was 20-45 yd, and on this client it was more than
+         * 120. But a leg can end while the character is still walking - "passed the
+         * target" fires mid-run - so `moved` here is the distance walked so far, not
+         * the click's reach. Measuring it now learns a scale that is too small, the
+         * next click is too tall, and the walk gets worse with every leg. The
+         * measurement is therefore deferred to the moment the character is really
+         * standing still (Tick, _pendingDy).
+         */
         if (_leg.Turn == ClickAimMath.TurnKindNone
             && Math.Abs(_leg.Dy) >= _p.MinDyPx
-            && ClickAimMath.PlausibleLeg(moved, secs))
+            && !double.IsNaN(_legWantYd))
         {
-            double candidate = moved / Math.Abs(_leg.Dy);
-            double est = _p.YdPerDyPx;
-            double used;
-            if (ClickAimMath.LearnScale(ref est, _p.AssumedYdPerDyPx, candidate, moved, _scaleSamples, out used))
-            {
-                _scaleSamples++;
-                _p.YdPerDyPx = est;
-                Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                    "[ClickAim] click scale: {0:F2} yd/px from {1:F1} yd walked on a {2} px click; "
-                    + "using {3:F2} (hop wanted {4:F1} yd)", candidate, moved, _leg.Dy, used, _legWantYd));
-            }
+            _pendingDy = _leg.Dy;
+            _pendingX = _legX;
+            _pendingY = _legY;
+            _pendingWantYd = _legWantYd;
+            _pendingStops = 0;
         }
 
         if (moved < BlockedMove) _stuck++; else _stuck = 0;
@@ -310,6 +332,11 @@ public sealed class ClickAimMover : IPlayerMover
         double runawayYd = 3.0 * _legWantYd + 10.0;
         if (runawayYd < 25.0) runawayYd = 25.0;
         if (runawayYd > WanderMaxYd) runawayYd = WanderMaxYd;
+
+        Logging.Write(string.Format(CultureInfo.InvariantCulture,
+            "[ClickAim] leg ended: {0:F1} yd in {1:F1} s on a {2}, {3}",
+            moved, secs, _leg.Turn == ClickAimMath.TurnKindNone ? "click" : "turn",
+            WhyLegEnded(timedOut, passed, moved, runawayYd)));
 
         if (timedOut || moved > runawayYd)
         {
@@ -331,6 +358,80 @@ public sealed class ClickAimMover : IPlayerMover
 
         _phase = Phase.Idle;
         _bestRemaining = double.MaxValue;
+    }
+
+    /// <summary>
+    /// Settles the click that was dispatched most recently.
+    ///
+    /// Two jobs, both of which need the character's *final* position rather than
+    /// the position when a leg happened to end:
+    ///
+    ///   * learn how far a click of that height actually goes (yd/px), which is the
+    ///     number the whole hop policy rests on;
+    ///   * stop a click that is still carrying the character past where it was meant
+    ///     to go. A movement key cancels a click-walk, so a leg that exceeds three
+    ///     times what was asked for is stopped instead of being watched. That is the
+    ///     120 yd sprint from 2026-10-29, cut at 70 yd the first time it happens.
+    /// </summary>
+    private void ResolvePendingClick(double px, double py, bool moving, int now)
+    {
+        if (_pendingDy == 0) return;
+
+        double travel = ClickAimMath.Len(px - _pendingX, py - _pendingY);
+        double cap = 3.0 * _pendingWantYd + 10.0;
+        if (cap < 25.0) cap = 25.0;
+        if (cap > WanderMaxYd) cap = WanderMaxYd;
+
+        if (moving)
+        {
+            if (travel <= cap || _pendingStops >= 3) return;
+
+            _pendingStops++;
+            IntPtr hwnd = Handle();
+            if (hwnd != IntPtr.Zero) ClickAimInput.TapKey(hwnd, StopKeyVk, 120);
+            Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                "[ClickAim] brake {0}/3: the click has carried the character {1:F1} yd for a hop that "
+                + "wanted {2:F1} yd; tapped the stop key", _pendingStops, travel, _pendingWantYd));
+
+            if (_pendingStops >= 3)
+            {
+                Runaways++;
+                Logging.Write("[ClickAim] the click will not stop; giving up on this leg, "
+                              + "the mover's own detours are meaningless until the character is still");
+                _pendingDy = 0;
+            }
+            return;
+        }
+
+        double candidate = travel / Math.Abs(_pendingDy);
+        double est = _p.YdPerDyPx;
+        double used;
+        if (ClickAimMath.LearnScale(ref est, _p.AssumedYdPerDyPx, candidate, travel, _scaleSamples, out used))
+        {
+            _scaleSamples++;
+            _p.YdPerDyPx = est;
+            Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                "[ClickAim] click scale: {0:F2} yd/px measured - {1:F1} yd walked on a {2} px click "
+                + "(hop wanted {3:F1}); using {4:F2} after {5} measurement(s)",
+                candidate, travel, _pendingDy, _pendingWantYd, used, _scaleSamples));
+        }
+        else if (travel >= 3.0)
+        {
+            Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                "[ClickAim] click scale: ignored {0:F2} yd/px from {1:F1} yd on a {2} px click "
+                + "(too far from the {3:F2} in use)",
+                candidate, travel, _pendingDy, used));
+        }
+
+        _pendingDy = 0;
+    }
+
+    private static string WhyLegEnded(bool timedOut, bool passed, double moved, double cap)
+    {
+        if (passed) return "it passed the target";
+        if (timedOut) return "it ran out of time";
+        if (moved > cap) return "it ran past the runaway limit of " + cap.ToString("F0", CultureInfo.InvariantCulture) + " yd";
+        return "the character came to rest";
     }
 
     private void StartDetour(double px, double py, int now)
