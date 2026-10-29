@@ -926,6 +926,12 @@ public sealed class ClickAimMover : IPlayerMover
 
         if (leg.Turn == ClickAimMath.TurnKindDrag)
         {
+            /* End the click-move first. A drag while the client is still walking to a
+             * clicked point does not just turn the camera: it curves the WALK. The
+             * 22:09 run has four "turn" legs of 27.3, 27.1, 19.5 and 10.0 yd that are
+             * nothing but that, and they are what carried the character 90 yd away from
+             * a goal 32.7 yd off. */
+            ClickAimInput.TapKey(hwnd, StopKeyVk, 90);
             ClickAimInput.Drag(hwnd, leg.DragPx);
             _p.HeadingAtZero = ClickAimMath.YawAfterTurn(_p, leg);
         }

@@ -377,6 +377,46 @@ Three rules follow, and they are in the code now:
 3. **Nothing is blacklisted by a walk that never clicked.** `mover.Clicks == 0` means
    the terrain was never tested, so the route stops and says that instead.
 
+### 22:09 and 22:21: the aim cannot be made to converge, and why
+
+Two more runs, both with the aim counting drags and then clicking regardless:
+
+| run | started | walked | ended |
+|---|---|---|---|
+| 22:09 | 32.7 yd from the goal | 90 yd | **83.7 yd from it** |
+| 22:21 | 64.5 yd from the goal | 269 yd | **95.4 yd from it** |
+
+The numbers that explain it:
+
+* **the drag gain is ~0.031 deg/px, not 0.21.** Every `drag -150 px` in the 22:09 run
+  turned the camera by 4.6 deg. 0.21 would have needed 21 px. So the field calibration
+  in `clickaim-cal.txt` is off by a factor of seven, and 118 deg of error therefore
+  needs ~25 drags, which is why the error never reached the tolerance.
+* **the camera heading drifts with nothing moving.** Nine consecutive ticks with the
+  character at 0.0 yd: the heading climbed 109.1, 113.8, 118.4, 123.1, 127.7, 132.4,
+  137.0 - exactly +4.6 deg per tick. A quantity that drifts on its own cannot be the
+  feedback of a control loop, and measuring the gain from it produced sign flips
+  between consecutive ticks (0.070, -0.031, 0.042, -0.031).
+* **the same click walks different distances.** `(0, -140)` walked 5.8, 6.5, 7.2, 23.8,
+  12.9, 14.0, 23.8, 7.8 and 63.1 yd in one run. A pixel offset cannot encode a distance:
+  the click's ground point is where the camera ray meets the ground, and that depends
+  on the camera PITCH, which nothing in this project can read.
+* **dragging while a click is in flight walks the character in an arc.** The 22:09 run
+  has "turn" legs of 27.3, 27.1, 19.5 and 10.0 yd - a drag with a click still running
+  does not just turn the camera. A drag now taps the stop key first.
+
+So aiming needs the camera's orientation, and the camera position this project reads is
+not it. Two things follow, and they are in the tree:
+
+1. **`--clickdest`** (`ClickAimDestHunt.cs`) stops trying to aim and looks for what the
+   click actually WRITES. Click once, snapshot the player record while it walks, and
+   look for a float triple that equals where it stopped but not where it was - the
+   destination field. If that field exists and can be written, the mover needs no
+   camera, no pitch and no pixels: put the mesh waypoint in it and the client walks.
+   Three trials, offsets that appear in more than one are printed with the record offset.
+2. The aim gate can no longer hold the click hostage (it did at 22:09: four minutes,
+   zero clicks dispatched); after three drags it clicks anyway and says so.
+
 ### The aim, rebuilt around the one channel that measured consistently
 
 Everything above was an attempt to make a *pixel offset* mean something: a click at

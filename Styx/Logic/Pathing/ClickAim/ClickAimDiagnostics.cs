@@ -63,6 +63,11 @@ public static class ClickAimDiagnostics
         try { Logging.Write(NavGridStore.SelfTest()); }
         catch (Exception ex) { Logging.Write("[NavGrid] self-test threw: " + ex.Message); }
 
+        // Checks the destination finder against synthetic records, so a failure here
+        // is a code problem and not a client problem.
+        try { Logging.Write(ClickAimDestHunt.SelfTest()); }
+        catch (Exception ex) { Logging.Write("[Dest] self-test threw: " + ex.Message); }
+
         // The bot loop is disabled on x64, but the navmesh engine only needs
         // Navigation.dll (now built for x64) and the mmaps directory.
         bool mesh = false;
@@ -800,6 +805,17 @@ public static class ClickAimDiagnostics
                 else if (arg.StartsWith("--clickaim-walk=", StringComparison.OrdinalIgnoreCase))
                 {
                     spec = arg.Substring("--clickaim-walk=".Length);
+                }
+                else if (arg.Equals("--clickdest", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Hunt for the field the client walks toward: click once, snapshot
+                    // the record mid-walk, and find the triple that holds where it
+                    // stopped. See ClickAimDestHunt for why this replaces aiming.
+                    var hunt = new Thread(ClickAimDestHunt.Run);
+                    hunt.IsBackground = true;
+                    hunt.Name = "ClickAimDestHunt";
+                    hunt.Start();
+                    continue;
                 }
                 else if (arg.Equals("--sigscan", StringComparison.OrdinalIgnoreCase))
                 {
