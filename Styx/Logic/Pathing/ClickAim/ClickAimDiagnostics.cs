@@ -801,6 +801,16 @@ public static class ClickAimDiagnostics
                 {
                     spec = arg.Substring("--clickaim-walk=".Length);
                 }
+                else if (arg.Equals("--sigscan", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Winkr's scanner + resig.py, ported: see WowBSigScan. Runs once, in the
+                    // attached client, and answers "does this function exist on THIS build".
+                    var scan = new Thread(WowBSigScan.Run);
+                    scan.IsBackground = true;
+                    scan.Name = "WowBSigScan";
+                    scan.Start();
+                    continue;
+                }
                 else if (arg.Equals("--clickaim-calibrate", StringComparison.OrdinalIgnoreCase))
                 {
                     var cal = new Thread(ClickAimSelfCalibration.Run);

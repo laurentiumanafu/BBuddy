@@ -91,9 +91,16 @@ public sealed class ClickAimMover : IPlayerMover
     private int _projectedClicks;
     private bool _projectionWorks;
     private int _projectionRejects;
-    private double _aimBest = double.MaxValue;
-    private int _aimWorse;
-    private double _aimGainSign = 1.0;
+    private double _aimHeadingBeforeDrag = double.NaN;
+    private int _aimDragPx;
+    private double _aimMeasuredGain = double.NaN;
+    private int _aimBadDrags;
+
+    /// <summary>
+    /// True when the camera stopped answering the drags. The route runner must not
+    /// treat this as an obstacle - the mesh is fine, the aim is not.
+    /// </summary>
+    public bool AimGaveUp { get; private set; }
     private bool _projectedThisDispatch;
 
     /// <summary>
@@ -110,7 +117,7 @@ public sealed class ClickAimMover : IPlayerMover
     private const double AimToleranceDeg = 6.0;
 
     /// <summary>Largest single camera rotation, so a mistake cannot spin the character.</summary>
-    private const double MaxAimDragPx = 320.0;
+    private const double MaxAimDragPx = 150.0;
 
     /// <summary>
     /// Height of the click used by the camera-aim path. A "far click" that is known to
@@ -118,6 +125,9 @@ public sealed class ClickAimMover : IPlayerMover
     /// wherever this one ends.
     /// </summary>
     private const int AimHopDy = -140;
+
+    /// <summary>Swallowed drags in a row before the walk stops and says so.</summary>
+    private const int AimBadDragLimit = 6;
 
     private int _probeAttempts;
     private int _stuck;
@@ -458,7 +468,10 @@ public sealed class ClickAimMover : IPlayerMover
         // leg is a clean sample of `walked = zero + degPerPx * clickPx`, and that is
         // what LearnAim fits - including the SIGN, which was wrong here and made
         // every leg walk about 180 degrees from where it was aimed.
-        if (_leg.Turn == ClickAimMath.TurnKindNone && moved >= ClickAimMath.MinLearningWalk)
+        // A centre click (0 px) says nothing about which way an offset click turns:
+        // the 21:50 log fed four of them into LearnAim as if they did.
+        if (_leg.Turn == ClickAimMath.TurnKindNone && _leg.ClickPx != 0
+            && moved >= ClickAimMath.MinLearningWalk)
         {
             double deg = _p.DegPerPx;
             double zero = _p.HeadingAtZero;
@@ -724,54 +737,81 @@ public sealed class ClickAimMover : IPlayerMover
         double desired = ClickAimMath.HeadingDeg(tx - px, ty - py);
         double error = ClickAimMath.WrapDeg(desired - camHeading);
 
-        // The loop has to notice if it is not converging. A drag whose sign is wrong
-        // makes the error grow every time, and without this the character spins on the
-        // spot for ever - which is one of the things this client has already done.
         if (Math.Abs(error) > AimToleranceDeg)
         {
-            if (Math.Abs(error) > _aimBest + 2.0)
+            /* MEASURE the drag gain instead of guessing its sign.
+             *
+             * The 21:50 run had the sign flipped four times in twenty seconds. Each
+             * flip compared the current error with the last one and blamed the sign -
+             * but between two ticks the character had also WALKED (one turn leg moved
+             * 10.7 yd), and the camera heading follows the player, so the error changes
+             * for reasons that have nothing to do with the drag. A heuristic that
+             * cannot separate those two effects will always oscillate.
+             *
+             * So: the heading was read before the previous drag and is read again now.
+             * turned / pixels IS the gain, sign included, measured on this client.
+             */
+            if (_aimDragPx != 0 && Math.Abs(_aimHeadingBeforeDrag) < 900.0)
             {
-                _aimWorse++;
-                if (_aimWorse == 1)
+                double turned = ClickAimMath.WrapDeg(camHeading - _aimHeadingBeforeDrag);
+                double obs = turned / _aimDragPx;
+                if (Math.Abs(turned) >= 1.0 && Math.Abs(obs) >= 0.03 && Math.Abs(obs) <= 0.8)
                 {
-                    _aimGainSign = -_aimGainSign;
-                    Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                        "[Aim] the error grew to {0:F1} deg after a drag, so the drag sign is the other "
-                        + "way on this client; using {1:F2} deg/px from now on", error,
-                        _p.DegPerDragPx * _aimGainSign));
+                    if (double.IsNaN(_aimMeasuredGain) || Math.Abs(obs - _aimMeasuredGain) > 0.02)
+                    {
+                        Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                            "[Aim] drag {0} px turned the camera {1:+0.0;-0.0} deg: measuring {2:F3} deg/px "
+                            + "(was {3})", _aimDragPx, turned, obs,
+                            double.IsNaN(_aimMeasuredGain) ? "unmeasured"
+                                : _aimMeasuredGain.ToString("F3", CultureInfo.InvariantCulture)));
+                    }
+                    _aimMeasuredGain = obs;
+                    _aimBadDrags = 0;
                 }
-                else if (_aimWorse >= 3)
+                else if (Math.Abs(turned) < 1.0)
                 {
-                    Blocked = true;
-                    Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                        "[Aim] the camera is not turning the way a drag predicts (three drags, error still "
-                        + "{0:F1} deg). Stopping rather than spinning on the spot.", error));
-                    return false;
+                    // The camera did not move: the drag was swallowed. Do not learn from it.
+                    _aimBadDrags++;
                 }
-            }
-            else
-            {
-                _aimBest = Math.Abs(error);
             }
 
-            double gain = (_p.DegPerDragPx != 0.0 ? _p.DegPerDragPx : -0.21) * _aimGainSign;
+            if (_aimBadDrags >= AimBadDragLimit)
+            {
+                /* Six drags that did not turn the camera at all. Stop turning and say why -
+                 * but do not call this "blocked", because nothing is: the mesh is fine and
+                 * the obstacle is the aim. */
+                Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                    "[Aim] {0} drags in a row did not turn the camera (error still {1:F1} deg). "
+                    + "The client is not following the drags, so a click cannot be aimed; stopping "
+                    + "the walk rather than clicking at random.", _aimBadDrags, error));
+                AimGaveUp = true;
+                return false;
+            }
+
+            double gain = double.IsNaN(_aimMeasuredGain)
+                ? (_p.DegPerDragPx != 0.0 ? _p.DegPerDragPx : -0.21)
+                : _aimMeasuredGain;
             double dragPx = error / gain;
             if (dragPx > MaxAimDragPx) dragPx = MaxAimDragPx;
             if (dragPx < -MaxAimDragPx) dragPx = -MaxAimDragPx;
+            if (Math.Abs(dragPx) < 3.0) dragPx = dragPx >= 0 ? 3.0 : -3.0;
 
             leg.Turn = ClickAimMath.TurnKindDrag;
             leg.DragPx = (int)(dragPx >= 0 ? dragPx + 0.5 : dragPx - 0.5);
             leg.Dy = 0;
 
+            _aimHeadingBeforeDrag = camHeading;
+            _aimDragPx = leg.DragPx;
+
             Logging.Write(string.Format(CultureInfo.InvariantCulture,
                 "[Aim] camera {0:F1} deg, target {1:F1} deg, error {2:+0.0;-0.0} deg -> drag {3} px "
-                + "(the camera turns {4:F2} deg/px)", camHeading, desired, error, leg.DragPx, _p.DegPerDragPx));
+                + "(measured {4:F3} deg/px)", camHeading, desired, error, leg.DragPx, gain));
             return true;
         }
 
         // Facing it: a middle click walks along that axis. No offset, no scale.
-        _aimBest = Math.Abs(error);
-        _aimWorse = 0;
+        _aimDragPx = 0;
+        _aimBadDrags = 0;
         leg.ClickPx = 0;
         leg.Dy = AimHopDy;
         Logging.Write(string.Format(CultureInfo.InvariantCulture,

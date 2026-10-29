@@ -307,6 +307,18 @@ public static class RouteRunner
 
             if (complete) return true;
 
+            /* The aim gave up, not the ground. Marking blackspots here is what turned
+             * the 21:50 run into "the way out is closed in every direction": four
+             * polygons were blacklisted around a spot the character could walk to
+             * perfectly well, and the next two paths went around a place that was
+             * never in the way. Say what actually happened and stop. */
+            if (mover.AimGaveUp)
+            {
+                Logging.Write("[Route] stopping: the mesh is fine but the camera stopped answering the "
+                    + "drags, so the click cannot be aimed. Nothing was blacklisted.");
+                return false;
+            }
+
             double sx, sy;
             double sz = ClickAimPositions.Z();
             if (!ClickAimPositions.TryRead(out sx, out sy))
