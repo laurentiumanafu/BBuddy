@@ -13,6 +13,7 @@ stock files, and takes a tile it cannot use without half-loading it.
     python3 test_legacy_mmaps.py [/tmp/legacy-mmap-test]
 """
 import os
+import re
 import shutil
 import struct
 import subprocess
@@ -141,6 +142,34 @@ def main():
     check("an overrunning size field is refused cleanly",
           "0 navmesh tiles added, 0 rejected" in result.stdout and result.returncode == 1,
           result.stdout + result.stderr)
+
+    # Three tiles side by side, each with its doorway in a different column: the only
+    # way across is to pass one doorway, cross the seam, and line up with the next.
+    # Detour asks the loader for those neighbours during the search, which is exactly
+    # what Navigation::LoadTileForDetour does in the game.
+    row = os.path.join(work, "row")
+    if os.path.isdir(row):
+        shutil.rmtree(row)
+    os.makedirs(row)
+    for tile, door in ((30, 2), (31, 5), (32, 6)):
+        subprocess.run([FIXTURE, "--out", row, "--tile", str(tile), "30", "--door", str(door)],
+                       check=True, capture_output=True)
+    result = subprocess.run([CHECK, "--mmaps", row, "--map", "1", "--ondemand",
+                             "--from", "-600,-600,0", "--to", "-600,400,0"],
+                            capture_output=True, text=True)
+    out = result.stdout
+    check("a route across three tiles is found with on-demand loading",
+          result.returncode == 0 and "0 rejected" in out, out + result.stderr)
+    found = re.search(r"on-demand: (\d+) tile file", out)
+    loaded = [int(found.group(1))] if found else []
+    check("the search pulled the neighbouring tiles itself",
+          bool(loaded) and loaded[0] >= 3, out)
+    length = path_length(out)
+    check("the route bends through three separate doorways",
+          length is not None and length > 400.0 + 50.0, out)
+    if length is not None:
+        print("    path %.1f yd, straight line 400.0 yd, %d tile files loaded"
+              % (length, loaded[0] if loaded else -1))
 
     print("\n%d checks, %d failed" % (total[0], len(failures)))
     return 1 if failures else 0

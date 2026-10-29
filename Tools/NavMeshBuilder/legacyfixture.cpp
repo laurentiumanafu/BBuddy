@@ -17,6 +17,7 @@
  * straight-line distance would come back instead.
  *
  *   legacyfixture --out <dir> [--tile 32 32] [--header 16|20] [--closed] [--cells 8]
+ *                 [--door <cell row>]
  *
  * Writes <dir>/001.mmap (raw dtNavMeshParams, exactly what MapData::loadMap reads)
  * and <dir>/001<xx><yy>.mmtile.
@@ -45,11 +46,18 @@ namespace
      * straight in Detour's own frame (x, y up, z) - the swizzle from WoW
      * (x, y, z) = Detour (z, x, y) is the query side's job, as it is for
      * mmapbuild. */
-    bool buildBlob(int cells, bool closed, int tileX, int tileY,
+    bool buildBlob(int cells, bool closed, int doorRow, int tileX, int tileY,
                    std::vector<unsigned char>& blob, int* polyCount)
     {
         const float cell = TILE_SIZE / (float)cells;
         const int stride = cells + 1;
+
+        /* The geometry has to sit where the tile it claims to be actually is:
+         * dtNavMesh places a tile by the params grid, but the vertices are relative
+         * to bmin inside the blob, so a tile at (30,30) that stored vertices at
+         * 0..533 would answer queries 500 yd away. Grid 32 happens to start at 0. */
+        const float originX = -GRID_ORIGIN + (float)tileX * TILE_SIZE;
+        const float originZ = -GRID_ORIGIN + (float)tileY * TILE_SIZE;
 
         std::vector<float> verts;
         std::vector<int> cornerIndex(stride * stride, -1);
@@ -57,7 +65,6 @@ namespace
         // Cell (ci, cj) covers x in [ci*cell, (ci+1)*cell], z likewise. The wall is
         // the column ci == cells/2, minus the doorway cell (cj == cells/2 - 1).
         const int wallCol = cells / 2;
-        const int doorRow = cells / 2 - 1;
         auto walkable = [&](int ci, int cj) -> bool
         {
             if (ci < 0 || cj < 0 || ci >= cells || cj >= cells) return false;
@@ -71,9 +78,9 @@ namespace
             if (cornerIndex[key] >= 0) return cornerIndex[key];
 
             const int index = (int)verts.size() / 3;
-            verts.push_back(quantise((float)ci * cell));
+            verts.push_back(quantise(originX + (float)ci * cell));
             verts.push_back(0.0f);
-            verts.push_back(quantise((float)cj * cell));
+            verts.push_back(quantise(originZ + (float)cj * cell));
             cornerIndex[key] = index;
             return index;
         };
@@ -116,8 +123,15 @@ namespace
                 const int nbCj[4] = { cj, cj + 1, cj, cj - 1 };
                 for (int i = 0; i < 4; i++)
                 {
+                    const bool outside = nbCi[i] < 0 || nbCi[i] >= cells ||
+                                         nbCj[i] < 0 || nbCj[i] >= cells;
                     const int p = walkable(nbCi[i], nbCj[i]) ? cellPoly[nbCj[i] * cells + nbCi[i]] : -1;
-                    polys.push_back(p >= 0 ? (unsigned short)p : (unsigned short)0xffff);
+                    if (p >= 0)
+                        polys.push_back((unsigned short)p);
+                    else if (outside)
+                        polys.push_back((unsigned short)(0x8000 | i));   // portal to the neighbouring tile
+                    else
+                        polys.push_back((unsigned short)0xffff);         // wall
                 }
             }
         }
@@ -184,6 +198,7 @@ int main(int argc, char** argv)
     std::string outDir;
     int headerBytes = 16;
     int tileX = 32, tileY = 32, cells = 8;
+    int doorRow = -1;
     bool closed = false;
     for (int i = 1; i < argc; i++)
     {
@@ -191,6 +206,7 @@ int main(int argc, char** argv)
         else if (!strcmp(argv[i], "--header") && i + 1 < argc) headerBytes = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--tile") && i + 2 < argc) { tileX = atoi(argv[++i]); tileY = atoi(argv[++i]); }
         else if (!strcmp(argv[i], "--cells") && i + 1 < argc) cells = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--door") && i + 1 < argc) doorRow = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--closed")) closed = true;
     }
     if (outDir.empty() || (headerBytes != 16 && headerBytes != 20) || cells < 4)
@@ -200,9 +216,11 @@ int main(int argc, char** argv)
         return 2;
     }
 
+    if (doorRow < 0) doorRow = cells / 2 - 1;
+
     std::vector<unsigned char> blob;
     int polyCount = 0;
-    if (!buildBlob(cells, closed, tileX, tileY, blob, &polyCount))
+    if (!buildBlob(cells, closed, doorRow, tileX, tileY, blob, &polyCount))
         return 1;
 
     char path[1024];
@@ -221,7 +239,13 @@ int main(int argc, char** argv)
     fwrite(&params, sizeof(params), 1, f);
     fclose(f);
 
-    snprintf(path, sizeof(path), "%s/%03d%02d%02d.mmtile", outDir.c_str(), 1, tileX, tileY);
+    /* The extractors name the file by grid coordinate, which runs the other way:
+     * TileWorker derives the blob's own index as (centre - orig) / 533, while the
+     * file name uses 32 - worldAxis / 533. The two are mirrors, so the file that
+     * holds blob (tileX, tileY) is <map><64-tileY><64-tileX>.mmtile. Getting this
+     * backwards is invisible on tile 32, where both give 32. */
+    snprintf(path, sizeof(path), "%s/%03d%02d%02d.mmtile", outDir.c_str(), 1,
+             64 - tileY, 64 - tileX);
     f = fopen(path, "wb");
     if (!f) { fprintf(stderr, "legacyfixture: cannot write %s\n", path); return 1; }
     unsigned int head[4] = { MMAP_MAGIC, (unsigned int)DT_NAVMESH_VERSION, 5,

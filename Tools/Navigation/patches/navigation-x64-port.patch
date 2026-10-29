@@ -414,6 +414,71 @@ index 678642e..071fbc9 100644
  		bool loadMapData(unsigned int mapId);
  		void buildTileManifest(unsigned int mapId, MMapData* mmap);
  		bool tileFileExists(MMapData* mmap, unsigned int packedGridPos) const;
+diff --git a/Navigation/Navigation.cpp b/Navigation/Navigation.cpp
+index 416f094..3970b29 100644
+--- a/Navigation/Navigation.cpp
++++ b/Navigation/Navigation.cpp
+@@ -1576,6 +1576,9 @@ bool Navigation::DetourTileLoader(int x, int y, void* userArg)
+     return nav->LoadTileForDetour(ctx->mapId, x, y);
+ }
+ 
++/* Called by Detour (dtNavMeshQuery::loadNeighbourTiles) when a search reaches the
++ * edge of a tile that is not loaded. Detour passes its own tile coordinates, which
++ * are in the space of the <map>.mmap params - not grid coordinates. */
+ bool Navigation::LoadTileForDetour(unsigned int mapId, int detourX, int detourY)
+ {
+     MMAP::MMapManager* manager = MMAP::MMapFactory::createOrGetMMapManager();
+@@ -1596,31 +1599,34 @@ bool Navigation::LoadTileForDetour(unsigned int mapId, int detourX, int detourY)
+     int tileX, tileY;
+     WorldToTile(worldX, worldY, &tileX, &tileY);
+ 
+-    if (tileX < 0 || tileX >= 64 || tileY < 0 || tileY >= 64)
+-        return false;
+-
+-    TileKey key = { mapId, tileX, tileY };
+-
+-    if (manager->isTileLoaded(mapId, tileX, tileY))
++    /* Ask for the file the detour tile *should* be in, then the eight around it.
++     *
++     * One detour tile is not always in the file its coordinates name: the naming
++     * schemes in the wild disagree about which axis the grid index carries, the
++     * stock 3.3.5a extractors write one 533 yd tile per file while our own builder
++     * writes sixteen 133 yd ones, and an off-by-one at a tile edge is easy to make
++     * and invisible. Loading the 3x3 neighbourhood costs nothing when the files are
++     * absent (fopen fails, loadMap returns false) and removes the whole class. */
++    bool loaded = false;
++    for (int dy = -1; dy <= 1; dy++)
+     {
+-        auto accessed = _tileAccessTime.find(key);
+-        if (accessed != _tileAccessTime.end())
++        for (int dx = -1; dx <= 1; dx++)
+         {
+-            accessed->second = std::chrono::duration_cast<std::chrono::milliseconds>(
+-                std::chrono::high_resolution_clock::now().time_since_epoch()
+-            ).count();
++            const int gx = tileX + dx;
++            const int gy = tileY + dy;
++            if (gx < 0 || gx >= 64 || gy < 0 || gy >= 64)
++                continue;
++            if (manager->loadMap(mapId, gx, gy))
++                loaded = true;
+         }
+-        return false;
+     }
+ 
+-    if (!manager->loadMap(mapId, tileX, tileY))
+-        return false;
+-
++    TileKey key = { mapId, tileX, tileY };
+     _tileAccessTime[key] = std::chrono::duration_cast<std::chrono::milliseconds>(
+         std::chrono::high_resolution_clock::now().time_since_epoch()
+     ).count();
+ 
+-    return true;
++    return loaded;
+ }
+ 
+ // HB 6.2.3 pattern: time-based tile GC (GarbageCollectTime = 1 minute).
 diff --git a/Navigation/PathFinder.cpp b/Navigation/PathFinder.cpp
 index 0e2dd31..92afc5b 100644
 --- a/Navigation/PathFinder.cpp

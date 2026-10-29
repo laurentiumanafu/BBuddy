@@ -103,6 +103,25 @@ instead of copying 2 GB:
 mklink /J "C:\BBuddy\Lib\x64\mmaps" "B:\World of Warcraft\ForeverRepack\data\mmaps"
 ```
 
+## Tile numbering — the second trap
+
+Three different numbers describe "which tile":
+
+| number | formula | used by |
+| --- | --- | --- |
+| blob tile index (`dtMeshHeader::x/y`) | `floor((meshAxis - orig) / tileSize)`, i.e. `32 + worldAxis/533.33` | Detour: `calcTileLoc`, every query, the on-demand loader |
+| grid / file number | `32 - worldAxis/533.33` | the `.mmtile` file name, `.map` file names, `WorldToTile` |
+| this build's 4x4 sub-tile | 16 blobs per file, index `127..130` for ADT 32 | our own `mmapbuild` output |
+
+They are **mirrors of each other**: for a 533 yd tile, `fileNumber = 64 - blobIndex`.
+vmangos has both halves in the source (`TileWorker.cpp` derives `params.tileX` from
+`(bmin+bmax)/2 - orig`, while `MapBuilder.cpp` writes the file as
+`%03u%02u%02u` = map, tileY, tileX with `bmax[0] = (32 - tileX)*GRID`). Tile 32 is the
+one place where all of them agree, which is why a bug here hides until the second
+tile. `legacyfixture` mirrors the name on purpose (`<map><64-y><64-x>.mmtile`) so the
+test would catch a regression, and `Navigation::LoadTileForDetour` loads the 3x3
+neighbourhood so a single off-by-one cannot stop a route dead at a seam.
+
 ## Axis convention — the trap that costs a day
 
 The DLL queries in **Detour `(x, y, z) = WoW `(y, z, x)`**. A mesh built in WoW order
@@ -158,7 +177,7 @@ a straight-line answer here would mean the tiles were emitted but never joined.
 
 ## Verification that has been run, legacy container
 
-`python3 test_legacy_mmaps.py /tmp/legacy-mmap-test` - 7 checks, 0 failed:
+`python3 test_legacy_mmaps.py /tmp/legacy-mmap-test` - 12 checks, 0 failed:
 
 ```
 16-byte header: one file, accepted by dtNavMesh
@@ -167,10 +186,20 @@ a straight-line answer here would mean the tiles were emitted but never joined.
 20-byte header: one file, accepted by dtNavMesh
 20-byte header: routes around the wall, not through it
                 path 460.7 yd, straight line 400.0 yd
+TrinityCore-style names are found without renaming anything
 a walled-off tile loads and the path stops at the wall
 a tile built for another Detour version is rejected
 an overrunning size field is refused cleanly
+a route across three tiles is found with on-demand loading
+the search pulled the neighbouring tiles itself
+the route bends through three separate doorways
+                path 1024.0 yd, straight line 400.0 yd, 3 tile files loaded
 ```
+
+The last three are `mmapcheck --ondemand`, which loads only the tile the start point
+is in and then answers Detour's tile requests the way `Navigation::LoadTileForDetour`
+does. Three tiles, three doorways in different columns, no preloading: 1024 yd of
+path across two seams.
 
 The 60.7 yd of extra path is the doorway detour: with a straight-line answer the wall
 would not have been in the mesh at all.

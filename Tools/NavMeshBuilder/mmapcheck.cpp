@@ -17,6 +17,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cctype>
+#include <set>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -223,6 +224,66 @@ static std::vector<std::string> listDir(const std::string& dir)
         return false;
     }
 
+    /* On-demand tile loading, mirroring Navigation::LoadTileForDetour: Detour asks
+     * for the tile next to the one it is expanding, we turn that into grid names and
+     * try both naming schemes plus the 3x3 neighbourhood. A long route can then run
+     * across tiles that were never loaded up front - which is what happens in the
+     * game when the bot walks further than the preload radius. */
+    struct LoaderCtx
+    {
+        dtNavMesh* nav = nullptr;
+        std::string dir;
+        int mapId = 0;
+        int filesLoaded = 0;
+        std::set<std::string> tried;
+    };
+
+    bool loadNamedTile(LoaderCtx* ctx, int gx, int gy)
+    {
+        char classic[64], trinity[64];
+        snprintf(classic, sizeof(classic), "%03d%02d%02d.mmtile", ctx->mapId, gx, gy);
+        snprintf(trinity, sizeof(trinity), "%04d_%02d_%02d.mmtile", ctx->mapId, gx, gy);
+        const char* names[2] = { classic, trinity };
+        for (int i = 0; i < 2; i++)
+        {
+            if (!ctx->tried.insert(names[i]).second) continue;
+            const std::string path = ctx->dir + "/" + names[i];
+            FILE* probe = fopen(path.c_str(), "rb");
+            if (!probe) continue;
+            fclose(probe);
+            Loaded stats;
+            loadFile(ctx->nav, path, &stats);
+            ctx->filesLoaded++;
+            if (stats.blobs > 0) return true;
+        }
+        return false;
+    }
+
+    bool onDemandLoader(int x, int y, void* userArg)
+    {
+        LoaderCtx* ctx = (LoaderCtx*)userArg;
+        const dtNavMeshParams* params = ctx->nav->getParams();
+        if (!params) return false;
+
+        // Detour (x, z) -> WoW (y, x), the inverse of the swizzle queries use.
+        const float worldY = params->orig[0] + ((float)x + 0.5f) * params->tileWidth;
+        const float worldX = params->orig[2] + ((float)y + 0.5f) * params->tileHeight;
+        int gx = 0, gy = 0;
+        tileKeyFor(worldX, worldY, &gx, &gy);
+
+        bool loaded = false;
+        for (int dy = -1; dy <= 1; dy++)
+        {
+            for (int dx = -1; dx <= 1; dx++)
+            {
+                const int nx = gx + dx, ny = gy + dy;
+                if (nx < 0 || nx >= 64 || ny < 0 || ny >= 64) continue;
+                if (loadNamedTile(ctx, nx, ny)) loaded = true;
+            }
+        }
+        return loaded;
+    }
+
     std::vector<std::string> listMmtiles(const std::string& dir, int mapId)
     {
         std::vector<std::string> out;
@@ -243,12 +304,14 @@ int main(int argc, char** argv)
     float sx = 0, sy = 0, sz = 0, gx = 0, gy = 0, gz = 0;
     bool verbose = false;
     bool haveQuery = false;
+    bool onDemand = false;
     for (int i = 1; i < argc; i++)
     {
         if (!strcmp(argv[i], "--mmaps") && i + 1 < argc) dir = argv[++i];
         else if (!strcmp(argv[i], "--map") && i + 1 < argc) mapId = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--from") && i + 1 < argc) { sscanf(argv[++i], "%f,%f,%f", &sx, &sy, &sz); haveQuery = true; }
         else if (!strcmp(argv[i], "--to") && i + 1 < argc) { sscanf(argv[++i], "%f,%f,%f", &gx, &gy, &gz); haveQuery = true; }
+        else if (!strcmp(argv[i], "--ondemand")) onDemand = true;
         else if (!strcmp(argv[i], "--verbose")) verbose = true;
         else if (!strcmp(argv[i], "--dump")) dumpHeaders = true;
     }
@@ -292,9 +355,17 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    std::vector<std::string> files = listMmtiles(dir, mapId);
+    LoaderCtx loader;
+    loader.nav = nav;
+    loader.dir = dir;
+    loader.mapId = mapId;
+
     Loaded stats;
-    for (const std::string& file : files) loadFile(nav, file, &stats);
+    if (!onDemand)
+    {
+        std::vector<std::string> files = listMmtiles(dir, mapId);
+        for (const std::string& file : files) loadFile(nav, file, &stats);
+    }
     printf("map %d: %d tile files (%d single-tile), %d navmesh tiles added, %d rejected\n",
            mapId, stats.files, stats.legacyFiles, stats.blobs, stats.failed);
     printf("  dtNavMeshParams: orig (%.1f, %.1f, %.1f), tile %.2f x %.2f, maxTiles %d\n",
@@ -331,6 +402,16 @@ int main(int argc, char** argv)
     {
         fprintf(stderr, "mmapcheck: dtNavMeshQuery::init failed\n");
         return 1;
+    }
+
+    float seedPt[3] = { sy, sz, sx };
+    int seedX = 0, seedY = 0;
+    nav->calcTileLoc(seedPt, &seedX, &seedY);
+    if (onDemand)
+    {
+        query->setTileLoader(onDemandLoader, &loader);
+        onDemandLoader(seedX, seedY, &loader);   // the tile the player stands on
+        printf("  on-demand: loaded the start tile, %d file(s) total\n", loader.filesLoaded);
     }
 
     dtQueryFilter filter;
@@ -389,6 +470,9 @@ int main(int argc, char** argv)
     }
     const float dx = gx - sx, dy = gy - sy, dz2 = gz - sz;   // 2D distance in WoW x/y
     printf("  path %.1f yd, straight line %.1f yd\n", length, sqrtf(dx * dx + dy * dy + dz2 * dz2));
+
+    if (onDemand)
+        printf("  on-demand: %d tile file(s) loaded during the search\n", loader.filesLoaded);
 
     int keyX, keyY;
     tileKeyFor(sx, sy, &keyX, &keyY);
