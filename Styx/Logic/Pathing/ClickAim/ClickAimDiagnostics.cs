@@ -81,6 +81,36 @@ public static class ClickAimDiagnostics
         }
     }
 
+    /// <summary>
+    /// Walks <paramref name="yards"/> straight ahead of the character's own facing -
+    /// the no-coordinates test. Client convention: facing 0 = +Y, clockwise, so the
+    /// offset is (sin, cos).
+    /// </summary>
+    public static bool WalkRelative(double yards)
+    {
+        double x, y, facing;
+        if (!ClickAimPositions.TryRead(out x, out y))
+        {
+            Logging.Write("[ClickAim] cannot walk ahead: no player position yet");
+            return false;
+        }
+        if (!ClickAimPositions.TryReadFacing(out facing))
+        {
+            Logging.Write("[ClickAim] cannot walk ahead: facing is not readable");
+            return false;
+        }
+
+        double targetX = x + Math.Sin(facing) * yards;
+        double targetY = y + Math.Cos(facing) * yards;
+        Logging.Write(string.Format(CultureInfo.InvariantCulture,
+            "[ClickAim] {0:F0} yd ahead: ({1:F1}, {2:F1}) -> ({3:F1}, {4:F1}) at facing {5:F2} rad",
+            yards, x, y, targetX, targetY, facing));
+        if (WalkNow(targetX, targetY, 3.0)) return true;
+
+        Logging.Write("[ClickAim] a walk is already running; the request was ignored");
+        return false;
+    }
+
     private static void ParseCommandLine()
     {
         try
@@ -101,23 +131,53 @@ public static class ClickAimDiagnostics
 
                 if (spec == null) continue;
 
-                double x, y, tol;
-                if (TryParseSpec(spec, out x, out y, out tol))
-                {
-                    Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                        "[ClickAim] command line walk to ({0:F1}, {1:F1}), tolerance {2:F1} yd", x, y, tol));
-                    WalkNow(x, y, tol);
-                }
-                else
-                {
-                    Logging.Write("[ClickAim] --clickaim-walk expects x,y[,tolerance]; got \"" + spec + "\"");
-                }
+                TryQueueSpec(spec, "command line");
             }
         }
         catch (Exception ex)
         {
             Logging.Write("[ClickAim] could not read the command line: " + ex.Message);
         }
+    }
+
+    /// <summary>
+    /// Accepts two forms: "x,y[,tolerance]" for a world position, or a single number
+    /// for "that many yards straight ahead", which needs no map orientation.
+    /// </summary>
+    private static bool TryQueueSpec(string spec, string origin)
+    {
+        double yards;
+        if (TryParseRelative(spec, out yards))
+        {
+            Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                "[ClickAim] {0} request: {1:F0} yd ahead", origin, yards));
+            return WalkRelative(yards);
+        }
+
+        double x, y, tol;
+        if (!TryParseSpec(spec, out x, out y, out tol))
+        {
+            Logging.Write("[ClickAim] ignoring \"" + spec + "\" from the "
+                          + origin + ": expected x,y[,tolerance] or a distance in yards");
+            return false;
+        }
+
+        Logging.Write(string.Format(CultureInfo.InvariantCulture,
+            "[ClickAim] {0} request: ({1:F1}, {2:F1}), tolerance {3:F1} yd", origin, x, y, tol));
+        if (WalkNow(x, y, tol)) return true;
+
+        Logging.Write("[ClickAim] a walk is already running; the request was ignored");
+        return false;
+    }
+
+    private static bool TryParseRelative(string text, out double yards)
+    {
+        yards = 0.0;
+        if (string.IsNullOrWhiteSpace(text)) return false;
+        if (text.IndexOf(',') >= 0) return false;
+        if (!double.TryParse(text.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out yards)) return false;
+        if (yards < 5.0 || yards > 120.0) return false;
+        return true;
     }
 
     private static bool TryParseSpec(string text, out double x, out double y, out double tolerance)
@@ -199,26 +259,11 @@ public static class ClickAimDiagnostics
 
         if (string.IsNullOrEmpty(text) || text == lastSeen) return;
 
-        double x, y, tol;
-        if (!TryParseSpec(text, out x, out y, out tol))
-        {
-            lastSeen = text;
-            Logging.Write("[ClickAim] ignoring \"" + text + "\": expected x,y[,tolerance]");
-            return;
-        }
-
         lastSeen = text;
-        if (!WalkNow(x, y, tol))
-        {
-            Logging.Write("[ClickAim] a walk is already running; the request was ignored");
-            return;
-        }
+        if (!TryQueueSpec(text, "file")) return;
 
         try { File.Delete(path); }
         catch { /* the next request can reuse the same text */ }
-
-        Logging.Write(string.Format(CultureInfo.InvariantCulture,
-            "[ClickAim] file walk to ({0:F1}, {1:F1}), tolerance {2:F1} yd", x, y, tol));
     }
 
     private static void RunWalk(double x, double y, double tolerance)

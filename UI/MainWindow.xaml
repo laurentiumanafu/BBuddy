@@ -122,6 +122,21 @@
             </Viewbox>
         </Button>
 
+        <!-- ClickAim walk (x64 diagnostic mode only, hidden elsewhere) -->
+        <Button x:Name="btnAimWalk"
+                Height="25"
+                Visibility="Hidden"
+                Margin="0,239,8,0"
+                VerticalAlignment="Top"
+                HorizontalAlignment="Right"
+                Width="120"
+                ToolTip="Walk 40 yd ahead with synthesised clicks"
+                Click="btnAimWalk_Click">
+            <Viewbox Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center">
+                <TextBlock Text="ClickAim 40 yd"/>
+            </Viewbox>
+        </Button>
+
         <!-- Start Button -->
         <Button x:Name="btnStart"
                 HorizontalAlignment="Right"

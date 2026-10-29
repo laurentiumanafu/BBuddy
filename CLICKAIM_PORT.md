@@ -101,15 +101,21 @@ mode. After attach the log shows the self-test and then:
 Two triggers, no rebuild between attempts:
 
 ```
-CopilotBuddy.exe --clickaim-walk 1977.5,232.0        :: one walk at startup
+CopilotBuddy.exe --clickaim-walk 1977.5,232.0        :: world position at startup
 CopilotBuddy.exe --clickaim-walk 1977.5,232.0,2.0    :: x,y,tolerance in yards
+CopilotBuddy.exe --clickaim-walk 40                  :: 40 yd straight ahead
 ```
 
-or, with the bot already running, write `1977.5,232.0` into
+or, with the bot already running, write the same text into
 `<application path>\Settings\clickaim-walk.txt`. The file is consumed and deleted,
-so the same coordinates can be asked for again by writing them again. A request is
-refused while a walk is already running and waits up to 30 s for a readable player
-position.
+so the same request can be repeated by writing it again. A request is refused while
+a walk is already running and waits up to 30 s for a readable player position.
+
+A single number means "that many yards straight ahead", computed from the
+character's own facing (`sin`/`cos` of the orientation the reader reports) - no map
+coordinates needed. On the x64 client a **ClickAim 40 yd** button next to *World
+snapshot* does the same thing, so the usual loop is: attach, click the button, watch
+the character walk.
 
 The pilot reports progress every 15 s, and stops on arrival, timeout, repeated
 blocking or a runaway leg. Everything it uses is the same `ClickAimMover` the tree

@@ -816,3 +816,34 @@ dotnet build CopilotBuddy.csproj -c Release -p:Platform=x64
 
 Nothing in the ClickAim port depends on this fix; it was publishing plumbing that
 had been broken since the dual-platform csproj was added.
+
+## 2026-10-29 (v18) — the x64 client had no player position for the mover
+
+Their attach log (PID 18232, build 70291) is healthy: 30 validated units, 69 pool
+slots, local GUID 0x0801…0006, record 0x11EBA8291C0, pos (-614.8, -4254.2, 39.0),
+hp 53/53, objMgr 0x11F2B319EF0. What it did NOT contain is any `[ClickAim]` line -
+the mover was never constructed, and that hid a real defect:
+
+`ObjectManager.Update()` on a 64-bit target publishes a `WowBWorldSnapshot` and
+returns before `Me` is ever assigned. `ClickAimMover.PlayerPosition` read
+`StyxWoW.Me`, so on the only client it was ported for it would have answered "no
+local player" forever - and the bot loop (which would have called it) is disabled
+anyway on x64.
+
+Fixed:
+* `ClickAimPositions.TryRead`: legacy `ObjectManager.Me` first, else
+  `WowBReader.TryGetPlayerObject` + `TryGetObjectTransform`, cached 40 ms. Also
+  `Z()` and `Source` ("legacy" / "wowb").
+* `ClickAimMover` uses that instead of `StyxWoW.Me`.
+* `ClickAimDiagnostics.EnableAfterAttach()`: logs the 26-check self-test, the
+  position source, and accepts walks from `--clickaim-walk x,y[,tol]` or from
+  `Settings\clickaim-walk.txt` (consumed then deleted), 240 s budget, refuses a
+  second walk while one runs, waits 30 s for a readable position.
+* `UI/MainWindow.xaml.cs`: calls it in the x64 diagnostic branch, so the triggers
+  work on the build that currently ships.
+
+Not run: everything above is lint/text only (no C# compiler here). The transport
+itself (PostMessage right-click) is the same code the field tool proved, but it has
+never been driven from *inside* the bot process - that is the next acceptance step,
+`--clickaim-walk <visible point 30-60 yd>`, expecting `[ClickAim] from … to …`,
+then `arrived: … yd remaining, N legs`.

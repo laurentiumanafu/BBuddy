@@ -123,6 +123,50 @@ internal static class ClickAimPositions
         }
     }
 
+    /// <summary>
+    /// The character's own facing in radians (client convention: 0 = +Y,
+    /// increasing clockwise), or false when it cannot be read. Used by the
+    /// relative walk trigger, not by the mover - aiming is done with the camera.
+    /// </summary>
+    public static bool TryReadFacing(out double radians)
+    {
+        radians = 0.0;
+        try
+        {
+            WowBReader? reader = ObjectManager.WowB;
+            if (reader != null)
+            {
+                WowBReader.WowBPoolObject obj;
+                if (reader.TryGetPlayerObject(out obj) && !obj.IsEmpty)
+                {
+                    float fx, fy, fz, facing;
+                    if (reader.TryGetObjectTransform(obj, out fx, out fy, out fz, out facing) &&
+                        float.IsFinite(facing))
+                    {
+                        radians = facing;
+                        return true;
+                    }
+                }
+            }
+
+            var me = ObjectManager.Me;
+            if (me != null)
+            {
+                float rot = me.Rotation;
+                if (float.IsFinite(rot))
+                {
+                    radians = rot;
+                    return true;
+                }
+            }
+        }
+        catch
+        {
+            // ignored
+        }
+        return false;
+    }
+
     /// <summary>Z of the local player, or NaN when only X/Y are available.</summary>
     public static double Z()
     {

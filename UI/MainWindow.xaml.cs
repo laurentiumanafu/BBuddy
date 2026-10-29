@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
@@ -210,6 +210,8 @@ namespace CopilotBuddy.UI
                                 btnDevTools.ToolTip = "View a read-only WowB snapshot";
                                 btnDevTools.Visibility = Visibility.Visible;
                                 btnDevTools.IsEnabled = true;
+                                btnAimWalk.Visibility = Visibility.Visible;
+                                btnAimWalk.IsEnabled = true;
                             });
                             return;
                         }
@@ -1148,6 +1150,23 @@ namespace CopilotBuddy.UI
                 Owner = this
             };
             pluginsWindow.ShowDialog();
+        }
+
+        /// <summary>
+        /// x64 diagnostic only: walk 40 yd ahead of the character using the
+        /// synthesised click mover. Nothing else in the bot is running when this
+        /// button exists, so it is the lowest-friction way to test movement.
+        /// </summary>
+        private void btnAimWalk_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                Styx.Logic.Pathing.ClickAimDiagnostics.WalkRelative(40.0);
+            }
+            catch (Exception ex)
+            {
+                Logging.Write("[ClickAim] walk failed: " + ex.Message);
+            }
         }
 
         private void btnDevTools_Click(object sender, RoutedEventArgs e)
