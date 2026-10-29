@@ -211,8 +211,9 @@ would not have been in the mesh at all.
 
 ## What the bot logs about the mesh
 
-On attach, `ClickAimDiagnostics` prints three things and then, if the library loaded,
-runs a probe:
+On attach, `ClickAimDiagnostics` prints three lines about the folder and then, if the
+library loaded, runs a probe. Shape of the output (numbers below are an example, not a
+measurement of any particular install):
 
 ```
 [NavMesh] 5948 tile files in the folder (312 params files), 4096 for map 1; params for this map: 001.mmap
