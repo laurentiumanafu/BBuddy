@@ -73,6 +73,7 @@ if "%MMAPS%"=="" (
     goto :Logs
 )
 if not defined MAPID call :MapIdFromParams "%FIRSTMAP%"
+echo %MAPID%| findstr /r /c:"^[0-9][0-9]*$" >nul || set "MAPID=1"
 call :Report "  map %MAPID%"
 "%~dp0NavMeshBuilder\bin-x64\mmapcheck.exe" --mmaps "%MMAPS%" --map %MAPID% >> "%REPORT%" 2>&1
 call :Report "  mmapcheck exit code: %ERRORLEVEL%  (0 = every tile accepted)"
@@ -100,14 +101,20 @@ endlocal
 exit /b 0
 
 :MapIdFromParams
-rem Map id from a params file name ("001.mmap" or "0001.mmap"), leading zeros
-rem stripped one at a time because set /a would read "0010" as octal 8.
-set "MAPID="
-if "%~1"=="" set "MAPID=1" & goto :eof
-for /f "delims=." %%A in ("%~1") do set "MAPID=%%A"
-:StripLead
-if "%MAPID:~0,1%"=="0" set "MAPID=%MAPID:~1%" & goto :StripLead
-if "%MAPID%"=="" set "MAPID=0"
+rem Map id from a params file name ("001.mmap" or "0001.mmap").
+rem
+rem Not a strip-leading-zeros loop: `if ... set ... & goto` runs the goto whatever
+rem the condition said, so "001" rewrote to "1", jumped anyway, and spun forever.
+rem Leading zeros are also why set /a is not used directly - it reads 0010 as octal
+rem 8. Prefixing with 1 and subtracting the width sidesteps both.
+set "MAPID=1"
+set "DIGITS=%~1"
+if "%DIGITS%"=="" goto :eof
+for /f "delims=." %%A in ("%DIGITS%") do set "DIGITS=%%A"
+echo %DIGITS%| findstr /r /c:"^[0-9][0-9]*$" >nul || goto :eof
+set /a MAPID=1%DIGITS%-1000
+if %MAPID% gtr 999 set /a MAPID=1%DIGITS%-10000
+if %MAPID% lss 0 set "MAPID=1"
 goto :eof
 
 :Hash

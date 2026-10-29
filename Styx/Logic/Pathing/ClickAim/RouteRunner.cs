@@ -45,7 +45,7 @@ public static class RouteRunner
         bool mesh = MeshAvailable();
         if (mesh)
         {
-            Logging.Write("[Route] navmesh available: every leg is routed with GeneratePath, then followed");
+            Logging.Write("[Route] navmesh available: every leg is routed on the mmaps (Navigator.FindPath), then followed point by point");
         }
         else
         {
@@ -113,8 +113,13 @@ public static class RouteRunner
 
             if (path != null && path.Length > 1)
             {
+                double meshLength = 0.0;
+                for (int q = 1; q < path.Length; q++)
+                    meshLength += ClickAimMath.Len(path[q].X - path[q - 1].X, path[q].Y - path[q - 1].Y);
                 Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                    "[Route] mesh path: {0} points", path.Length));
+                    "[Route] mesh path: {0} points, {1:F1} yd for a {2:F1} yd leg{3}",
+                    path.Length, meshLength, leg,
+                    meshLength > leg + 1.0 ? " (detours around terrain)" : " (nearly straight)"));
                 arrived = true;
                 for (int p = 1; p < path.Length; p++)
                 {
@@ -210,6 +215,13 @@ public static class RouteRunner
     private static bool _meshReady;
 
     /// <summary>
+    /// True when a navmesh can be queried, loading the library once if it has not
+    /// been already. Public so a single-point walk can take the same route a profile
+    /// leg does instead of clicking straight at the goal.
+    /// </summary>
+    public static bool MeshReady() { return MeshAvailable(); }
+
+    /// <summary>
     /// True once a navmesh can be queried. The first call tries to load the native
     /// library itself: on the 64-bit client no bot session ever starts, so nothing
     /// would call <c>LoadMeshes</c> and every leg would silently fall back to the
@@ -237,7 +249,10 @@ public static class RouteRunner
             Tripper.Navigation.Navigator nav = Navigator.TripperNavigator;
             if (!nav.IsLoaded) return null;
 
-            uint mapId = (uint)NavGridStore.MapId;
+            /* The map id is a constant (1). When the character is somewhere else the
+             * tile for this position belongs to a different map, every query comes
+             * back empty, and it looks like the mesh is broken. Ask the position. */
+            uint mapId = ClickAimDiagnostics.ResolveMap((uint)NavGridStore.MapId, px, py);
             var from = new System.Numerics.Vector3((float)px, (float)py, fromZ);
             var to = new System.Numerics.Vector3((float)target.X, (float)target.Y, (float)target.Z);
 

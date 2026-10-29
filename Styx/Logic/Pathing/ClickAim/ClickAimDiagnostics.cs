@@ -190,6 +190,42 @@ public static class ClickAimDiagnostics
     }
 
     /// <summary>
+    /// The map id to route on, given a position.
+    ///
+    /// <see cref="NavGridStore.MapId"/> is a constant that nothing sets from the
+    /// client, so it is right for Kalimdor and wrong everywhere else. This returns it
+    /// unchanged when its tile exists, and otherwise the first map in the mmaps
+    /// folder that does have a tile for the position - which is right for a character
+    /// standing in the Eastern Kingdoms while the bot still thinks "map 1".
+    /// </summary>
+    internal static uint ResolveMap(uint mapId, double x, double y)
+    {
+        try
+        {
+            int tileX, tileY;
+            try
+            {
+                Tripper.Navigation.NativeMethods.WorldToTile((float)x, (float)y, out tileX, out tileY);
+            }
+            catch
+            {
+                tileX = (int)((32.0 * 533.33333 - x) / 533.33333);
+                tileY = (int)((32.0 * 533.33333 - y) / 533.33333);
+            }
+
+            string mmapsDir = System.IO.Path.Combine(AppContext.BaseDirectory, "mmaps");
+            if (TileFileExists(mmapsDir, mapId, tileX, tileY)) return mapId;
+
+            List<uint> covering = MapsCoveringTile(mmapsDir, tileX, tileY);
+            return covering.Count > 0 ? covering[0] : mapId;
+        }
+        catch
+        {
+            return mapId;
+        }
+    }
+
+    /// <summary>
     /// Which of the covered maps has a tile file for this position?
     ///
     /// <see cref="NavGridStore.MapId"/> defaults to 1 and nothing in the ported code
@@ -250,15 +286,33 @@ public static class ClickAimDiagnostics
 
             var from = new System.Numerics.Vector3((float)x, (float)y, (float)z);
 
-            // Which tile do we expect? The loader derives the same number, so a
-            // "no polygon" answer can be checked against a file name here.
+            /* Which tile file does the engine expect for this position?
+             *
+             * Read it from the DLL itself rather than recomputing it here: the two
+             * conventions in this codebase are transposed (NavGridFinder.TileOf
+             * returns the .map-style pair, the loader names files the other way
+             * round), and a log that prints a name the loader would never look for
+             * sends the next person hunting a file that is not the problem.
+             * Navigation::WorldToTile is what getTileName/getTileFile use. */
             int tileX, tileY;
-            NavGridFinder.TileOf(x, y, out tileX, out tileY);
+            try
+            {
+                Tripper.Navigation.NativeMethods.WorldToTile((float)x, (float)y, out tileX, out tileY);
+            }
+            catch
+            {
+                tileX = (int)((32.0 * 533.33333 - x) / 533.33333);
+                tileY = (int)((32.0 * 533.33333 - y) / 533.33333);
+            }
+
+            int gridX, gridY;
+            NavGridFinder.TileOf(x, y, out gridX, out gridY);
+
             Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                "[MeshProbe] player {0:F1},{1:F1},{2:F1} map {3} -> grid tile ({4},{5}), "
-                + "file {6}{7}{8}.mmtile{9}", x, y, z, mapId, tileX, tileY, mapId.ToString("000"),
-                tileX.ToString("00"), tileY.ToString("00"),
-                zKnown ? "" : " (z unreadable, probing at 0)"));
+                "[MeshProbe] player {0:F1},{1:F1},{2:F1} map {3} -> loader tile ({4},{5}) = file "
+                + "{6}{7}{8}.mmtile; .map-style pair ({9},{10}){11}", x, y, z, mapId, tileX, tileY,
+                mapId.ToString("000"), tileX.ToString("00"), tileY.ToString("00"),
+                gridX, gridY, zKnown ? "" : " (z unreadable, probing at 0)"));
 
             // Does the map the bot believes it is on actually have this tile? If some
             // other map does, that is the answer and the map id is the bug.
@@ -710,15 +764,16 @@ public static class ClickAimDiagnostics
     private static void RunWalk(double x, double y, double tolerance)
     {
         int waited = 0;
+        double startDistance = double.NaN;
         while (waited < PlayerWaitMs)
         {
             double px, py;
             if (ClickAimPositions.TryRead(out px, out py))
             {
-                double start = ClickAimMath.Len(x - px, y - py);
+                startDistance = ClickAimMath.Len(x - px, y - py);
                 Logging.Write(string.Format(CultureInfo.InvariantCulture,
                     "[ClickAim] from ({0:F1}, {1:F1}) [{2}] to ({3:F1}, {4:F1}) - {5:F1} yd",
-                    px, py, ClickAimPositions.Source, x, y, start));
+                    px, py, ClickAimPositions.Source, x, y, startDistance));
                 break;
             }
             Thread.Sleep(500);
@@ -732,6 +787,36 @@ public static class ClickAimDiagnostics
             return;
         }
 
+        /* Route on the mmaps when they are there.
+         *
+         * A single click walks a straight line, and a straight line between two
+         * points in Ashenvale is usually a tree, a rock or a cliff. The mesh turns
+         * the same request into a polyline that goes around them - which is the
+         * entire reason the mmaps are loaded. Falls back to the straight click only
+         * when no mesh can be queried, and says which one it used.
+         */
+        bool mesh = false;
+        try { mesh = RouteRunner.MeshReady(); }
+        catch (Exception ex) { Logging.Write("[ClickAim] mesh probe failed: " + ex.Message); }
+
+        if (mesh)
+        {
+            double z = ClickAimPositions.Z();
+            if (double.IsNaN(z)) z = 0.0;
+
+            Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                "[ClickAim] routing {0:F1} yd on the mesh; a straight click is only the fallback",
+                startDistance));
+
+            var route = new List<RoutePoint>
+            {
+                new RoutePoint { X = x, Y = y, Z = z, Kind = "WalkTo", Label = "single point" }
+            };
+            RouteRunner.Run(route, 0);
+            return;
+        }
+
+        Logging.Write("[ClickAim] no mesh for this map - walking the straight line");
         ClickAimPilot.WalkTo(x, y, tolerance, PilotTimeoutMs, true);
     }
 }
