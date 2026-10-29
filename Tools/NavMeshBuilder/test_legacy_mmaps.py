@@ -39,6 +39,12 @@ def check(name, ok, detail=""):
         failures.append(name)
 
 
+def rename_to_trinity(store):
+    """001.mmap / 0013232.mmtile -> 0001.mmap / 0001_32_32.mmtile."""
+    os.rename(os.path.join(store, "001.mmap"), os.path.join(store, "0001.mmap"))
+    os.rename(os.path.join(store, "0013232.mmtile"), os.path.join(store, "0001_32_32.mmtile"))
+
+
 def make_store(work, name, header=16, closed=False):
     path = os.path.join(work, name)
     if os.path.isdir(path):
@@ -85,6 +91,18 @@ def main():
               out)
         if length is not None:
             print("    path %.1f yd, straight line %.1f yd" % (length, STRAIGHT))
+
+    # TrinityCore and newer name the same files 0001.mmap / 0001_32_32.mmtile.
+    store = make_store(work, "trinity-names")
+    rename_to_trinity(store)
+    result = run(store)
+    check("TrinityCore-style names are found without renaming anything",
+          result.returncode == 0 and "(1 single-tile), 1 navmesh tiles added, 0 rejected"
+          in result.stdout,
+          result.stdout + result.stderr)
+    length = path_length(result.stdout)
+    check("TrinityCore-style names route as well",
+          length is not None and length > STRAIGHT + 50.0, result.stdout)
 
     # A wall with no doorway: the tile must still load, and the query must fail
     # instead of inventing a straight line.

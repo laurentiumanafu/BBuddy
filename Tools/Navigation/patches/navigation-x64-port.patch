@@ -1,8 +1,130 @@
 diff --git a/Navigation/MoveMap.cpp b/Navigation/MoveMap.cpp
-index 9b68d88..eb55615 100644
+index 9b68d88..79d391d 100644
 --- a/Navigation/MoveMap.cpp
 +++ b/Navigation/MoveMap.cpp
-@@ -322,7 +322,7 @@ namespace MMAP
+@@ -183,6 +183,70 @@ namespace MMAP
+ 		}
+ 	}
+ 
++	/* Two naming schemes are in the wild, and they do not overlap:
++	 *
++	 *   MaNGOS / cmangos / AzerothCore     mmaps\\\\001.mmap    mmaps\\\\0013232.mmtile
++	 *   TrinityCore (and anything newer)   mmaps\\\\0001.mmap   mmaps\\\\0001_32_32.mmtile
++	 *
++	 * Both are read: the mmap set on disk is whatever that install's extractor wrote. */
++
++	// "<mapid><xx><yy>" or "<mapid>_<xx>_<yy>", .mmtile suffix included.
++	bool parseTileFileName(const string& name, unsigned int mapId, int* x, int* y)
++	{
++		const string suffix = ".mmtile";
++		if (name.size() <= suffix.size() ||
++			name.compare(name.size() - suffix.size(), suffix.size(), suffix) != 0)
++			return false;
++
++		const string stem = name.substr(0, name.size() - suffix.size());
++
++		/* The map id and the tile digits are both numbers, so where the map id ends
++		 * has to come from the shape of the name: a "_" separator, or else the four
++		 * trailing digits of a 7- or 8-character run (3-digit or 4-digit map id). */
++		string mapPart, rest;
++		const size_t underscore = stem.find('_');
++		if (underscore != string::npos)
++		{
++			mapPart = stem.substr(0, underscore);
++			rest = stem.substr(underscore);
++		}
++		else
++		{
++			if (stem.size() != 7 && stem.size() != 8)
++				return false;
++			mapPart = stem.substr(0, stem.size() - 4);
++			rest = stem.substr(stem.size() - 4);
++		}
++		if (mapPart.empty())
++			return false;
++		for (size_t i = 0; i < mapPart.size(); i++)
++		{
++			if (mapPart[i] < '0' || mapPart[i] > '9')
++				return false;
++		}
++		if ((unsigned int)atoi(mapPart.c_str()) != mapId)
++			return false;
++		if (rest.size() == 4 &&
++			rest[0] >= '0' && rest[0] <= '9' && rest[1] >= '0' && rest[1] <= '9' &&
++			rest[2] >= '0' && rest[2] <= '9' && rest[3] >= '0' && rest[3] <= '9')
++		{
++			*x = (rest[0] - '0') * 10 + (rest[1] - '0');
++			*y = (rest[2] - '0') * 10 + (rest[3] - '0');
++			return true;
++		}
++
++		if (rest.size() == 6 && rest[0] == '_' && rest[3] == '_' &&
++			rest[1] >= '0' && rest[1] <= '9' && rest[2] >= '0' && rest[2] <= '9' &&
++			rest[4] >= '0' && rest[4] <= '9' && rest[5] >= '0' && rest[5] <= '9')
++		{
++			*x = (rest[1] - '0') * 10 + (rest[2] - '0');
++			*y = (rest[4] - '0') * 10 + (rest[5] - '0');
++			return true;
++		}
++
++		return false;
++	}
++
+ 	bool MMapManager::loadMapData(unsigned int mapId)
+ 	{
+ 		if (loadedMMaps.find(mapId) != loadedMMaps.end())
+@@ -192,7 +256,16 @@ namespace MMAP
+ 		getMapName(mapId, fileName);
+ 		FILE* file = fopen(fileName.c_str(), "rb");
+ 		if (!file)
+-			return false;
++		{
++			// TrinityCore and anything newer: mmaps\\0001.mmap
++			string directory = "";
++			getMmapsDirectory(directory);
++			char modern[64];
++			snprintf(modern, sizeof(modern), "%04u.mmap", mapId);
++			file = fopen((directory + modern).c_str(), "rb");
++			if (!file)
++				return false;
++		}
+ 		dtNavMeshParams params;
+ 		size_t file_read = fread(&params, sizeof(dtNavMeshParams), 1, file);
+ 		fclose(file);
+@@ -232,7 +305,7 @@ namespace MMAP
+ 		string directory = "";
+ 		getMmapsDirectory(directory);
+ 
+-		string pattern = directory + mapIdStr + "*.mmtile";
++		string pattern = directory + "*.mmtile";
+ 
+ 		WIN32_FIND_DATAA findData;
+ 		HANDLE find = FindFirstFileA(pattern.c_str(), &findData);
+@@ -250,21 +323,10 @@ namespace MMAP
+ 			if (name.length() < prefixLength + 4)
+ 				continue;
+ 
+-			bool digits = true;
+-			for (size_t i = prefixLength; i < prefixLength + 4; i++)
+-			{
+-				if (name[i] < '0' || name[i] > '9')
+-				{
+-					digits = false;
+-					break;
+-				}
+-			}
+-			if (!digits)
++			int x = 0, y = 0;
++			if (!parseTileFileName(name, mapId, &x, &y))
+ 				continue;
+ 
+-			int x = (name[prefixLength] - '0') * 10 + (name[prefixLength + 1] - '0');
+-			int y = (name[prefixLength + 2] - '0') * 10 + (name[prefixLength + 3] - '0');
+-
+ 			mmap->mmapExistingTiles.insert(packTileID(x, y));
+ 		}
+ 		while (FindNextFileA(find, &findData));
+@@ -322,7 +384,7 @@ namespace MMAP
  
  	unsigned int MMapManager::packTileID(int x, int y)
  	{
@@ -11,7 +133,25 @@ index 9b68d88..eb55615 100644
  	}
  
  	bool MMapManager::loadMap(unsigned int mapId, int x, int y)
-@@ -362,128 +362,158 @@ namespace MMAP
+@@ -344,7 +406,16 @@ namespace MMAP
+ 
+ 		FILE* file = fopen(fileName.c_str(), "rb");
+ 		if (!file)
+-			return false;
++		{
++			// TrinityCore and anything newer: mmaps\\0001_32_32.mmtile
++			string directory = "";
++			getMmapsDirectory(directory);
++			char modern[64];
++			snprintf(modern, sizeof(modern), "%04u_%02d_%02d.mmtile", mapId, x, y);
++			file = fopen((directory + modern).c_str(), "rb");
++			if (!file)
++				return false;
++		}
+ 
+ 		// Peek at the first 12 bytes to determine format version
+ 		unsigned int headerPeek[3]; // magic, dtVersion, mmapVersion
+@@ -362,128 +433,158 @@ namespace MMAP
  		}
  
  		unsigned int mmapVersion = headerPeek[2];
@@ -63,39 +203,31 @@ index 9b68d88..eb55615 100644
 -					fclose(file);
 -					return anyLoaded;
 -				}
-+		fclose(file);
- 
+-
 -				if (blobSize == 0)
 -				{
 -					// Empty sub-tile slot — skip
 -					tileRefs.push_back(0);
 -					continue;
 -				}
-+		if (!anyLoaded)
-+			return false;
- 
+-
 -				unsigned char* data = (unsigned char*)dtAlloc(blobSize, DT_ALLOC_PERM);
 -				if (!data)
 -				{
 -					fclose(file);
 -					return anyLoaded;
 -				}
-+		mmap->mmapLoadedTiles.insert(std::pair<unsigned int, std::vector<dtTileRef>>(packedGridPos, tileRefs));
- 
+-
 -				if (fread(data, blobSize, 1, file) != 1)
 -				{
 -					dtFree(data);
 -					fclose(file);
 -					return anyLoaded;
 -				}
-+		// HB 4.3.4: Load tile-specific offmesh connections
-+		OffMeshManager::Instance().LoadTileOffMeshConnections(mapId, x, y);
- 
+-
 -				dtMeshHeader* header = (dtMeshHeader*)data;
 -				OffMeshManager::Instance().RegisterTileNavParams(mapId, header);
-+		// HB 6.2.3 pattern: notify managed layer that a tile was loaded
-+		raiseTileLoaded(mapId, x, y);
- 
+-
 -				dtTileRef tileRef = 0;
 -				dtStatus dtResult = mmap->navMesh->addTile(data, blobSize, DT_TILE_FREE_DATA, 0, &tileRef);
 -				if (dtStatusFailed(dtResult))
@@ -104,12 +236,31 @@ index 9b68d88..eb55615 100644
 -					tileRefs.push_back(0);
 -					continue;
 -				}
-+		return true;
-+	}
- 
+-
 -				tileRefs.push_back(tileRef);
 -				anyLoaded = true;
 -			}
++		fclose(file);
+ 
+-			fclose(file);
++		if (!anyLoaded)
++			return false;
+ 
+-			if (!anyLoaded)
+-				return false;
+-		}
+-		else if (mmapVersion == MMAP_VERSION)
++		mmap->mmapLoadedTiles.insert(std::pair<unsigned int, std::vector<dtTileRef>>(packedGridPos, tileRefs));
++
++		// HB 4.3.4: Load tile-specific offmesh connections
++		OffMeshManager::Instance().LoadTileOffMeshConnections(mapId, x, y);
++
++		// HB 6.2.3 pattern: notify managed layer that a tile was loaded
++		raiseTileLoaded(mapId, x, y);
++
++		return true;
++	}
++
 +	/* This build's container: magic, dtVersion, 6, tileCount, flags, then
 +	 * tileCount x (u32 size + blob). An empty slot has size 0. */
 +	bool MMapManager::loadMultiTile(FILE* file, MMapData* mmap, unsigned int mapId, std::vector<dtTileRef>& tileRefs)
@@ -118,15 +269,10 @@ index 9b68d88..eb55615 100644
 +		if (fread(&tileCount, sizeof(unsigned int), 1, file) != 1 ||
 +			fread(&flags, sizeof(unsigned int), 1, file) != 1)
 +			return false;
- 
--			fclose(file);
++
 +		if (tileCount == 0 || tileCount > 64)
 +			return false;
- 
--			if (!anyLoaded)
--				return false;
--		}
--		else if (mmapVersion == MMAP_VERSION)
++
 +		bool anyLoaded = false;
 +		for (unsigned int i = 0; i < tileCount; i++)
  		{
@@ -196,11 +342,11 @@ index 9b68d88..eb55615 100644
 +	{
 +		unsigned int head[4] = { 0, 0, 0, 0 };
 +		if (fseek(file, 0, SEEK_SET) != 0)
- 			return false;
++			return false;
 +		if (fread(head, sizeof(unsigned int), 4, file) != 4)
 +			return false;
 +		if (head[0] != MMAP_MAGIC)
-+			return false;
+ 			return false;
 +
 +		unsigned int blobSize = head[3];
 +		if (blobSize == 0 || blobSize > 64u * 1024u * 1024u)

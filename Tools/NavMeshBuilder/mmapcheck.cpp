@@ -16,6 +16,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <cctype>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -172,16 +173,63 @@ static std::vector<std::string> listDir(const std::string& dir)
         fclose(f);
     }
 
+    /* <map:03d><x:02d><y:02d>.mmtile (MaNGOS, cmangos, AzerothCore) or
+     * <map:04d>_<x:02d>_<y:02d>.mmtile (TrinityCore and newer). Same parse as
+     * parseTileFileName() in Navigation/MoveMap.cpp. */
+    bool parseTileName(const std::string& name, int mapId, int* x, int* y)
+    {
+        const std::string suffix = ".mmtile";
+        if (name.size() <= suffix.size() ||
+            name.compare(name.size() - suffix.size(), suffix.size(), suffix) != 0)
+            return false;
+
+        const std::string stem = name.substr(0, name.size() - suffix.size());
+
+        /* The map id and the tile digits are both numbers, so where the map id ends
+         * has to come from the shape of the name: a "_" separator, or else the four
+         * trailing digits of a 7- or 8-character run (3-digit or 4-digit map id). */
+        std::string mapPart, rest;
+        const size_t underscore = stem.find('_');
+        if (underscore != std::string::npos)
+        {
+            mapPart = stem.substr(0, underscore);
+            rest = stem.substr(underscore);
+        }
+        else
+        {
+            if (stem.size() != 7 && stem.size() != 8) return false;
+            mapPart = stem.substr(0, stem.size() - 4);
+            rest = stem.substr(stem.size() - 4);
+        }
+        if (mapPart.empty()) return false;
+        for (size_t i = 0; i < mapPart.size(); i++)
+            if (!isdigit((unsigned char)mapPart[i])) return false;
+        if (atoi(mapPart.c_str()) != mapId) return false;
+        if (rest.size() == 4 && isdigit((unsigned char)rest[0]) && isdigit((unsigned char)rest[1]) &&
+            isdigit((unsigned char)rest[2]) && isdigit((unsigned char)rest[3]))
+        {
+            *x = (rest[0] - '0') * 10 + (rest[1] - '0');
+            *y = (rest[2] - '0') * 10 + (rest[3] - '0');
+            return true;
+        }
+        if (rest.size() == 6 && rest[0] == '_' && rest[3] == '_' &&
+            isdigit((unsigned char)rest[1]) && isdigit((unsigned char)rest[2]) &&
+            isdigit((unsigned char)rest[4]) && isdigit((unsigned char)rest[5]))
+        {
+            *x = (rest[1] - '0') * 10 + (rest[2] - '0');
+            *y = (rest[4] - '0') * 10 + (rest[5] - '0');
+            return true;
+        }
+        return false;
+    }
+
     std::vector<std::string> listMmtiles(const std::string& dir, int mapId)
     {
         std::vector<std::string> out;
-        const std::string prefix = std::to_string(mapId);
         for (const std::string& name : listDir(dir))
         {
-            // <map:03d><x:02d><y:02d>.mmtile
-            if (name.size() != 7 + 7) continue;                    // "0013232.mmtile"
-            if (name.compare(name.size() - 7, 7, ".mmtile") != 0) continue;
-            if (name.compare(0, 3, std::string(3 - prefix.size(), '0') + prefix) != 0) continue;
+            int x = 0, y = 0;
+            if (!parseTileName(name, mapId, &x, &y)) continue;
             out.push_back(dir + "/" + name);
         }
         return out;
@@ -211,12 +259,19 @@ int main(int argc, char** argv)
     }
 
     char mapPath[1024];
+    char trinityPath[1024];
+    snprintf(trinityPath, sizeof(trinityPath), "%s/%04d.mmap", dir.c_str(), mapId);
     snprintf(mapPath, sizeof(mapPath), "%s/%03d.mmap", dir.c_str(), mapId);
     FILE* mf = fopen(mapPath, "rb");
     if (!mf)
     {
-        fprintf(stderr, "mmapcheck: no %s\n", mapPath);
-        return 1;
+        // TrinityCore and newer: 0001.mmap beside 0001_32_32.mmtile
+        mf = fopen(trinityPath, "rb");
+        if (!mf)
+        {
+            fprintf(stderr, "mmapcheck: no %s (or %s)\n", mapPath, trinityPath);
+            return 1;
+        }
     }
     dtNavMeshParams params;
     if (fread(&params, sizeof(params), 1, mf) != 1)

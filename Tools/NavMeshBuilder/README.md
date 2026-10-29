@@ -83,6 +83,17 @@ Kingdoms can be fed to the x64 DLL as-is. Our own 4x4 output and stock files mus
 be **mixed inside one map**: a `dtNavMesh` is initialised from one params file, and the
 tile size in it (133.33 vs 533.33 yd) has to match every tile added. Pick one per map.
 
+Both file-naming schemes are read, because they do not overlap:
+
+| extractor | params | tile |
+| --- | --- | --- |
+| MaNGOS / cmangos / AzerothCore | `mmaps\\001.mmap` | `mmaps\\0013232.mmtile` |
+| TrinityCore (and newer) | `mmaps\\0001.mmap` | `mmaps\\0001_32_32.mmtile` |
+
+The tile manifest is built by parsing every `*.mmtile` beside the DLL, so a directory
+holding either scheme - or both, for different maps - is usable without renaming
+anything.
+
 `Navigation.dll` resolves `mmaps\` next to itself, so the directory the loader reads is
 the one beside the DLL - `Lib\x64\mmaps\` in this repo. Point it at an existing set
 instead of copying 2 GB:
