@@ -427,7 +427,14 @@ int main(int argc, char** argv)
     {
         query->setTileLoader(onDemandLoader, &loader);
         onDemandLoader(seedX, seedY, &loader);   // the tile the player stands on
-        printf("  on-demand: loaded the start tile, %d file(s) total\n", loader.filesLoaded);
+        // The goal tile too: findNearestPoly does not consult the tile loader, and
+        // the managed side preloads both ends for the same reason.
+        float goalPt[3] = { gy, gz, gx };
+        int goalX = 0, goalY = 0;
+        nav->calcTileLoc(goalPt, &goalX, &goalY);
+        if (goalX != seedX || goalY != seedY)
+            onDemandLoader(goalX, goalY, &loader);
+        printf("  on-demand: loaded both ends, %d file(s) total\n", loader.filesLoaded);
     }
 
     dtQueryFilter filter;

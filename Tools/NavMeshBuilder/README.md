@@ -178,7 +178,7 @@ a straight-line answer here would mean the tiles were emitted but never joined.
 
 ## Verification that has been run, legacy container
 
-`python3 test_legacy_mmaps.py /tmp/legacy-mmap-test` - 14 checks, 0 failed:
+`python3 test_legacy_mmaps.py /tmp/legacy-mmap-test` - 18 checks, 0 failed:
 
 ```
 16-byte header: one file, accepted by dtNavMesh
@@ -199,10 +199,12 @@ the route bends through three separate doorways
                 path 1024.0 yd, straight line 400.0 yd, 3 tile files loaded
 ```
 
-The last three are `mmapcheck --ondemand`, which loads only the tile the start point
-is in and then answers Detour's tile requests the way `Navigation::LoadTileForDetour`
-does. Three tiles, three doorways in different columns, no preloading: 1024 yd of
-path across two seams.
+The `--ondemand` checks load only the two end tiles and then answer Detour's tile
+requests the way `Navigation::LoadTileForDetour` does. Three tiles, three doorways in
+different columns: 1024 yd of path against a 400 yd straight line. At grid scale -
+7x7 stock tiles, a wall and a differently placed doorway in every one, 3.7 km
+across - the route comes out at 4715 yd against 4525 yd straight, and the search
+pulled 45 of the 49 files in itself.
 
 The 60.7 yd of extra path is the doorway detour: with a straight-line answer the wall
 would not have been in the mesh at all.

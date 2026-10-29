@@ -40,10 +40,18 @@ def check(name, ok, detail=""):
         failures.append(name)
 
 
+def tile_file(store):
+    names = [n for n in os.listdir(store) if n.endswith(".mmtile")]
+    assert len(names) == 1, names
+    return os.path.join(store, names[0])
+
+
 def rename_to_trinity(store):
-    """001.mmap / 0013232.mmtile -> 0001.mmap / 0001_32_32.mmtile."""
+    """001.mmap / 0013131.mmtile -> 0001.mmap / 0001_31_31.mmtile."""
+    tile = tile_file(store)
     os.rename(os.path.join(store, "001.mmap"), os.path.join(store, "0001.mmap"))
-    os.rename(os.path.join(store, "0013232.mmtile"), os.path.join(store, "0001_32_32.mmtile"))
+    base = os.path.basename(tile)[3:7]                 # "3131"
+    os.rename(tile, os.path.join(store, "0001_%s_%s.mmtile" % (base[:2], base[2:])))
 
 
 def make_store(work, name, header=16, closed=False):
@@ -67,7 +75,7 @@ def wrap_as_multi_tile(store, version):
     loader must not care: the container is recognised by its shape, not by a
     number that has already meant three different things.
     """
-    path = os.path.join(store, "0013232.mmtile")
+    path = tile_file(store)
     with open(path, "rb") as f:
         data = f.read()
     magic, dt_version, _version, size = struct.unpack_from("<4I", data, 0)
@@ -104,6 +112,13 @@ def main():
         check("%d-byte header: one file, accepted by dtNavMesh" % header,
               result.returncode == 0 and "(1 single-tile), 1 navmesh tiles added, 0 rejected" in out,
               out + result.stderr)
+        # The name the loader derives from the start position has to be a file that
+        # exists: that is the whole 32 - worldAxis / 533.33 vs 32 + worldAxis / 533.33
+        # business, and an off-by-one here makes a stock set silently unusable.
+        hint = re.search(r"tile file (\d{7})\.mmtile", out)
+        check("%d-byte header: the file it looks for is the file it wrote" % header,
+              hint is not None and os.path.exists(os.path.join(store, hint.group(1) + ".mmtile")),
+              out)
         length = path_length(out)
         check("%d-byte header: routes around the wall, not through it" % header,
               length is not None and length > STRAIGHT + 50.0,
@@ -151,7 +166,7 @@ def main():
     # Detour refuses a blob built for another version, and the rejection has to be
     # counted rather than silently leaving half a tile behind.
     store = make_store(work, "wrongversion")
-    victim = os.path.join(store, "0013232.mmtile")
+    victim = tile_file(store)
     with open(victim, "r+b") as f:
         f.seek(16 + 4)                       # blob version, past the 16-byte header
         f.write(struct.pack("<i", 5))
@@ -163,7 +178,7 @@ def main():
     # A size field that overruns the file must not be trusted: no blind read of
     # whatever is past the end.
     store = make_store(work, "oversize")
-    victim = os.path.join(store, "0013232.mmtile")
+    victim = tile_file(store)
     real = os.path.getsize(victim)
     with open(victim, "r+b") as f:
         f.seek(12)
@@ -200,6 +215,33 @@ def main():
     if length is not None:
         print("    path %.1f yd, straight line 400.0 yd, %d tile files loaded"
               % (length, loaded[0] if loaded else -1))
+
+    # Continent-scale shape: 7x7 stock-format tiles (0.5 km each, 3.7 km across),
+    # a wall in every one of them with its doorway in a different column, and only
+    # the two end tiles loaded up front.
+    grid = os.path.join(work, "grid7")
+    if os.path.isdir(grid):
+        shutil.rmtree(grid)
+    os.makedirs(grid)
+    for tx in range(28, 35):
+        for ty in range(28, 35):
+            subprocess.run([FIXTURE, "--out", grid, "--tile", str(tx), str(ty),
+                            "--door", str((tx * 7 + ty * 3) % 8)],
+                           check=True, capture_output=True)
+    result = subprocess.run([CHECK, "--mmaps", grid, "--map", "1", "--ondemand",
+                             "--from", "-1800,-1800,0", "--to", "1400,1400,0"],
+                            capture_output=True, text=True)
+    out = result.stdout
+    length = path_length(out)
+    found = re.search(r"on-demand: (\d+) tile file", out)
+    loaded = int(found.group(1)) if found else -1
+    check("a 3.7 km route across 49 tiles is found",
+          result.returncode == 0 and length is not None and length < 4525.5 * 1.15,
+          out + result.stderr)
+    check("most of the grid was pulled in by the search, not preloaded",
+          loaded >= 40, out)
+    if length is not None:
+        print("    path %.1f yd, straight line 4525.5 yd, %d tile files loaded" % (length, loaded))
 
     print("\n%d checks, %d failed" % (total[0], len(failures)))
     return 1 if failures else 0

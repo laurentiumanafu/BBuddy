@@ -243,9 +243,11 @@ int main(int argc, char** argv)
      * TileWorker derives the blob's own index as (centre - orig) / 533, while the
      * file name uses 32 - worldAxis / 533. The two are mirrors, so the file that
      * holds blob (tileX, tileY) is <map><64-tileY><64-tileX>.mmtile. Getting this
-     * backwards is invisible on tile 32, where both give 32. */
+     * backwards is invisible near tile 32, where both give nearly the same number.
+     * For a blob whose mesh-axis centre is v, blobIndex = floor(32 + v/533.33) and
+     * the file number is floor(32 - v/533.33), so the file is 63 - blobIndex. */
     snprintf(path, sizeof(path), "%s/%03d%02d%02d.mmtile", outDir.c_str(), 1,
-             64 - tileY, 64 - tileX);
+             63 - tileY, 63 - tileX);
     f = fopen(path, "wb");
     if (!f) { fprintf(stderr, "legacyfixture: cannot write %s\n", path); return 1; }
     unsigned int head[4] = { MMAP_MAGIC, (unsigned int)DT_NAVMESH_VERSION, 5,
