@@ -301,6 +301,57 @@ What changed, and none of it needs a separate calibration run:
   rotates the ladder instead of counting towards "stuck", which is what produced six
   identical no-op clicks and then a spurious `BLOCKED`.
 
+### Aiming by projection, because the pixel model was not measurable
+
+The 21:27 walk settled it. Two facts from that log:
+
+* **Every click was `(0, dy)`.** The aim probe never ran: the boot click exists to
+  *set* the zero, `LearnAim` refused any leg whose reference zero was NaN, so
+  `HeadingAtZero` stayed NaN for 190 s and every tick posted another boot click. The
+  character walked wherever the camera happened to face.
+* **`-70 px` walked 0.6 yd and 34.1 yd in consecutive legs.** A click is aimed at
+  whatever the ray under the cursor hits, so its distance is a property of the terrain
+  and camera pitch, not of the pixel offset. The "-70 px = 10 yd" idea was never true.
+
+So the click is no longer aimed by a learned pixel model. `ClickAimMath.ProjectToScreen`
+projects a **world point** onto the client area using the camera position and the
+point it looks at (the player) - and the camera is readable, it has been printed in
+every attach log:
+
+```
+[ClickAim] camera readable at (-834.1, -5065.9, 8.9): clicks are aimed at world points
+           by projecting them onto the screen (90 deg field of view), not by a learned pixel model
+```
+
+The mover clicks the projected position of the point it wants to stand on. That point
+comes from the mesh polyline and it has a Z, so:
+
+* the walk goes where the path goes, not where a ray happened to land;
+* the distance is the distance to that point - there is no hop to tune;
+* the click height is whatever the geometry says, so downhill and uphill both work.
+
+Field of view is the one unknown (a client setting, `ClickAimParams.CameraFovDeg`,
+default 90). An error there moves the click up or down the same ray, which changes how
+far along the path the character walks, not which way - and the next leg re-aims.
+
+The learned model is kept as a fallback for a build whose camera offsets are still
+placeholders, and its boot click now works: with a camera the zero comes from the
+player's facing; without one, `LearnAim` adopts the heading the boot walk measured
+instead of refusing and repeating forever.
+
+### It stops itself now
+
+Two walks on 2026-10-29 had to be killed by hand: one cycled through six click heights
+at 16.8 yd without moving for minutes. `ClickAimPilot` now watches the best distance
+reached, and if it has not improved by 2 yd in 25 s it stops and says so:
+
+```
+[ClickAim] no progress for 25 s: stuck at 16.8 yd from the point (best was 16.7). Stopped instead of clicking at it forever.
+```
+
+That is information, not noise: it means the last re-plan and the mover disagree about
+where the character can go, and it is the caller's job to re-plan or give up.
+
 ### Entering the point
 
 The point is the interface: write `x,y` and the rest is the bot's problem.
