@@ -47,6 +47,13 @@ public sealed class ClickAimMover : IPlayerMover
     private const int MaxDetours = 6;
     private const int StopKeyVk = 0x57;             // W also cancels a click walk
 
+    /// <summary>
+    /// How far one click is expected to walk, from the field measurements of the hop
+    /// ladder (-43 px 10.3 yd, -60 px 12.6, -71 px 8.5, -105 px 10.6). Used for the
+    /// runaway bound and the brake, never to decide the click height itself.
+    /// </summary>
+    private const double ExpectedHopYd = 13.0;
+
     private readonly object _gate = new object();
     private readonly ClickAimParams _p = new ClickAimParams();
     private readonly ClickAimCalibration.Result _cal = new ClickAimCalibration.Result();
@@ -63,14 +70,45 @@ public sealed class ClickAimMover : IPlayerMover
 
     // A click whose reach has not been measured yet: from where it was clicked,
     // how tall it was, and how far the character has gone since.
+    private double _zeroAtClick;            // HeadingAtZero when the last click was posted
+    private int _clickAtMs;
     private int _pendingDy;
     private double _pendingX, _pendingY;
     private double _pendingWantYd;
     private int _pendingStops;
+
+    // Hop heights in the order they are tried. Every one of these was seen to move
+    // the character on this client; the ones past -180 px were not, which is why
+    // they are not on the list.
+    private static readonly int[] HopLadder = { -70, -100, -50, -130, -90, -160 };
+    private int _hopIndex;
+    private int _hopDy = HopLadder[0];
+    private int _deadClickStreak;
+
+    /// <summary>
+    /// True until two centre-and-offset clicks have measured the aim. The sign of the
+    /// click channel is not knowable without an observation: on 2026-10-29 it was
+    /// negative when this client needed positive, and every leg walked backwards.
+    /// </summary>
+    private bool _needSignProbe = !_sessionAimKnown;
+
+    /// <summary>How far off centre the probe click goes. Big enough to resolve a sign.</summary>
+    private const int SignProbePx = 170;
+
+    private int _probeAttempts;
     private int _stuck;
     private int _detourAttempt;
     private bool _warnedStuck;
     private bool _warnedUnsupported;
+
+    /* What a previous walk in this process already measured. The aim channels are a
+     * property of the client and the camera, not of one walk, so paying for the probe
+     * on every goal would be silly - but the probe is only two legs, and it is far
+     * better than aiming with a sign nobody has checked. */
+    private static bool _sessionAimKnown;
+    private static double _sessionDegPerPx;
+    private static double _sessionZero;
+    private static int _sessionHopDy = int.MinValue;
 
     public ClickAimMover()
     {
@@ -82,6 +120,13 @@ public sealed class ClickAimMover : IPlayerMover
         if (_cal.ScaleSamples > 0 && _cal.YdPerDyPx > 0.01) _p.YdPerDyPx = _cal.YdPerDyPx;
         _p.DegPerDragPx = _cal.DragSamples > 0 ? _cal.DegPerDragPx : -0.21;
         _p.DegPerKeyMs = _cal.KeySamples > 0 ? _cal.DegPerKeyMs : 0.0;
+        if (_sessionAimKnown)
+        {
+            _p.DegPerPx = _sessionDegPerPx;
+            _p.HeadingAtZero = _sessionZero;
+        }
+        if (_sessionHopDy != int.MinValue) _hopDy = _sessionHopDy;
+
         _p.DegPerPxRef = _p.DegPerPx;
         _p.DegPerDragPxRef = _p.DegPerDragPx;
         _p.ConeHalfDeg = ClickAimMath.ConeHalfDeg(_p.DegPerPx, _p.HalfWidth);
@@ -232,9 +277,54 @@ public sealed class ClickAimMover : IPlayerMover
             return;
         }
 
+        if (_needSignProbe)
+        {
+            // Two clicks buy the whole model: a centre click (the boot click, which
+            // already ran) says what heading a centre click walks, and this offset
+            // click says which way and how far an offset turns it. It walks ~10 yd,
+            // possibly in the wrong direction, and then the aim is right for the rest
+            // of the session.
+            ClickAimLeg probe = default(ClickAimLeg);
+            probe.Turn = ClickAimMath.TurnKindNone;
+            probe.ClickPx = SignProbePx;
+            probe.Dy = _hopDy;
+            _probeAttempts++;
+            if (_probeAttempts > 4)
+            {
+                _needSignProbe = false;
+                Logging.Write("[ClickAim] the aim probe clicked four times without the character walking "
+                              + "far enough to measure; going on with the unchecked model");
+            }
+            else
+            {
+                Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                    "[ClickAim] aim probe {0}/4: one {1} px click to find which way an offset turns the "
+                    + "walk (the model's sign has never been checked on this client)",
+                    _probeAttempts, SignProbePx));
+            }
+            if (_needSignProbe)
+            {
+                _legWantYd = rem;
+                Dispatch(probe, px, py, now);
+                return;
+            }
+        }
+
         ClickAimLeg leg;
         int rc = ClickAimMath.PlanLeg(_p, tx - px, ty - py, out leg);
         if (rc <= 0) return;
+
+        /* One hop size for every click, not one computed from the distance left.
+         *
+         * The measured mapping from click height to distance is not monotone on this
+         * client (2026-10-29, one walk): -43 px walked 10.3 yd, -105 px 10.6, -141 px
+         * 8.2, -183 px 28.6, then -171 px 0.5, 0.6, 0.5, 0.0, 0.0 - the last four did
+         * nothing at all. Anything derived from that curve is a guess, and a wrong
+         * guess at a goal 40 yd away meant -253 px, which never moves. So the height
+         * is fixed at a value that is known to move, and distance comes from
+         * repeating the hop along the polyline.
+         */
+        leg.Dy = _hopDy;
         _legWantYd = rem;
         Dispatch(leg, px, py, now);
     }
@@ -273,34 +363,42 @@ public sealed class ClickAimMover : IPlayerMover
 
         // A turn leg walks along its OLD facing while the drag turns the camera,
         // so its displacement heading is not a camera heading. Only a pure click
-        // leg can measure the yaw, and only if it walked far enough to have one.
-        if (_leg.Turn == ClickAimMath.TurnKindNone)
+        // leg is a clean sample of `walked = zero + degPerPx * clickPx`, and that is
+        // what LearnAim fits - including the SIGN, which was wrong here and made
+        // every leg walk about 180 degrees from where it was aimed.
+        if (_leg.Turn == ClickAimMath.TurnKindNone && moved >= ClickAimMath.MinLearningWalk)
         {
-            if (moved >= MinHeadingWalk && ClickAimMath.PlausibleLeg(moved, secs))
+            double deg = _p.DegPerPx;
+            double zero = _p.HeadingAtZero;
+            string note;
+            if (ClickAimMath.LearnAim(ref deg, ref zero, _leg.ClickPx, _zeroAtClick,
+                                      ClickAimMath.HeadingDeg(px - _legX, py - _legY), moved, out note))
             {
-                double heading = ClickAimMath.HeadingDeg(px - _legX, py - _legY);
-                double turn = ClickAimMath.WrapDeg(heading - _p.HeadingAtZero);
-
-                /* Back the click offset out. HeadingAtZero means "the heading a click
-                 * at the centre of the screen walks", and this leg's click was at
-                 * ClickPx, so the heading it produced is offset by DegPerPx*ClickPx.
-                 * Storing the raw heading instead put that offset into the zero on
-                 * every off-centre click, and the model then aimed wide by the same
-                 * amount for the rest of the walk - a bias that accumulates into
-                 * "it walks off in the wrong direction" with no single bad click. */
-                double zero = ClickAimMath.WrapDeg(heading - _p.DegPerPx * _leg.ClickPx);
-                if (!double.IsNaN(zero)) _p.HeadingAtZero = zero;
-                if (Math.Abs(_leg.ClickPx) >= 40)
+                _p.DegPerPx = deg;
+                _p.HeadingAtZero = zero;
+                _p.ConeHalfDeg = ClickAimMath.ConeHalfDeg(deg, _p.HalfWidth);
+                bool wasProbe = _needSignProbe && _leg.ClickPx == SignProbePx;
+                if (note.Length > 0)
                 {
-                    // A property cannot be passed by ref, and the learner needs a
-                    // local to write into; assign back only when it accepted.
-                    double slope = _p.DegPerPx;
-                    if (ClickAimMath.LearnSlope(ref slope, _p.DegPerPxRef, turn, _leg.ClickPx,
-                            _p.MinLearnMove, _p.MaxLearnMove, moved, 0.35))
-                    {
-                        _p.DegPerPx = slope;
-                        _p.ConeHalfDeg = ClickAimMath.ConeHalfDeg(_p.DegPerPx, _p.HalfWidth);
-                    }
+                    Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                        "[ClickAim] aim learned from {0:F1} yd on a {1} px click: {2}",
+                        moved, _leg.ClickPx, note));
+                }
+
+                if (wasProbe)
+                {
+                    _needSignProbe = false;
+                    _sessionAimKnown = true;
+                    _sessionDegPerPx = _p.DegPerPx;
+                    _sessionZero = _p.HeadingAtZero;
+                    Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                        "[ClickAim] aim is now degPerPx {0:F4}, zero {1:F1} deg - kept for the rest of "
+                        + "the session", _p.DegPerPx, _p.HeadingAtZero));
+
+                    // Worth keeping on disk too: the next start begins with a checked
+                    // model instead of the field default from another camera.
+                    if (Math.Abs(_p.DegPerPx) > 0.02 && Math.Abs(_p.DegPerPx) < 0.6)
+                        ClickAimCalibration.Append(_p.DegPerPx, _p.DegPerDragPx, 0.0, _p.YdPerDyPx);
                 }
             }
         }
@@ -327,15 +425,37 @@ public sealed class ClickAimMover : IPlayerMover
             _pendingStops = 0;
         }
 
-        if (moved < BlockedMove) _stuck++; else _stuck = 0;
+        /* A click that moved the character nowhere is not an obstacle - it is a click
+         * the client did not take, or one that landed somewhere useless. Walking into
+         * a tree still moves a little as the character slides; a dead click moves
+         * zero. Repeating it is what produced six identical 0.0 yd legs in a row, so
+         * the hop height changes instead, and only a streak of them counts as stuck. */
+        if (_leg.Turn == ClickAimMath.TurnKindNone && moved < 1.0)
+        {
+            _deadClickStreak++;
+            if (_deadClickStreak >= 2)
+            {
+                _hopIndex = (_hopIndex + 1) % HopLadder.Length;
+                _hopDy = HopLadder[_hopIndex];
+                _sessionHopDy = _hopDy;
+                Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                    "[ClickAim] {0} clicks in a row moved nothing; trying a {1} px hop",
+                    _deadClickStreak, _hopDy));
+                _deadClickStreak = 0;
+                _stuck = 0;                 // not the obstacle counter's business
+            }
+        }
+        else if (moved >= 1.0)
+        {
+            _deadClickStreak = 0;
+            if (moved < BlockedMove) _stuck++; else _stuck = 0;
+        }
 
-        /* The runaway cap is now relative to what the click was asked to do. A flat
-         * 120 yd let one bad click run for 14 s; 3x the wanted hop plus a margin
-         * cuts it at a third of that and still leaves room for a slope that makes
-         * a click land further than expected. */
-        double runawayYd = 3.0 * _legWantYd + 10.0;
-        if (runawayYd < 25.0) runawayYd = 25.0;
-        if (runawayYd > WanderMaxYd) runawayYd = WanderMaxYd;
+        /* The runaway cap is relative to the hop, not to the goal. A click is a fixed
+         * hop of 10-13 yd, so a leg that has walked much more than that did not walk
+         * where it was aimed: the old cap of 3x the distance-left let a 20 yd goal
+         * click run 120 yd, and this one cuts at 55. */
+        double runawayYd = 3.0 * ExpectedHopYd + 10.0;
 
         Logging.Write(string.Format(CultureInfo.InvariantCulture,
             "[ClickAim] leg ended: {0:F1} yd in {1:F1} s on a {2}, {3}",
@@ -382,9 +502,7 @@ public sealed class ClickAimMover : IPlayerMover
         if (_pendingDy == 0) return;
 
         double travel = ClickAimMath.Len(px - _pendingX, py - _pendingY);
-        double cap = 3.0 * _pendingWantYd + 10.0;
-        if (cap < 25.0) cap = 25.0;
-        if (cap > WanderMaxYd) cap = WanderMaxYd;
+        double cap = 3.0 * ExpectedHopYd + 10.0;
 
         if (moving)
         {
@@ -495,6 +613,8 @@ public sealed class ClickAimMover : IPlayerMover
         _leg = leg;
         _legX = px;
         _legY = py;
+        _zeroAtClick = _p.HeadingAtZero;
+        _clickAtMs = now;
         _legStartMs = now;
         _bestRemaining = double.MaxValue;
         _phase = Phase.Walking;

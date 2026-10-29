@@ -18,6 +18,15 @@ public static class ClickAimMath
 {
     // Named "Kind" because ClickAimParams.TurnKey is a bool (the key channel is
     // enabled); two meanings for one identifier is a trap for the next reader.
+    /// <summary>A leg shorter than this says nothing about direction.</summary>
+    public const double MinLearningWalk = 5.0;
+
+    /// <summary>A click closer to the centre than this cannot resolve a slope.</summary>
+    private const double MinAimPx = 60.0;
+
+    /// <summary>More than this much disagreement is a flipped sign, not noise.</summary>
+    private const double SignFlipDeg = 100.0;
+
     public const int TurnKindNone = 0;
     public const int TurnKindDrag = 1;
     public const int TurnKindKey = 2;
@@ -160,6 +169,78 @@ public static class ClickAimMath
         double a = 0.5 * q;
         est = (1.0 - a) * used + a * candidate;
         used = est;
+        return true;
+    }
+
+    /// <summary>
+    /// Learns the click-to-direction model from one click leg, including its SIGN.
+    ///
+    /// The model is <c>walked = zero + degPerPx * clickPx</c>: the camera does not
+    /// move during a click, so a click leg is a clean sample of it. What is not known
+    /// is whether <c>degPerPx</c> is positive or negative here, and on 2026-10-29 it
+    /// was negative when this client needed positive - every leg walked about 180
+    /// degrees from where it was aimed, and the walk wandered 110 yd on a 20 yd goal.
+    /// A magnitude estimate made from one short leg cannot tell that apart from noise;
+    /// the sign can, because 180 degrees is not noise.
+    ///
+    /// Three things are updated, in this order, because each depends on the one
+    /// before:
+    ///
+    ///   1. the sign, when the leg walked the opposite way to what the click asked
+    ///      for by more than <see cref="SignFlipDeg"/>;
+    ///   2. the magnitude, blended from the same leg but only when the click was far
+    ///      enough off centre to make the angle mean something;
+    ///   3. the zero, which is now "the heading a centre click walks" by definition.
+    /// </summary>
+    public static bool LearnAim(ref double degPerPx, ref double zero,
+                                double clickPx, double zeroAtClick, double walkedHeading,
+                                double movedYd, out string note)
+    {
+        note = "";
+        if (movedYd < MinLearningWalk) return false;
+        if (double.IsNaN(walkedHeading) || double.IsNaN(zeroAtClick)) return false;
+
+        double observed = WrapDeg(walkedHeading - zeroAtClick);
+        double expected = degPerPx * clickPx;
+
+        if (Math.Abs(clickPx) >= MinAimPx && Math.Abs(observed) > SignFlipDeg
+            && Math.Abs(expected) > 1.0 && (observed > 0) != (expected > 0))
+        {
+            degPerPx = -degPerPx;
+            expected = -expected;
+            note += string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                "the click was aimed {0:F0} deg one way and walked {1:F0} deg the other, so the click "
+                + "sign is flipped to {2:F4} deg/px; ", expected, observed, degPerPx);
+        }
+
+        if (Math.Abs(clickPx) >= MinAimPx)
+        {
+            double candidate = observed / clickPx;
+            double refMag = Math.Abs(degPerPx);
+            if (Math.Abs(candidate) > 1e-6 && refMag > 1e-6)
+            {
+                double ratio = Math.Abs(candidate) / refMag;
+                if (ratio < 3.0 && ratio > 0.25 && (candidate > 0) == (degPerPx > 0))
+                {
+                    double blended = 0.65 * degPerPx + 0.35 * candidate;
+                    if (Math.Abs(blended) > 1e-6)
+                    {
+                        note += string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                            "click magnitude {0:F4} -> {1:F4} deg/px; ", degPerPx, blended);
+                        degPerPx = blended;
+                    }
+                }
+            }
+        }
+
+        double newZero = WrapDeg(walkedHeading - degPerPx * clickPx);
+        if (!double.IsNaN(newZero))
+        {
+            note += string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                "zero {0:F1} -> {1:F1} deg", zero, newZero);
+            zero = newZero;
+        }
+
         return true;
     }
 
@@ -370,6 +451,19 @@ public static class ClickAimMath
         learned = LearnScale(ref scaleEst, 1.1, 0.75, 30.0, 3, out usedScale);
         check("scaleAcceptsClose", learned && scaleEst > 0.7 && scaleEst < 0.75);
 
+        // Aim learning, including the sign: on 2026-10-29 every leg walked ~180 deg
+        // from where it was aimed, because degPerPx had the wrong sign here.
+        double aimDeg = -0.115, aimZero = 100.0;
+        string note;
+        // A click at +100 px was expected to turn -11.5 deg; it walked +30 deg.
+        bool ok = LearnAim(ref aimDeg, ref aimZero, 100.0, 100.0, 130.0, 12.0, out note);
+        check("aimLearnsSign", ok && aimDeg > 0);
+        check("aimRelearnsZero", ok && Math.Abs(ClickAimMath.WrapDeg(aimZero - (130.0 - aimDeg * 100.0))) < 1e-9);
+        // A short leg must teach nothing.
+        double keepDeg = aimDeg, keepZero = aimZero;
+        ok = LearnAim(ref keepDeg, ref keepZero, 100.0, aimZero, 200.0, 1.0, out note);
+        check("aimIgnoresShortLeg", !ok && keepDeg == aimDeg && keepZero == aimZero);
+
         var p = new ClickAimParams();
         p.HeadingAtZero = 0.0;
         p.DegPerPx = -0.10;
@@ -383,6 +477,17 @@ public static class ClickAimMath
         ClickAimLeg leg;
         check("insideTolerance", PlanLeg(p, 1.0, 0.0, out leg) == 0);
         check("clickStraight", PlanLeg(p, 40.0, 0.0, out leg) == 1 && leg.Turn == TurnKindNone);
+
+        // A flipped click sign is recoverable: PlanLeg sends px = delta/DegPerPx, so
+        // the same off-axis target aims on opposite sides of the screen before and
+        // after the sign is corrected. This is the check that would have caught the
+        // 2026-10-29 walk, where every leg went the other way.
+        p.HeadingAtZero = 0.0;
+        p.DegPerPx = 0.062;
+        check("aimsOneSideWhenPositive", PlanLeg(p, 40.0, 10.0, out leg) == 1 && leg.ClickPx > 0);
+        p.DegPerPx = -0.062;
+        check("aimsOtherSideWhenNegative", PlanLeg(p, 40.0, 10.0, out leg) == 1 && leg.ClickPx < 0);
+        p.DegPerPx = -0.10;
 
         // The click height used to come from a tier table (-60/-100/-140). On
         // 2026-10-29 a -100 click walked more than 120 yd past a 20 yd goal, so it

@@ -256,7 +256,79 @@ The walking test is separate and has to pass first: see the click-scale section
 below, because on 2026-10-29 the mesh was already correct while the walk ran 120 yd
 past a 20 yd goal.
 
-### Calibrate first: four walks that measure the model
+### What 110 yd of walking for a 20 yd goal actually was
+
+Field log, 2026-10-29 21:16, Ashenvale, goal 20 yd ahead. Every leg of that walk is in
+the table below, and between them they explain the whole failure:
+
+| click | walked | what it means |
+| --- | --- | --- |
+| `(0, -43)` | 10.3 yd | moves, and ends up **further** from the goal |
+| `(88, -105)` | 10.6 yd | moves, still further away |
+| `(31, -183)` | 28.6 yd | moves a lot, in the wrong direction |
+| `(27, -171)` | 4.5 yd | shorter and shorter |
+| `(10, -171)` | 0.5 yd | |
+| `(0, -171)`, `(7,-171)` | **0.0 yd** | the click does nothing at all |
+
+110 yd of walking, ending 90 yd from a 20 yd goal. Two independent faults:
+
+1. **The click channel's sign was wrong.** `degPerPx` was a negative constant from a
+   field run, and on this client a positive pixel offset turns the walk the other way.
+   So every aim was mirrored: the character walked away from what it was aiming at,
+   the zero was then re-learned from that walk, and the error compounded.
+2. **The click height saturates and then dies.** Past about 170 px below the centre,
+   clicks stop moving the character (`0.0 yd`, five times). Since the old planner
+   computed the height from the *distance left*, a goal 40 yd away asked for -253 px -
+   i.e. the further away the goal, the more certain the click was to do nothing.
+
+What changed, and none of it needs a separate calibration run:
+
+* **`ClickAimMath.LearnAim`** fits `walked = zero + degPerPx * clickPx` from each
+  click leg and, crucially, corrects the **sign** when the leg walked more than 100
+  degrees away from what the click asked for - because 180 degrees is not noise. It
+  also blends the magnitude and re-learns the zero, in that order, since each depends
+  on the previous one.
+* **Two clicks buy the model.** The first click of a session is a centre click (it
+  measures the heading a centre click walks); the second is a `+170 px` click, which
+  measures which way an offset turns the walk. That is 20 yd of walking once, in the
+  middle of the route, and then the aim is right for the rest of the session - the
+  values are cached statically and written to `clickaim-cal.txt`.
+* **The hop height is fixed at -70 px** with a ladder of alternates; distance comes
+  from repeating the hop along the polyline, never from the distance left. Every
+  height on the ladder was observed to move the character; the ones at -180 and
+  beyond were observed not to, and are not on it.
+* **A dead click is not an obstacle.** A leg that moved under 1 yd twice in a row
+  rotates the ladder instead of counting towards "stuck", which is what produced six
+  identical no-op clicks and then a spurious `BLOCKED`.
+
+### Entering the point
+
+The point is the interface: write `x,y` and the rest is the bot's problem.
+
+```
+Tools\Walk.cmd -623.6,-4286.8
+```
+
+which is the same as writing `-623.6,-4286.8` into `Settings\clickaim-walk.txt`. A
+third number is a tolerance, not a height (`-623.6,-4286.8,4`). The height is read
+from the mesh, so it never has to be typed:
+
+```
+[ClickAim] file request: point (-623.6, -4286.8), tolerance 2.0 yd
+[MeshQuery] the target had no usable height (given 0.0); searched 400 yd and found the mesh at 38.7 - using (-623.6, -4286.8, 38.7)
+[Point] target (-623.6, -4286.8) -> mesh point (-623.6, -4286.8, 38.7) on map 1; 20.0 yd from the player, 0.0 yd higher
+[Route] mesh path: 2 points, 20.0 yd for a 20.0 yd leg (nearly straight)
+```
+
+`--clickaim-route x,y` prints the whole polyline without walking, which is the mesh
+test; `x,y` walks it. The "N yards ahead" form still works but is no longer the shape
+of the tool, and the log now says so.
+
+### Optional: calibrating on purpose (the walk now does this itself)
+
+The aim learning above runs inside the walk and needs nothing from you. This command
+is for measuring the two channels deliberately, with five long probes, when something
+looks wrong:
 
 ```
 CopilotBuddy.exe --clickaim-calibrate        (or write  calibrate  into Settings\clickaim-walk.txt)

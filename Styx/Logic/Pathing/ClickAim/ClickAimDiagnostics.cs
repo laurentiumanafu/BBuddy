@@ -899,7 +899,8 @@ public static class ClickAimDiagnostics
         if (TryParseRelative(spec, out yards))
         {
             Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                "[ClickAim] {0} request: {1:F0} yd ahead", origin, yards));
+                "[ClickAim] {0} request: {1:F0} yd ahead (a world point is the better test: "
+                + "write x,y into the request file)", origin, yards));
             return WalkRelative(yards);
         }
 
@@ -912,11 +913,65 @@ public static class ClickAimDiagnostics
         }
 
         Logging.Write(string.Format(CultureInfo.InvariantCulture,
-            "[ClickAim] {0} request: ({1:F1}, {2:F1}), tolerance {3:F1} yd", origin, x, y, tol));
+            "[ClickAim] {0} request: point ({1:F1}, {2:F1}), tolerance {3:F1} yd", origin, x, y, tol));
+
+        // Say what the mesh thinks the target is before walking to it: the entered
+        // point has no height, and the height is what finds the right floor of a
+        // multi-level area. This line is the answer to "where am I actually going".
+        ReportPoint(x, y);
+
         if (WalkNow(x, y, tol)) return true;
 
         Logging.Write("[ClickAim] a walk is already running; the request was ignored");
         return false;
+    }
+
+    /// <summary>
+    /// Resolves an entered point against the mesh and prints where it landed and at
+    /// what height. Purely informational - <see cref="RouteRunner"/> snaps again when
+    /// it plans - but it is the difference between "the walk failed" and "the point
+    /// you typed is 40 yd above the ground and the mesh found it anyway".
+    /// </summary>
+    private static void ReportPoint(double x, double y)
+    {
+        try
+        {
+            Tripper.Navigation.Navigator nav = Navigator.TripperNavigator;
+            if (nav == null || !nav.IsLoaded)
+            {
+                Logging.Write("[Point] Navigation.dll is not loaded, so the point cannot be placed on the mesh");
+                return;
+            }
+
+            double px, py;
+            double z = ClickAimPositions.Z();
+            if (!ClickAimPositions.TryRead(out px, out py)) z = 0.0;
+            if (double.IsNaN(z)) z = 0.0;
+
+            uint mapId = ResolveMap((uint)NavGridStore.MapId, px, py);
+            var target = new System.Numerics.Vector3((float)x, (float)y, 0f);
+            nav.EnsureTilesAroundPosition(mapId, target, Navigator.LoadTilesAroundRadius);
+
+            var snapped = target;
+            if (!MeshQuery.SnapLogged(nav, mapId, target, "target", out snapped))
+            {
+                Logging.Write("[Point] the mesh has no ground at (" + x.ToString("F1", CultureInfo.InvariantCulture)
+                              + ", " + y.ToString("F1", CultureInfo.InvariantCulture)
+                              + "); nothing will be walked");
+                return;
+            }
+
+            double straight = ClickAimMath.Len(x - px, y - py);
+            double climb = snapped.Z - z;
+            Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                "[Point] target ({0:F1}, {1:F1}) -> mesh point ({2:F1}, {3:F1}, {4:F1}) on map {5}; "
+                + "{6:F1} yd from the player, {7:F1} yd higher",
+                x, y, snapped.X, snapped.Y, snapped.Z, mapId, straight, climb));
+        }
+        catch (Exception ex)
+        {
+            Logging.Write("[Point] could not place the target on the mesh: " + ex.Message);
+        }
     }
 
     private static bool TryParseRelative(string text, out double yards)
