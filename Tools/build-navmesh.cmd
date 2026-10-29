@@ -11,7 +11,8 @@ rem  <ref>       a coordinate you know in game, e.g. -614.8,-4254.2,39
 rem  <game dir>  where CopilotBuddy.exe lives; defaults to this checkout's bin
 rem
 rem  Steps, each of which stops the script on failure:
-rem    1. cascdump   CASC store -> ADT files
+rem    1. cascdump   CASC store -> ADT files   (falls back to carving the archives
+rem                  directly when the store's index cannot be parsed)
 rem    2. navbake    ADT files  -> .navtile
 rem    3. mmapbuild  .navtile   -> .mmtile + <map>.mmap
 rem    4. mmapcheck  load them with the same Detour the DLL uses
@@ -60,9 +61,18 @@ echo [1/4] reading %DATA%
 "%CASC%" list --data "%DATA%" --verbose
 if errorlevel 1 (
   echo.
-  echo no index entries could be read. Here is the header report, keep it:
-  "%CASC%" inspect --data "%DATA%"
-  exit /b 1
+  echo the index could not be read. Reading the archives directly instead -
+  echo this ignores the index completely, but scans every data.### file, so it
+  echo takes minutes rather than seconds.
+  "%CASC%" carve --data "%DATA%" --out "%ADT%" --map %MAP% --ref %REF%
+  if errorlevel 1 (
+    echo.
+    echo carving found no terrain either. Keep this report, it says what the store
+    echo actually contains:
+    "%CASC%" inspect --data "%DATA%"
+    exit /b 1
+  )
+  goto extracted
 )
 echo.
 echo       extracting ADTs, this reads the whole store once
@@ -71,6 +81,7 @@ if errorlevel 1 (
   echo nothing was extracted - see the note at the end of the output above
   exit /b 1
 )
+:extracted
 
 echo.
 echo [2/4] baking .navtile

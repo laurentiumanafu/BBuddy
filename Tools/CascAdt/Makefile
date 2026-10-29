@@ -27,6 +27,7 @@ bin-x64/cascdump.exe: cascdump.c ../NavGrid/adt.c ../NavGrid/navgrid.c $(ZLIB)
 # positions and the terrain heights come back exactly as they went in.
 test: cascdump
 	rm -rf /tmp/cascdump-test
+	rm -rf /tmp/cascdump-test/carved
 	python3 make_test_casc.py /tmp/cascdump-test
 	mkdir -p /tmp/cascdump-test/out
 	./cascdump list --data /tmp/cascdump-test/data --verbose
@@ -38,7 +39,12 @@ test: cascdump
 	@grep -q "1_32_32.adt,32,32,placement,256,.*,50.00" /tmp/cascdump-test/out/adt-index.csv || (echo "FAIL: tile (32,32) height is wrong"; exit 1)
 	@grep -q "1_32_34.adt,32,34,chunkpos" /tmp/cascdump-test/out/adt-index.csv || (echo "FAIL: tile (32,34) did not come from chunk positions"; exit 1)
 	@test -f /tmp/cascdump-test/out/alternates/1_32_32__b1b1b1.adt || (echo "FAIL: competing tile was dropped instead of kept as an alternate"; exit 1)
+	@./cascdump carve --data /tmp/cascdump-test/broken --out /tmp/cascdump-test/carved --ref -100,-100,50
+	@test -f /tmp/cascdump-test/carved/1_32_32.adt || (echo "FAIL: carving did not find the terrain"; exit 1)
+	@test -f /tmp/cascdump-test/carved/1_32_34.adt || (echo "FAIL: carving missed the chunk-position tile"; exit 1)
+	@test -d /tmp/cascdump-test/carved/alternates || (echo "FAIL: carving dropped the competing continent"; exit 1)
 	@echo "OK: index layouts, BLTE frames, tile solving, alternates and heights all check out"
+	@echo "OK: carving finds the same terrain from a store whose index says nothing"
 
 clean:
 	rm -f cascdump bin-x64/cascdump.exe

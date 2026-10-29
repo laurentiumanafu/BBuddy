@@ -296,7 +296,15 @@ def main() -> int:
     (data_dir / "0000000004.idx").write_bytes(
         build_index_pages([make_entry(p[0]) for p in payloads[6:]], guarded=False))
 
+    # A fifth copy of the store with an index of zeros: nothing can be found in it
+    # except by carving the archive for BLTE streams.
+    broken = root / "broken"
+    broken.mkdir(parents=True, exist_ok=True)
+    (broken / "data.000").write_bytes(bytes(archive))
+    (broken / "0000000001.idx").write_bytes(bytes(4096 + 24 * len(payloads)))
+
     print(f"wrote {data_dir}/data.000 ({len(archive)} bytes) and four index files")
+    print(f"wrote {broken}/ with an index that says nothing (for --carve)")
     print(f"  continent A: tiles (32,32) height 50/72, (32,34) height 60 by chunk position")
     print(f"  tile (32,33) has no placement data, so it must come out as unknown")
     print(f"  continent B: tile (32,32), height 150")

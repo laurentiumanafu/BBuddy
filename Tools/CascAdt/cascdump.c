@@ -1168,8 +1168,11 @@ static int cmd_list(const char *data_dir, int verbose)
     if (list.count == 0)
     {
         printf("\nno entries could be read from these index files.\n"
-               "run \"cascdump inspect --data \"%s>\"\" and keep the output: it shows the header\n"
-               "and the first bytes of each index, which is what identifies the layout.\n", data_dir);
+               "  cascdump inspect --data <the same folder>\n"
+               "prints each index header and its first bytes; that output identifies the\n"
+               "layout. Or go around the index entirely:\n"
+               "  cascdump carve --data <the same folder> --out <dir> --map 1\n"
+               "which scans the data.### archives for payloads instead.\n");
         free(list.items);
         return 1;
     }
@@ -1361,6 +1364,289 @@ static int cmd_dump(const char *data_dir, const char *out_dir, int32_t map_id, c
     return 0;
 }
 
+/* ------------------------------------------------------------------------- */
+/* carving                                                                   */
+/* ------------------------------------------------------------------------- */
+
+/* Finds terrain inside `data.###` archives without trusting the index.
+ *
+ * Every payload in an archive is a BLTE stream, and a BLTE stream with more than
+ * one frame says how long it is: the header carries one 24-byte record per frame,
+ * each with the compressed size. So a scan for the four bytes "BLTE" followed by a
+ * self-consistent frame table locates whole payloads, and the table is a strong
+ * filter - random bytes do not produce a header size that equals 12 + 24 * n where
+ * n also matches the three-byte counter at offset 9.
+ *
+ * This exists because the index is the fragile part: a store whose `.idx` layout
+ * this build does not recognise still hands over its terrain this way. It is
+ * slower - it reads every archive - and it cannot recover single-frame payloads,
+ * whose length is only in the index. Small files use one frame; root ADTs do not.
+ */
+
+typedef struct
+{
+    long streams;      /* BLTE streams that passed the frame-table check */
+    long decoded;      /* streams that decoded */
+    long adts;
+    long tiles;
+    long wrote;
+    long alternatives;
+    long at_ref;
+} carve_stats;
+
+typedef struct
+{
+    const char *out_dir;
+    int32_t map_id;
+    const float *ref;
+    int verbose;
+    FILE *csv;
+} carve_out;
+
+static int carve_stream_length(const uint8_t *header, size_t available, uint64_t *length)
+{
+    if (available < 12 || memcmp(header, "BLTE", 4) != 0) return 0;
+
+    uint32_t header_size = be32(header + 4);
+    if (header_size < 36 || (header_size - 12) % 24 != 0) return 0;
+
+    uint32_t frames = (header_size - 12) / 24;
+    uint32_t declared = ((uint32_t)header[9] << 16) | ((uint32_t)header[10] << 8) | header[11];
+    if (frames != declared) return 0;
+
+    /* Each frame's compressed size is in its record; the frame data follows the
+     * table. A stream longer than the payload limit is not terrain. */
+    if (available < (size_t)header_size) return 0;
+    uint64_t total = header_size;
+    for (uint32_t i = 0; i < frames; i++)
+    {
+        const uint8_t *frame = header + 12 + (size_t)i * 24;
+        uint32_t encoded = be32(frame);
+        if (encoded == 0) return 0;
+        total += encoded;
+        if (total > MAX_PAYLOAD) return 0;
+    }
+    *length = total;
+    return 1;
+}
+
+/* Writes one decoded ADT under the name the tile solver produced, or tells the
+ * caller why it could not. Mirrors what `dump` does with an index entry, minus the
+ * EKey, which a carved stream does not have. */
+static void carve_write_payload(carve_out *out, carve_stats *stats,
+                                const uint8_t *decoded, size_t decoded_size, int verbose)
+{
+    adt_info info;
+    inspect_adt(decoded, decoded_size, out->map_id, &info, out->ref);
+    if (info.is_adt) stats->adts++;
+
+    if (info.is_adt && info.have_tile)
+    {
+        char file_name[128];
+        snprintf(file_name, sizeof(file_name), "%d_%d_%d.adt", (int)out->map_id,
+                 info.tile_x, info.tile_y);
+        char out_path[1024];
+        join_path(out_path, sizeof(out_path), out->out_dir, file_name);
+
+        int duplicate = 0;
+        FILE *probe = fopen(out_path, "rb");
+        if (probe != NULL) { duplicate = 1; fclose(probe); }
+
+        if (duplicate)
+        {
+            /* No EKey to tell two candidates apart, so number them. */
+            static int serial = 0;
+            char alt_dir[1024];
+            join_path(alt_dir, sizeof(alt_dir), out->out_dir, "alternates");
+            make_dir(alt_dir);
+            snprintf(file_name, sizeof(file_name), "alternates/%d_%d_%d__carved%02d.adt",
+                     (int)out->map_id, info.tile_x, info.tile_y, ++serial);
+            join_path(out_path, sizeof(out_path), out->out_dir, file_name);
+            stats->alternatives++;
+        }
+
+        FILE *file = fopen(out_path, "wb");
+        if (file != NULL)
+        {
+            fwrite(decoded, 1, decoded_size, file);
+            fclose(file);
+            stats->wrote++;
+        }
+        stats->tiles++;
+        fprintf(out->csv, "%s,%d,%d,%s,%d,0,%.2f\n", file_name, info.tile_x, info.tile_y,
+                info.tile_from_doodad ? "placement" : "chunkpos", info.chunks, info.height_at_ref);
+        if (info.ref_inside && verbose)
+            printf("  %s: %d chunks, height at ref %.2f\n", file_name, info.chunks,
+                   info.height_at_ref);
+        if (info.ref_inside) stats->at_ref++;
+    }
+    else if (info.is_adt && verbose)
+    {
+        printf("  an ADT with no solvable tile was skipped\n");
+    }
+}
+
+static int carve_archive(const char *path, const char *archive_name, carve_out *out,
+                         carve_stats *stats, long limit, int verbose)
+{
+    FILE *file = fopen(path, "rb");
+    if (file == NULL)
+    {
+        fprintf(stderr, "cascdump: cannot open %s\n", archive_name);
+        return 0;
+    }
+
+    int64_t size = file_size(file);
+    if (size <= 0) { fclose(file); return 0; }
+
+    const size_t window_size = 4u * 1024u * 1024u;
+    uint8_t *window = (uint8_t *)malloc(window_size);
+    uint8_t *stream = (uint8_t *)malloc(MAX_PAYLOAD);
+    if (window == NULL || stream == NULL)
+    {
+        free(window);
+        free(stream);
+        fclose(file);
+        return 0;
+    }
+
+    uint64_t pos = 0;
+    uint64_t total_scanned = 0;
+    while (pos < (uint64_t)size)
+    {
+        if (limit > 0 && stats->wrote >= limit) break;
+
+        if (file_seek(file, pos) != 0) break;
+        size_t want = window_size;
+        if (pos + want > (uint64_t)size) want = (size_t)((uint64_t)size - pos);
+        size_t got = fread(window, 1, want, file);
+        if (got < 12) break;
+        total_scanned += got;
+
+        size_t at = 0;
+        uint64_t consumed_to = 0;
+        while (at + 12 <= got)
+        {
+            const uint8_t *hit = (const uint8_t *)memchr(window + at, 'B', got - at);
+            if (hit == NULL) break;
+            size_t offset = (size_t)(hit - window);
+            at = offset + 1;
+            if (offset + 12 > got) break;
+
+            uint64_t length = 0;
+            if (!carve_stream_length(window + offset, got - offset, &length)) continue;
+
+            stats->streams++;
+            if (pos + offset + length > (uint64_t)size) continue;   /* runs off the end */
+
+            if (length > got - offset)
+            {
+                /* The stream crosses the window: read it whole from the file. */
+                if (file_seek(file, pos + offset) != 0) continue;
+                if (fread(stream, 1, (size_t)length, file) != (size_t)length) continue;
+            }
+            else
+            {
+                memcpy(stream, window + offset, (size_t)length);
+            }
+
+            uint8_t *decoded = NULL;
+            size_t decoded_size = 0;
+            char why[128] = {0};
+            if (!blte_decode(stream, (size_t)length, &decoded, &decoded_size, why, sizeof(why)))
+            {
+                if (verbose) fprintf(stderr, "  %s@%llu: %s\n", archive_name,
+                                     (unsigned long long)(pos + offset), why);
+                continue;
+            }
+
+            stats->decoded++;
+            carve_write_payload(out, stats, decoded, decoded_size, verbose);
+            free(decoded);
+
+            /* Skip what was just consumed: a decoded payload cannot contain another
+             * payload boundary, and compressed bytes produce false hits. */
+            consumed_to = pos + offset + length;
+            at = (size_t)(offset + length);
+        }
+
+        if (consumed_to > pos)
+        {
+            pos = consumed_to;
+            continue;
+        }
+        if (pos + got >= (uint64_t)size) break;
+        pos += got - 11;                     /* keep 11 bytes of overlap for "BLTE" */
+    }
+
+    free(window);
+    free(stream);
+    fclose(file);
+    return 1;
+}
+
+static int cmd_carve(const char *data_dir, const char *out_dir, int32_t map_id,
+                     const float *ref, long limit, int verbose, int first_archive, int last_archive)
+{
+    char names[4096][256];
+    int count = list_dir(data_dir, names, 4096);
+    if (count == 0)
+    {
+        fprintf(stderr, "cascdump: cannot list %s\n", data_dir);
+        return 1;
+    }
+    make_dir(out_dir);
+
+    char csv_path[1024];
+    join_path(csv_path, sizeof(csv_path), out_dir, "adt-index.csv");
+    FILE *csv = fopen(csv_path, "wb");
+    if (csv == NULL)
+    {
+        fprintf(stderr, "cascdump: cannot write %s\n", csv_path);
+        return 1;
+    }
+    fprintf(csv, "file,tile_x,tile_y,source,chunks,encoded_size,height_at_ref\n");
+
+    carve_out out = { out_dir, map_id, ref, verbose, csv };
+    carve_stats stats;
+    memset(&stats, 0, sizeof(stats));
+
+    int archives = 0;
+    for (int i = 0; i < count; i++)
+    {
+        if (strncmp(names[i], "data.", 5) != 0) continue;
+
+        int index = atoi(names[i] + 5);
+        if (first_archive >= 0 && index < first_archive) continue;
+        if (last_archive >= 0 && index > last_archive) continue;
+
+        char path[1024];
+        join_path(path, sizeof(path), data_dir, names[i]);
+
+        if (verbose) printf("%s\n", names[i]);
+        carve_archive(path, names[i], &out, &stats, limit, verbose);
+        archives++;
+        if (limit > 0 && stats.wrote >= limit) break;
+    }
+
+    fclose(csv);
+
+    printf("%d archives scanned\n", archives);
+    printf("%ld BLTE streams passed the frame table, %ld decoded, %ld ADTs\n",
+           stats.streams, stats.decoded, stats.adts);
+    printf("%ld tiles written (%ld as alternates)\n", stats.wrote, stats.alternatives);
+    if (ref != NULL) printf("%ld tiles cover the reference point and report a height\n", stats.at_ref);
+    printf("index: %s\n", csv_path);
+
+    if (stats.tiles == 0)
+    {
+        printf("\nnothing carved. Either these archives do not hold this build's world, or\n"
+               "the payloads are encrypted (a beta build usually is not).\n");
+        return 1;
+    }
+    return 0;
+}
+
 /* Header report for one index file, plus the first bytes of the file and of the
  * first page. This exists because "0 entries" on an unfamiliar store is not
  * answerable without seeing the bytes. */
@@ -1519,12 +1805,15 @@ int main(int argc, char **argv)
     long limit = 0;
     int32_t map_id = 1;
     int prefilter = 1;
+    int first_archive = -1, last_archive = -1;
 
     if (argc < 2)
     {
         fprintf(stderr,
                 "usage: cascdump list --data <dir> [--verbose]\n"
                 "       cascdump inspect --data <dir> [--verbose]\n"
+                "       cascdump carve --data <dir> --out <dir> [--map <id>] [--ref x,y,z]\n"
+                "                      [--archives <first>-<last>] [--limit n]\n"
                 "       cascdump dump --data <dir> --out <dir> [--map id] [--ref x,y,z] [--limit n]\n"
                 "                     [--no-prefilter] [--verbose]\n"
                 "\n"
@@ -1546,6 +1835,13 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--limit") && i + 1 < argc) limit = atol(argv[++i]);
         else if (!strcmp(argv[i], "--verbose")) verbose = 1;
         else if (!strcmp(argv[i], "--no-prefilter")) prefilter = 0;
+        else if (!strcmp(argv[i], "--archives") && i + 1 < argc)
+        {
+            const char *range = argv[++i];
+            const char *dash = strchr(range, '-');
+            first_archive = atoi(range);
+            last_archive = dash != NULL ? atoi(dash + 1) : first_archive;
+        }
     }
 
     if (data_dir == NULL)
@@ -1556,6 +1852,13 @@ int main(int argc, char **argv)
 
     if (!strcmp(command, "list")) return cmd_list(data_dir, verbose);
     if (!strcmp(command, "inspect")) return cmd_inspect(data_dir, verbose);
+    if (!strcmp(command, "carve") && out_dir == NULL)
+    {
+        fprintf(stderr, "cascdump: carve needs --out <dir>\n");
+        return 2;
+    }
+    if (!strcmp(command, "carve")) return cmd_carve(data_dir, out_dir, map_id, have_ref ? ref : NULL,
+                                                    limit, verbose, first_archive, last_archive);
 
     if (!strcmp(command, "dump"))
     {
@@ -1567,6 +1870,6 @@ int main(int argc, char **argv)
         return cmd_dump(data_dir, out_dir, map_id, have_ref ? ref : NULL, limit, verbose, prefilter);
     }
 
-    fprintf(stderr, "cascdump: unknown command %s\n", command);
+    fprintf(stderr, "cascdump: unknown command \"%s\"\n", command);
     return 2;
 }

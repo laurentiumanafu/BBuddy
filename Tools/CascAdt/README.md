@@ -84,7 +84,26 @@ Known layouts:
 | `paged+guard` | 0x200-byte pages, 4-byte hash in front of each entry, 2 bytes of padding |
 | `paged` | 0x200-byte pages with the entries packed and no per-entry hash |
 
-If nothing matches, run:
+If nothing matches, there are two ways forward. The first is a report:
+
+```bat
+cascdump.exe inspect --data "B:\World of Warcraft\Data\data" --verbose
+```
+
+and the second is to ignore the index completely:
+
+```bat
+cascdump.exe carve --data "B:\World of Warcraft\Data\data" --out <dir> --map 1
+```
+
+`carve` reads the `data.###` archives themselves and looks for BLTE streams, whose
+frame tables carry their own lengths. Each candidate stream is then decoded and
+checked for terrain. No index, no root manifest, no listfile: if the terrain is in
+the store, this finds it. It is slower - every archive is read - and it cannot
+recover payloads stored as a single frame, whose length only the index knows.
+`build-navmesh.cmd` runs it automatically when `list` comes back empty.
+
+Then:
 
 ```bat
 cascdump.exe inspect --data "B:\World of Warcraft\Data\data"
