@@ -312,10 +312,14 @@ public static class RouteRunner
              * polygons were blacklisted around a spot the character could walk to
              * perfectly well, and the next two paths went around a place that was
              * never in the way. Say what actually happened and stop. */
-            if (mover.AimGaveUp)
+            /* A walk that never clicked learned NOTHING about this ground. Marking
+             * blackspots from it put 52 polygons out of bounds on 2026-10-29 while the
+             * character stood still, and the two re-plans then detoured around a place
+             * nothing was ever in the way of. */
+            if (mover.Clicks == 0)
             {
-                Logging.Write("[Route] stopping: the mesh is fine but the camera stopped answering the "
-                    + "drags, so the click cannot be aimed. Nothing was blacklisted.");
+                Logging.Write("[Route] stopping: no click was ever dispatched, so nothing here says "
+                    + "the ground is blocked. Nothing was blacklisted.");
                 return false;
             }
 

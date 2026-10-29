@@ -339,6 +339,44 @@ placeholders, and its boot click now works: with a camera the zero comes from th
 player's facing; without one, `LearnAim` adopts the heading the boot walk measured
 instead of refusing and repeating forever.
 
+### The camera heading drifts, so it cannot be a feedback signal (22:09)
+
+The first run of drag-to-face spent four minutes and dispatched **zero clicks**: the
+error never fell inside the 6 degree tolerance, so nothing was ever clicked, and the
+route then marked 52 polygons as obstacles around ground the character could walk to.
+
+The log has the reason. While the character stood at 0.0 yd for nine consecutive ticks,
+the camera heading went:
+
+```
+109.1  113.8  118.4  123.1  127.7  132.4  137.0     (+4.6 deg per tick, nothing moved)
+```
+
+and every drag, left or right, "measured" that same -4.6 deg. Reading the gain off
+those two facts gives, in one run:
+
+```
+drag -150 px turned the camera -10.4 deg: measuring  0.070 deg/px
+drag  150 px turned the camera  -4.6 deg: measuring -0.031 deg/px
+drag  150 px turned the camera  -4.6 deg: measuring  0.042 deg/px
+drag -150 px turned the camera  -6.3 deg: measuring  0.042 deg/px
+```
+
+A measured gain that changes sign while the commanded drag alternates produces a
+drag in a direction nothing predicted, every tick. That is an oscillation by
+construction, not a tuning problem.
+
+Three rules follow, and they are in the code now:
+
+1. **The aim never gates the click.** At most 3 drags, then a centre click happens
+   regardless, with a line in the log saying so. A drag on its own is not progress; a
+   centre click moves the character 5.8-7.2 yd (measured at 21:50).
+2. **Do not measure the drag gain from the camera.** Use the calibrated value, or the
+   -0.21 field default. The camera position is trustworthy; the camera *orientation*
+   implied by it is not.
+3. **Nothing is blacklisted by a walk that never clicked.** `mover.Clicks == 0` means
+   the terrain was never tested, so the route stops and says that instead.
+
 ### The aim, rebuilt around the one channel that measured consistently
 
 Everything above was an attempt to make a *pixel offset* mean something: a click at

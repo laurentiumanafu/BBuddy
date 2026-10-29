@@ -534,10 +534,23 @@ public static class ClickAimMath
         // from where it was aimed, because degPerPx had the wrong sign here.
         double aimDeg = -0.115, aimZero = 100.0;
         string note;
-        // A click at +100 px was expected to turn -11.5 deg; it walked +30 deg.
+        /* A click at +100 px was expected to turn -11.5 deg and walked +30 deg. That is
+         * a MAGNITUDE miss, not a sign flip: 30 deg is nowhere near 180 deg, so the sign
+         * must survive. (This check used to demand a flip, and passed only while the
+         * flip threshold was 30 deg - which flipped on noise. The threshold is now
+         * SignFlipDeg = 100, so the old assertion was stale, not the code.) */
         bool ok = LearnAim(ref aimDeg, ref aimZero, 100.0, 100.0, 130.0, 12.0, out note);
-        check("aimLearnsSign", ok && aimDeg > 0);
-        check("aimRelearnsZero", ok && Math.Abs(ClickAimMath.WrapDeg(aimZero - (130.0 - aimDeg * 100.0))) < 1e-9);
+        check("aimKeepsSignOnSmallMiss", ok && aimDeg < 0);
+        check("aimRelearnsZero",
+              ok && Math.Abs(ClickAimMath.WrapDeg(aimZero - ClickAimMath.WrapDeg(130.0 - aimDeg * 100.0))) < 1e-9);
+        // A walk more than SignFlipDeg the other way IS a sign flip.
+        double flipDeg = -0.115, flipZero = 0.0;
+        ok = LearnAim(ref flipDeg, ref flipZero, 100.0, 0.0, 120.0, 12.0, out note);
+        check("aimLearnsSign", ok && flipDeg > 0);
+        // A centre click (0 px) carries no heading information at all.
+        double centreDeg = -0.115, centreZero = 40.0;
+        ok = LearnAim(ref centreDeg, ref centreZero, 0.0, 40.0, 95.0, 12.0, out note);
+        check("aimIgnoresCentreClick", !ok || Math.Abs(centreDeg - (-0.115)) < 1e-9);
         // A short leg must teach nothing.
         double keepDeg = aimDeg, keepZero = aimZero;
         ok = LearnAim(ref keepDeg, ref keepZero, 100.0, aimZero, 200.0, 1.0, out note);
