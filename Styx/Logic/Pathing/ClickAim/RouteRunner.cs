@@ -246,8 +246,8 @@ public static class RouteRunner
                 meshLength += ClickAimMath.Len(path[q].X - path[q - 1].X, path[q].Y - path[q - 1].Y);
             Logging.Write(string.Format(CultureInfo.InvariantCulture,
                 "[Route] mesh path: {0} points, {1:F1} yd for a {2:F1} yd leg{3}",
-                path.Length, meshLength, leg,
-                meshLength > leg + 1.0 ? " (detours around terrain)" : " (nearly straight)"));
+                path.Length, meshLength, remaining,
+                meshLength > remaining + 1.0 ? " (detours around terrain)" : " (nearly straight)"));
 
             mover.ResetBlocked();
 
