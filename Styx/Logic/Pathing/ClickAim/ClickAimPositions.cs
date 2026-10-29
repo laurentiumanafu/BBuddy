@@ -167,6 +167,38 @@ internal static class ClickAimPositions
         return false;
     }
 
+    /// <summary>
+    /// The camera's world position, which is what makes aiming geometric.
+    ///
+    /// A third-person camera looks at the player, so camera position plus player
+    /// position is a complete camera axis: a world point can then be projected to a
+    /// screen position and clicked directly. That is worth far more than any learned
+    /// pixel model - on 2026-10-29 the same "70 px down" click walked 0.6 yd once and
+    /// 34.1 yd the next time, because a click is aimed at whatever the ray hits.
+    /// </summary>
+    public static bool TryReadCamera(out double x, out double y, out double z)
+    {
+        x = y = z = 0.0;
+        try
+        {
+            WowBReader? reader = ObjectManager.WowB;
+            if (reader == null) return false;
+
+            float cx, cy, cz;
+            if (!reader.TryGetCameraPosition(out cx, out cy, out cz)) return false;
+            if (!float.IsFinite(cx) || !float.IsFinite(cy) || !float.IsFinite(cz)) return false;
+
+            x = cx;
+            y = cy;
+            z = cz;
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     /// <summary>Z of the local player, or NaN when only X/Y are available.</summary>
     public static double Z()
     {

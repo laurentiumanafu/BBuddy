@@ -198,7 +198,16 @@ public static class ClickAimMath
     {
         note = "";
         if (movedYd < MinLearningWalk) return false;
-        if (double.IsNaN(walkedHeading) || double.IsNaN(zeroAtClick)) return false;
+        if (double.IsNaN(walkedHeading)) return false;
+        if (double.IsNaN(zeroAtClick))
+        {
+            // The boot click: this walk IS the zero. Refusing here is what left the
+            // 2026-10-29 walk posting boot clicks forever, one every 0.8 s.
+            zero = WrapDeg(walkedHeading - degPerPx * clickPx);
+            note = string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                "zero set to {0:F1} deg from this walk", zero);
+            return !double.IsNaN(zero);
+        }
 
         double observed = WrapDeg(walkedHeading - zeroAtClick);
         double expected = degPerPx * clickPx;
@@ -241,6 +250,76 @@ public static class ClickAimMath
             zero = newZero;
         }
 
+        return true;
+    }
+
+    /// <summary>
+    /// Projects a world point onto the screen, relative to the middle of the client
+    /// area, so a click can be aimed at a *place* instead of at a pixel offset.
+    ///
+    /// This is the difference between guessing and knowing. The learned model
+    /// (<c>degPerPx</c>, the hop ladder, the zero) exists because the click position
+    /// was only understood as "some pixels right and down from the middle"; every
+    /// number in it had to be measured by walking, and on 2026-10-29 those
+    /// measurements disagreed with each other by a factor of fifty. Geometry needs
+    /// no measuring: the camera's position is readable, it looks at the player, and
+    /// a point in front of it lands at a computable place on the screen.
+    ///
+    /// The camera's field of view is the one unknown. It is a client setting, so it
+    /// is a parameter (<see cref="ClickAimParams.CameraFovDeg"/>), and the projection
+    /// only has to be good enough that the click lands on the right piece of ground -
+    /// the client then walks to whatever it hit.
+    ///
+    /// Returns false when the point is behind the camera or off the screen, in which
+    /// case the caller falls back to the learned model.
+    /// </summary>
+    public static bool ProjectToScreen(double camX, double camY, double camZ,
+                                       double lookX, double lookY, double lookZ,
+                                       double targetX, double targetY, double targetZ,
+                                       double halfWidth, double halfHeight, double fovDeg,
+                                       out int dx, out int dy)
+    {
+        dx = 0;
+        dy = 0;
+
+        /* The camera axis comes from the point it is looking at, which is the player:
+         * a third-person camera orbits the player and points at it. Deriving the axis
+         * from the target instead would make every target trivially "straight ahead"
+         * - the first version of this did exactly that and returned (0,0) for
+         * everything, which is a good reminder that a projection with no axis is not
+         * a projection. */
+        double fx = lookX - camX, fy = lookY - camY, fz = lookZ - camZ;
+        double len = Math.Sqrt(fx * fx + fy * fy + fz * fz);
+        if (len < 0.5) return false;
+        double fwdX = fx / len, fwdY = fy / len, fwdZ = fz / len;
+
+        // right = fwd x worldUp(+Z), which keeps the ground left/right exact.
+        double rx = fwdY, ry = -fwdX, rz = 0.0;
+        double rlen = Math.Sqrt(rx * rx + ry * ry);
+        if (rlen < 1e-6) return false;                // looking straight up or down
+        rx /= rlen; ry /= rlen;
+
+        // up = right x fwd
+        double ux = ry * fwdZ - rz * fwdY;
+        double uy = rz * fwdX - rx * fwdZ;
+        double uz = rx * fwdY - ry * fwdX;
+
+        double vx = targetX - camX, vy = targetY - camY, vz = targetZ - camZ;
+        double alongFwd = vx * fwdX + vy * fwdY + vz * fwdZ;
+        if (alongFwd <= 1.0) return false;            // behind the camera
+
+        double alongRight = vx * rx + vy * ry + vz * rz;
+        double alongUp = vx * ux + vy * uy + vz * uz;
+
+        double halfFovRad = (fovDeg * 0.5) * Math.PI / 180.0;
+        double tanHalfX = Math.Tan(halfFovRad);
+        if (tanHalfX <= 1e-6) return false;
+        double tanHalfY = tanHalfX * (halfHeight / Math.Max(1.0, halfWidth));
+
+        dx = (int)Math.Round((alongRight / alongFwd) / tanHalfX * halfWidth);
+        dy = (int)Math.Round(-(alongUp / alongFwd) / tanHalfY * halfHeight);
+
+        if (Math.Abs(dx) > halfWidth * 0.95 || Math.Abs(dy) > halfHeight * 0.95) return false;
         return true;
     }
 
@@ -464,6 +543,11 @@ public static class ClickAimMath
         ok = LearnAim(ref keepDeg, ref keepZero, 100.0, aimZero, 200.0, 1.0, out note);
         check("aimIgnoresShortLeg", !ok && keepDeg == aimDeg && keepZero == aimZero);
 
+        // A leg with no zero yet (the boot click) must ADOPT the walked heading.
+        double bootDeg = -0.1, bootZero = double.NaN;
+        ok = LearnAim(ref bootDeg, ref bootZero, 0.0, double.NaN, 45.0, 12.0, out note);
+        check("aimBootSetsZero", ok && Math.Abs(bootZero - 45.0) < 1e-9);
+
         var p = new ClickAimParams();
         p.HeadingAtZero = 0.0;
         p.DegPerPx = -0.10;
@@ -572,6 +656,14 @@ public sealed class ClickAimParams
 
     /// <summary>Furthest below the middle of the screen a click may go, in px.</summary>
     public int MaxDyPx { get; set; } = 260;
+
+    /// <summary>
+    /// Horizontal field of view of the camera, in degrees, used to project a world
+    /// point onto the screen. WoW's default is 90; it is a client setting, so it is
+    /// here rather than baked in. Only the scale of the projection depends on it -
+    /// which piece of ground a click hits - and the client walks to whatever it hit.
+    /// </summary>
+    public double CameraFovDeg { get; set; } = 90.0;
     /// <summary>Click height for a 15-40 yd hop; -140 overshoots a path waypoint.</summary>
     public int MidDy { get; set; } = -100;
     public int NearDy { get; set; } = -60;

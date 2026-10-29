@@ -55,6 +55,20 @@ public static class ClickAimPilot
         int started = Environment.TickCount;
         int lastReport = started;
 
+        /* A walk that stops making progress must stop itself.
+         *
+         * On 2026-10-29 two walks had to be killed by hand: one cycled through six
+         * click heights at 16.8 yd without moving, and the log filled with "2 clicks
+         * in a row moved nothing" for minutes. Nothing in that loop was ever going to
+         * end - every component thought it was making its next attempt. So: remember
+         * the best distance reached; if it has not improved by two yards in twenty
+         * five seconds, stop and say so. That is a statement about the walk, not about
+         * one click, and it is the caller's business to re-plan from there. */
+        double bestRemaining = double.MaxValue;
+        int lastProgressMs = started;
+        const double ProgressYd = 2.0;
+        const int StallMs = 25000;
+
         while (unchecked(Environment.TickCount - started) < timeoutMs)
         {
             mover.MoveTowards(goal);
@@ -67,6 +81,25 @@ public static class ClickAimPilot
                     Logging.Write(string.Format(CultureInfo.InvariantCulture,
                         "[ClickAim] blocked with {0:F1} yd remaining, {1} legs, {2} detours spent",
                         mover.LastRemaining, mover.Legs, mover.Detours));
+                }
+                return false;
+            }
+
+            if (mover.LastRemaining < bestRemaining - ProgressYd)
+            {
+                bestRemaining = mover.LastRemaining;
+                lastProgressMs = Environment.TickCount;
+            }
+            else if (unchecked(Environment.TickCount - lastProgressMs) > StallMs)
+            {
+                mover.MoveStop();
+                if (verbose)
+                {
+                    Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                        "[ClickAim] no progress for {0:F0} s: stuck at {1:F1} yd from the point "
+                        + "(best was {2:F1}). Stopped instead of clicking at it forever.",
+                        (Environment.TickCount - lastProgressMs) / 1000.0,
+                        mover.LastRemaining, bestRemaining));
                 }
                 return false;
             }

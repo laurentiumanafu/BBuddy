@@ -70,12 +70,15 @@ public sealed class ClickAimMover : IPlayerMover
 
     // A click whose reach has not been measured yet: from where it was clicked,
     // how tall it was, and how far the character has gone since.
+    private double _targetZ = double.NaN;   // height of the point being walked to
     private double _zeroAtClick;            // HeadingAtZero when the last click was posted
     private int _clickAtMs;
     private int _pendingDy;
     private double _pendingX, _pendingY;
     private double _pendingWantYd;
     private int _pendingStops;
+    private bool _pendingProjected;
+    private bool _legProjected;
 
     // Hop heights in the order they are tried. Every one of these was seen to move
     // the character on this client; the ones past -180 px were not, which is why
@@ -84,6 +87,8 @@ public sealed class ClickAimMover : IPlayerMover
     private int _hopIndex;
     private int _hopDy = HopLadder[0];
     private int _deadClickStreak;
+    private int _projectedClicks;
+    private bool _projectedThisDispatch;
 
     /// <summary>
     /// True until two centre-and-offset clicks have measured the aim. The sign of the
@@ -130,6 +135,20 @@ public sealed class ClickAimMover : IPlayerMover
         _p.DegPerPxRef = _p.DegPerPx;
         _p.DegPerDragPxRef = _p.DegPerDragPx;
         _p.ConeHalfDeg = ClickAimMath.ConeHalfDeg(_p.DegPerPx, _p.HalfWidth);
+        double cx, cy, cz;
+        if (ClickAimPositions.TryReadCamera(out cx, out cy, out cz))
+        {
+            Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                "[ClickAim] camera readable at ({0:F1}, {1:F1}, {2:F1}): clicks are aimed at world points "
+                + "by projecting them onto the screen ({3:F0} deg field of view), not by a learned pixel model",
+                cx, cy, cz, _p.CameraFovDeg));
+        }
+        else
+        {
+            Logging.Write("[ClickAim] camera position is not readable: falling back to the learned pixel model, "
+                          + "which needs the first clicks of the walk to measure itself");
+        }
+
         Logging.Write(string.Format(CultureInfo.InvariantCulture,
             "[ClickAim] mover ready; calibration {0}{1}", _cal,
             _cal.Ok ? "" : " (none found - using field defaults)"));
@@ -202,6 +221,7 @@ public sealed class ClickAimMover : IPlayerMover
     {
         lock (_gate)
         {
+            _targetZ = location.Z;
             Tick(location.X, location.Y, Environment.TickCount & int.MaxValue);
         }
     }
@@ -265,16 +285,31 @@ public sealed class ClickAimMover : IPlayerMover
             return;
         }
 
+        /* The boot click exists only for the fallback: with no camera to project
+         * through, the first click has to walk once to learn which way "centre" is.
+         * On 2026-10-29 this click never stopped being the click - LearnAim refused
+         * the leg because the zero it was told to learn against was itself NaN, so
+         * HeadingAtZero stayed NaN, so every tick posted another boot click and the
+         * character walked wherever the camera happened to face. Hence: with a camera
+         * the zero comes from the facing, without one LearnAim adopts the walk. */
         if (double.IsNaN(_p.HeadingAtZero))
         {
-            // Nothing has measured which way "centre" points yet. One centre
-            // click walks along the camera yaw, and that walk measures it.
-            ClickAimLeg boot = default(ClickAimLeg);
-            boot.Turn = ClickAimMath.TurnKindNone;
-            boot.Dy = _hopDy;                  // a height known to move the character
-            _legWantYd = rem;
-            Dispatch(boot, px, py, now);
-            return;
+            if (ClickAimPositions.TryReadCamera(out _, out _, out _))
+            {
+                double facingRad;
+                _p.HeadingAtZero = ClickAimPositions.TryReadFacing(out facingRad)
+                    ? facingRad * 180.0 / Math.PI
+                    : 0.0;
+            }
+            else
+            {
+                ClickAimLeg boot = default(ClickAimLeg);
+                boot.Turn = ClickAimMath.TurnKindNone;
+                boot.Dy = _hopDy;
+                _legWantYd = rem;
+                Dispatch(boot, px, py, now);
+                return;
+            }
         }
 
         if (_needSignProbe)
@@ -310,7 +345,21 @@ public sealed class ClickAimMover : IPlayerMover
             }
         }
 
+        /* Geometry first: click the screen position of the point we want to stand on.
+         *
+         * This replaces the whole learned model when the camera can be read. The point
+         * is a real world position with a real height, so the click lands on the walk
+         * the mmaps planned rather than somewhere down a ray, and the distance walked
+         * is the distance to that point instead of whatever a pixel offset happened to
+         * be worth that second. */
         ClickAimLeg leg;
+        if (TryProjectedClick(tx, ty, out leg))
+        {
+            _legWantYd = rem;
+            Dispatch(leg, px, py, now);
+            return;
+        }
+
         int rc = ClickAimMath.PlanLeg(_p, tx - px, ty - py, out leg);
         if (rc <= 0) return;
 
@@ -340,7 +389,12 @@ public sealed class ClickAimMover : IPlayerMover
 
         // Passed the goal: it came close and is now getting further away. A click
         // is immediate-mode, so the client will walk the whole way past it.
-        bool passed = _bestRemaining <= PassRadius && rem > _bestRemaining + PassGiveUp;
+        // Passing a point is only interesting if the point was not the goal: within a
+        // few yards of it, walking past it IS arriving, and the old code cancelled the
+        // walk and clicked again, which is how the log filled with "passed the target
+        // at 2.7 yd" three times in a row.
+        bool passed = _bestRemaining <= PassRadius && rem > _bestRemaining + PassGiveUp
+                      && rem > _p.Tolerance * 2.0;
 
         if ((resting && armed) || tooLong || passed)
         {
@@ -423,6 +477,7 @@ public sealed class ClickAimMover : IPlayerMover
             _pendingY = _legY;
             _pendingWantYd = _legWantYd;
             _pendingStops = 0;
+            _pendingProjected = _legProjected;
         }
 
         /* A click that moved the character nowhere is not an obstacle - it is a click
@@ -525,6 +580,16 @@ public sealed class ClickAimMover : IPlayerMover
             return;
         }
 
+        /* A projected click was aimed at a world point, so it says how far that point
+         * was, not how much ground a click height is worth. Feeding it to the scale
+         * learner is what produced "0.49 yd/px" and "0.05 yd/px" from the same -70 px
+         * in consecutive legs on 2026-10-29. */
+        if (_pendingProjected)
+        {
+            _pendingDy = 0;
+            return;
+        }
+
         double candidate = travel / Math.Abs(_pendingDy);
         double est = _p.YdPerDyPx;
         double used;
@@ -554,6 +619,52 @@ public sealed class ClickAimMover : IPlayerMover
         if (timedOut) return "it ran out of time";
         if (moved > cap) return "it ran past the runaway limit of " + cap.ToString("F0", CultureInfo.InvariantCulture) + " yd";
         return "the character came to rest";
+    }
+
+    /// <summary>
+    /// Builds a click aimed at the world position of the target, using the camera.
+    ///
+    /// Returns false when the camera cannot be read or the point is behind it, in
+    /// which case the caller falls back to the learned pixel model - which is worth
+    /// keeping, because the camera offsets are placeholders on some builds.
+    /// </summary>
+    private bool TryProjectedClick(double tx, double ty, out ClickAimLeg leg)
+    {
+        leg = default(ClickAimLeg);
+        leg.Turn = ClickAimMath.TurnKindNone;
+
+        double camX, camY, camZ;
+        if (!ClickAimPositions.TryReadCamera(out camX, out camY, out camZ)) return false;
+
+        double px, py;
+        if (!PlayerPosition(out px, out py)) return false;
+
+        double pz = ClickAimPositions.Z();
+        if (double.IsNaN(pz)) pz = camZ;                 // last resort: assume the camera height
+
+        double tz = _targetZ;
+        if (double.IsNaN(tz) || Math.Abs(tz) < 0.01) tz = pz;
+
+        IntPtr hwnd = Handle();
+        if (hwnd == IntPtr.Zero) return false;
+
+        int w, h;
+        if (!ClickAimInput.ClientSize(hwnd, out w, out h)) return false;
+
+        int dx, dy;
+        if (!ClickAimMath.ProjectToScreen(camX, camY, camZ, px, py, pz, tx, ty, tz,
+                                          w / 2.0, h / 2.0, _p.CameraFovDeg, out dx, out dy))
+            return false;
+
+        // A click within a few pixels of the middle walks along the camera axis and
+        // says nothing about where the character is, so aim at least a little off it.
+        if (Math.Abs(dx) < 8 && Math.Abs(dy) < 8) dy = dy < 0 ? -12 : 12;
+
+        leg.ClickPx = dx;
+        leg.Dy = dy;
+        _projectedClicks++;
+        _projectedThisDispatch = true;
+        return true;
     }
 
     private void StartDetour(double px, double py, int now)
@@ -590,9 +701,11 @@ public sealed class ClickAimMover : IPlayerMover
         if (leg.Turn == ClickAimMath.TurnKindNone)
         {
             Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                "[ClickAim] click ({0}, {1}) - {2:F1} yd to go, click scale {3:F2} yd/px",
+                "[ClickAim] click ({0}, {1}) - {2:F1} yd to go, {3}",
                 leg.ClickPx, leg.Dy, _legWantYd > 0 ? _legWantYd : 0.0,
-                _p.YdPerDyPx > 1e-6 ? _p.YdPerDyPx : _p.AssumedYdPerDyPx));
+                _projectedClicks > 0 && Math.Abs(leg.ClickPx) == 0 && Math.Abs(leg.Dy) <= 12
+                    ? "aimed by projection at the centre"
+                    : "click scale " + (_p.YdPerDyPx > 1e-6 ? _p.YdPerDyPx : _p.AssumedYdPerDyPx).ToString("F2", CultureInfo.InvariantCulture) + " yd/px"));
         }
 
         if (leg.Turn == ClickAimMath.TurnKindDrag)
@@ -611,6 +724,8 @@ public sealed class ClickAimMover : IPlayerMover
         }
 
         _leg = leg;
+        _legProjected = _projectedThisDispatch;
+        _projectedThisDispatch = false;
         _legX = px;
         _legY = py;
         _zeroAtClick = _p.HeadingAtZero;
