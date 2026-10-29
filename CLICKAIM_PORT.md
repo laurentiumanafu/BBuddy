@@ -146,20 +146,25 @@ that is the transport problem, not a pathfinding problem.
 and refuses legs beyond `ProfileRoute.MaxClickWalkYd` (100 yd) when one is not,
 instead of aiming a click at something 600 yd away.
 
-### Why there is no mesh on build 70291
+### The mesh is live now
 
-Two independent blockers, both verifiable in the repo:
+This section used to say there was no mesh on 70291. Both blockers are gone:
 
-* `Lib/Navigation.dll` has PE machine `0x014C` (i386). The bot is x64; a 32-bit
-  native library cannot be loaded into it, so the Detour engine is inert there.
-* Its tiles are V5 `.mmtile` / MaNGOS ADT files generated from 3.3.5a map data.
-  There is no tile set for build 70291, and the 3.3.5a tiles cannot be reused - the
-  terrain and the map ids are different.
+* `Lib/x64/Navigation.dll` is a real x64 build (PE32+ `0x8664`, 116 exports, 74/74
+  P/Invoke entry points). `Tools/Navigation/build-navigation.sh` reproduces it from
+  the upstream source plus one patch.
+* The tiles do not have to be baked from 70291 at all: `MoveMap.cpp` now reads the
+  single-tile `.mmtile` files the 3.3.5a extractors write, in either naming scheme,
+  with a 16- or a 20-byte header, gated on the blob rather than on a version field.
+  A stock 3.3.5a set for Kalimdor and Eastern Kingdoms loads as-is.
 
-So on this client the mesh path is dead code that has been left correct for the day
-a mesh exists. The honest options are in `hunt/NAVMESH_PLAN.md`: an x64 Detour build
-plus CASC-extracted terrain for 70291, or a learned occupancy grid. Until then the
-profile's own hotspots are the path, which is exactly what they are.
+Confirmed on the real client (2026-10-29, Ashenvale, `(-616.4, -4257.9, 39.0)`):
+`Navigation.dll loaded: yes`, 5948 tile files, 25 files / 400 sub-tiles pulled in
+around the player on demand, and Detour returned a 42.8 yd path (4 points) and a
+139.6 yd path (7 points).
+
+`RouteRunner` and a plain `x,y` walk both route on the mesh when it is queryable;
+the straight click is the fallback, and the log says which one was used.
 
 ## Where the position comes from
 
@@ -177,7 +182,8 @@ attach and per walk (`[wowb]` or `[legacy]`).
   so the character is attacked, dazed and killed, and no navigation change fixes
   that.
 * **Routing.** Waypoints come from the caller (`MeshNavigator`, or the pilot's
-  single goal). There is no navmesh yet; see `hunt/NAVMESH_PLAN.md`.
+  single goal). The navmesh is live (see above); what is missing is a caller that
+  turns a quest into waypoints.
 * **Z.** Only X and Y are used. A hotspot on a tower floor needs interior geometry.
 * **Transports, portals, taxis.** Profile `<RunTo>` chains that cross a continent
   are not movement problems and are not handled.
@@ -186,14 +192,30 @@ attach and per walk (`[wowb]` or `[legacy]`).
 
 ## Test checklist on the user's machine
 
-1. `python3 Tools/lint_cs_types.py Styx/Logic/Pathing/ClickAim/*.cs` (repo root).
-2. `dotnet build -c Release -p:Platform=x64 .` - this is the first real compiler
-   pass over the five new files; they have only been linted, not compiled.
-3. At attach the log should show `[ClickAim] self-test 26/26 passed`, the
-   `pilot armed` line, a readable position source and the calibration line. If the
-   self-test fails, nothing else is worth trying.
-4. `--clickaim-walk <x>,<y>` to a point you can see, 30-60 yd of open ground.
-   Expect `[ClickAim] from ... to ... - N yd`, then `arrived: ... yd remaining,
-   N legs`.
-5. Only after that, `ClickAimMover.Install()` in a game session where the tree runs
-   (i.e. once the x64 object model is complete).
+Do these in order. Each one answers a different question, and the log line to look
+for is named, so a failure points at one thing instead of "movement is broken".
+
+0. `Tools\SelfCheck.cmd` - no game needed. DLL hash, tile counts per naming scheme,
+   `mmapcheck` over one map, and the navmesh lines from the newest log.
+1. `dotnet build -c Release -p:Platform=x64 .` - the first real compiler pass over
+   the ClickAim files. Then start the bot and check the attach lines:
+   `[ClickAim] self-test 26/26 passed`, `NavGrid self-test` all passed,
+   `[NavMesh] ... N tile files`, then the `[MeshProbe]` block. Two `mesh path OK`
+   lines mean the mesh is real and queryable from inside the process.
+2. **Does the mover still work?** Put `20` in `Settings\clickaim-walk.txt`
+   (a number = "that many yards ahead of my facing", no coordinates needed).
+   Expect `[ClickAim] routing 20.0 yd on the mesh`, then `[Route] mesh path`, then
+   `[ClickAim] arrived: ... yd remaining, N legs`. A short walk is nearly a straight
+   line, so this isolates the mover from the routing.
+3. **Does the mesh change anything?** Put `100` in the same file, facing something
+   you have to walk around. The tell is `[Route] mesh path: N points, X yd for a
+   100.0 yd leg (detours around terrain)` - X larger than the leg means it went
+   around. A straight click would have been exactly 100.
+4. **A real goal.** Put `x,y` in the file. Expect `[ClickAim] routing N yd on the
+   mesh`, a polyline, and the character walking it. Watch for `[ClickAim] BLOCKED`
+   (the mover's own detours exhausted) or `gave up on mesh point` (the walk stopped
+   physically, e.g. a fence the mmap does not know about).
+5. Only when that works: `ClickAimMover.Install()` in a session where the tree runs.
+
+If step 2 fails but step 1's probe passed, the problem is the mover, not the mesh.
+If the probe fails, nothing downstream can work - send that log.
