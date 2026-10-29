@@ -91,6 +91,9 @@ public sealed class ClickAimMover : IPlayerMover
     private int _projectedClicks;
     private bool _projectionWorks;
     private int _projectionRejects;
+    private double _aimBest = double.MaxValue;
+    private int _aimWorse;
+    private double _aimGainSign = 1.0;
     private bool _projectedThisDispatch;
 
     /// <summary>
@@ -102,6 +105,19 @@ public sealed class ClickAimMover : IPlayerMover
 
     /// <summary>How far off centre the probe click goes. Big enough to resolve a sign.</summary>
     private const int SignProbePx = 170;
+
+    /// <summary>Inside this many degrees of the target heading, click instead of turning.</summary>
+    private const double AimToleranceDeg = 6.0;
+
+    /// <summary>Largest single camera rotation, so a mistake cannot spin the character.</summary>
+    private const double MaxAimDragPx = 320.0;
+
+    /// <summary>
+    /// Height of the click used by the camera-aim path. A "far click" that is known to
+    /// move; it does not have to be accurate, because the next tick re-aims from
+    /// wherever this one ends.
+    /// </summary>
+    private const int AimHopDy = -140;
 
     private int _probeAttempts;
     private int _stuck;
@@ -365,8 +381,17 @@ public sealed class ClickAimMover : IPlayerMover
         // With a camera there is nothing for the probe to measure.
         if (_needSignProbe) _needSignProbe = false;
 
+        /* The primary aim: turn the camera to face the point, then click the middle.
+         * See TryAimByCamera for why this and not a pixel offset. */
         ClickAimLeg leg;
-        if (TryProjectedClick(tx, ty, out leg))
+        if (TryAimByCamera(tx, ty, out leg))
+        {
+            _legWantYd = rem;
+            Dispatch(leg, px, py, now);
+            return;
+        }
+
+        if (_p.UseProjection && TryProjectedClick(tx, ty, out leg))
         {
             _legWantYd = rem;
             Dispatch(leg, px, py, now);
@@ -654,6 +679,105 @@ public sealed class ClickAimMover : IPlayerMover
         if (timedOut) return "it ran out of time";
         if (moved > cap) return "it ran past the runaway limit of " + cap.ToString("F0", CultureInfo.InvariantCulture) + " yd";
         return "the character came to rest";
+    }
+
+    /// <summary>
+    /// Aims by rotating the camera to face the target, then clicking the MIDDLE of
+    /// the screen - the one mechanism in this client that has measured consistently.
+    ///
+    /// Why this replaces everything else that was tried today:
+    ///
+    ///   * a click to the middle of the screen walks along the camera's axis, so once
+    ///     the camera faces the target the click cannot go anywhere else. There is no
+    ///     pixel offset to be wrong by a few hundred pixels, no click scale and no
+    ///     click sign - <c>ClickPx</c> is zero by construction.
+    ///   * the drag channel is the one that measured the same twice in a row today:
+    ///     -0.21 deg/px in the field, -0.21 in the 21:36 calibration, -0.21000 in the
+    ///     file. Nothing else in this model has ever agreed with itself.
+    ///   * it is a closed loop. The camera position is readable, so the camera's
+    ///     heading is known before and after every drag; a drag that over- or
+    ///     under-rotates shows up as a smaller error on the next tick and is corrected.
+    ///     The gain does not have to be right, only consistent.
+    ///
+    /// Projection was meant to do this directly, and on 2026-10-29 it swung the click
+    /// by hundreds of pixels per tick while the character stood still - the 90 degree
+    /// field of view (or the camera reading itself) is not what the projection assumes.
+    /// A closed loop does not need to assume.
+    /// </summary>
+    private bool TryAimByCamera(double tx, double ty, out ClickAimLeg leg)
+    {
+        leg = default(ClickAimLeg);
+        leg.Turn = ClickAimMath.TurnKindNone;
+
+        double camX, camY, camZ;
+        if (!ClickAimPositions.TryReadCamera(out camX, out camY, out camZ)) return false;
+
+        double px, py;
+        if (!PlayerPosition(out px, out py)) return false;
+
+        // The camera looks at the player; if it is sitting on top of the player its
+        // heading is noise, so say nothing rather than aim by noise.
+        double sep = ClickAimMath.Len(px - camX, py - camY);
+        if (sep < 0.8) return false;
+
+        double camHeading = ClickAimMath.HeadingDeg(px - camX, py - camY);
+        double desired = ClickAimMath.HeadingDeg(tx - px, ty - py);
+        double error = ClickAimMath.WrapDeg(desired - camHeading);
+
+        // The loop has to notice if it is not converging. A drag whose sign is wrong
+        // makes the error grow every time, and without this the character spins on the
+        // spot for ever - which is one of the things this client has already done.
+        if (Math.Abs(error) > AimToleranceDeg)
+        {
+            if (Math.Abs(error) > _aimBest + 2.0)
+            {
+                _aimWorse++;
+                if (_aimWorse == 1)
+                {
+                    _aimGainSign = -_aimGainSign;
+                    Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                        "[Aim] the error grew to {0:F1} deg after a drag, so the drag sign is the other "
+                        + "way on this client; using {1:F2} deg/px from now on", error,
+                        _p.DegPerDragPx * _aimGainSign));
+                }
+                else if (_aimWorse >= 3)
+                {
+                    Blocked = true;
+                    Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                        "[Aim] the camera is not turning the way a drag predicts (three drags, error still "
+                        + "{0:F1} deg). Stopping rather than spinning on the spot.", error));
+                    return false;
+                }
+            }
+            else
+            {
+                _aimBest = Math.Abs(error);
+            }
+
+            double gain = (_p.DegPerDragPx != 0.0 ? _p.DegPerDragPx : -0.21) * _aimGainSign;
+            double dragPx = error / gain;
+            if (dragPx > MaxAimDragPx) dragPx = MaxAimDragPx;
+            if (dragPx < -MaxAimDragPx) dragPx = -MaxAimDragPx;
+
+            leg.Turn = ClickAimMath.TurnKindDrag;
+            leg.DragPx = (int)(dragPx >= 0 ? dragPx + 0.5 : dragPx - 0.5);
+            leg.Dy = 0;
+
+            Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                "[Aim] camera {0:F1} deg, target {1:F1} deg, error {2:+0.0;-0.0} deg -> drag {3} px "
+                + "(the camera turns {4:F2} deg/px)", camHeading, desired, error, leg.DragPx, _p.DegPerDragPx));
+            return true;
+        }
+
+        // Facing it: a middle click walks along that axis. No offset, no scale.
+        _aimBest = Math.Abs(error);
+        _aimWorse = 0;
+        leg.ClickPx = 0;
+        leg.Dy = AimHopDy;
+        Logging.Write(string.Format(CultureInfo.InvariantCulture,
+            "[Aim] camera {0:F1} deg, target {1:F1} deg, error {2:+0.0;-0.0} deg -> centre click ({3} px down)",
+            camHeading, desired, error, AimHopDy));
+        return true;
     }
 
     /// <summary>

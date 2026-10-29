@@ -664,6 +664,15 @@ public sealed class ClickAimParams
     /// which piece of ground a click hits - and the client walks to whatever it hit.
     /// </summary>
     public double CameraFovDeg { get; set; } = 90.0;
+
+    /// <summary>
+    /// Whether to aim by projecting the target onto the screen. Off by default: on
+    /// 2026-10-29 the projection swung hundreds of pixels per tick while the character
+    /// stood still, so the field of view it assumes is not the client's. The camera
+    /// aim (drag to face, then click the middle) does not need the assumption and is
+    /// what runs.
+    /// </summary>
+    public bool UseProjection { get; set; }
     /// <summary>Click height for a 15-40 yd hop; -140 overshoots a path waypoint.</summary>
     public int MidDy { get; set; } = -100;
     public int NearDy { get; set; } = -60;

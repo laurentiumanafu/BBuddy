@@ -339,6 +339,53 @@ placeholders, and its boot click now works: with a camera the zero comes from th
 player's facing; without one, `LearnAim` adopts the heading the boot walk measured
 instead of refusing and repeating forever.
 
+### The aim, rebuilt around the one channel that measured consistently
+
+Everything above was an attempt to make a *pixel offset* mean something: a click at
+`px` right of centre turns the walk by `degPerPx * px`. That model needed five
+separate numbers (sign, magnitude, zero, click scale, hop height), none of which ever
+agreed with itself on this client - and the 21:41 log is what it looks like when they
+disagree:
+
+```
+click (291,-169) - 22.8 yd to go, aimed at the projected point   -> walked 4.4 yd
+click (193,-178) - 25.3 yd to go                                 -> walked 0.0 yd
+click (103,-182) - 25.3 yd to go                                 -> walked 0.0 yd
+click (-2,-183)  - 25.3 yd to go                                 -> walked 2.7 yd
+click (401,-222) - 25.2 yd to go                                 -> walked 0.8 yd
+```
+
+The click position swings by 300 px while the character stands still, and the target
+never gets closer. Every click turns the character instead of walking it.
+
+The rebuilt aim uses two facts that held all day:
+
+* **a click on the middle of the screen walks along the camera's axis.** No offset
+  means no `degPerPx`, no scale, no sign: `ClickPx` is zero by construction.
+* **the camera position is readable**, so the camera's heading is known:
+  `HeadingDeg(player - camera)`. The heading it must have is
+  `HeadingDeg(target - player)`. The difference is the error, and a drag of
+  `error / degPerDragPx` pixels turns it - and the drag channel is the only number
+  that measured the same twice (`-0.21` in the field, `-0.21000` in the file,
+  `-0.21` in the 21:36 calibration).
+
+So the mover now: **drag to face the target, then click the middle.** Both steps are
+logged, and the loop is closed on the camera - the next tick re-reads the camera
+heading and corrects whatever the drag got wrong:
+
+```
+[Aim] camera -75.4 deg, target -111.2 deg, error -35.9 deg -> drag 171 px (the camera turns -0.21 deg/px)
+[Aim] camera -111.3 deg, target -111.2 deg, error +0.1 deg -> centre click (-140 px down)
+```
+
+Offline check of that loop: with the gain exactly right, one drag lands (error 0.1
+deg); with the gain 40 % wrong, the error goes 15.4 -> 6.8 -> 2.8 deg, i.e. it
+converges in three drags because each one re-measures; with the sign wrong it
+oscillates - which the mover detects, flips the sign once, and says so in the log.
+
+Projection stays in the tree behind `ClickAimParams.UseProjection` (off by default)
+because the 90 degree field of view it assumes is demonstrably not this client's.
+
 ### Three reasons projection did not run on its first outing (21:36)
 
 The camera was read on the first try - `camera readable at (-602.8, -4179.8, 50.0)` -
