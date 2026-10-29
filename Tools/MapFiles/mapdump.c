@@ -34,8 +34,11 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#include <direct.h>
 #else
 #include <dirent.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 #endif
 
 #define MAP_SIZE_OF_GRIDS 533.33333f
@@ -107,6 +110,17 @@ static void join_path(char *out, size_t size, const char *dir, const char *name)
         snprintf(out, size, "%s%s", dir, name);
     else
         snprintf(out, size, "%s/%s", dir, name);
+}
+
+/* Creates the output directory if it is not there; a tool that writes 256 files
+ * should not require the caller to have made the folder first. */
+static void ensure_dir(const char *dir)
+{
+#ifdef _WIN32
+    _mkdir(dir);
+#else
+    mkdir(dir, 0777);
+#endif
 }
 
 static int list_dir(const char *dir, char names[][256], int max)
@@ -511,6 +525,8 @@ static int convert_one(const char *path, const char *name, const char *out_dir,
 static int cmd_convert(const char *maps_dir, const char *out_dir, int map_filter,
                        float slope, int verbose)
 {
+    ensure_dir(out_dir);
+
     char names[4096][256];
     int count = list_dir(maps_dir, names, 4096);
     if (count == 0)

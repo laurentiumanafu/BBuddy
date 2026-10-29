@@ -36,6 +36,8 @@
 #include <string>
 #include <vector>
 #include <algorithm>
+#include <filesystem>
+#include <system_error>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -392,6 +394,18 @@ int main(int argc, char** argv)
         fprintf(stderr, "usage: mmapbuild --tiles <dir with .navtile> --map <id> --out <mmaps dir>\n");
         return 2;
     }
+    /* A continent is 256 tiles; requiring the caller to have created the folder
+     * first is how an empty mmaps directory gets blamed on the builder. */
+    {
+        std::error_code ec;
+        std::filesystem::create_directories(outDir, ec);
+        if (ec)
+        {
+            std::fprintf(stderr, "mmapbuild: cannot create %s: %s\n", outDir.c_str(),
+                         ec.message().c_str());
+            return 1;
+        }
+    }
 
     dtNavMeshParams mapParams;
     memset(&mapParams, 0, sizeof(mapParams));
@@ -411,6 +425,7 @@ int main(int argc, char** argv)
         fprintf(stderr, "mmapbuild: cannot write %s\n", mapPath);
         return 1;
     }
+
     fwrite(&mapParams, sizeof(mapParams), 1, mf);
     fclose(mf);
     printf("wrote %s (sub-tile %.2f yd, maxTiles %d, maxPolys %d)\n",

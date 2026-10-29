@@ -21,6 +21,10 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define NG_MAGIC      "NAVG"
 #define NG_VERSION    1
 #define NG_ADT_YD     533.3333f
@@ -102,5 +106,10 @@ int ng_find_path(const ng_map *m, float sx, float sy, float sz,
 
 /* Straight walkability between two world points on the map. */
 int ng_line_walkable(const ng_map *m, float x0, float y0, float x1, float y1);
+
+
+#ifdef __cplusplus
+}    /* extern "C" */
+#endif
 
 #endif /* NAVGRID_H */

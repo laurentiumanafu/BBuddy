@@ -20,6 +20,10 @@
 #include <stdint.h>
 #include "navgrid.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef struct
 {
     int chunks_read;
@@ -42,5 +46,10 @@ int ng_bake_adt_buffer(const uint8_t *data, size_t size, int32_t map_id,
 
 /* Tile indices for a world position, using the client's own convention. */
 void ng_adt_tile_of(float x, float y, int32_t *tile_x, int32_t *tile_y);
+
+
+#ifdef __cplusplus
+}    /* extern "C" */
+#endif
 
 #endif /* ADT_H */

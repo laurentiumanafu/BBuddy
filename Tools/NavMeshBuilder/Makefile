@@ -24,7 +24,28 @@ mmapbuild: mmapbuild.cpp ../NavGrid/navgrid.o
 mmapcheck: mmapcheck.cpp
 	$(CXX) $(CFLAGS) $(INCLUDES) -o $@ mmapcheck.cpp $(SOURCES)
 
-clean:
-	rm -f mmapbuild mmapcheck ../NavGrid/navgrid.o
+# Cross-compiled for the game machine. Detour is compiled in, so the exes are
+# self-contained; -static-libgcc -static-libstdc++ keeps them free of a MinGW DLL.
+ZIG ?= zig
+win: bin-x64/mmapbuild.exe bin-x64/mmapcheck.exe
 
-.PHONY: all clean
+# navgrid.c is compiled as C (it is C99) and linked in, which needs the extern "C"
+# guards navgrid.h carries.
+../NavGrid/navgrid-win.o: ../NavGrid/navgrid.c ../NavGrid/navgrid.h
+	$(ZIG) cc -target x86_64-windows-gnu -std=c99 -O2 -w -c -I ../NavGrid -o $@ ../NavGrid/navgrid.c
+
+bin-x64/mmapbuild.exe: mmapbuild.cpp ../NavGrid/navgrid-win.o
+	mkdir -p bin-x64
+	$(ZIG) c++ -target x86_64-windows-gnu $(CFLAGS) -static-libgcc -static-libstdc++ \
+		$(INCLUDES) -o $@ mmapbuild.cpp $(SOURCES) ../NavGrid/navgrid-win.o -lm
+
+bin-x64/mmapcheck.exe: mmapcheck.cpp
+	mkdir -p bin-x64
+	$(ZIG) c++ -target x86_64-windows-gnu $(CFLAGS) -static-libgcc -static-libstdc++ \
+		$(INCLUDES) -o $@ mmapcheck.cpp $(SOURCES) -lm
+
+clean:
+	rm -f mmapbuild mmapcheck ../NavGrid/navgrid.o ../NavGrid/navgrid-win.o
+	rm -rf bin-x64
+
+.PHONY: all win clean

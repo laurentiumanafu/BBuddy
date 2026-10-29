@@ -21,9 +21,23 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#include <direct.h>
 #else
 #include <dirent.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 #endif
+
+/* Creates the output directory if it is not there; a tool that writes 256 files
+ * should not require the caller to have made the folder first. */
+static void ensure_dir(const char *dir)
+{
+#ifdef _WIN32
+    _mkdir(dir);
+#else
+    mkdir(dir, 0777);
+#endif
+}
 
 static const char *arg_value(int argc, char **argv, const char *name)
 {
@@ -82,6 +96,7 @@ static int cmd_bake(int argc, char **argv)
                         "[--slope deg] --out <dir>\n");
         return 2;
     }
+    ensure_dir(out);
 
     ng_tile *tile = (ng_tile *)malloc(sizeof(ng_tile));
     if (tile == NULL) return 1;
@@ -182,6 +197,7 @@ static int cmd_bakeall(int argc, char **argv)
         fprintf(stderr, "usage: navbake bakeall --adts <dir> --map <id> [--slope deg] --out <dir>\n");
         return 2;
     }
+    ensure_dir(out);
 
     char names[4096][256];
     int count = 0;
