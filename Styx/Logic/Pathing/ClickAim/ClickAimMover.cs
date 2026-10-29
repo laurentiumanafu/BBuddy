@@ -271,7 +271,7 @@ public sealed class ClickAimMover : IPlayerMover
             // click walks along the camera yaw, and that walk measures it.
             ClickAimLeg boot = default(ClickAimLeg);
             boot.Turn = ClickAimMath.TurnKindNone;
-            boot.Dy = ClickAimMath.HopDy(_p, rem);
+            boot.Dy = _hopDy;                  // a height known to move the character
             _legWantYd = rem;
             Dispatch(boot, px, py, now);
             return;
