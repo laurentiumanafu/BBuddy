@@ -292,6 +292,8 @@ public static class ClickAimMath
     public static int HopDy(ClickAimParams p, double remaining)
     {
         if (p == null) return -60;
+        if (double.IsNaN(remaining) || double.IsInfinity(remaining) || remaining <= 0.0)
+            return -p.MinDyPx;
 
         double want = remaining * p.HopFactor;
         if (want > p.MaxHopYd) want = p.MaxHopYd;

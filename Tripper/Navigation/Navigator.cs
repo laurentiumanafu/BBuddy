@@ -1101,7 +1101,8 @@ namespace Tripper.Navigation
         /// <returns>True if a polygon was found.</returns>
         public bool FindNearestPolyRef(uint mapId, Vector3 position, out PolygonReference polyRef, out Vector3 nearestPoint)
         {
-            return FindNearestPolyRef(mapId, position, Extents, out polyRef, out nearestPoint);
+            return FindNearestPolyRef(mapId, position, Extents.X, Extents.Y,
+                                      out polyRef, out nearestPoint);
         }
 
         /// <summary>
