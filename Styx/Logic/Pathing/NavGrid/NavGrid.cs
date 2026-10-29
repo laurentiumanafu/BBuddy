@@ -709,14 +709,38 @@ public static class NavGridStore
         }
         check("pinchNoCut", aroundOk && aroundLength > 3.0);
 
-        // 5. Tile mapping: the client's own convention, including negatives.
+        /* 5. Tile mapping. The same table as Tools/NavGrid/test_navgrid.c, so the two
+         * implementations cannot drift: tile_x comes from y and tile_y from x, the
+         * truncation applies to the difference (32 - coord/533.33), and tile 31
+         * covers (0, 533] while tile 32 covers (-533, 0].
+         *
+         * This block used to expect (33,32) for (100,-600) - i.e. 32 for the y axis.
+         * The correct answer is 31, and a mirrored expectation is exactly what a
+         * mirrored lookup would have produced, so it was hiding nothing but proving
+         * nothing either. */
         int tx, ty;
         NavGridFinder.TileOf(-100, -100, out tx, out ty);
         check("tileOfNegative", tx == 32 && ty == 32);
+
         NavGridFinder.TileOf(100, -600, out tx, out ty);
-        check("tileOfMixed", tx == 33 && ty == 32);
+        check("tileOfMixed", tx == 33 && ty == 31);
+
+        // Rotating the argument by 90 degrees must rotate the answer, not repeat it:
+        // x and y are not interchangeable here.
+        int swapX, swapY;
+        NavGridFinder.TileOf(-600, 100, out swapX, out swapY);
+        check("tileOfAxisNotSwapped", swapX == 31 && swapY == 33 && (swapX != tx || swapY != ty));
+
         NavGridFinder.TileOf(-600, -100, out tx, out ty);
         check("tileOfWest", tx == 32 && ty == 33);
+
+        // The rest of the table, from the C tests.
+        NavGridFinder.TileOf(4000, 4000, out tx, out ty);
+        check("tileOfFarNortheast", tx == 24 && ty == 24);
+        NavGridFinder.TileOf(5000, -1, out tx, out ty);
+        check("tileOfEastEdge", tx == 32 && ty == 22);
+        NavGridFinder.TileOf(-4254, -614, out tx, out ty);
+        check("tileOfAshenvale", tx == 33 && ty == 39);
 
         if (failures.Length == 0)
             return string.Format(CultureInfo.InvariantCulture, "NavGrid self-test {0}/{1} passed", passed, total);

@@ -73,26 +73,64 @@ public static class ClickAimDiagnostics
         // exe, so this is the only path that matters - there is no override API.
         string mmapsDir = System.IO.Path.Combine(AppContext.BaseDirectory, "mmaps");
         int mmtiles = 0;
+        int thisMap = 0;
+        int paramsFiles = 0;
+        string paramsForMap = "none";
         try
         {
             if (System.IO.Directory.Exists(mmapsDir))
-                mmtiles = System.IO.Directory.GetFiles(mmapsDir, "*.mmtile").Length;
+            {
+                string[] names = System.IO.Directory.GetFiles(mmapsDir);
+
+                // Both naming schemes the loader understands. Counting per map
+                // matters: a folder-wide number says nothing about whether the map
+                // the player is standing on has tiles at all.
+                uint mapId = (uint)NavGridStore.MapId;
+                string classic = mapId.ToString("000", CultureInfo.InvariantCulture);
+                string trinity = mapId.ToString("0000", CultureInfo.InvariantCulture) + "_";
+                foreach (string path in names)
+                {
+                    string name = System.IO.Path.GetFileName(path);
+                    if (name.EndsWith(".mmtile", StringComparison.OrdinalIgnoreCase))
+                    {
+                        mmtiles++;
+                        if ((name.Length == 14 && name.StartsWith(classic, StringComparison.Ordinal))
+                            || name.StartsWith(trinity, StringComparison.Ordinal))
+                            thisMap++;
+                    }
+                    else if (name.EndsWith(".mmap", StringComparison.OrdinalIgnoreCase))
+                    {
+                        paramsFiles++;
+                        if (name == classic + ".mmap" || name == trinity.TrimEnd('_') + ".mmap")
+                            paramsForMap = name;
+                    }
+                }
+            }
         }
         catch (Exception ex) { Logging.Write("[NavMesh] cannot list " + mmapsDir + ": " + ex.Message); }
 
+        uint currentMap = (uint)NavGridStore.MapId;
         Logging.Write("[NavMesh] Navigation.dll loaded: " + (mesh ? "yes" : "no")
-                      + " - mmaps read from " + mmapsDir + " (map " + NavGridStore.MapId + "): "
-                      + (mmtiles > 0 ? mmtiles + " tile files" : "none"));
+                      + " - mmaps read from " + mmapsDir);
+        Logging.Write("[NavMesh] " + mmtiles + " tile files in the folder (" + paramsFiles
+                      + " params files), " + thisMap + " for map " + currentMap
+                      + "; params for this map: " + paramsForMap);
         if (!mesh)
         {
             Logging.Write("[NavMesh] without it, routing falls back to the baked navgrid tiles "
                           + "(Tools/NavGrid) and then to straight-line walking");
         }
-        else if (mmtiles == 0)
+        else if (thisMap == 0)
         {
-            Logging.Write("[NavMesh] the library loaded but there are no mmaps for this map, so "
-                          + "FindPath returns nothing - run Tools\\NavMeshBuilder\\make-mmaps.cmd "
-                          + "to bake them from your ADT export");
+            Logging.Write("[NavMesh] the library loaded, but no tile file in " + mmapsDir
+                          + " belongs to map " + currentMap + " - FindPath will return nothing "
+                          + "for this map. Run Tools\\UseExistingMmaps.cmd against your mmaps "
+                          + "set, or bake this map with make-mmaps.cmd");
+        }
+        else
+        {
+            Logging.Write("[MeshProbe] asking Detour for a path from where the player stands; "
+                          + "the answer follows in a few seconds");
         }
 
         Logging.Write("[ClickAim] pilot armed. Write \"x,y\" into " + RequestPath
@@ -107,6 +145,142 @@ public static class ClickAimDiagnostics
         thread.IsBackground = true;
         thread.Name = "ClickAimPilot";
         thread.Start();
+
+        if (mesh)
+        {
+            var probe = new Thread(MeshProbe);
+            probe.IsBackground = true;
+            probe.Name = "ClickAimMeshProbe";
+            probe.Start();
+        }
+    }
+
+    /// <summary>
+    /// Answers one question the file count cannot: does this navmesh actually route?
+    ///
+    /// It asks the engine for a short path and a long one, both starting where the
+    /// player stands, and logs the status, the tile counts and the geometry it got
+    /// back. Everything printed here is a value that was read or returned - if the
+    /// probe cannot run, it says so instead of implying success.
+    ///
+    /// When the short path fails the likely cause is named: the tile file for this
+    /// position is missing, or the mesh under the player is not walkable. On a stock
+    /// mmap set that is nearly always a name/size mismatch, which the numbers below
+    /// make obvious.
+    /// </summary>
+    private static void MeshProbe()
+    {
+        try
+        {
+            // Let the client settle: attach happens before the world finishes loading.
+            Thread.Sleep(3000);
+
+            for (int attempt = 0; attempt < 5; attempt++)
+            {
+                double px, py;
+                if (ClickAimPositions.TryRead(out px, out py)) break;
+                Thread.Sleep(2000);
+            }
+
+            double x, y;
+            if (!ClickAimPositions.TryRead(out x, out y))
+            {
+                Logging.Write("[MeshProbe] skipped: player position is not readable");
+                return;
+            }
+
+            uint mapId = (uint)NavGridStore.MapId;
+            double z = ClickAimPositions.Z();
+            bool zKnown = !double.IsNaN(z);
+            if (!zKnown) z = 0.0;
+
+            var from = new System.Numerics.Vector3((float)x, (float)y, (float)z);
+
+            // Which tile do we expect? The loader derives the same number, so a
+            // "no polygon" answer can be checked against a file name here.
+            int tileX, tileY;
+            NavGridFinder.TileOf(x, y, out tileX, out tileY);
+            Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                "[MeshProbe] player {0:F1},{1:F1},{2:F1} map {3} -> grid tile ({4},{5}), "
+                + "file {6}{7}{8}.mmtile{9}", x, y, z, mapId, tileX, tileY, mapId.ToString("000"),
+                tileX.ToString("00"), tileY.ToString("00"),
+                zKnown ? "" : " (z unreadable, probing at 0)"));
+
+            Tripper.Navigation.Navigator nav = Navigator.TripperNavigator;
+            nav.EnsureTilesAroundPosition(mapId, from, 2);
+
+            int loadedTiles = -1;
+            try { loadedTiles = nav.GetLoadedTilesCount(mapId); }
+            catch { /* older DLL without the export */ }
+
+            // Did the file for the player's own grid square load? If the ring around
+            // the position brought tiles in but this one is missing, the name the
+            // engine derives and the name on disk disagree - that is the single most
+            // expensive mistake in this area, so it gets its own line.
+            bool tileLoaded = false;
+            try { tileLoaded = nav.IsTileLoaded(mapId, tileX, tileY); }
+            catch { /* older DLL without the export */ }
+
+            Logging.Write("[MeshProbe] tiles loaded for map " + mapId + ": " + loadedTiles
+                          + "; tile (" + tileX + "," + tileY + ") loaded: " + tileLoaded);
+
+            // Two lengths: 40 yd stays inside a few tiles, 120 yd crosses seams and
+            // exercises the on-demand loader while the search runs.
+            double[] legs = { 40.0, 120.0 };
+            double facing;
+            if (!ClickAimPositions.TryReadFacing(out facing)) facing = 0.0;
+            double dx = Math.Sin(facing), dy = Math.Cos(facing);
+
+            foreach (double leg in legs)
+            {
+                var to = new System.Numerics.Vector3(
+                    (float)(x + dx * leg), (float)(y + dy * leg), (float)z);
+                nav.EnsureTilesAroundPosition(mapId, to, 1);
+
+                Tripper.Navigation.PathFindResult result;
+                try { result = nav.FindPath(mapId, from, to, true); }
+                catch (Exception ex)
+                {
+                    Logging.Write("[MeshProbe] " + leg + " yd threw: " + ex.Message);
+                    continue;
+                }
+
+                if (result == null || !result.Status.Succeeded
+                    || result.Points == null || result.Points.Length < 2)
+                {
+                    Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                        "[MeshProbe] {0:F0} yd: NO PATH (status {1}) - the mesh under the player "
+                        + "is missing or not walkable; check that {2}{3}{4}.mmtile exists and was "
+                        + "built for the {5}.mmap beside it",
+                        leg, result == null ? "null" : result.Status.ToString(),
+                        mapId.ToString("000"), tileX.ToString("00"), tileY.ToString("00"), mapId));
+                    continue;
+                }
+
+                double length = 0.0;
+                for (int i = 1; i < result.Points.Length; i++)
+                {
+                    double ex = result.Points[i].X - result.Points[i - 1].X;
+                    double ey = result.Points[i].Y - result.Points[i - 1].Y;
+                    double ez = result.Points[i].Z - result.Points[i - 1].Z;
+                    length += Math.Sqrt(ex * ex + ey * ey + ez * ez);
+                }
+                Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                    "[MeshProbe] {0:F0} yd: mesh path OK - {1} points, {2:F1} yd, {3:F1} ms, "
+                    + "ends at ({4:F1},{5:F1},{6:F1})",
+                    leg, result.Points.Length, length, result.Elapsed.TotalMilliseconds,
+                    result.Points[result.Points.Length - 1].X,
+                    result.Points[result.Points.Length - 1].Y,
+                    result.Points[result.Points.Length - 1].Z));
+            }
+
+            Logging.Write("[MeshProbe] done. A path here is Detour reading the mmaps; "
+                          + "walking still depends on the mover, not on this probe.");
+        }
+        catch (Exception ex)
+        {
+            Logging.Write("[MeshProbe] threw: " + ex.Message);
+        }
     }
 
     /// <summary>Queues a walk. Safe from any thread; returns false if one is already running.</summary>
