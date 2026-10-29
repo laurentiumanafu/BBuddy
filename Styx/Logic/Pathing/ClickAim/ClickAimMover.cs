@@ -58,6 +58,8 @@ public sealed class ClickAimMover : IPlayerMover
     private double _lastX, _lastY;
     private int _lastMoveMs;
     private double _bestRemaining;
+    private double _legWantYd;              // distance left when the leg was clicked
+    private int _scaleSamples;              // accepted click-scale measurements
     private int _stuck;
     private int _detourAttempt;
     private bool _warnedStuck;
@@ -207,7 +209,8 @@ public sealed class ClickAimMover : IPlayerMover
             // click walks along the camera yaw, and that walk measures it.
             ClickAimLeg boot = default(ClickAimLeg);
             boot.Turn = ClickAimMath.TurnKindNone;
-            boot.Dy = _p.PreferredDy;
+            boot.Dy = ClickAimMath.HopDy(_p, rem);
+            _legWantYd = rem;
             Dispatch(boot, px, py, now);
             return;
         }
@@ -215,6 +218,7 @@ public sealed class ClickAimMover : IPlayerMover
         ClickAimLeg leg;
         int rc = ClickAimMath.PlanLeg(_p, tx - px, ty - py, out leg);
         if (rc <= 0) return;
+        _legWantYd = rem;
         Dispatch(leg, px, py, now);
     }
 
@@ -275,9 +279,39 @@ public sealed class ClickAimMover : IPlayerMover
             }
         }
 
+        /* Measure the click scale. This is the number that made a 20 yd walk sprint
+         * 120 yd: the old model assumed a -100 px click was 20-45 yd, and on this
+         * client it was more than 120. Only pure click legs say anything about it,
+         * only legs that walked far enough are trusted, and the learner throws away
+         * candidates that disagree wildly with what is already known. */
+        if (_leg.Turn == ClickAimMath.TurnKindNone
+            && Math.Abs(_leg.Dy) >= _p.MinDyPx
+            && ClickAimMath.PlausibleLeg(moved, secs))
+        {
+            double candidate = moved / Math.Abs(_leg.Dy);
+            double est = _p.YdPerDyPx;
+            double used;
+            if (ClickAimMath.LearnScale(ref est, _p.AssumedYdPerDyPx, candidate, moved, _scaleSamples, out used))
+            {
+                _scaleSamples++;
+                _p.YdPerDyPx = est;
+                Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                    "[ClickAim] click scale: {0:F2} yd/px from {1:F1} yd walked on a {2} px click; "
+                    + "using {3:F2} (hop wanted {4:F1} yd)", candidate, moved, _leg.Dy, used, _legWantYd));
+            }
+        }
+
         if (moved < BlockedMove) _stuck++; else _stuck = 0;
 
-        if (timedOut || moved > WanderMaxYd)
+        /* The runaway cap is now relative to what the click was asked to do. A flat
+         * 120 yd let one bad click run for 14 s; 3x the wanted hop plus a margin
+         * cuts it at a third of that and still leaves room for a slope that makes
+         * a click land further than expected. */
+        double runawayYd = 3.0 * _legWantYd + 10.0;
+        if (runawayYd < 25.0) runawayYd = 25.0;
+        if (runawayYd > WanderMaxYd) runawayYd = WanderMaxYd;
+
+        if (timedOut || moved > runawayYd)
         {
             Runaways++;
             IntPtr hwnd = Handle();
@@ -330,6 +364,14 @@ public sealed class ClickAimMover : IPlayerMover
         IntPtr hwnd = Handle();
         if (hwnd == IntPtr.Zero) return;
 
+        if (leg.Turn == ClickAimMath.TurnKindNone)
+        {
+            Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                "[ClickAim] click ({0}, {1}) - {2:F1} yd to go, click scale {3:F2} yd/px",
+                leg.ClickPx, leg.Dy, _legWantYd > 0 ? _legWantYd : 0.0,
+                _p.YdPerDyPx > 1e-6 ? _p.YdPerDyPx : _p.AssumedYdPerDyPx));
+        }
+
         if (leg.Turn == ClickAimMath.TurnKindDrag)
         {
             ClickAimInput.Drag(hwnd, leg.DragPx);
@@ -360,7 +402,7 @@ public sealed class ClickAimMover : IPlayerMover
         // next MoveTowards takes over the aim.
         IntPtr hwnd = Handle();
         if (hwnd == IntPtr.Zero) return;
-        ClickAimInput.Click(hwnd, 0, _p.PreferredDy);
+        ClickAimInput.Click(hwnd, 0, ClickAimMath.HopDy(_p, 15.0));
     }
 
     private static IntPtr Handle()

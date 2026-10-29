@@ -215,6 +215,62 @@ or, when there is nothing to save:
 [Route] re-plan 2 made no progress (0.4 yd): the way out is closed in every direction Detour can see from (...)
 ```
 
+### The click scale was the real reason a 20 yd walk ran 120 yd
+
+Field log, 2026-10-29 20:33, standing in `(-825.5, -5054.0)`:
+
+```
+[Route] mesh path: 2 points, 20.0 yd for a 20.0 yd leg (nearly straight)
+[ClickAim] passed the target at 3.1 yd; cancelling the walk
+[ClickAim] runaway: a leg walked 120.5 yd in 14.0 s and never came to rest
+[Route] stopped at mesh point 2/2, attempt 1 - (-809.3, -5042.3) was 241.8 yd away
+```
+
+The mesh was right - two points, 20.0 yd. The mover clicked once, the character
+walked through the goal and kept going for 120 yd. The click height table said
+`-100 px` was a 20-45 yd hop; on this client it was more than 120 yd. That table
+came from field runs with the camera pitched down, and the click distance is set by
+where the ray under the cursor meets the terrain, so it changes with the camera. A
+constant was never going to hold.
+
+What replaced it:
+
+* **`ClickAimMath.HopDy`** computes the click height from the distance left and a
+  *measured* scale, clamped to 30-260 px. The near clamp keeps the cursor off the
+  character and the sky; the far clamp bounds the damage of a wrong scale.
+* **The scale is measured every click leg** (`ClickAimMath.LearnScale`, called from
+  `ClickAimMover.FinishLeg`): `moved / |dy|`. The first accepted measurement replaces
+  the guess outright, later ones are averaged, and a candidate more than 4x away
+  from the current value is thrown out - a leg cut short by a wall is not evidence
+  about the scale. Log line: `[ClickAim] click scale: 1.35 yd/px from 40.5 yd walked
+  on a 30 px click; using 1.35 (hop wanted 20.0 yd)`.
+* **The runaway cap is relative.** It used to be a flat 120 yd, which is why one bad
+  click ran for 14 s; it is now `3 x the hop that was asked for + 10 yd` (bounded
+  25-120), so a click meant to be 20 yd is abandoned at 70.
+
+The first click of a session is deliberately short: with no measurement yet the
+assumed scale is 1.1 yd/px, so a 20 yd goal asks for 30 px and walks 30-40 yd. One
+leg of overshoot in the worst case, then the loop knows the scale.
+
+### A goal written as `x,y` has no Z, and that used to fail the walk outright
+
+```
+[MeshQuery] no polygon within 5 yd of the goal at (1977.5, 232.0, 0.0) - the mesh has nothing there
+[Route] no route on the mesh ... after 0 re-plan(s)
+```
+
+`1977.5,232` is a fine goal; `Z = 0` is a placeholder, and the ground there is not at
+zero. Detour's nearest-polygon search looks 20 yd up and down, so the request was
+refused for a reason that has nothing to do with the mesh. `MeshQuery.Snap` now
+retries with a 400 yd vertical search when the tight box finds nothing, and says so:
+
+```
+[MeshQuery] the goal had no usable height (given 0.0); searched 400 yd and found the mesh at 84.6 - using (1977.5, 232.0, 84.6)
+```
+
+Entering a goal with its Z (`1977.5,232,84`) skips that path and is still the better
+habit.
+
 ## Where the position comes from
 
 `ClickAimPositions.TryRead` prefers the 3.3.5a object model (`ObjectManager.Me`),
@@ -267,8 +323,10 @@ for is named, so a failure points at one thing instead of "movement is broken".
    100.0 yd leg (detours around terrain)` - X larger than the leg means it went
    around. A straight click would have been exactly 100.
 4. **A real goal.** `Tools\Walk.cmd 1977.5,232 -Seconds 180`. Expect
-   `[ClickAim] routing N yd on the mesh`, a polyline, and the character walking it
-   in 15 yd hops. When something the
+   `[ClickAim] routing N yd on the mesh`, a polyline, then `[ClickAim] click (px, dy)
+   - N yd to go, click scale K yd/px` per hop and a `[ClickAim] click scale:` line
+   whenever a leg measured the scale. Negative coordinates are fine:
+   `Tools\Walk.cmd -1977.5,-232`. When something the
    mesh does not know about is in the way, the log shows `[Route] stopped at mesh
    point k/n`, `[Blackspot] marked ... polygons`, `[Route] re-plan 1/3` - and then
    either arrival or `no progress`. Both are answers; the failure that is no longer

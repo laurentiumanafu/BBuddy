@@ -122,6 +122,43 @@ public static class ClickAimMath
         return true;
     }
 
+    /// <summary>
+    /// Updates the click scale (yards walked per pixel of click height) from one
+    /// measured leg.
+    ///
+    /// This is the channel that broke on 2026-10-29: the scale was a constant from
+    /// a run with the camera pitched down, and this client's camera made a -100 px
+    /// click walk 120+ yd. So the first accepted measurement replaces the guess
+    /// outright - the guess is not evidence - and after that it is a weighted
+    /// average, rejecting candidates more than 4x away from what is known, since a
+    /// leg cut short by a wall is not a statement about the scale.
+    /// </summary>
+    public static bool LearnScale(ref double est, double fallback, double candidate, double moved,
+                                  int samples, out double used)
+    {
+        used = est > 1e-6 ? est : fallback;
+        if (candidate <= 1e-6 || candidate > 20.0) return false;
+        if (moved < 3.0) return false;
+
+        if (samples <= 0)
+        {
+            est = candidate;
+            used = candidate;
+            return true;
+        }
+
+        double ratio = candidate / used;
+        if (ratio > 4.0 || ratio < 0.25) return false;
+
+        double q = moved / 12.0;
+        if (q > 1.0) q = 1.0;
+        if (q < 0.25) q = 0.25;
+        double a = 0.5 * q;
+        est = (1.0 - a) * used + a * candidate;
+        used = est;
+        return true;
+    }
+
     /// <summary>Does the model predict a measurement it was not fitted on?</summary>
     public static bool PredictionOk(double measured, double predicted, double relTol, double absTol)
     {
@@ -191,15 +228,16 @@ public static class ClickAimMath
         leg.DragPx = 0;
         leg.KeyMs = 0;
         leg.ClickPx = 0;
-        // How far the click lands is a property of the terrain under the cursor,
-        // but the DISTANCE it walks is roughly monotone in dy: -60 is a 5-10 yd
-        // hop, -140 is 20-45 yd. A single goal never cared (the loop just
-        // re-planned); a path waypoint every 2-4 yd does, because a 30 yd
-        // overshoot cuts the corner straight through whatever the corner was
-        // going around. So the hop is chosen from the distance left.
-        if (remaining < p.NearGoal) leg.Dy = p.NearDy;
-        else if (remaining < p.MidGoal) leg.Dy = p.MidDy;
-        else leg.Dy = p.PreferredDy;
+        // How far the click lands is the least reliable part of the whole model:
+        // it is set by where the ray under the cursor meets the terrain, so it
+        // depends on the camera pitch, which moves with the mouse. The field
+        // numbers (-60 = 5-10 yd, -140 = 20-45 yd) were measured with the camera
+        // pitched down. On 2026-10-29 a -100 click walked MORE THAN 120 yd past a
+        // 20 yd goal, which is why the tier table is gone: the hop is computed
+        // from a scale that every click leg re-measures (ClickAimMover.FinishLeg)
+        // and the result is clamped, so one bad scale costs one leg and not a
+        // 120 yd sprint.
+        leg.Dy = HopDy(p, remaining);
 
         if (Math.Abs(delta) > p.ConeHalfDeg)
         {
@@ -212,7 +250,7 @@ public static class ClickAimMath
                 if (ms < -cap) ms = -cap;
                 leg.Turn = TurnKindKey;
                 leg.KeyMs = (int)(ms >= 0 ? ms + 0.5 : ms - 0.5);
-                leg.Dy = remaining > 2.0 * p.NearGoal ? p.PreferredDy : p.NearDy;
+                leg.Dy = HopDy(p, remaining);
                 return 1;
             }
             if (Math.Abs(p.DegPerDragPx) > 1e-6)
@@ -224,7 +262,7 @@ public static class ClickAimMath
                 leg.DragPx = (int)(dpx >= 0 ? dpx + 0.5 : dpx - 0.5);
                 // A turn leg walks along the NEW heading: with a long way to go
                 // it must walk far enough for the next leg to re-measure the yaw.
-                leg.Dy = remaining > 2.0 * p.NearGoal ? p.PreferredDy : p.NearDy;
+                leg.Dy = HopDy(p, remaining);
                 return 1;
             }
             return -1;
@@ -236,6 +274,33 @@ public static class ClickAimMath
         if (px < -limit) px = -limit;
         leg.ClickPx = (int)(px >= 0 ? px + 0.5 : px - 0.5);
         return 1;
+    }
+
+    /// <summary>
+    /// The click height for a hop that should land about <c>HopFactor</c> times the
+    /// distance left, using the measured click scale.
+    ///
+    /// Two clamps, and both matter more than the arithmetic. The near clamp keeps
+    /// the cursor away from the middle of the screen, where a click lands on the
+    /// character itself or on the sky and does nothing. The far clamp keeps a wrong
+    /// scale from asking for a 400 px click that lands 300 yd away.
+    /// </summary>
+    public static int HopDy(ClickAimParams p, double remaining)
+    {
+        if (p == null) return -60;
+
+        double want = remaining * p.HopFactor;
+        if (want > p.MaxHopYd) want = p.MaxHopYd;
+        if (want < p.MinHopYd) want = p.MinHopYd;
+
+        double scale = p.YdPerDyPx > 1e-6 ? p.YdPerDyPx : p.AssumedYdPerDyPx;
+        // Worked in the (positive) pixel offset and negated at the end, because
+        // "below the middle of the screen" is a negative dy and comparing negative
+        // numbers is how this clamp was wrong the first time.
+        int offset = (int)(want / scale + 0.5);
+        if (offset < p.MinDyPx) offset = p.MinDyPx;
+        if (offset > p.MaxDyPx) offset = p.MaxDyPx;
+        return -offset;
     }
 
     /// <summary>
@@ -287,6 +352,18 @@ public static class ClickAimMath
         took = LearnSlope(ref est, -0.10, -18.0, 150, 6.0, 30.0, 10.0, 0.5);
         check("learnAccepts", took && est < -0.10 && est > -0.115);
 
+        // Click scale: the first measurement replaces the guess, later ones are
+        // rejected when they are wildly different (a leg cut short by a wall).
+        double scaleEst = 0.0;
+        double usedScale;
+        bool learned = LearnScale(ref scaleEst, 1.1, 0.7, 70.0, 0, out usedScale);
+        check("scaleFirstReplacesGuess", learned && Math.Abs(scaleEst - 0.7) < 1e-9);
+        scaleEst = 0.7;
+        learned = LearnScale(ref scaleEst, 1.1, 9.0, 40.0, 3, out usedScale);
+        check("scaleRejectsJump", !learned && Math.Abs(scaleEst - 0.7) < 1e-9);
+        learned = LearnScale(ref scaleEst, 1.1, 0.75, 30.0, 3, out usedScale);
+        check("scaleAcceptsClose", learned && scaleEst > 0.7 && scaleEst < 0.75);
+
         var p = new ClickAimParams();
         p.HeadingAtZero = 0.0;
         p.DegPerPx = -0.10;
@@ -300,11 +377,22 @@ public static class ClickAimMath
         ClickAimLeg leg;
         check("insideTolerance", PlanLeg(p, 1.0, 0.0, out leg) == 0);
         check("clickStraight", PlanLeg(p, 40.0, 0.0, out leg) == 1 && leg.Turn == TurnKindNone);
-        check("clickDyFar", leg.Dy == -140);
-        check("clickNearHop", PlanLeg(p, 8.0, 0.0, out leg) == 1 && leg.Dy == -70);
-        check("clickMidHop", PlanLeg(p, 25.0, 0.0, out leg) == 1 && leg.Dy == p.MidDy);
+
+        // The click height used to come from a tier table (-60/-100/-140). On
+        // 2026-10-29 a -100 click walked more than 120 yd past a 20 yd goal, so it
+        // now comes from a measured scale with two clamps. These checks pin the
+        // clamps, because they are what bounds a wrong scale.
+        check("dyNeverInsideNear", HopDy(p, 1.0) <= -p.MinDyPx);
+        check("dyNeverBeyondFar", HopDy(p, 5000.0) >= -p.MaxDyPx);
+        check("dyShortHopUsesNear", HopDy(p, 4.0) == -p.MinDyPx);
+        p.YdPerDyPx = 0.25;                      // the documented field scale
+        check("dyFieldScale", HopDy(p, 12.0) == -58);   // 12*1.2/0.25 = 57.6
+        p.YdPerDyPx = 3.0;                       // a click that lands far, as seen
+        check("dyFarScaleClamps", HopDy(p, 20.0) == -p.MinDyPx);
+        p.YdPerDyPx = 0.0;
+
         check("turnNeeded", PlanLeg(p, -80.0, 0.0, out leg) == 1 && leg.Turn == TurnKindDrag);
-        check("turnWalksFar", leg.Dy == -140);
+        check("turnWalksHop", leg.Dy <= -p.MinDyPx && leg.Dy >= -p.MaxDyPx);
         check("turnClamped", Math.Abs(leg.DragPx) <= p.HalfWidth - 40);
 
         var dlg = default(ClickAimLeg);
@@ -340,6 +428,30 @@ public sealed class ClickAimParams
     public double ConeHalfDeg { get; set; } = 75.0;
     public double Tolerance { get; set; } = 2.0;
     public int PreferredDy { get; set; } = -140;
+
+    /// <summary>
+    /// Yards walked per pixel of click height (|dy|). 0 = not measured yet, in which
+    /// case <see cref="AssumedYdPerDyPx"/> is used. Measured per leg by the mover.
+    /// </summary>
+    public double YdPerDyPx { get; set; }
+
+    /// <summary>Starting guess for the click scale; deliberately pessimistic.</summary>
+    public double AssumedYdPerDyPx { get; set; } = 1.1;
+
+    /// <summary>How much further than the distance left a hop should land.</summary>
+    public double HopFactor { get; set; } = 1.2;
+
+    /// <summary>Longest hop asked for, in yards, whatever the scale says.</summary>
+    public double MaxHopYd { get; set; } = 25.0;
+
+    /// <summary>Shortest hop asked for; below this a click is a rounding error.</summary>
+    public double MinHopYd { get; set; } = 4.0;
+
+    /// <summary>Nearest the cursor may come to the middle of the screen, in px.</summary>
+    public int MinDyPx { get; set; } = 30;
+
+    /// <summary>Furthest below the middle of the screen a click may go, in px.</summary>
+    public int MaxDyPx { get; set; } = 260;
     /// <summary>Click height for a 15-40 yd hop; -140 overshoots a path waypoint.</summary>
     public int MidDy { get; set; } = -100;
     public int NearDy { get; set; } = -60;
