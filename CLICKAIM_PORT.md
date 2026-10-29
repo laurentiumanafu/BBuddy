@@ -61,6 +61,29 @@ robust median, because two verified runs on the same client measured -0.10709 an
 4. **Give-up semantics.** Six failed detours or a runaway stop the mover and log
    once, instead of walking in circles with the bot's clock running.
 
+## Building it
+
+Build the **project**, not the solution:
+
+```
+dotnet build CopilotBuddy.csproj -c Release -p:Platform=x64
+dotnet build CopilotBuddy.csproj -c Release -p:Platform=x86
+```
+
+Building `CopilotBuddy.slnx` used to fail before compiling a line of code:
+
+```
+CopilotBuddy.slnx.metaproj : error MSB4126: The specified solution
+configuration "Release|x64" is invalid.
+```
+
+The solution file declared its platforms but no configurations, so it only knew
+`Debug`; `-c Release` had nowhere to go. `CopilotBuddy.slnx` now declares
+`<BuildType Name="Debug" />` and `<BuildType Name="Release" />` alongside the
+platforms, so the solution form works too. The project-level command above stays
+the recommended one - it is what `Publish-Release.ps1` uses, and it cannot be
+broken by solution configuration mapping.
+
 ## How to exercise it today
 
 The 64-bit bot loop still refuses to start (`TreeRoot.Start()` returns with

@@ -793,3 +793,26 @@ overshoot but a path waypoint every 2-4 yd does.
 Not compiled here (no C# toolchain in the sandbox): `Tools/lint_cs_types.py` clean
 only. First real check is `dotnet build -c Release -p:Platform=x64 .` on the user's
 machine, then the in-app self-test line at startup.
+
+## 2026-10-29 (v17) — the solution configuration was the first build error
+
+```
+CopilotBuddy.slnx.metaproj : error MSB4126: The specified solution
+configuration "Release|x64" is invalid.
+```
+
+`CopilotBuddy.slnx` declared `<Platform Name="Any CPU|x86|x64" />` but no
+configuration entries at all, so the solution only knew `Debug` and `-c Release`
+died during solution load, before a single `.cs` file was compiled. In the `.slnx`
+format `Debug`/`Release` are `<BuildType>` elements, not platforms; both are now
+declared next to the platforms and the two `Solution="*|x86|x64"` mappings.
+
+The recommended command does not touch the solution file at all, and is what
+`Publish-Release.ps1` already used:
+
+```
+dotnet build CopilotBuddy.csproj -c Release -p:Platform=x64
+```
+
+Nothing in the ClickAim port depends on this fix; it was publishing plumbing that
+had been broken since the dual-platform csproj was added.
