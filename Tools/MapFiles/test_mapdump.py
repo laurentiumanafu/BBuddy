@@ -17,6 +17,7 @@ import os
 import struct
 import subprocess
 import sys
+import zlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 NAVGRID = os.path.join(HERE, "..", "NavGrid")
@@ -134,6 +135,54 @@ def write_map(path, gx, gy, kind):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "wb") as f:
         f.write(header + area + height + liquid + holes)
+
+
+def write_map_terrain(path, gx, gy, func):
+    """A tile whose heights come from a function of world position, so neighbouring
+    tiles are continuous across the shared edge."""
+    v9 = []
+    for i in range(RES + 1):
+        for j in range(RES + 1):
+            x = MAP_SIZE_OF_GRIDS * ((32 - gx) - i / float(RES))
+            y = MAP_SIZE_OF_GRIDS * ((32 - gy) - j / float(RES))
+            v9.append(func(x, y))
+    height = block(int.from_bytes(b"MHGT", "little"), 0, 0.0, 0.0, v9, v8_float(v9), "float")
+    area = struct.pack("<256H", *([0] * 256))
+    holes = struct.pack("<256H", *([0] * 256))
+    liquid = block(int.from_bytes(b"MLIQ", "little"), 0x03, 0.0, 0.0) + struct.pack(
+        "<BBBBHf", 0, 0, 0, 0, 0, 0.0)
+    area_off = 40
+    height_off = area_off + len(area)
+    liquid_off = height_off + len(height)
+    holes_off = liquid_off + len(liquid)
+    header = struct.pack("<4sI" + "II" * 4, b"MAPS", int.from_bytes(b"z1.4", "little"),
+                         area_off, len(area), height_off, len(height),
+                         liquid_off, len(liquid), holes_off, len(holes))
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "wb") as f:
+        f.write(header + area + height + liquid + holes)
+
+
+def rewrite_swapped(src_path, dst_path):
+    """Copies a .navtile with tile_x and tile_y exchanged, CRC repaired - the shape a
+    transposed axis convention would produce."""
+    with open(src_path, "rb") as f:
+        data = bytearray(f.read())
+    magic, version, header_bytes, map_id, tx, ty = struct.unpack_from("<4sHHiii", data, 0)
+    struct.pack_into("<i", data, 12, ty)      # tile_x
+    struct.pack_into("<i", data, 16, tx)      # tile_y
+
+    height_bytes = (NG_CELLS * NG_CELLS) * 2
+    heights = bytes(data[header_bytes:header_bytes + height_bytes])
+    flags = bytes(data[header_bytes + height_bytes:header_bytes + height_bytes + NG_CELLS * NG_CELLS])
+
+    struct.pack_into("<i", data, header_bytes - 4, 0)          # crc32 field
+    crc = zlib.crc32(bytes(data[:header_bytes]))
+    crc = zlib.crc32(heights) ^ crc
+    crc = zlib.crc32(flags) ^ crc
+    struct.pack_into("<i", data, header_bytes - 4, crc & 0xFFFFFFFF if crc < 0x80000000 else crc - 0x100000000)
+    with open(dst_path, "wb") as f:
+        f.write(bytes(data))
 
 
 # --- the .navtile written back ----------------------------------------------
@@ -258,6 +307,40 @@ def main():
     band = sum(1 for f in t4["flags"] if not (f & NG_WALK))
     check("the holed band is a minority of the tile", 0 < band < 0.6 * len(t4["flags"]),
           "%d of %d" % (band, len(t4["flags"])))
+
+    print("seam check")
+    seam_maps = os.path.join(work, "seam-maps")
+    seam_tiles = os.path.join(work, "seam-tiles")
+    for d in (seam_tiles,):
+        if os.path.isdir(d):
+            for name in os.listdir(d):
+                os.remove(os.path.join(d, name))
+        os.makedirs(d, exist_ok=True)
+
+    def terrain(x, y):
+        return 300.0 + 0.02 * x + 0.03 * y + 18.0 * ((x / 400.0) % 1.0)
+
+    for gx, gy in ((32, 32), (33, 32), (32, 33), (33, 33)):
+        write_map_terrain(os.path.join(seam_maps, "001%02d%02d.map" % (gy, gx)), gx, gy, terrain)
+
+    subprocess.run([binary, "convert", "--maps", seam_maps, "--out", seam_tiles, "--map", "1"],
+                   capture_output=True, text=True)
+    seams = subprocess.run([binary, "check", "--tiles", seam_tiles, "--map", "1"],
+                           capture_output=True, text=True)
+    check("adjacent tiles line up", seams.returncode == 0, seams.stdout + seams.stderr)
+    check("seam report names the pairs", "median" in seams.stdout and "west edge" in seams.stdout)
+
+    swapped = os.path.join(work, "swapped-tiles")
+    os.makedirs(swapped, exist_ok=True)
+    for name in os.listdir(swapped):
+        os.remove(os.path.join(swapped, name))
+    for name in os.listdir(seam_tiles):
+        rewrite_swapped(os.path.join(seam_tiles, name), os.path.join(swapped, name))
+
+    bad = subprocess.run([binary, "check", "--tiles", swapped, "--map", "1"],
+                         capture_output=True, text=True)
+    check("a transposed grid is caught", bad.returncode != 0 and "transposed" in bad.stdout,
+          bad.stdout + bad.stderr)
 
     print("renderer input")
     builder = os.path.join(HERE, "..", "NavMeshBuilder")

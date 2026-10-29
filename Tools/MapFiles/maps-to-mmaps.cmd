@@ -3,7 +3,7 @@ setlocal enabledelayedexpansion
 rem ---------------------------------------------------------------------------
 rem  server .map files -> .navtile -> .mmtile -> <game dir>\mmaps
 rem
-rem    maps-to-mmaps.cmd <repack data dir> <map-id> <game dir>
+rem    maps-to-mmaps.cmd <repack data dir> <map-id> <game dir> [x,y,z]
 rem
 rem  <repack data dir>  the folder that holds "maps", "vmaps" and "mmaps", e.g.
 rem                     B:\World of Warcraft\ForeverRepack\data
@@ -14,14 +14,20 @@ rem  This route needs no CASC extractor: the repack already carries the terrain
 rem  in the server's .map format. What it gives you is terrain - hills, cliffs,
 rem  holes, shorelines. Buildings and bridges live in vmaps and are not included.
 rem
+rem  The optional x,y,z is a spot you know the height of - your logged position.
+rem  The tool prints the height it baked there; if that disagrees with the Z the
+rem  client shows, the map files belong to a different version of the world and the
+rem  CASC route is the accurate one for this client.
+rem
 rem  Example:
-rem    maps-to-mmaps.cmd "B:\World of Warcraft\ForeverRepack\data" 1 C:\BBuddy
+rem    maps-to-mmaps.cmd "B:\World of Warcraft\ForeverRepack\data" 1 C:\BBuddy -614.8,-4254.2,39
 rem ---------------------------------------------------------------------------
 
 set "HERE=%~dp0"
 set "MAPDUMP=%HERE%bin-x64\mapdump.exe"
 set "MMAPBUILD=%HERE%..\NavMeshBuilder\bin-x64\mmapbuild.exe"
 set "MMAPCHECK=%HERE%..\NavMeshBuilder\bin-x64\mmapcheck.exe"
+set "NAVBAKE=%HERE%..\NavGrid\bin-x64\navbake.exe"
 
 if "%~3"=="" (
   echo usage: maps-to-mmaps.cmd ^<repack data dir^> ^<map-id^> ^<game dir^>
@@ -57,6 +63,15 @@ if errorlevel 1 (
   exit /b 1
 )
 
+echo [1b/3] checking that the tiles line up with each other
+"%MAPDUMP%" check --tiles "%TILES%" --map %MAP%
+if errorlevel 1 (
+  echo.
+  echo The tiles are contiguous in the source and not in the converted set. That is a
+  echo naming or axis problem, not a terrain problem - do not build mmaps from this.
+  exit /b 1
+)
+
 echo [2/3] building mmaps -^> "%GAME%\mmaps"
 if not exist "%GAME%\mmaps" mkdir "%GAME%\mmaps"
 "%MMAPBUILD%" --tiles "%TILES%" --map %MAP% --out "%GAME%\mmaps"
@@ -74,4 +89,9 @@ if exist "%MMAPCHECK%" (
 
 echo.
 echo done. tiles for map %MAP% are in "%GAME%\mmaps"
+if not "%~4"=="" (
+  echo.
+  echo height check at %~4 - compare with the Z the bot logs:
+  "%NAVBAKE%" probe --tiles "%TILES%" --map %MAP% %~4
+)
 endlocal

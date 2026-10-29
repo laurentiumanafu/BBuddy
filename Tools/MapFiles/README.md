@@ -72,7 +72,15 @@ axis flip would be caught.
 ```bat
 mapdump info    --maps <dir> [--map 1]                  what the files contain
 mapdump convert --maps <dir> --out <dir> [--map 1] [--slope 45] [--verbose]
+mapdump check   --tiles <dir> [--map 1]                 do the tiles line up?
 ```
+
+`check` compares the facing edges of neighbouring tiles and prints the median
+difference per seam. That is the one mistake a single tile cannot show: if the two
+axes are transposed every tile still looks like a plausible landscape, but tiles no
+longer meet their neighbours. Real terrain meets, within the one-cell offset of the
+two edge columns. `maps-to-mmaps.cmd` runs it before building, and refuses to build
+from a set that does not line up.
 
 `info` prints the magic (`MAPS`), the format version (`z1.4`), the section table
 and the height encoding for the first files, plus how many distinct map ids are
@@ -81,7 +89,8 @@ present. If `convert` ever finds nothing, that is the output to keep.
 ## Self-test
 
 ```sh
-make test        # 25 checks: names, float/int16/flat/hole tiles, then mmapbuild
+make test        # 28 checks: names, float/int16/flat/hole tiles, seam continuity,
+                 # a deliberately transposed copy that must be caught, then mmapbuild
                  # and a real Detour findPath over the result
 ```
 
@@ -101,3 +110,8 @@ they are skipped when those are not built.
 * The hole mask is used as-is. A repack assembled from a different client build
   can have a mask that disagrees with the client you are playing, which shows up
   as a route that plans over a cave mouth.
+* **World version.** These files come from the repack's client, which is not
+  necessarily the client you are running. If it is an older one, heights in revamped
+  zones differ and the mesh is approximate there. `maps-to-mmaps.cmd` takes your
+  logged position as an optional fourth argument and prints the height it baked
+  there; a mismatch of tens of yards means the CASC route is the accurate one.

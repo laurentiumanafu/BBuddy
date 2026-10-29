@@ -645,19 +645,144 @@ static int cmd_info(const char *maps_dir, int map_filter)
     return 0;
 }
 
+/* --- seam check ----------------------------------------------------------- */
+
+/* Compares the facing edges of neighbouring tiles.
+ *
+ * This is the one mistake that cannot be seen from inside a single tile: if the two
+ * axes are swapped, every tile still looks like a plausible landscape, but tiles do
+ * not line up with the tiles next to them. Real terrain does, because a tile shares
+ * its edge with its neighbour's edge. A median absolute difference of a few yards is
+ * normal (the two edge cells are one cell apart); tens of yards means the grid does
+ * not belong together.
+ */
+static int compare_edges(const ng_tile *a, const ng_tile *b, int along_x, float diffs[], int max)
+{
+    int count = 0;
+    for (int i = 0; i < a->cells && count < max; i++)
+    {
+        float ha = along_x ? ng_tile_height(a, a->cells - 1, i)      /* east edge of a */
+                           : ng_tile_height(a, i, a->cells - 1);     /* south edge of a */
+        float hb = along_x ? ng_tile_height(b, 0, i)
+                           : ng_tile_height(b, i, 0);
+        diffs[count++] = fabsf(ha - hb);
+    }
+    return count;
+}
+
+static int by_float(const void *lhs, const void *rhs)
+{
+    float a = *(const float *)lhs, b = *(const float *)rhs;
+    return (a > b) - (a < b);
+}
+
+static int cmd_check(const char *tiles_dir, int map_filter, float tolerance)
+{
+    char names[4096][256];
+    int count = list_dir(tiles_dir, names, 4096);
+    if (count == 0)
+    {
+        fprintf(stderr, "mapdump: no files in %s\n", tiles_dir);
+        return 1;
+    }
+
+    enum { MAX_TILES = 512 };
+    static ng_tile tiles[MAX_TILES];
+    int tile_count = 0;
+
+    for (int i = 0; i < count && tile_count < MAX_TILES; i++)
+    {
+        size_t len = strlen(names[i]);
+        if (len < 9 || strcmp(names[i] + len - 8, ".navtile") != 0) continue;
+
+        char path[1024];
+        join_path(path, sizeof(path), tiles_dir, names[i]);
+        ng_tile *tile = &tiles[tile_count];
+        if (!ng_tile_read(tile, path)) continue;
+        if (map_filter >= 0 && tile->map_id != map_filter) continue;
+        tile_count++;
+    }
+
+    if (tile_count < 2)
+    {
+        printf("%d tiles for map %d - a seam needs two, nothing to check\n",
+               tile_count, map_filter);
+        return 0;
+    }
+
+    static float diffs[NG_CELLS * 2];
+    int pairs = 0, bad_pairs = 0;
+    float all[4096];
+    int all_count = 0;
+
+    for (int i = 0; i < tile_count; i++)
+    {
+        for (int k = 0; k < tile_count; k++)
+        {
+            if (i == k) continue;
+
+            /* tile_x is the Y index and tile_y the X index, so a neighbour one tile
+             * further west differs in tile_y by one. */
+            int dx = tiles[k].tile_y - tiles[i].tile_y;
+            int dy = tiles[k].tile_x - tiles[i].tile_x;
+            if (!((dx == 1 && dy == 0) || (dx == 0 && dy == 1))) continue;
+
+            int n = compare_edges(&tiles[i], &tiles[k], dy == 0, diffs, NG_CELLS);
+            if (n < 2) continue;
+            memcpy(all + all_count, diffs, sizeof(float) * (size_t)n);
+            all_count += n;
+
+            float sorted[NG_CELLS];
+            memcpy(sorted, diffs, sizeof(float) * (size_t)n);
+            qsort(sorted, (size_t)n, sizeof(float), by_float);
+            float median = sorted[n / 2];
+
+            pairs++;
+            if (median > tolerance) bad_pairs++;
+            printf("  (%d,%d)<->(%d,%d) %s edge: median %.1f yd%s\n",
+                   tiles[i].tile_x, tiles[i].tile_y, tiles[k].tile_x, tiles[k].tile_y,
+                   dy == 0 ? "west" : "south", median,
+                   median > tolerance ? "   <- does not line up" : "");
+        }
+    }
+
+    if (pairs == 0)
+    {
+        printf("%d tiles, no two of them adjacent - nothing to check\n", tile_count);
+        return 0;
+    }
+
+    qsort(all, (size_t)all_count, sizeof(float), by_float);
+    float overall = all[all_count / 2];
+
+    printf("\n%d tiles, %d seams, median edge difference %.1f yd (limit %.1f)\n",
+           tile_count, pairs, overall, tolerance);
+    if (bad_pairs > 0)
+    {
+        printf("%d of %d seams disagree. Either the tiles are not contiguous, or the\n"
+               "tile naming is transposed: tile_x is the Y index and tile_y the X index.\n",
+               bad_pairs, pairs);
+        return 1;
+    }
+    printf("seams agree: the tiles are placed the right way round\n");
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 2)
     {
         fprintf(stderr,
                 "usage: mapdump convert --maps <dir> --out <navtile dir> [--map <id>] [--slope 45]\n"
-                "       mapdump info    --maps <dir> [--map <id>]\n");
+                "       mapdump info    --maps <dir> [--map <id>]\n"
+                "       mapdump check   --tiles <navtile dir> [--map <id>]\n");
         return 2;
     }
 
     const char *command = argv[1];
     const char *maps_dir = NULL;
     const char *out_dir = NULL;
+    const char *tiles_dir = NULL;
     int map_filter = -1;
     float slope = 45.0f;
     int verbose = 0;
@@ -666,9 +791,20 @@ int main(int argc, char **argv)
     {
         if (strcmp(argv[i], "--maps") == 0 && i + 1 < argc) maps_dir = argv[++i];
         else if (strcmp(argv[i], "--out") == 0 && i + 1 < argc) out_dir = argv[++i];
+        else if (strcmp(argv[i], "--tiles") == 0 && i + 1 < argc) tiles_dir = argv[++i];
         else if (strcmp(argv[i], "--map") == 0 && i + 1 < argc) map_filter = atoi(argv[++i]);
         else if (strcmp(argv[i], "--slope") == 0 && i + 1 < argc) slope = (float)atof(argv[++i]);
         else if (strcmp(argv[i], "--verbose") == 0) verbose = 1;
+    }
+
+    if (strcmp(command, "check") == 0)
+    {
+        if (tiles_dir == NULL)
+        {
+            fprintf(stderr, "mapdump: --tiles <dir> is required for check\n");
+            return 2;
+        }
+        return cmd_check(tiles_dir, map_filter, 8.0f);
     }
 
     if (maps_dir == NULL)
