@@ -60,3 +60,6 @@ WowBCTM-*.zip
 output.zip
 google_drive/
 CopilotBuddy-clickaim-port*.zip
+Tools/NavGrid/navbake
+Tools/NavGrid/test_navgrid
+Tools/NavGrid/*.o

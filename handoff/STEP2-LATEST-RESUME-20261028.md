@@ -877,3 +877,31 @@ New:
 Not compiled (no C# toolchain here). Not run: the parser was mirrored in Python
 against the real file to check counts/ordering, which is why the 20-cluster and
 17,705 yd numbers above are measurements rather than guesses.
+
+## 2026-10-29 (v20) — navgrid replaces the native mesh, one stage left
+
+The user asked for the x64 Detour rebuild + CASC extract + Recast bake. The first
+and third parts cannot be produced here: `Lib\Navigation.dll` and `Navigation 1x1.dll`
+are PE machine 0x014C (i386), their tiles are WotLK `.mmtile`, and this workspace has
+no MSVC/mingw/cmake - a C++ Detour rewrite would be typed but never compiled, which
+is worse than not shipping it.
+
+Built instead (and verified here):
+* `Tools/NavGrid/` - C99 reference: 267x267-cell tile per ADT (1.9975 yd cells, so
+  tiles stay exactly contiguous), heights in quarter yards, per-cell flags
+  WALK/HOLE/STEEP/LIQUID, CRC32. A* with no corner cutting, line-of-sight smoothing,
+  `navbake bake|path|probe` CLI, `make test` = 44 checks.
+* `Styx/Logic/Pathing/NavGrid/NavGrid.cs` - tile reader with CRC, A*, smoothing, tile
+  store with lazy loading, and `SelfTest()` mirroring the C checks. Logged at attach.
+* `RouteRunner` - with no mesh it now asks the grid for the leg, splits the result
+  into <= 40 yd click hops, and falls back to the direct waypoint when no tile exists.
+* `--navtiles <dir>` / `--navmap <id>`; tiles default to `<app>\NavTiles`.
+
+Bugs the tests caught (worth keeping): line-of-sight must refuse a diagonal between
+two blocked cells (Bresenham alone walks through doorframes); negative coordinates
+must map with truncation toward zero, not floorf, or every western ADT is off by one;
+267 cells at 2.0 yd per tile drift by 0.67 yd per tile.
+
+Still missing, and it is the only hard blocker: the 70291 ADTs. Use CASCExplorer or
+wow.tools.local to export the root ADTs, then bake and `probe` against a logged
+position. Doodads (`_obj0.adt`) are not baked yet, so towns are wrong until they are.

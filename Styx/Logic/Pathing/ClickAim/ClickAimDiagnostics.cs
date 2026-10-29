@@ -60,6 +60,9 @@ public static class ClickAimDiagnostics
         catch (Exception ex) { report = "[ClickAim] self-test threw: " + ex.Message; }
         Logging.Write(report);
 
+        try { Logging.Write(NavGridStore.SelfTest()); }
+        catch (Exception ex) { Logging.Write("[NavGrid] self-test threw: " + ex.Message); }
+
         Logging.Write("[ClickAim] pilot armed. Write \"x,y\" into " + RequestPath
                       + " to walk there, or start CopilotBuddy with --clickaim-walk x,y");
         Logging.Write("[ClickAim] position source: " + (ClickAimPositions.TryRead(out double px, out double py)
@@ -213,6 +216,13 @@ public static class ClickAimDiagnostics
                     startNearest = true;
                 else if (a.Equals("--profile-all", StringComparison.OrdinalIgnoreCase))
                     wholeProfile = true;
+                else if (a.Equals("--navtiles", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+                    NavGridStore.Root = args[i + 1];
+                else if (a.Equals("--navmap", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+                {
+                    int mapId;
+                    if (int.TryParse(args[i + 1], out mapId)) NavGridStore.MapId = mapId;
+                }
             }
 
             for (int i = 0; i < args.Length; i++)
@@ -247,6 +257,8 @@ public static class ClickAimDiagnostics
 
                 TryQueueSpec(spec, "command line");
             }
+
+            Logging.Write("[NavGrid] tiles: " + NavGridStore.Root + " (map " + NavGridStore.MapId + ")");
         }
         catch (Exception ex)
         {
