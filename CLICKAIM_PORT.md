@@ -256,24 +256,28 @@ for is named, so a failure points at one thing instead of "movement is broken".
    `[ClickAim] self-test 26/26 passed`, `NavGrid self-test` all passed,
    `[NavMesh] ... N tile files`, then the `[MeshProbe]` block. Two `mesh path OK`
    lines mean the mesh is real and queryable from inside the process.
-2. **Does the mover still work?** Put `20` in `Settings\clickaim-walk.txt`
-   (a number = "that many yards ahead of my facing", no coordinates needed).
-   Expect `[ClickAim] routing 20.0 yd on the mesh`, then `[Route] mesh path`, then
-   `[ClickAim] arrived: ... yd remaining, N legs`. A short walk is nearly a straight
-   line, so this isolates the mover from the routing.
+2. **Does the mover still work?** `Tools\Walk.cmd 20` - it writes the request into
+   `Settings\clickaim-walk.txt` (a bare number means "that many yards ahead of my
+   facing") and tails the newest log, printing only the lines that matter. Without
+   the helper, write `20` into the file by hand. Expect `[ClickAim] routing 20.0 yd
+   on the mesh`, `[Route] mesh path: ...`, `[ClickAim] arrived: ... yd remaining`.
+   A short walk is nearly a straight line, so this isolates the mover from routing.
 3. **Does the mesh change anything?** Put `100` in the same file, facing something
    you have to walk around. The tell is `[Route] mesh path: N points, X yd for a
    100.0 yd leg (detours around terrain)` - X larger than the leg means it went
    around. A straight click would have been exactly 100.
-4. **A real goal.** Put `x,y` in the file. Expect `[ClickAim] routing N yd on the
-   mesh`, a polyline, and the character walking it in 15 yd hops. When something the
+4. **A real goal.** `Tools\Walk.cmd 1977.5,232 -Seconds 180`. Expect
+   `[ClickAim] routing N yd on the mesh`, a polyline, and the character walking it
+   in 15 yd hops. When something the
    mesh does not know about is in the way, the log shows `[Route] stopped at mesh
    point k/n`, `[Blackspot] marked ... polygons`, `[Route] re-plan 1/3` - and then
    either arrival or `no progress`. Both are answers; the failure that is no longer
    possible is standing still for 90 s.
 5. **Obstacle proof.** Walk into a tree or a fence on purpose with a 40 yd goal, and
    confirm the character ends up beside it rather than against it. That is the
-   blackspot loop doing its job.
+   blackspot loop doing its job. Three lines tell the story, in this order:
+   `[Route] stopped at mesh point k/n`, `[Blackspot] marked N polygons ...`,
+   `[Route] re-plan k/3 from (...)`.
 6. Only when that works: `ClickAimMover.Install()` in a session where the tree runs.
 
 If step 2 fails but step 1's probe passed, the problem is the mover, not the mesh.
