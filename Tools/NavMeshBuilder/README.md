@@ -29,7 +29,9 @@ Tools\NavMeshBuilder\make-mmaps.cmd C:\export\kalimdor 1 C:\CopilotBuddy
 | file | role |
 | --- | --- |
 | `mmapbuild.cpp` | `.navtile` → `dtCreateNavMeshData` → **MMAP v6 multi-tile** files. Splits every ADT tile into a 4×4 grid of Detour tiles (67×67 cells each) because a `dtPoly` index is 16-bit and one full ADT has ~72k cells. Emits portal links across both seams so a route can leave the tile it started in. |
-| `mmapcheck.cpp` | Loads the written files with the *same* Detour sources the DLL was compiled from, then runs `findNearestPoly` → `findPath` → `findStraightPath`. With no `--from/--to` it just proves every blob is accepted; that is the check the bake script runs. |
+| `mmapcheck.cpp` | Loads the written files with the *same* Detour sources the DLL was compiled from, then runs `findNearestPoly` → `findPath` → `findStraightPath`. With no `--from/--to` it just proves every blob is accepted; that is the check the bake script runs. Accepts both our 4×4 container and stock single-tile files. |
+| `legacyfixture.cpp` | Writes one 533 yd Detour tile in the **stock** (MaNGOS/TC/AC) single-tile container: a flat square with a wall and one doorway, so the legacy loader path can be tested against a real mesh. `--header 16\|20` picks the header size, `--closed` removes the doorway. |
+| `test_legacy_mmaps.py` | Acceptance test for the legacy path: both header sizes route *around* the wall (not through it), a walled-off tile returns Detour's partial path instead of a straight line, a blob built for another Detour version is rejected, and an overrunning size field is refused without a blind read. |
 | `make-mmaps.cmd` | Windows end-to-end driver with error checks at each step. |
 | `Makefile` | Linux/macOS build of both tools against a `Navigation-C-` checkout. |
 | `bin-x64/*.exe` | Prebuilt x64 tools: `mmapbuild.exe`, `mmapcheck.exe`. |
@@ -57,7 +59,37 @@ u32 1 (flags)
 ```
 
 The header in the upstream `Navigation.h` still says version 5; the loader's own
-constant is **6**, and 5 is rejected. Do not "fix" this back to 5.
+constant for this container is **6**. Do not "fix" this back to 5.
+
+## Stock 3.3.5a mmaps load too
+
+The files a MaNGOS / TrinityCore / AzerothCore install already has are a *different*
+container: one Detour tile per file, 533.33 yd tiles, and a header that may be 16 or
+20 bytes:
+
+```
+u32 "PAMM"   u32 dtVersion   u32 mmapVersion   u32 blobSize   [u32 usesLiquids]
+byte blob[blobSize]          <- starts with DT_NAVMESH_MAGIC, DT_NAVMESH_VERSION 7
+```
+
+The version field is *not* a gate: 4 through 8 all exist in the wild, and Detour does
+not care how a tile file is arranged - only that the tile was built against the
+`<map>.mmap` params beside it. So `MoveMap.cpp` probes for `DT_NAVMESH_MAGIC` at
+offset 16 and then 20, reads exactly `blobSize` bytes, and lets `dtNavMesh::addTile`
+decide. `blobSize == 0` or `> 64 MB` is refused before any allocation.
+
+Practical consequence: the 3.3.5a mmap set you already have for Kalimdor and Eastern
+Kingdoms can be fed to the x64 DLL as-is. Our own 4x4 output and stock files must not
+be **mixed inside one map**: a `dtNavMesh` is initialised from one params file, and the
+tile size in it (133.33 vs 533.33 yd) has to match every tile added. Pick one per map.
+
+`Navigation.dll` resolves `mmaps\` next to itself, so the directory the loader reads is
+the one beside the DLL - `Lib\x64\mmaps\` in this repo. Point it at an existing set
+instead of copying 2 GB:
+
+```bat
+mklink /J "C:\BBuddy\Lib\x64\mmaps" "B:\World of Warcraft\ForeverRepack\data\mmaps"
+```
 
 ## Axis convention — the trap that costs a day
 
@@ -112,10 +144,29 @@ mmapcheck         -> 2 tile files, 32 tiles added, 0 rejected
 The detour through the gap at x≈−267 and back north is the proof that the seams link:
 a straight-line answer here would mean the tiles were emitted but never joined.
 
+## Verification that has been run, legacy container
+
+`python3 test_legacy_mmaps.py /tmp/legacy-mmap-test` - 7 checks, 0 failed:
+
+```
+16-byte header: one file, accepted by dtNavMesh
+16-byte header: routes around the wall, not through it
+                path 460.7 yd, straight line 400.0 yd
+20-byte header: one file, accepted by dtNavMesh
+20-byte header: routes around the wall, not through it
+                path 460.7 yd, straight line 400.0 yd
+a walled-off tile loads and the path stops at the wall
+a tile built for another Detour version is rejected
+an overrunning size field is refused cleanly
+```
+
+The 60.7 yd of extra path is the doorway detour: with a straight-line answer the wall
+would not have been in the mesh at all.
+
 ## Still needed before this is real pathing in 70291
 
-Real ADTs. The extactor that pulls `world\maps\*` out of the 70291 CASC store is not
-in this repo (upstream points at the private `extractor-csharp` / `Extractor_projects`).
-Export them with CASCExplorer or `wow.tools.local` as loose `.adt` files, keep the
-`Kalimdor_32_32.adt` naming, then run `make-mmaps.cmd`. Only the root ADTs are needed —
-`_tex0`, `_obj0` and `_lod` siblings are detected and skipped automatically.
+Nothing here, if the 3.3.5a mmap set is used: that is a full continent of real terrain
+plus WMO/doodad collision, built by an extractor that read a real client. Generating
+our own set from 70291 (ADT -> `.navtile` -> mmaps) is **postponed** - it needs the
+CASC extractor, and it would still lack WMO collision because `cascdump`/`mapdump`
+only read terrain.

@@ -80,7 +80,7 @@ static std::vector<std::string> listDir(const std::string& dir)
         *tileY = (int)((GRID_ORIGIN - y) / TILE_SIZE);
     }
 
-    struct Loaded { int files = 0; int blobs = 0; int failed = 0; };
+    struct Loaded { int files = 0; int blobs = 0; int failed = 0; int legacyFiles = 0; };
 
     bool addTile(dtNavMesh* nav, unsigned char* data, int size, Loaded* stats)
     {
@@ -134,14 +134,40 @@ static std::vector<std::string> listDir(const std::string& dir)
                 addTile(nav, data, (int)size, stats);
             }
         }
-        else if (peek[2] == MMAP_VERSION)
+        else
         {
-            fseek(f, 0, SEEK_SET);
-            MmapTileHeader header;
-            if (fread(&header, sizeof(header), 1, f) != 1) { fclose(f); return; }
-            unsigned char* data = (unsigned char*)dtAlloc(header.size, DT_ALLOC_PERM);
-            if (data && fread(data, header.size, 1, f) == 1) addTile(nav, data, (int)header.size, stats);
-            else dtFree(data);
+            /* One Detour tile per file: what the MaNGOS / TrinityCore /
+             * AzerothCore extractors write, and what the 3.3.5a mmaps on disk are.
+             * The version field in those files (4 through 8) is not this build's
+             * business - Detour only needs the tile to match <map>.mmap - so the
+             * header size is found by looking for the tile magic at 16 or at 20
+             * bytes, and addTile decides whether the tile is usable at all. */
+            unsigned int head[4] = { 0, 0, 0, 0 };
+            if (fseek(f, 0, SEEK_SET) == 0 && fread(head, sizeof(unsigned int), 4, f) == 4 &&
+                head[0] == MMAP_MAGIC && head[3] > 0 && head[3] <= 64u * 1024u * 1024u)
+            {
+                long start = -1;
+                for (long at = 16; at <= 20; at += 4)
+                {
+                    unsigned int magic = 0;
+                    if (fseek(f, at, SEEK_SET) != 0) break;
+                    if (fread(&magic, sizeof(magic), 1, f) != 1) break;
+                    if (magic == (unsigned int)DT_NAVMESH_MAGIC) { start = at; break; }
+                }
+                if (start > 0)
+                {
+                    unsigned char* data = (unsigned char*)dtAlloc(head[3], DT_ALLOC_PERM);
+                    if (data && fseek(f, start, SEEK_SET) == 0 && fread(data, head[3], 1, f) == 1)
+                    {
+                        stats->legacyFiles++;
+                        addTile(nav, data, (int)head[3], stats);
+                    }
+                    else
+                    {
+                        dtFree(data);
+                    }
+                }
+            }
         }
         fclose(f);
     }
@@ -214,8 +240,8 @@ int main(int argc, char** argv)
     std::vector<std::string> files = listMmtiles(dir, mapId);
     Loaded stats;
     for (const std::string& file : files) loadFile(nav, file, &stats);
-    printf("map %d: %d tile files, %d navmesh tiles added, %d rejected\n",
-           mapId, stats.files, stats.blobs, stats.failed);
+    printf("map %d: %d tile files (%d single-tile), %d navmesh tiles added, %d rejected\n",
+           mapId, stats.files, stats.legacyFiles, stats.blobs, stats.failed);
     printf("  dtNavMeshParams: orig (%.1f, %.1f, %.1f), tile %.2f x %.2f, maxTiles %d\n",
            params.orig[0], params.orig[1], params.orig[2],
            params.tileWidth, params.tileHeight, params.maxTiles);

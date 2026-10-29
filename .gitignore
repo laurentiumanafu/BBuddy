@@ -65,8 +65,11 @@ Tools/NavGrid/test_navgrid
 Tools/NavGrid/*.o
 Tools/NavMeshBuilder/mmapbuild
 Tools/NavMeshBuilder/mmapcheck
+Tools/NavMeshBuilder/legacyfixture
 Tools/NavGrid/navgrid.o
 Tools/CascAdt/cascdump
 Tools/MapFiles/mapdump
 Tools/NavMeshBuilder/*.exe
+# zig emits an import library next to -shared output
+Lib/x64/*.lib
 Tools/CascAdt/*.o

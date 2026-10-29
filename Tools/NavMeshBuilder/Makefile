@@ -13,7 +13,7 @@ SOURCES  = $(DETOUR)/DetourAlloc.cpp $(DETOUR)/DetourAssert.cpp $(DETOUR)/Detour
            $(DETOUR)/DetourNavMesh.cpp $(DETOUR)/DetourNavMeshBuilder.cpp \
            $(DETOUR)/DetourNavMeshQuery.cpp $(DETOUR)/DetourNode.cpp
 
-all: mmapbuild mmapcheck
+all: mmapbuild mmapcheck legacyfixture
 
 ../NavGrid/navgrid.o:
 	$(CC) -std=c99 -O2 -c -I ../NavGrid ../NavGrid/navgrid.c -o $@
@@ -24,10 +24,13 @@ mmapbuild: mmapbuild.cpp ../NavGrid/navgrid.o
 mmapcheck: mmapcheck.cpp
 	$(CXX) $(CFLAGS) $(INCLUDES) -o $@ mmapcheck.cpp $(SOURCES)
 
+legacyfixture: legacyfixture.cpp
+	$(CXX) $(CFLAGS) $(INCLUDES) -o $@ legacyfixture.cpp $(SOURCES)
+
 # Cross-compiled for the game machine. Detour is compiled in, so the exes are
 # self-contained; -static-libgcc -static-libstdc++ keeps them free of a MinGW DLL.
 ZIG ?= zig
-win: bin-x64/mmapbuild.exe bin-x64/mmapcheck.exe
+win: bin-x64/mmapbuild.exe bin-x64/mmapcheck.exe bin-x64/legacyfixture.exe
 
 # navgrid.c is compiled as C (it is C99) and linked in, which needs the extern "C"
 # guards navgrid.h carries.
@@ -44,8 +47,13 @@ bin-x64/mmapcheck.exe: mmapcheck.cpp
 	$(ZIG) c++ -target x86_64-windows-gnu $(CFLAGS) -static-libgcc -static-libstdc++ \
 		$(INCLUDES) -o $@ mmapcheck.cpp $(SOURCES) -lm
 
+bin-x64/legacyfixture.exe: legacyfixture.cpp
+	mkdir -p bin-x64
+	$(ZIG) c++ -target x86_64-windows-gnu $(CFLAGS) -static-libgcc -static-libstdc++ \
+		$(INCLUDES) -o $@ legacyfixture.cpp $(SOURCES) -lm
+
 clean:
-	rm -f mmapbuild mmapcheck ../NavGrid/navgrid.o ../NavGrid/navgrid-win.o
+	rm -f mmapbuild mmapcheck legacyfixture ../NavGrid/navgrid.o ../NavGrid/navgrid-win.o
 	rm -rf bin-x64
 
 .PHONY: all win clean
