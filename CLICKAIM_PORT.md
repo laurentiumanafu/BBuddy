@@ -339,6 +339,34 @@ placeholders, and its boot click now works: with a camera the zero comes from th
 player's facing; without one, `LearnAim` adopts the heading the boot walk measured
 instead of refusing and repeating forever.
 
+### Three reasons projection did not run on its first outing (21:36)
+
+The camera was read on the first try - `camera readable at (-602.8, -4179.8, 50.0)` -
+and the walk still failed. All three causes are worth writing down, because each was
+invisible in the log:
+
+* **The aim probe still ran.** It was gated on `_projectionWorks`, a flag that is only
+  set *after* a projection has been attempted - which happens further down the same
+  method. So the probe went first and spent four clicks proving nothing. It is now
+  gated on the camera being readable: camera, project; no camera, probe.
+* **The clicks aimed 5.7 yd out.** A point that close projects onto the character's own
+  feet, and a click at your own feet does nothing - twelve of them moved 0.0 yd.
+  `RouteRunner` now skips ahead to the first polyline point at least 12 yd away
+  (`LookAheadYd`) unless it is the last one, so a click always has an angle to express.
+* **Nothing ended it.** The hop ladder rotated for minutes at 5.7 yd while the
+  character stood still. Six dead clicks in a row now set `Blocked` and say so, letting
+  the route re-plan or give up; and each ladder rotation taps the stop key first,
+  because a movement key clears the client's click-to-move state so the next click
+  counts as new.
+
+The click line now names the aim, so none of this needs a code change to diagnose:
+
+```
+[ClickAim] aim: projecting world points onto the screen from camera (-602.8, -4179.8, 50.0), 90 deg field of view
+[ClickAim] click (312, -88) - 14.2 yd to go, aimed at the projected point
+[ClickAim] click (0, -70) - 9.8 yd to go, pixel model, scale 0.14 yd/px
+```
+
 ### It stops itself now
 
 Two walks on 2026-10-29 had to be killed by hand: one cycled through six click heights
