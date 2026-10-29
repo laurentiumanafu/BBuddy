@@ -209,6 +209,27 @@ pulled 45 of the 49 files in itself.
 The 60.7 yd of extra path is the doorway detour: with a straight-line answer the wall
 would not have been in the mesh at all.
 
+## What the bot logs about the mesh
+
+On attach, `ClickAimDiagnostics` prints three things and then, if the library loaded,
+runs a probe:
+
+```
+[NavMesh] 5948 tile files in the folder (312 params files), 4096 for map 1; params for this map: 001.mmap
+[MeshProbe] player -616.4,-4257.9,39.0 map 1 -> grid tile (39,33), file 0013933.mmtile
+[MeshProbe] tile (39,33) exists for map(s): 0, 1
+[MeshProbe] tiles loaded for map 1: 25; tile (39,33) loaded: True
+[MeshProbe] 40 yd: mesh path OK - 4 points, 41.2 yd, 0.8 ms, ends at (-601.1,-4221.0,39.4)
+[MeshProbe] 120 yd: mesh path OK - 9 points, 123.7 yd, 1.4 ms, ends at (-566.5,-4136.0,38.8)
+```
+
+Read it in that order: is the map right, is the tile there, did it load, did Detour
+answer. A `NO PATH` line names the tile file it expected. `exists for map(s)` is the
+cheap check that catches the wrong continent before anything else does, and if the
+bot's map is missing from that list the probe switches to one that is.
+
+`Tools\SelfCheck.cmd` reports the same facts from outside the game.
+
 ## Still needed before this is real pathing in 70291
 
 Nothing here, if the 3.3.5a mmap set is used: that is a full continent of real terrain
