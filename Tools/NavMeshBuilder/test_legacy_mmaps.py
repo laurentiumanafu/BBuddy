@@ -60,6 +60,24 @@ def make_store(work, name, header=16, closed=False):
     return path
 
 
+def wrap_as_multi_tile(store, version):
+    """Rewrite the fixture's single tile as a one-blob multi-tile container.
+
+    Version 5 is what the 4x4 builds that came before this one wrote, and the
+    loader must not care: the container is recognised by its shape, not by a
+    number that has already meant three different things.
+    """
+    path = os.path.join(store, "0013232.mmtile")
+    with open(path, "rb") as f:
+        data = f.read()
+    magic, dt_version, _version, size = struct.unpack_from("<4I", data, 0)
+    blob = data[16:16 + size]
+    with open(path, "wb") as f:
+        f.write(struct.pack("<5I", magic, dt_version, version, 1, 1))
+        f.write(struct.pack("<I", len(blob)))
+        f.write(blob)
+
+
 def run(path, query=True):
     args = [CHECK, "--mmaps", path, "--map", "1"]
     if query:
@@ -103,6 +121,18 @@ def main():
           result.stdout + result.stderr)
     length = path_length(result.stdout)
     check("TrinityCore-style names route as well",
+          length is not None and length > STRAIGHT + 50.0, result.stdout)
+
+    # The 4x4 container this project wrote before, spelled version 5.
+    store = make_store(work, "multi5")
+    wrap_as_multi_tile(store, 5)
+    result = run(store)
+    check("a version-5 multi-tile container loads by shape, not by its version",
+          result.returncode == 0
+          and "(0 single-tile), 1 navmesh tiles added, 0 rejected" in result.stdout,
+          result.stdout + result.stderr)
+    length = path_length(result.stdout)
+    check("a version-5 multi-tile container routes",
           length is not None and length > STRAIGHT + 50.0, result.stdout)
 
     # A wall with no doorway: the tile must still load, and the query must fail

@@ -1,5 +1,5 @@
 diff --git a/Navigation/MoveMap.cpp b/Navigation/MoveMap.cpp
-index 9b68d88..79d391d 100644
+index 9b68d88..717ce99 100644
 --- a/Navigation/MoveMap.cpp
 +++ b/Navigation/MoveMap.cpp
 @@ -183,6 +183,70 @@ namespace MMAP
@@ -151,7 +151,7 @@ index 9b68d88..79d391d 100644
  
  		// Peek at the first 12 bytes to determine format version
  		unsigned int headerPeek[3]; // magic, dtVersion, mmapVersion
-@@ -362,128 +433,158 @@ namespace MMAP
+@@ -362,128 +433,180 @@ namespace MMAP
  		}
  
  		unsigned int mmapVersion = headerPeek[2];
@@ -172,8 +172,17 @@ index 9b68d88..79d391d 100644
  		std::vector<dtTileRef> tileRefs;
 +		bool anyLoaded = false;
  
- 		if (mmapVersion == MMAP_MULTI_TILE_VERSION)
--		{
+-		if (mmapVersion == MMAP_MULTI_TILE_VERSION)
++		/* Both containers are tried, in either direction, without consulting the
++		 * version field: 6 is ours, 5 is what the 4x4 builds that came before it wrote,
++		 * and a single-tile file has no business being gated on a number either. The
++		 * parsers are strict (count, sizes, file length) and addTile is the final judge,
++		 * so a wrong guess costs one rejected blob, not a half-loaded tile. */
++		(void)mmapVersion;
++		anyLoaded = loadMultiTile(file, mmap, mapId, tileRefs);
++
++		if (!anyLoaded)
+ 		{
 -			// ===== Version 5: Multi-tile format (16 sub-tiles per ADT) =====
 -			// Read remaining header fields (tileCount + flags)
 -			unsigned int tileCount, flags;
@@ -183,7 +192,9 @@ index 9b68d88..79d391d 100644
 -				fclose(file);
 -				return false;
 -			}
-+			anyLoaded = loadMultiTile(file, mmap, mapId, tileRefs);
++			tileRefs.clear();
++			anyLoaded = loadSingleTile(file, mmap, mapId, tileRefs);
++		}
  
 -			// Sanity check
 -			if (tileCount == 0 || tileCount > 64)
@@ -191,8 +202,7 @@ index 9b68d88..79d391d 100644
 -				fclose(file);
 -				return false;
 -			}
-+		if (!anyLoaded)
-+			anyLoaded = loadSingleTile(file, mmap, mapId, tileRefs);
++		fclose(file);
  
 -			bool anyLoaded = false;
 -			for (unsigned int i = 0; i < tileCount; i++)
@@ -240,18 +250,16 @@ index 9b68d88..79d391d 100644
 -				tileRefs.push_back(tileRef);
 -				anyLoaded = true;
 -			}
-+		fclose(file);
- 
--			fclose(file);
 +		if (!anyLoaded)
 +			return false;
+ 
+-			fclose(file);
++		mmap->mmapLoadedTiles.insert(std::pair<unsigned int, std::vector<dtTileRef>>(packedGridPos, tileRefs));
  
 -			if (!anyLoaded)
 -				return false;
 -		}
 -		else if (mmapVersion == MMAP_VERSION)
-+		mmap->mmapLoadedTiles.insert(std::pair<unsigned int, std::vector<dtTileRef>>(packedGridPos, tileRefs));
-+
 +		// HB 4.3.4: Load tile-specific offmesh connections
 +		OffMeshManager::Instance().LoadTileOffMeshConnections(mapId, x, y);
 +
@@ -271,6 +279,15 @@ index 9b68d88..79d391d 100644
 +			return false;
 +
 +		if (tileCount == 0 || tileCount > 64)
++			return false;
++
++		// How much is left in the file: a size field that claims more than this is a
++		// file in some other layout, not a blob to allocate for.
++		const long here = ftell(file);
++		if (here < 0 || fseek(file, 0, SEEK_END) != 0)
++			return false;
++		long remaining = ftell(file) - here;
++		if (remaining < 0 || fseek(file, here, SEEK_SET) != 0)
 +			return false;
 +
 +		bool anyLoaded = false;
@@ -295,6 +312,11 @@ index 9b68d88..79d391d 100644
  
 -			unsigned char* data = (unsigned char*)dtAlloc(fileHeader.size, DT_ALLOC_PERM);
 -			if (fread(data, fileHeader.size, 1, file) != 1)
++			if (blobSize > 64u * 1024u * 1024u || (long)blobSize > remaining)
++				return anyLoaded;
++
++			remaining -= (long)blobSize;
++
 +			unsigned char* data = (unsigned char*)dtAlloc(blobSize, DT_ALLOC_PERM);
 +			if (!data)
 +				return anyLoaded;
@@ -346,11 +368,11 @@ index 9b68d88..79d391d 100644
 +		if (fread(head, sizeof(unsigned int), 4, file) != 4)
 +			return false;
 +		if (head[0] != MMAP_MAGIC)
- 			return false;
++			return false;
 +
 +		unsigned int blobSize = head[3];
 +		if (blobSize == 0 || blobSize > 64u * 1024u * 1024u)
-+			return false;
+ 			return false;
 +
 +		long dataStart = -1;
 +		for (long candidate = 16; candidate <= 20; candidate += 4)

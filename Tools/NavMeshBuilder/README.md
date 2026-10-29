@@ -177,7 +177,7 @@ a straight-line answer here would mean the tiles were emitted but never joined.
 
 ## Verification that has been run, legacy container
 
-`python3 test_legacy_mmaps.py /tmp/legacy-mmap-test` - 12 checks, 0 failed:
+`python3 test_legacy_mmaps.py /tmp/legacy-mmap-test` - 14 checks, 0 failed:
 
 ```
 16-byte header: one file, accepted by dtNavMesh
@@ -187,6 +187,8 @@ a straight-line answer here would mean the tiles were emitted but never joined.
 20-byte header: routes around the wall, not through it
                 path 460.7 yd, straight line 400.0 yd
 TrinityCore-style names are found without renaming anything
+a version-5 multi-tile container loads by shape, not by its version
+a version-5 multi-tile container routes
 a walled-off tile loads and the path stops at the wall
 a tile built for another Detour version is rejected
 an overrunning size field is refused cleanly

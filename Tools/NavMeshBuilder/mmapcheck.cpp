@@ -117,26 +117,42 @@ static std::vector<std::string> listDir(const std::string& dir)
         }
         stats->files++;
 
-        if (peek[2] == MMAP_MULTI_TILE_VERSION)
+        /* Multi-tile container first, whatever the version field says: 6 is what
+         * this build writes, 5 is what the 4x4 builds before it wrote, and a
+         * single-tile file reaches the else branch by failing the count/size checks
+         * rather than by being recognised. */
+        (void)peek[2];
+        const long afterPeek = ftell(f);
+        if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return; }
+        const long fileEnd = ftell(f);
+        if (fseek(f, afterPeek, SEEK_SET) != 0) { fclose(f); return; }
+
+        bool fromMulti = false;
         {
             unsigned int count = 0, flags = 0;
-            if (fread(&count, sizeof(count), 1, f) != 1 || fread(&flags, sizeof(flags), 1, f) != 1)
+            const bool headerOk = fread(&count, sizeof(count), 1, f) == 1 &&
+                                  fread(&flags, sizeof(flags), 1, f) == 1 &&
+                                  count > 0 && count <= 64;
+            if (headerOk)
             {
-                fclose(f);
-                return;
-            }
-            for (unsigned int i = 0; i < count; i++)
-            {
-                unsigned int size = 0;
-                if (fread(&size, sizeof(size), 1, f) != 1) break;
-                if (size == 0) continue;
-                unsigned char* data = (unsigned char*)dtAlloc(size, DT_ALLOC_PERM);
-                if (!data) break;
-                if (fread(data, size, 1, f) != 1) { dtFree(data); break; }
-                addTile(nav, data, (int)size, stats);
+                long remaining = fileEnd - ftell(f);
+                for (unsigned int i = 0; i < count; i++)
+                {
+                    unsigned int size = 0;
+                    if (fread(&size, sizeof(size), 1, f) != 1) break;
+                    if (size == 0) continue;
+                    if (size > 64u * 1024u * 1024u || (long)size > remaining) break;
+                    remaining -= (long)size;
+                    unsigned char* data = (unsigned char*)dtAlloc(size, DT_ALLOC_PERM);
+                    if (!data) break;
+                    if (fread(data, size, 1, f) != 1) { dtFree(data); break; }
+                    addTile(nav, data, (int)size, stats);
+                    fromMulti = true;
+                }
             }
         }
-        else
+
+        if (!fromMulti)
         {
             /* One Detour tile per file: what the MaNGOS / TrinityCore /
              * AzerothCore extractors write, and what the 3.3.5a mmaps on disk are.
