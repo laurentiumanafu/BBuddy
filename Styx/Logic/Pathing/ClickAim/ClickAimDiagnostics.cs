@@ -156,6 +156,60 @@ public static class ClickAimDiagnostics
     }
 
     /// <summary>
+    /// Every map id that has a params file in the mmaps folder, in ascending order.
+    /// There are a few hundred at most, and it is the only list of "maps this set
+    /// actually covers" available without reading the client.
+    /// </summary>
+    private static List<uint> MapsWithParams(string mmapsDir)
+    {
+        var ids = new List<uint>();
+        try
+        {
+            if (!System.IO.Directory.Exists(mmapsDir)) return ids;
+            foreach (string path in System.IO.Directory.GetFiles(mmapsDir, "*.mmap"))
+            {
+                string stem = System.IO.Path.GetFileNameWithoutExtension(path);
+                uint id;
+                if (uint.TryParse(stem, NumberStyles.None, CultureInfo.InvariantCulture, out id))
+                    ids.Add(id);
+            }
+        }
+        catch { /* a listing failure is not fatal here */ }
+        ids.Sort();
+        return ids;
+    }
+
+    private static bool TileFileExists(string mmapsDir, uint mapId, int tileX, int tileY)
+    {
+        string classic = string.Format(CultureInfo.InvariantCulture, "{0:000}{1:00}{2:00}.mmtile",
+                                       mapId, tileX, tileY);
+        string trinity = string.Format(CultureInfo.InvariantCulture, "{0:0000}_{1:00}_{2:00}.mmtile",
+                                       mapId, tileX, tileY);
+        return System.IO.File.Exists(System.IO.Path.Combine(mmapsDir, classic))
+            || System.IO.File.Exists(System.IO.Path.Combine(mmapsDir, trinity));
+    }
+
+    /// <summary>
+    /// Which of the covered maps has a tile file for this position?
+    ///
+    /// <see cref="NavGridStore.MapId"/> defaults to 1 and nothing in the ported code
+    /// sets it from the client, so on a character standing in the Eastern Kingdoms
+    /// every query would fail with "no polygon" while the Kalimdor tiles sit right
+    /// there - the exact shape of failure that looks like a broken mesh. Comparing
+    /// the position against the files turns that into a sentence.
+    /// </summary>
+    private static List<uint> MapsCoveringTile(string mmapsDir, int tileX, int tileY)
+    {
+        var found = new List<uint>();
+        foreach (uint mapId in MapsWithParams(mmapsDir))
+        {
+            if (TileFileExists(mmapsDir, mapId, tileX, tileY))
+                found.Add(mapId);
+        }
+        return found;
+    }
+
+    /// <summary>
     /// Answers one question the file count cannot: does this navmesh actually route?
     ///
     /// It asks the engine for a short path and a long one, both starting where the
@@ -205,6 +259,22 @@ public static class ClickAimDiagnostics
                 + "file {6}{7}{8}.mmtile{9}", x, y, z, mapId, tileX, tileY, mapId.ToString("000"),
                 tileX.ToString("00"), tileY.ToString("00"),
                 zKnown ? "" : " (z unreadable, probing at 0)"));
+
+            // Does the map the bot believes it is on actually have this tile? If some
+            // other map does, that is the answer and the map id is the bug.
+            string mmapsDir = System.IO.Path.Combine(AppContext.BaseDirectory, "mmaps");
+            List<uint> covering = MapsCoveringTile(mmapsDir, tileX, tileY);
+            bool currentCovered = covering.Contains(mapId);
+            Logging.Write("[MeshProbe] tile (" + tileX + "," + tileY + ") exists for map(s): "
+                          + (covering.Count == 0 ? "none" : string.Join(", ", covering.ConvertAll(v => v.ToString(CultureInfo.InvariantCulture)).ToArray())));
+            if (!currentCovered && covering.Count > 0)
+            {
+                Logging.Write("[MeshProbe] the bot was using map " + mapId
+                              + ", which has no tile here; probing map " + covering[0]
+                              + " instead. NavGridStore.MapId is a constant, not a read from the "
+                              + "client - this is what that costs");
+                mapId = covering[0];
+            }
 
             Tripper.Navigation.Navigator nav = Navigator.TripperNavigator;
             nav.EnsureTilesAroundPosition(mapId, from, 2);
