@@ -215,6 +215,32 @@ or, when there is nothing to save:
 [Route] re-plan 2 made no progress (0.4 yd): the way out is closed in every direction Detour can see from (...)
 ```
 
+### Checking the mesh without moving the character
+
+`--clickaim-route x,y[,z]`, or `route:x,y` written into `Settings\clickaim-walk.txt`,
+plans the route and prints every waypoint, and touches neither the mouse nor the
+keyboard:
+
+```
+[Route] plan only, no walking: (-825.5, -5054.0, 3.5) -> (1977.5, 232.0, height unknown) on map 1
+[MeshQuery] the goal had no usable height (given 0.0); searched 400 yd and found the mesh at 84.6 ...
+[Route] 14 points, 6180.2 yd for a 6173.2 yd straight line (3.1 ms)
+[Route]    1: ( -825.5,   -5054.0,     3.5)
+[Route]    2: ( -814.2,   -5048.7,     4.9)
+...
+```
+
+That is the road test: pick the far end of a road, run it, and compare the printed
+waypoints with the map. A path that follows the road comes back with
+`(points, length)` where the length is a few percent over the straight line and the
+waypoints run down the middle of it. A path that ignores the mountain and goes
+straight up it means the tiles for that area are missing or the height data is flat,
+which the polygon report in `[MeshProbe]` explains.
+
+The walking test is separate and has to pass first: see the click-scale section
+below, because on 2026-10-29 the mesh was already correct while the walk ran 120 yd
+past a 20 yd goal.
+
 ### The click scale was the real reason a 20 yd walk ran 120 yd
 
 Field log, 2026-10-29 20:33, standing in `(-825.5, -5054.0)`:

@@ -632,6 +632,126 @@ public static class ClickAimDiagnostics
         return true;
     }
 
+    /// <summary>
+    /// Plans a route to a point and prints every waypoint, without touching the
+    /// keyboard or the mouse. The question it answers is "is the mesh right?", and
+    /// it answers it even while the mover is still being brought up: no clicks, no
+    /// camera, no character movement, just Detour reading the tiles.
+    /// </summary>
+    private static void StartRouteReport(string spec)
+    {
+        var thread = new Thread(() => RouteReport(spec));
+        thread.IsBackground = true;
+        thread.Name = "ClickAimRouteReport";
+        thread.Start();
+    }
+
+    private static void RouteReport(string spec)
+    {
+        try
+        {
+            double[] parts = ParseNumbers(spec);
+            if (parts.Length < 2)
+            {
+                Logging.Write("[Route] --clickaim-route wants x,y[,z]: got \"" + spec + "\"");
+                return;
+            }
+
+            double x, y;
+            if (!ClickAimPositions.TryRead(out x, out y))
+            {
+                Logging.Write("[Route] no player position - is the character in the world?");
+                return;
+            }
+
+            double z = ClickAimPositions.Z();
+            if (double.IsNaN(z)) z = 0.0;
+
+            var nav = Navigator.TripperNavigator;
+            if (!nav.IsLoaded)
+            {
+                Logging.Write("[Route] Navigation.dll is not loaded; nothing to plan with");
+                return;
+            }
+
+            uint mapId = ResolveMap((uint)NavGridStore.MapId, x, y);
+            var from = new System.Numerics.Vector3((float)x, (float)y, (float)z);
+            var to = new System.Numerics.Vector3((float)parts[0], (float)parts[1],
+                                                 (float)(parts.Length > 2 ? parts[2] : 0.0));
+
+            Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                "[Route] plan only, no walking: ({0:F1}, {1:F1}, {2:F1}) -> ({3:F1}, {4:F1}{5}) on map {6}",
+                from.X, from.Y, from.Z, to.X, to.Y,
+                parts.Length > 2 ? ", " + to.Z.ToString("F1", CultureInfo.InvariantCulture) : ", height unknown",
+                mapId));
+
+            nav.EnsureTilesAroundPosition(mapId, from, Navigator.LoadTilesAroundRadius);
+            nav.EnsureTilesAroundPosition(mapId, to, Navigator.LoadTilesAroundRadius);
+
+            var snappedFrom = from;
+            var snappedTo = to;
+            if (!MeshQuery.SnapLogged(nav, mapId, from, "player", out snappedFrom)) return;
+            if (!MeshQuery.SnapLogged(nav, mapId, to, "goal", out snappedTo)) return;
+
+            Tripper.Navigation.PathFindResult result = nav.FindPath(mapId, snappedFrom, snappedTo, true);
+            if (result == null || !result.Status.Succeeded || result.Points == null || result.Points.Length < 2)
+            {
+                Logging.Write("[Route] no path (status "
+                    + (result == null ? "null" : result.Status.ToString())
+                    + "); the probe's polygon report says whether the mesh is empty or the filter refuses it");
+                return;
+            }
+
+            double straight = ClickAimMath.Len(snappedTo.X - snappedFrom.X, snappedTo.Y - snappedFrom.Y);
+            double length = 0.0;
+            for (int i = 1; i < result.Points.Length; i++)
+                length += ClickAimMath.Len(result.Points[i].X - result.Points[i - 1].X,
+                                           result.Points[i].Y - result.Points[i - 1].Y);
+
+            Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                "[Route] {0} points, {1:F1} yd for a {2:F1} yd straight line ({3:F1} ms)",
+                result.Points.Length, length, straight,
+                result.Elapsed.TotalMilliseconds));
+
+            int shown = Math.Min(result.Points.Length, 60);
+            for (int i = 0; i < shown; i++)
+            {
+                Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                    "[Route]   {0,2}: ({1,9:F1}, {2,9:F1}, {3,7:F1})",
+                    i + 1, result.Points[i].X, result.Points[i].Y, result.Points[i].Z));
+            }
+            if (shown < result.Points.Length)
+                Logging.Write("[Route]   ... " + (result.Points.Length - shown) + " more");
+        }
+        catch (Exception ex)
+        {
+            Logging.Write("[Route] plan failed: " + ex.Message);
+        }
+    }
+
+    /// <summary>Every number in a string, separators and spaces ignored.</summary>
+    private static double[] ParseNumbers(string text)
+    {
+        var values = new List<double>();
+        if (text == null) return values.ToArray();
+        int start = -1;
+        for (int i = 0; i <= text.Length; i++)
+        {
+            bool numeric = i < text.Length &&
+                (char.IsDigit(text[i]) || text[i] == '-' || text[i] == '+' || text[i] == '.');
+            if (numeric && start < 0) start = i;
+            if (!numeric && start >= 0)
+            {
+                double v;
+                if (double.TryParse(text.Substring(start, i - start), NumberStyles.Float,
+                        CultureInfo.InvariantCulture, out v))
+                    values.Add(v);
+                start = -1;
+            }
+        }
+        return values.ToArray();
+    }
+
     private static void ParseCommandLine()
     {
         try
@@ -676,6 +796,19 @@ public static class ClickAimDiagnostics
                 else if (arg.StartsWith("--clickaim-walk=", StringComparison.OrdinalIgnoreCase))
                 {
                     spec = arg.Substring("--clickaim-walk=".Length);
+                }
+                else if (arg.Equals("--clickaim-route", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Plan and print, never walk. This is the mesh test: the mover
+                    // is not in the loop, so what comes back is Detour's opinion and
+                    // nothing else.
+                    if (i + 1 < args.Length) StartRouteReport(args[i + 1]);
+                    continue;
+                }
+                else if (arg.StartsWith("--clickaim-route=", StringComparison.OrdinalIgnoreCase))
+                {
+                    StartRouteReport(arg.Substring("--clickaim-route=".Length));
+                    continue;
                 }
                 else if (arg.Equals("--clickaim-profile", StringComparison.OrdinalIgnoreCase))
                 {
@@ -728,6 +861,15 @@ public static class ClickAimDiagnostics
             }
             Logging.Write("[Route] " + origin + " request: profile " + path);
             return StartProfile(path, 0, 0, false, false);
+        }
+
+        // "route:x,y[,z]" in clickaim-walk.txt plans and prints without walking,
+        // which is how the mesh gets checked while the mover is still being worked on.
+        if (trimmed.StartsWith("route:", StringComparison.OrdinalIgnoreCase))
+        {
+            Logging.Write("[Route] " + origin + " request: plan only, no walking");
+            StartRouteReport(trimmed.Substring("route:".Length));
+            return true;
         }
 
         double yards;
