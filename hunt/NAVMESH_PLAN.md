@@ -5,6 +5,18 @@ not fix combat, transports, or the per-click reach. This note records what a mes
 buys, the three ways to get one for build 70291, and what has to exist in the bot
 before any of them are useful.
 
+> **STATUS 2026-10-29 — option B is built and proven, minus the ADT export.**
+> The "32-bit library" blocker below is gone: `Lib/x64/Navigation.dll` is a real
+> PE32+ x64 build of `Likon69/Navigation-C-` (commit `221dfe2`, DT_POLYREF64) with
+> all 74 C# P/Invoke entry points. `Tools/NavMeshBuilder/mmapbuild` converts
+> `.navtile` to the MMAP v6 multi-tile files that DLL reads, and `mmapcheck` loads
+> them back with the same Detour sources and runs real queries (two ADTs with a wall
+> between the points: 451.5 yd route around the wall vs 330 yd straight).
+> What is still missing is **the ADT export for map 70291** — the CASC→ADT extractor
+> is not in this repo and upstream keeps it private. Export `world\maps\<map>\*.adt`
+> with CASCExplorer, then `Tools\NavMeshBuilder\make-mmaps.cmd <dir> 1 <game dir>`.
+> Details: `Tools/NavMeshBuilder/README.md`.
+
 ## What a mesh buys, in this bot's own numbers
 
 The walker today aims straight at the goal and detours blindly. Measured limits:
@@ -92,14 +104,18 @@ That is small, testable offline, and it is the consumer every mesh option needs.
 also makes option C immediately useful, because a learned grid is only worth having
 if the bot can walk a route rather than a single goal.
 
-## Order I would do it in
+## Where this stands now
 
-1. Waypoint chain walker (no new dependencies; makes profile hotspots usable now,
-   one at a time, inside a cluster).
-2. Learned occupancy grid on top of it (needs only the walker).
-3. Re-scan for `WORLD_INTERSECT` early in a session at higher coverage; if it
-   resolves, prototype the runtime raycast bake on one 133 yd tile and compare the
-   tile against the walk results at the same spot.
-4. Only if (3) fails: offline CASC extraction + Recast, which is the largest single
-   piece of work in this file and the one most likely to be out of date the moment
-   the client build changes.
+1. ~~Waypoint chain walker~~ — done (`Styx/Logic/Pathing/ClickAim/RouteRunner.cs`,
+   driven by `--clickaim-profile`).
+2. ~~Learned / baked occupancy grid~~ — done as the *baked* variant instead of the
+   learned one: `Tools/NavGrid` reads root ADTs directly and `NavGrid.cs` runs A* on
+   it. It is the fallback when no mmaps exist.
+3. ~~x64 Detour + mmap writer~~ — done. The library is rebuilt for x64 and the
+   builder emits files its loader accepts (see the status block at the top).
+4. **Remaining: the ADT export for 70291**, then run `make-mmaps.cmd` once per map.
+   After that `RouteRunner` prefers the mesh automatically: `MeshAvailable()` loads
+   the DLL on first use, each leg goes through `Tripper.Navigator.FindPath`, and the
+   grid is only touched when no mesh tile covers the position.
+5. Runtime raycast bake (`WORLD_INTERSECT`, option A) stays a later upgrade: terrain
+   meshes have no buildings or cave interiors, so interiors still need it.

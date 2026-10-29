@@ -10,10 +10,10 @@ namespace Styx.Logic.Pathing;
 ///
 /// Two modes, chosen from what the client actually has:
 ///
-///  * a navmesh is loaded -&gt; each leg is routed with <c>Navigator.GeneratePath</c>
-///    and the resulting polyline is followed point by point (this is what a
-///    mesh-driven run does, and it is what the bot will do once a mesh exists for
-///    this build);
+///  * a navmesh is loaded -&gt; each leg is routed on the mmaps through
+///    <c>Tripper.Navigation.Navigator.FindPath</c> and the resulting polyline is
+///    followed point by point. <c>Navigator.GeneratePath</c> is not used because it
+///    asks <c>ObjectManager.Me</c> for the map id and <c>Me</c> is null on x64;
 ///  * no navmesh -&gt; each profile waypoint is walked directly, because the profile's
 ///    own hotspot clusters are already 6-60 yd hops. Legs longer than
 ///    <see cref="ProfileRoute.MaxClickWalkYd"/> are refused instead of attempted,
@@ -49,8 +49,9 @@ public static class RouteRunner
         }
         else
         {
-            Logging.Write("[Route] (the Detour native library is 32-bit and there are no mmap tiles for build 70291, "
-                          + "so there is no mesh to route on - see hunt/NAVMESH_PLAN.md)");
+            Logging.Write("[Route] no navmesh: either Navigation.dll did not load or there are no mmap tiles "
+                          + "for this map yet. Build them with Tools\\NavMeshBuilder\\make-mmaps.cmd "
+                          + "(see Tools/NavMeshBuilder/README.md); routing falls back to the baked grid.");
             int cached = NavGridStore.CachedTiles;
             Logging.Write("[Route] baked navgrid tiles in " + NavGridStore.Root
                           + " (map " + NavGridStore.MapId + "): "
@@ -205,10 +206,22 @@ public static class RouteRunner
         return true;
     }
 
+    private static bool _meshProbed;
+    private static bool _meshReady;
+
+    /// <summary>
+    /// True once a navmesh can be queried. The first call tries to load the native
+    /// library itself: on the 64-bit client no bot session ever starts, so nothing
+    /// would call <c>LoadMeshes</c> and every leg would silently fall back to the
+    /// grid even with a valid Navigation.dll and mmaps sitting next to the exe.
+    /// </summary>
     private static bool MeshAvailable()
     {
-        try { return Navigator.IsNavigatorLoaded; }
-        catch { return false; }
+        if (_meshProbed) return _meshReady;
+        _meshProbed = true;
+        try { _meshReady = Navigator.EnsureLoadedForDiagnostics(); }
+        catch { _meshReady = false; }
+        return _meshReady;
     }
 
     private static WoWPoint[]? TryMeshPath(double px, double py, RoutePoint target)
@@ -217,12 +230,37 @@ public static class RouteRunner
         {
             double z = ClickAimPositions.Z();
             float fromZ = double.IsNaN(z) ? (float)target.Z : (float)z;
-            WoWPoint[] path = Navigator.GeneratePath(new WoWPoint((float)px, (float)py, fromZ), target.ToWoWPoint());
-            return path.Length > 1 ? path : null;
+
+            // Navigator.GeneratePath asks ObjectManager.Me for the map id, and on the
+            // x64 client Me does not exist. Drive the Tripper navigator directly with
+            // the map id we were told to use.
+            Tripper.Navigation.Navigator nav = Navigator.TripperNavigator;
+            if (!nav.IsLoaded) return null;
+
+            uint mapId = (uint)NavGridStore.MapId;
+            var from = new System.Numerics.Vector3((float)px, (float)py, fromZ);
+            var to = new System.Numerics.Vector3((float)target.X, (float)target.Y, (float)target.Z);
+
+            nav.EnsureTilesAroundPosition(mapId, from, Navigator.LoadTilesAroundRadius);
+            nav.EnsureTilesAroundPosition(mapId, to, Navigator.LoadTilesAroundRadius);
+
+            Tripper.Navigation.PathFindResult result = nav.FindPath(mapId, from, to, true);
+            if (result == null || !result.Status.Succeeded)
+            {
+                Logging.Write("[Route] navmesh found no path to ("
+                    + string.Format(CultureInfo.InvariantCulture, "{0:F1}, {1:F1}", target.X, target.Y) + ")");
+                return null;
+            }
+            if (result.Points == null || result.Points.Length < 2) return null;
+
+            var path = new WoWPoint[result.Points.Length];
+            for (int i = 0; i < result.Points.Length; i++)
+                path[i] = new WoWPoint(result.Points[i].X, result.Points[i].Y, result.Points[i].Z);
+            return path;
         }
         catch (Exception ex)
         {
-            Logging.Write("[Route] mesh path failed, falling back to the waypoint: " + ex.Message);
+            Logging.Write("[Route] mesh path failed, falling back: " + ex.Message);
             return null;
         }
     }

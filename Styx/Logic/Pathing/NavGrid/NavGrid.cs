@@ -13,10 +13,10 @@ namespace Styx.Logic.Pathing;
 /// </summary>
 public sealed class NavGridTile
 {
-    public const int Cells = 267;
+    public const int Cells = 268;   // 533.3333/268 = 1.99005 yd; /4 = 67 cells per Detour sub-tile
     public const int CellCount = Cells * Cells;
     public const float AdtYd = 533.3333f;
-    public const float CellYd = AdtYd / Cells;      // 1.9975 yd
+    public const float CellYd = AdtYd / Cells;      // 1.99005 yd
     public const int HeightQ = 4;                   // quarter yards
 
     public const byte Walk = 0x01;

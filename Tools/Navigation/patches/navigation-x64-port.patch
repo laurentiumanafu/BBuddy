@@ -1,0 +1,53 @@
+diff --git a/Navigation/MoveMap.cpp b/Navigation/MoveMap.cpp
+index 9b68d88..09a6517 100644
+--- a/Navigation/MoveMap.cpp
++++ b/Navigation/MoveMap.cpp
+@@ -322,7 +322,7 @@ namespace MMAP
+ 
+ 	unsigned int MMapManager::packTileID(int x, int y)
+ 	{
+-		return unsigned int(x << 16 | y);
++		return (unsigned int)(x << 16 | y);   // MSVC-only functional cast; portable form
+ 	}
+ 
+ 	bool MMapManager::loadMap(unsigned int mapId, int x, int y)
+diff --git a/Navigation/PathFinder.cpp b/Navigation/PathFinder.cpp
+index 0e2dd31..92afc5b 100644
+--- a/Navigation/PathFinder.cpp
++++ b/Navigation/PathFinder.cpp
+@@ -322,7 +322,7 @@ void PathFinder::BuildPolyPath(const Vector3& startPos, const Vector3& endPos)
+ 
+ 		// take ~80% of the original length
+ 		// TODO : play with the values here
+-		unsigned int prefixPolyLength = unsigned int(m_polyLength * 0.8f + 0.5f);
++		unsigned int prefixPolyLength = (unsigned int)(m_polyLength * 0.8f + 0.5f);
+ 		memmove(m_pathPolyRefs, m_pathPolyRefs + pathStartIndex, prefixPolyLength * sizeof(dtPolyRef));
+ 
+ 		dtPolyRef suffixStartPoly = m_pathPolyRefs[prefixPolyLength - 1];
+diff --git a/Navigation/PathFinder.h b/Navigation/PathFinder.h
+index d50f79b..3a352e0 100644
+--- a/Navigation/PathFinder.h
++++ b/Navigation/PathFinder.h
+@@ -86,7 +86,7 @@ public:
+ 
+ 	// option setters - use optional
+ 	void setUseStrightPath(bool useStraightPath) { m_useStraightPath = useStraightPath; };
+-	void setPathLengthLimit(float distance) { m_pointPathLimit = std::min<unsigned int>(unsigned int(distance / SMOOTH_PATH_STEP_SIZE), MAX_POINT_PATH_LENGTH); };
++	void setPathLengthLimit(float distance) { m_pointPathLimit = std::min<unsigned int>((unsigned int)(distance / SMOOTH_PATH_STEP_SIZE), (unsigned int)MAX_POINT_PATH_LENGTH); };
+ 
+ 	// result getters
+ 	Vector3 getStartPosition()      const { return m_startPosition; }
+diff --git a/Navigation/g3dlite/Include/G3D/platform.h b/Navigation/g3dlite/Include/G3D/platform.h
+index 1964331..2f766af 100644
+--- a/Navigation/g3dlite/Include/G3D/platform.h
++++ b/Navigation/g3dlite/Include/G3D/platform.h
+@@ -49,7 +49,8 @@
+ #define __fastcall
+ #endif
+ 
+-#ifdef _MSC_VER 
++#if defined(_MSC_VER) || defined(_WIN32)
++    // MinGW / clang-cl also target Windows; g3dlite only knew MSVC here.
+     #define G3D_WIN32
+ #elif  defined(__FreeBSD__) || defined(__OpenBSD__)
+     #define G3D_FREEBSD

@@ -383,6 +383,28 @@ namespace Styx.Logic.Pathing
 			Logging.Write("Loading {0}_{1}_{2}", e.MapId, e.TileX, e.TileY);
 		}
 
+		/// <summary>
+		/// Loads the Tripper engine without starting a bot. On the x64 client the bot
+		/// loop is disabled, but the navmesh query API is usable on its own - it only
+		/// needs Navigation.dll and the mmaps, not the object model.
+		/// </summary>
+		public static bool EnsureLoadedForDiagnostics()
+		{
+			try
+			{
+				if (_navigator == null) _navigator = new TripperNav.Navigator();
+				if (_navigator.IsLoaded) return true;
+				if (!_navigator.LoadMeshes()) return false;
+				_navigator.TileLoaded += OnTileLoaded;
+				return _navigator.IsLoaded;
+			}
+			catch (Exception ex)
+			{
+				Logging.Write("[Navigator] cannot load Navigation.dll: " + ex.Message);
+				return false;
+			}
+		}
+
 		private static void OnBotStart(EventArgs args)
 		{
 			Clear();

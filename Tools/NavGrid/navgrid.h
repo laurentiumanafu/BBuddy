@@ -7,7 +7,7 @@
  * that does not need native code at all: a walkability grid per ADT tile, baked
  * offline, plus A* and line-of-sight smoothing.
  *
- * Resolution is ~2 yd per cell over one 533.33 yd ADT tile = 267x267 cells. That is
+ * Resolution is ~1.99 yd per cell over one 533.33 yd ADT tile = 268x268 cells. That is
  * coarser than a Detour polygon mesh and much simpler: it stores "can I stand here
  * and how high is it", which is all a click-walk mover needs to turn a long leg into
  * a chain of reachable 20-40 yd clicks.
@@ -24,9 +24,12 @@
 #define NG_MAGIC      "NAVG"
 #define NG_VERSION    1
 #define NG_ADT_YD     533.3333f
-/* 267 cells over one ADT: exactly contiguous, so tiles never drift apart. */
+/* 268 cells over one ADT: sub-tile boundaries land exactly on cell edges. */
 #define NG_CELL_YD    (NG_ADT_YD / (float)NG_CELLS)
-#define NG_CELLS      267                 /* ceil(533.3333 / 2) */
+/* 268 cells, not 267: Detour tiles are capped at 65535 polygons, so an ADT has
+ * to be cut into a 4x4 grid of sub-tiles, and 268/4 = 67 cells per sub-tile keeps
+ * those boundaries on exact cell edges instead of drifting 0.67 yd per tile. */
+#define NG_CELLS      268
 #define NG_CELL_COUNT (NG_CELLS * NG_CELLS)
 #define NG_HEIGHT_Q   4                   /* height unit: quarter yard */
 #define NG_MAX_CELLS  4000000             /* A* refuses more than this */

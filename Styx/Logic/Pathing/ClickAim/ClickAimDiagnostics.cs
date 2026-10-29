@@ -63,6 +63,38 @@ public static class ClickAimDiagnostics
         try { Logging.Write(NavGridStore.SelfTest()); }
         catch (Exception ex) { Logging.Write("[NavGrid] self-test threw: " + ex.Message); }
 
+        // The bot loop is disabled on x64, but the navmesh engine only needs
+        // Navigation.dll (now built for x64) and the mmaps directory.
+        bool mesh = false;
+        try { mesh = Navigator.EnsureLoadedForDiagnostics(); }
+        catch (Exception ex) { Logging.Write("[NavMesh] " + ex.Message); }
+
+        // The DLL resolves mmaps relative to its own file, and it sits next to the
+        // exe, so this is the only path that matters - there is no override API.
+        string mmapsDir = System.IO.Path.Combine(AppContext.BaseDirectory, "mmaps");
+        int mmtiles = 0;
+        try
+        {
+            if (System.IO.Directory.Exists(mmapsDir))
+                mmtiles = System.IO.Directory.GetFiles(mmapsDir, "*.mmtile").Length;
+        }
+        catch (Exception ex) { Logging.Write("[NavMesh] cannot list " + mmapsDir + ": " + ex.Message); }
+
+        Logging.Write("[NavMesh] Navigation.dll loaded: " + (mesh ? "yes" : "no")
+                      + " - mmaps read from " + mmapsDir + " (map " + NavGridStore.MapId + "): "
+                      + (mmtiles > 0 ? mmtiles + " tile files" : "none"));
+        if (!mesh)
+        {
+            Logging.Write("[NavMesh] without it, routing falls back to the baked navgrid tiles "
+                          + "(Tools/NavGrid) and then to straight-line walking");
+        }
+        else if (mmtiles == 0)
+        {
+            Logging.Write("[NavMesh] the library loaded but there are no mmaps for this map, so "
+                          + "FindPath returns nothing - run Tools\\NavMeshBuilder\\make-mmaps.cmd "
+                          + "to bake them from your ADT export");
+        }
+
         Logging.Write("[ClickAim] pilot armed. Write \"x,y\" into " + RequestPath
                       + " to walk there, or start CopilotBuddy with --clickaim-walk x,y");
         Logging.Write("[ClickAim] position source: " + (ClickAimPositions.TryRead(out double px, out double py)

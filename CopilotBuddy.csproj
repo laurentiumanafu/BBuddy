@@ -74,6 +74,22 @@
     <ApplicationDefinition Include="UI\App.xaml" />
   </ItemGroup>
 
+  <!--
+    32-bit vs 64-bit native navigation.
+    Lib\Navigation.dll is i386 and can only load into the x86 build; the x64 build
+    needs Lib\x64\Navigation.dll or every Tripper P/Invoke throws BadImageFormat.
+    Copy the matching one next to the executable; the DLL finds its mmaps in
+    <exe dir>\mmaps.
+  -->
+  <ItemGroup Condition="'$(Platform)' == 'x64'">
+    <None Include="Lib\x64\Navigation.dll" Link="Navigation.dll"
+          CopyToOutputDirectory="PreserveNewest" Visible="false" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(Platform)' != 'x64'">
+    <None Include="Lib\Navigation.dll" Link="Navigation.dll"
+          CopyToOutputDirectory="PreserveNewest" Visible="false" />
+  </ItemGroup>
+
   <!-- PostBuild: move satellite culture folders into Languages/ subdir (HB pattern) -->
   <Target Name="MoveSatelliteAssemblies" AfterTargets="Build">
     <Exec Command="if exist &quot;$(OutputPath)Languages\&quot; rmdir /S /Q &quot;$(OutputPath)Languages&quot;
@@ -105,7 +121,8 @@ exit /b 0"/>
     </Reference>
   </ItemGroup>
 
-  <!-- Native Navigation.dll: place manually next to exe. Loaded via [DllImport] P/Invoke. -->
+  <!-- Native Navigation.dll is copied next to the exe by the ItemGroups above
+       (x64 -> Lib\x64\Navigation.dll). Loaded via [DllImport] P/Invoke. -->
 
   <ItemGroup>
     <PackageReference Include="MahApps.Metro" Version="2.4.11" />

@@ -63,3 +63,6 @@ CopilotBuddy-clickaim-port*.zip
 Tools/NavGrid/navbake
 Tools/NavGrid/test_navgrid
 Tools/NavGrid/*.o
+Tools/NavMeshBuilder/mmapbuild
+Tools/NavMeshBuilder/mmapcheck
+Tools/NavGrid/navgrid.o

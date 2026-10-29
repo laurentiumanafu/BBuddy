@@ -2,6 +2,7 @@
  * navbake - bake ADT tiles into .navtile files, and query them.
  *
  *   navbake bake --adt <file> --map <id> --tx <n> --ty <n> [--slope 45] --out <dir>
+ *   navbake bakeall --adts <dir> --map <id> [--slope 45] --out <dir>
  *   navbake path --tiles <dir> --map <id> --from x,y[,z] --to x,y[,z]
  *   navbake probe --tiles <dir> --map <id> x,y[,z]
  *
@@ -17,6 +18,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <dirent.h>
+#endif
 
 static const char *arg_value(int argc, char **argv, const char *name)
 {
@@ -109,6 +116,169 @@ static int cmd_bake(int argc, char **argv)
            walkable, NG_CELL_COUNT, 100.0 * (double)walkable / (double)NG_CELL_COUNT);
     free(tile);
     return 0;
+}
+
+/* Builds `<dir>/<name>` without assuming a path separator, so the same binary
+ * works whether it was handed `C:\adts` or `/tmp/adts`. */
+static void join_path(char *out, size_t size, const char *dir, const char *name)
+{
+    const size_t n = strlen(dir);
+    const int slash = n > 0 && (dir[n - 1] == '/' || dir[n - 1] == '\\');
+    snprintf(out, size, "%s%s%s", dir, slash ? "" : "/", name);
+}
+
+/* Pulls the X_Y out of `Kalimdor_32_32.adt` / `1_32_32.adt`. Returns 0 when the
+ * name does not end in the two tile digits, in which case the caller must skip
+ * the file rather than guess - a wrong tile index misplaces every height. */
+static int tile_from_name(const char *name, int *tx, int *ty)
+{
+    const char *dot = strrchr(name, '.');
+    if (dot == NULL || dot == name) return 0;
+
+    char stem[512];
+    const size_t len = (size_t)(dot - name);
+    if (len >= sizeof(stem)) return 0;
+    memcpy(stem, name, len);
+    stem[len] = 0;
+
+    char *last = strrchr(stem, '_');
+    if (last == NULL) return 0;
+    *last = 0;
+    char *prev = strrchr(stem, '_');
+    if (prev == NULL) return 0;
+
+    const char *a = prev + 1;
+    const char *b = last + 1;
+    if (*a == 0 || *b == 0) return 0;
+    for (const char *c = a; *c; c++) if (*c < '0' || *c > '9') return 0;
+    for (const char *c = b; *c; c++) if (*c < '0' || *c > '9') return 0;
+
+    *tx = atoi(a);
+    *ty = atoi(b);
+    return *tx >= 0 && *tx < 64 && *ty >= 0 && *ty < 64;
+}
+
+static int opens_with(const char *name, const char *suffix)
+{
+    const size_t n = strlen(name);
+    const size_t m = strlen(suffix);
+    return n > m && strcmp(name + n - m, suffix) == 0;
+}
+
+/* Whole-map bake: walk an ADT export folder and bake every root ADT in it.
+ * `_tex0`/`_obj0` siblings share the tile index and are skipped by the suffix
+ * test, so an unmodified CASC export can be pointed at directly. */
+static int cmd_bakeall(int argc, char **argv)
+{
+    const char *dir = arg_value(argc, argv, "--adts");
+    const char *out = arg_value(argc, argv, "--out");
+    int map_id = arg_int(argc, argv, "--map", -1);
+    float slope = arg_float(argc, argv, "--slope", 45.0f);
+    int verbose = 0;
+    for (int i = 0; i < argc; i++) if (strcmp(argv[i], "--verbose") == 0) verbose = 1;
+
+    if (dir == NULL || out == NULL || map_id < 0)
+    {
+        fprintf(stderr, "usage: navbake bakeall --adts <dir> --map <id> [--slope deg] --out <dir>\n");
+        return 2;
+    }
+
+    char names[4096][256];
+    int count = 0;
+#ifdef _WIN32
+    char pattern[1024];
+    join_path(pattern, sizeof(pattern), dir, "*");
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA(pattern, &fd);
+    if (h == INVALID_HANDLE_VALUE)
+    {
+        fprintf(stderr, "navbake: cannot list %s\n", dir);
+        return 1;
+    }
+    do
+    {
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+        if (count >= 4096) break;
+        snprintf(names[count], sizeof(names[0]), "%s", fd.cFileName);
+        count++;
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+#else
+    DIR *d = opendir(dir);
+    if (d == NULL)
+    {
+        fprintf(stderr, "navbake: cannot list %s\n", dir);
+        return 1;
+    }
+    struct dirent *entry;
+    while ((entry = readdir(d)) != NULL)
+    {
+        if (count >= 4096) break;
+        snprintf(names[count], sizeof(names[0]), "%s", entry->d_name);
+        count++;
+    }
+    closedir(d);
+#endif
+
+    ng_tile *tile = (ng_tile *)malloc(sizeof(ng_tile));
+    if (tile == NULL) return 1;
+
+    int baked = 0, skipped = 0, failed = 0;
+    long total_walkable = 0;
+    for (int i = 0; i < count; i++)
+    {
+        if (!opens_with(names[i], ".adt")) continue;
+        if (opens_with(names[i], "_tex0.adt") || opens_with(names[i], "_obj0.adt") ||
+            opens_with(names[i], "_tex1.adt") || opens_with(names[i], "_obj1.adt") ||
+            opens_with(names[i], "_lod.adt"))
+        {
+            skipped++;
+            continue;
+        }
+
+        int tx, ty;
+        if (!tile_from_name(names[i], &tx, &ty))
+        {
+            fprintf(stderr, "navbake: %s has no _X_Y suffix, skipped\n", names[i]);
+            skipped++;
+            continue;
+        }
+
+        char adt_path[1024];
+        join_path(adt_path, sizeof(adt_path), dir, names[i]);
+
+        adt_stats stats;
+        if (ng_bake_adt(adt_path, map_id, tx, ty, slope, tile, &stats) <= 0)
+        {
+            fprintf(stderr, "navbake: %s has no MCNK/MCVT\n", names[i]);
+            failed++;
+            continue;
+        }
+
+        char tile_file[1024];
+        tile_path(tile_file, sizeof(tile_file), out, map_id, tx, ty);
+        if (!ng_tile_write(tile, tile_file))
+        {
+            fprintf(stderr, "navbake: cannot write %s\n", tile_file);
+            failed++;
+            continue;
+        }
+
+        long walkable = 0;
+        for (int c = 0; c < NG_CELL_COUNT; c++)
+            if (tile->flags[c] & NG_WALK) walkable++;
+        total_walkable += walkable;
+        baked++;
+        if (verbose)
+            printf("  %s -> (%d,%d) heights %.1f..%.1f, walkable %ld/%d\n",
+                   names[i], tx, ty, stats.min_height, stats.max_height,
+                   walkable, NG_CELL_COUNT);
+    }
+    free(tile);
+
+    printf("bakeall: %d ADTs baked, %d skipped, %d failed, %.2fM walkable cells -> %s\n",
+           baked, skipped, failed, (double)total_walkable / 1e6, out);
+    return baked > 0 ? 0 : 1;
 }
 
 static int parse_xy(const char *text, float *x, float *y, float *z)
@@ -276,10 +446,11 @@ int main(int argc, char **argv)
 {
     if (argc < 2)
     {
-        fprintf(stderr, "usage: navbake <bake|path|probe> ...\n");
+        fprintf(stderr, "usage: navbake <bake|bakeall|path|probe> ...\n");
         return 2;
     }
     if (strcmp(argv[1], "bake") == 0) return cmd_bake(argc, argv);
+    if (strcmp(argv[1], "bakeall") == 0) return cmd_bakeall(argc, argv);
     if (strcmp(argv[1], "path") == 0) return cmd_path(argc, argv);
     if (strcmp(argv[1], "probe") == 0) return cmd_probe(argc, argv);
     fprintf(stderr, "unknown command %s\n", argv[1]);
