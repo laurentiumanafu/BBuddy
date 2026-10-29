@@ -187,6 +187,19 @@ namespace CopilotBuddy.UI
                             // cannot be treated as safe or available. Leave
                             // normal x86 startup unchanged.
                             Logging.Write("[Attach] WowB diagnostic mode: bot, routine and plugin startup is disabled; x64 gameplay is not available yet.");
+
+                            // Movement does not need the object model - it needs the
+                            // player's X/Y, which the WowB reader already provides. Arm
+                            // the click-aim pilot so it can be exercised from this mode.
+                            try
+                            {
+                                Styx.Logic.Pathing.ClickAimDiagnostics.EnableAfterAttach();
+                            }
+                            catch (Exception ex)
+                            {
+                                Logging.Write("[ClickAim] pilot not armed: " + ex.Message);
+                            }
+
                             Dispatcher.Invoke(() =>
                             {
                                 SetStatus("Attached (read-only)");

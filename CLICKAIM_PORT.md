@@ -89,14 +89,41 @@ broken by solution configuration mapping.
 The 64-bit bot loop still refuses to start (`TreeRoot.Start()` returns with
 "WowB x64 is read-only"), because the object model is incomplete. Movement does not
 need the object model - it needs the player's X and Y, which the x64 reader already
-provides - so the pilot exists:
+provides - so the pilot can be driven from the running application in diagnostic
+mode. After attach the log shows the self-test and then:
 
-```csharp
-ClickAimPilot.WalkTo(3463.95, -60.20);      // hotspot from a CopilotBuddy profile
+```
+[ClickAim] pilot armed. Write "x,y" into ...\Settings\clickaim-walk.txt to walk there,
+           or start CopilotBuddy with --clickaim-walk x,y
+[ClickAim] position source: wowb at (1977.4, 232.0)
 ```
 
-That runs the same mover the tree will use, reports progress every 15 s, and stops
-on arrival, timeout or repeated blocking.
+Two triggers, no rebuild between attempts:
+
+```
+CopilotBuddy.exe --clickaim-walk 1977.5,232.0        :: one walk at startup
+CopilotBuddy.exe --clickaim-walk 1977.5,232.0,2.0    :: x,y,tolerance in yards
+```
+
+or, with the bot already running, write `1977.5,232.0` into
+`<application path>\Settings\clickaim-walk.txt`. The file is consumed and deleted,
+so the same coordinates can be asked for again by writing them again. A request is
+refused while a walk is already running and waits up to 30 s for a readable player
+position.
+
+The pilot reports progress every 15 s, and stops on arrival, timeout, repeated
+blocking or a runaway leg. Everything it uses is the same `ClickAimMover` the tree
+will call.
+
+## Where the position comes from
+
+`ClickAimPositions.TryRead` prefers the 3.3.5a object model (`ObjectManager.Me`),
+and falls back to the 64-bit reader: `WowBReader.TryGetPlayerObject` plus
+`TryGetObjectTransform`, cached for 40 ms. This matters - `ObjectManager.Update()`
+on a 64-bit client publishes a `WowBWorldSnapshot` and returns, so `Me` is never
+built and the first version of the mover would have reported "no local player"
+forever on the exact client it was ported for. The position source is logged at
+attach and per walk (`[wowb]` or `[legacy]`).
 
 ## What this does NOT do
 
@@ -116,8 +143,11 @@ on arrival, timeout or repeated blocking.
 1. `python3 Tools/lint_cs_types.py Styx/Logic/Pathing/ClickAim/*.cs` (repo root).
 2. `dotnet build -c Release -p:Platform=x64 .` - this is the first real compiler
    pass over the five new files; they have only been linted, not compiled.
-3. At startup the log should show `ClickAim self-test 26/26 passed` and the
-   calibration line. If the self-test fails, nothing else is worth trying.
-4. `ClickAimPilot.WalkTo(<a hotspot you can see>)` on open ground, 30-60 yd.
+3. At attach the log should show `[ClickAim] self-test 26/26 passed`, the
+   `pilot armed` line, a readable position source and the calibration line. If the
+   self-test fails, nothing else is worth trying.
+4. `--clickaim-walk <x>,<y>` to a point you can see, 30-60 yd of open ground.
+   Expect `[ClickAim] from ... to ... - N yd`, then `arrived: ... yd remaining,
+   N legs`.
 5. Only after that, `ClickAimMover.Install()` in a game session where the tree runs
    (i.e. once the x64 object model is complete).

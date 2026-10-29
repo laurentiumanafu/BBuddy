@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Globalization;
 using Styx.Helpers;
 using Styx.WoWInternals;
@@ -341,30 +341,17 @@ public sealed class ClickAimMover : IPlayerMover
 
     private bool PlayerPosition(out double x, out double y)
     {
-        x = 0;
-        y = 0;
-        try
+        // On 3.3.5a this is ObjectManager.Me.Location; on the 64-bit client Me is
+        // never built, so the same call falls through to the WowB record reader.
+        if (ClickAimPositions.TryRead(out x, out y)) return true;
+
+        if (!_warnedNoPlayer)
         {
-            LocalPlayer? me = StyxWoW.Me;
-            if (me == null)
-            {
-                if (!_warnedNoPlayer)
-                {
-                    _warnedNoPlayer = true;
-                    Logging.Write("[ClickAim] no local player object yet - is the client attached?");
-                }
-                return false;
-            }
-            WoWPoint loc = me.Location;
-            if (!loc.IsValid) return false;
-            x = loc.X;
-            y = loc.Y;
-            return true;
+            _warnedNoPlayer = true;
+            Logging.Write("[ClickAim] no player position yet - is the character in the world? "
+                          + "(legacy object model and WowB record reader both returned nothing)");
         }
-        catch
-        {
-            return false;
-        }
+        return false;
     }
 
     /// <summary>
