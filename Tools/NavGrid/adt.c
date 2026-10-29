@@ -117,7 +117,10 @@ static int bake_from_buffer(const uint8_t *data, size_t size, int32_t map_id,
                             int32_t tile_x, int32_t tile_y, float max_slope_deg,
                             ng_tile *out, adt_stats *stats)
 {
-    if (data == NULL || out == NULL || size < 16) return -1;
+    /* Eight bytes is one chunk header; anything shorter cannot be an ADT. A file
+     * that has a header but no terrain still gets walked, so it reports "no
+     * chunks" (0) instead of "unreadable" (-1). */
+    if (data == NULL || out == NULL || size < 8) return -1;
 
     ng_tile_init(out, map_id, tile_x, tile_y);
     memset(out->flags, 0, sizeof(out->flags));
