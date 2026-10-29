@@ -192,6 +192,15 @@ def index_header() -> bytes:
     return bytes(header)
 
 
+def block_hash(entries: list) -> int:
+    """The blocked-index hash Blizzard writes: each 18-byte record is hashed with
+    the previous result as the seed, so the block is a chain, not one hash."""
+    h = 0
+    for e in entries:
+        h = hashlittle(e, h)
+    return h
+
+
 def build_index_block(entries: list, gap: int = 0) -> bytes:
     """Single guarded block of entries. `gap` inserts the 8 bytes of padding that
     CascLib skips after the header and that some writers omit, so both offsets get
@@ -201,7 +210,7 @@ def build_index_block(entries: list, gap: int = 0) -> bytes:
     out = bytearray()
     out += struct.pack("<I", len(header)) + struct.pack("<I", hashlittle(header, 0)) + header
     out += bytes(gap)
-    out += struct.pack("<I", len(payload)) + struct.pack("<I", hashlittle(payload, 0))
+    out += struct.pack("<I", len(payload)) + struct.pack("<I", block_hash(entries))
     out += payload
     return bytes(out)
 

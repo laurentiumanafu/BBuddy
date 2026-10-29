@@ -358,6 +358,17 @@ typedef struct
  * Paged layouts restart on every 0x200-byte boundary, and a page ends as soon as a
  * record stops looking like an entry - trailing zero padding is normal, so counting
  * it against the candidate would reject the correct layout. */
+/* Blizzard's blocked-index hash is chained per entry, not a single hash over the
+ * whole block: every 18-byte record is hashed with the previous result as the seed.
+ * Both forms are accepted because tools in the wild wrote either one. */
+static uint32_t block_hash_chained(const uint8_t *data, size_t length, size_t stride)
+{
+    uint32_t hash = 0;
+    for (size_t at = 0; stride > 0 && at + stride <= length; at += stride)
+        hash = hashlittle(data + at, stride, hash);
+    return hash;
+}
+
 static double score_layout(const uint8_t *data, size_t size, unsigned segment_bits,
                            uint64_t max_file_offset, unsigned archive_count,
                            size_t start, size_t stride, size_t entry_offset, int paged,
@@ -479,7 +490,13 @@ static idx_layout search_layout(const uint8_t *data, size_t size, unsigned segme
             if (!layout_is_believable(score, seen)) continue;
 
             /* A declared block length that also hashes correctly is decisive. */
-            if (so == 0 && hashlittle(data + start + 8, block_size, 0) == rd32(data + start + 4)) score = 1.5;
+            if (so == 0)
+            {
+                uint32_t stored = rd32(data + start + 4);
+                if (block_hash_chained(data + start + 8, block_size, 18) == stored ||
+                    hashlittle(data + start + 8, block_size, 0) == stored)
+                    score = 1.5;
+            }
             if (block_size > 0) score += 0.25;          /* an exact length beats a guess */
 
             if (layout_is_better(score, seen, &best))

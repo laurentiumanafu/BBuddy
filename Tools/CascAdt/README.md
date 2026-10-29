@@ -79,6 +79,7 @@ Known layouts:
 | name | shape |
 | --- | --- |
 | `block+guard` | u32 block length + u32 hash, then 18-byte entries back to back (hash verified, worth +1.5) |
+| | the hash is the one Blizzard writes - **chained**, each 18-byte record hashed with the previous result as the seed - but a single hash over the whole block is accepted too |
 | `block` | the same entries with no block guard |
 | `paged+guard` | 0x200-byte pages, 4-byte hash in front of each entry, 2 bytes of padding |
 | `paged` | 0x200-byte pages with the entries packed and no per-entry hash |
