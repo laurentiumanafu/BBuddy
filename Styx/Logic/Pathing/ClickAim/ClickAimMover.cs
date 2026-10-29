@@ -87,7 +87,10 @@ public sealed class ClickAimMover : IPlayerMover
     private int _hopIndex;
     private int _hopDy = HopLadder[0];
     private int _deadClickStreak;
+    private int _deadClicks;                // dead clicks in a row, ladder rotations included
     private int _projectedClicks;
+    private bool _projectionWorks;
+    private int _projectionRejects;
     private bool _projectedThisDispatch;
 
     /// <summary>
@@ -312,7 +315,14 @@ public sealed class ClickAimMover : IPlayerMover
             }
         }
 
-        if (_needSignProbe)
+        /* The probe is for the pixel model only. With a readable camera the click is
+         * aimed by projecting the world point, which needs no measured sign - and on
+         * 2026-10-29 the probe fired first and spent four clicks (and the first 4 yd of
+         * the walk) proving nothing. */
+        // Gate on the camera, not on _projectionWorks: that flag is only known after a
+        // projection has been attempted, which happens further down this method - so
+        // gating on it let the probe run first, which is exactly what happened.
+        if (_needSignProbe && !ClickAimPositions.TryReadCamera(out _, out _, out _))
         {
             // Two clicks buy the whole model: a centre click (the boot click, which
             // already ran) says what heading a centre click walks, and this offset
@@ -352,6 +362,9 @@ public sealed class ClickAimMover : IPlayerMover
          * the mmaps planned rather than somewhere down a ray, and the distance walked
          * is the distance to that point instead of whatever a pixel offset happened to
          * be worth that second. */
+        // With a camera there is nothing for the probe to measure.
+        if (_needSignProbe) _needSignProbe = false;
+
         ClickAimLeg leg;
         if (TryProjectedClick(tx, ty, out leg))
         {
@@ -487,15 +500,36 @@ public sealed class ClickAimMover : IPlayerMover
          * the hop height changes instead, and only a streak of them counts as stuck. */
         if (_leg.Turn == ClickAimMath.TurnKindNone && moved < 1.0)
         {
+            _deadClicks++;
             _deadClickStreak++;
-            if (_deadClickStreak >= 2)
+
+            /* Six dead clicks in a row is the end of the walk, not another rung of the
+             * ladder. On 2026-10-29 the ladder rotated for minutes while the character
+             * stood still at 5.7 yd and the walk had to be killed by hand: nothing in
+             * that loop was ever going to end it, because every component believed it
+             * was about to make its next attempt. */
+            if (_deadClicks >= 6)
+            {
+                Blocked = true;
+                Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                    "[ClickAim] {0} clicks in a row moved the character nowhere (it is at "
+                    + "({1:F1}, {2:F1}), {3:F1} yd from the point). Not clicking any more - the caller "
+                    + "can re-plan from here.", _deadClicks, _legX, _legY, _legWantYd));
+            }
+            else if (_deadClickStreak >= 2)
             {
                 _hopIndex = (_hopIndex + 1) % HopLadder.Length;
                 _hopDy = HopLadder[_hopIndex];
                 _sessionHopDy = _hopDy;
+
+                // A movement key cancels a click-walk and clears the client's internal
+                // CTM state; a click posted after it is treated as new.
+                IntPtr hwnd = Handle();
+                if (hwnd != IntPtr.Zero) ClickAimInput.TapKey(hwnd, StopKeyVk, 120);
+
                 Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                    "[ClickAim] {0} clicks in a row moved nothing; trying a {1} px hop",
-                    _deadClickStreak, _hopDy));
+                    "[ClickAim] {0} clicks in a row moved nothing ({1} in total); tapped the stop key and "
+                    + "will try a {2} px hop", _deadClickStreak, _deadClicks, _hopDy));
                 _deadClickStreak = 0;
                 _stuck = 0;                 // not the obstacle counter's business
             }
@@ -503,6 +537,7 @@ public sealed class ClickAimMover : IPlayerMover
         else if (moved >= 1.0)
         {
             _deadClickStreak = 0;
+            _deadClicks = 0;
             if (moved < BlockedMove) _stuck++; else _stuck = 0;
         }
 
@@ -634,7 +669,15 @@ public sealed class ClickAimMover : IPlayerMover
         leg.Turn = ClickAimMath.TurnKindNone;
 
         double camX, camY, camZ;
-        if (!ClickAimPositions.TryReadCamera(out camX, out camY, out camZ)) return false;
+        if (!ClickAimPositions.TryReadCamera(out camX, out camY, out camZ))
+        {
+            if (_projectionWorks)
+            {
+                _projectionWorks = false;
+                Logging.Write("[ClickAim] the camera stopped being readable: falling back to the pixel model");
+            }
+            return false;
+        }
 
         double px, py;
         if (!PlayerPosition(out px, out py)) return false;
@@ -654,7 +697,26 @@ public sealed class ClickAimMover : IPlayerMover
         int dx, dy;
         if (!ClickAimMath.ProjectToScreen(camX, camY, camZ, px, py, pz, tx, ty, tz,
                                           w / 2.0, h / 2.0, _p.CameraFovDeg, out dx, out dy))
+        {
+            _projectionRejects++;
+            if (_projectionRejects <= 3)
+            {
+                Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                    "[ClickAim] projection rejected the point ({0:F1}, {1:F1}, {2:F1}) from camera "
+                    + "({3:F1}, {4:F1}, {5:F1}) looking at the player ({6:F1}, {7:F1}, {8:F1}) - it is "
+                    + "behind the camera or off the screen; using the pixel model for this leg",
+                    tx, ty, tz, camX, camY, camZ, px, py, pz));
+            }
             return false;
+        }
+
+        if (!_projectionWorks)
+        {
+            _projectionWorks = true;
+            Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                "[ClickAim] aim: projecting world points onto the screen from camera "
+                + "({0:F1}, {1:F1}, {2:F1}), {3:F0} deg field of view", camX, camY, camZ, _p.CameraFovDeg));
+        }
 
         // A click within a few pixels of the middle walks along the camera axis and
         // says nothing about where the character is, so aim at least a little off it.
@@ -698,14 +760,15 @@ public sealed class ClickAimMover : IPlayerMover
         IntPtr hwnd = Handle();
         if (hwnd == IntPtr.Zero) return;
 
+        bool projected = _projectedThisDispatch;
         if (leg.Turn == ClickAimMath.TurnKindNone)
         {
             Logging.Write(string.Format(CultureInfo.InvariantCulture,
                 "[ClickAim] click ({0}, {1}) - {2:F1} yd to go, {3}",
                 leg.ClickPx, leg.Dy, _legWantYd > 0 ? _legWantYd : 0.0,
-                _projectedClicks > 0 && Math.Abs(leg.ClickPx) == 0 && Math.Abs(leg.Dy) <= 12
-                    ? "aimed by projection at the centre"
-                    : "click scale " + (_p.YdPerDyPx > 1e-6 ? _p.YdPerDyPx : _p.AssumedYdPerDyPx).ToString("F2", CultureInfo.InvariantCulture) + " yd/px"));
+                projected
+                    ? "aimed at the projected point"
+                    : "pixel model, scale " + (_p.YdPerDyPx > 1e-6 ? _p.YdPerDyPx : _p.AssumedYdPerDyPx).ToString("F2", CultureInfo.InvariantCulture) + " yd/px"));
         }
 
         if (leg.Turn == ClickAimMath.TurnKindDrag)

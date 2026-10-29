@@ -49,6 +49,12 @@ public static class RouteRunner
     /// </summary>
     private const double FollowStepYd = 15.0;
 
+    /// <summary>
+    /// Shortest distance a click should be aimed at. Below this the projected point
+    /// lands on the character's own feet and the click is ignored by the client.
+    /// </summary>
+    private const double LookAheadYd = 12.0;
+
     /// <summary>Radius marked as bad around a point the character could not pass.</summary>
     private const float BlackspotRadius = 8.0f;
 
@@ -265,6 +271,31 @@ public static class RouteRunner
 
             for (int p = 1; p < follow.Length; p++)
             {
+                /* Never aim a click closer than LookAheadYd unless it is the last point.
+                 *
+                 * A click is aimed at the ground under a screen position, and a point a
+                 * couple of yards from the character projects onto the character's own
+                 * feet - where a click does nothing. On 2026-10-29 that is exactly what
+                 * happened: the walk sat at 5.7 yd from its next point and clicked at it
+                 * a dozen times without moving. Skipping ahead to the next point keeps
+                 * the aim at an angle the projection can express. */
+                if (p < follow.Length - 1)
+                {
+                    double cx, cy;
+                    if (ClickAimPositions.TryRead(out cx, out cy))
+                    {
+                        int skipped = p;
+                        while (skipped < follow.Length - 1 &&
+                               ClickAimMath.Len(follow[skipped].X - cx, follow[skipped].Y - cy) < LookAheadYd)
+                            skipped++;
+                        if (skipped != p)
+                        {
+                            p = skipped - 1;    // the loop's ++p lands on `skipped`
+                            continue;
+                        }
+                    }
+                }
+
                 if (ClickAimPilot.WalkTo(mover, follow[p], StepTolerance, MeshPointTimeoutMs, false, true))
                     continue;
 
