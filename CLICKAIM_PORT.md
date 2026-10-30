@@ -1472,3 +1472,41 @@ unverified`).
 `[ClickAim] no progress for 25 s: stuck at 25.5 yd from the point … [Grind] could not walk to
 hotspot` — the click-to-move fallback used when Detour refuses a leg stalled 25 yd out and the
 bot stood there until it gave up. That is the mover, not the loot; it needs its own run.
+
+## 18:57 run — looting works; one click per body, then look away
+
+User: **"success, loots the monster after it is dead - successfully, then it selects the dead
+monster again (after it was already looted earlier)"**. Four corpses, four loots:
+
+```
+[18:59:50.565] [Loot] the right-click on 0x…2469 landed (left-click probe 20 found it 0,130 px from
+                      the projected point; that offset is now used to start every search)
+[18:59:52.740] [Loot] the right-click on 0x…2469 landed (left-click probe 1 found it 0,130 px …)
+[18:59:52.740] [Grind] looted the body of 0x…2469 (2.8 yd away); the bones are still in the pool
+```
+
+Two things in that pair of lines:
+
+1. **The probe works.** The first search cost 20 probes and learned `0,130 px`; every later corpse
+   was found by probe 1. That is the projection being wrong by most of the character's height and
+   the search correcting it, exactly as intended.
+2. **The second pair of lines is the bug the user saw.** Every body was clicked *twice*, 2.2 s
+   apart — the retry from `LootTries`, which could not tell "these are bones, the loot happened"
+   from "the click missed". A right-click on a body also SELECTS it, so the second click picked up
+   the corpse that had just been looted.
+
+Fixed:
+
+- **`LootTries` is gone.** A left-click probe has already proved the click lands on the body, so
+  there is nothing a retry could establish. One right-click per corpse, full stop.
+- **The target is cleared afterwards.** The loot click leaves the body selected, so once the body
+  is settled the bot presses a left-click on a pixel the search already proved empty (a probe that
+  came back with *nothing* selected). A left-click there deselects and does nothing else — no walk,
+  no attack, no window. That is the only way to drop a target in this client: ESC opens the Game
+  Menu. The corpse then stays untouched: `_looted` keeps it out of the loot list for the session,
+  and the TAB loop refuses it by health 0.
+
+One line is left that a reader might wonder about — `the only thing the client offered was a
+corpse (health 0) - walking on without touching it`. That is TAB, the client's own targeting,
+finding nothing but the body it just stood over. The bot does not press a key on it and does not
+stop for it; it walks on.

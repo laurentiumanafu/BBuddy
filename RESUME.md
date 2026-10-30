@@ -321,3 +321,12 @@ spell cast through the memory action bar. What the run exposed and what changed:
   projected point and says it is unverified.
 - Open, not touched here: the click-to-move fallback (`no route on the mesh … clicking straight`)
   stalls ~25 yd out with `no progress for 25 s` and the grind gives up on the hotspot.
+
+## Latest: 18:57 run — looting confirmed working; one click per body
+
+- Verified: `left-click probe 20 found it 0,130 px` then `probe 1` for every later corpse — the
+  learned offset makes the search one probe.
+- Removed the second loot attempt (`LootTries`): it re-clicked every body 2.2 s after looting and
+  a right-click also selects, which is the "selects the dead monster again" the user saw.
+- `DeselectIfPossible`: after the loot, a left-click on a pixel a probe proved empty clears the
+  target (no walk/attack/window). ESC is not usable - it opens the Game Menu.

@@ -120,8 +120,6 @@ internal static class GrindRunner
     /// <summary>How long the walk to a corpse may take before the loot is given up.</summary>
     private const int LootWalkMs = 20000;
 
-    /// <summary>Tries per corpse before giving up on it for this session.</summary>
-    private const int LootTries = 2;
 
     /// <summary>Corpses this run has already tried; a corpse that cannot be looted is not retried forever.</summary>
     private static readonly HashSet<WowBGuid> _looted = new HashSet<WowBGuid>();
@@ -131,6 +129,11 @@ internal static class GrindRunner
 
     /// <summary>Set once the corpse word-diff has been printed; it is a discovery aid, not a log line.</summary>
     private static bool _lootProbed;
+
+    /// <summary>A pixel a left-click probe proved is empty ground - the safe way to deselect.</summary>
+    private static int _emptyPixelX;
+    private static int _emptyPixelY;
+    private static bool _emptyPixelKnown;
 
     /// <summary>
     /// A mob's level, from <c>data+0x1E40</c>, against mine. Above +3 is a corpse run and
@@ -286,6 +289,7 @@ internal static class GrindRunner
         _looted.Clear();
         _loots = 0;
         _lootProbed = false;
+        _emptyPixelKnown = false;
 
         /* What the client can be asked without Lua: level, health, the stored action bar
          * and what is standing around. It is printed once because it is the answer to
@@ -1026,87 +1030,100 @@ internal static class GrindRunner
     /// </summary>
     private static int TryLootOne(IntPtr hwnd, WowBObservedUnit corpse)
     {
-        for (int attempt = 0; attempt < LootTries && !_stop; attempt++)
+        /* Get within reach first, and mean it. A right-click on a body further away is a walk
+         * order, not a loot - the 18:44 run spent a whole loot window on that. */
+        int walkStart = Environment.TickCount;
+        while (unchecked(Environment.TickCount - walkStart) < LootWalkMs && !_stop)
         {
-            /* Get within reach first, and mean it. A right-click on a body further away is a
-             * walk order, and the 18:44 run spent a whole loot window on that: the mob was
-             * killed at 18 yd, the walk budget ran out before the body was reachable, and the
-             * click sweep then reported "none of 18 points selected it" - which was true and
-             * entirely the wrong thing to be measuring. */
-            int walkStart = Environment.TickCount;
-            while (unchecked(Environment.TickCount - walkStart) < LootWalkMs && !_stop)
-            {
-                double px, py;
-                if (!ClickAimPositions.TryRead(out px, out py)) break;
-                double d = ClickAimMath.Len(corpse.Location.X - px, corpse.Location.Y - py);
-                if (d <= LootReachYd) break;
-                if (UnderAttack()) return LootUnderAttack;
-                double remaining;
-                ClickAimKeySteer.Steer(corpse.Location.X, corpse.Location.Y, hwnd, true, out remaining);
-                Thread.Sleep(90);
-            }
-
-            ClickAimKeySteer.ReleaseHeld();
-            StopAndSettle(hwnd);
-
-            double lx, ly;
-            if (!ClickAimPositions.TryRead(out lx, out ly)) return LootNoClick;
-
-            double reach = ClickAimMath.Len(corpse.Location.X - lx, corpse.Location.Y - ly);
-            if (reach > LootReachYd + 1.0)
-            {
-                Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                    "[Loot] could not get to the body of {0} - still {1:F1} yd away and the reach is "
-                    + "{2:F0} yd, so no click was sent (a right-click from here is a walk order)",
-                    corpse.Guid, reach, LootReachYd));
-                return LootNoClick;
-            }
-
-            ClickAimKeySteer.Face(corpse.Location.X, corpse.Location.Y, hwnd, 30.0, 4);
-
-            /* One probe per session: five windows of the corpse's own object, read before and
-             * after a click the client CONFIRMED selected the body. A word that moves across
-             * that click is the loot flag, and finding it finally makes "was it looted" a
-             * reading instead of an assumption. */
-            bool probe = !_lootProbed && !_clickBiasKnown;
-            uint[][]? before = probe ? CaptureWords(corpse) : null;
-
-            /* mustSelect: the click only counts once the client says this body is the target.
-             * A right-click aimed at a point that lands on the character's own back (which is
-             * where a unit 3 yd in front projects to) selects nothing and loots nothing, and
-             * "I clicked" was being reported as "I looted" all through the 18:35 run. */
-            string how;
-            if (!TryClickUnit(hwnd, corpse, lx, ly, true, out how))
-            {
-                Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                    "[Loot] could not reach the body of {0} with the mouse: {1}", corpse.Guid, how));
-                return LootNoClick;
-            }
-
-            _clicks++;
-            _lootProbed = true;
-
-            /* The client opens, takes and closes the window in well under a second with
-             * auto-loot on; a body that is going to leave the pool leaves soon after. */
-            for (int waited = 0; waited < LootSettleMs && !_stop; waited += 300)
-            {
-                Thread.Sleep(300);
-                if (!BodyStillThere(corpse.Guid)) return 1;
-            }
-
-            if (before != null)
-            {
-                Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
-                if (reader != null) DescribeWordDiff(reader, corpse, before);
-            }
-
-            Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                "[Loot] the right-click on {0} landed ({1}); the body is still in the pool", corpse.Guid, how));
-
-            if (attempt + 1 < LootTries) StopAndSettle(hwnd);
+            double px, py;
+            if (!ClickAimPositions.TryRead(out px, out py)) break;
+            double d = ClickAimMath.Len(corpse.Location.X - px, corpse.Location.Y - py);
+            if (d <= LootReachYd) break;
+            if (UnderAttack()) return LootUnderAttack;
+            double remaining;
+            ClickAimKeySteer.Steer(corpse.Location.X, corpse.Location.Y, hwnd, true, out remaining);
+            Thread.Sleep(90);
         }
 
-        return 0;
+        ClickAimKeySteer.ReleaseHeld();
+        StopAndSettle(hwnd);
+
+        double lx, ly;
+        if (!ClickAimPositions.TryRead(out lx, out ly)) return LootNoClick;
+
+        double reach = ClickAimMath.Len(corpse.Location.X - lx, corpse.Location.Y - ly);
+        if (reach > LootReachYd + 1.0)
+        {
+            Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                "[Loot] could not get to the body of {0} - still {1:F1} yd away and the reach is "
+                + "{2:F0} yd, so no click was sent (a right-click from here is a walk order)",
+                corpse.Guid, reach, LootReachYd));
+            return LootNoClick;
+        }
+
+        ClickAimKeySteer.Face(corpse.Location.X, corpse.Location.Y, hwnd, 30.0, 4);
+
+        /* One probe per session: five windows of the corpse's own object, read before and after
+         * a click the client CONFIRMED selected the body. */
+        bool probe = !_lootProbed && !_clickBiasKnown;
+        uint[][]? before = probe ? CaptureWords(corpse) : null;
+
+        string how;
+        if (!TryClickUnit(hwnd, corpse, lx, ly, true, out how))
+        {
+            Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                "[Loot] could not reach the body of {0} with the mouse: {1}", corpse.Guid, how));
+            return LootNoClick;
+        }
+
+        _clicks++;
+        _lootProbed = true;
+
+        /* ONE click per body, and this is the reason. The 18:57 run looted four corpses and then
+         * clicked every one of them a second time, 2.2 s later, because the retry loop could not
+         * tell "the click landed and these are bones" from "the click missed" - and a right-click
+         * on a body also SELECTS it, so the user watched the bot pick the corpse it had just
+         * looted back up. A left-click probe has already proved the click lands on the body, so
+         * there is nothing left for a retry to establish. */
+        int result = 0;
+        for (int waited = 0; waited < LootSettleMs && !_stop; waited += 300)
+        {
+            Thread.Sleep(300);
+            if (!BodyStillThere(corpse.Guid))
+            {
+                result = 1;
+                break;
+            }
+        }
+
+        if (before != null)
+        {
+            Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
+            if (reader != null) DescribeWordDiff(reader, corpse, before);
+        }
+
+        Logging.Write(string.Format(CultureInfo.InvariantCulture,
+            "[Loot] the right-click on {0} landed ({1}); {2}", corpse.Guid, how,
+            result > 0 ? "the body is gone, so the client took it" : "the body is still in the pool as bones"));
+
+        /* Leave the screen the way a player would: nothing targeted. The body is still selected
+         * by the loot click, and a left-click on ground the search already proved empty clears
+         * the target without moving, attacking, or opening anything. */
+        DeselectIfPossible(hwnd);
+
+        return result;
+    }
+
+    /// <summary>
+    /// Clears the current target with a left-click on a pixel a probe found to be empty ground.
+    /// A left-click there deselects and does nothing else; there is no ESC in this client that
+    /// does not open the Game Menu.
+    /// </summary>
+    private static void DeselectIfPossible(IntPtr hwnd)
+    {
+        if (!_emptyPixelKnown) return;
+        ClickAimInput.LeftClick(hwnd, _emptyPixelX, _emptyPixelY);
+        Thread.Sleep(120);
     }
 
     /// <summary>The click found no point on the body at all.</summary>
@@ -1493,7 +1510,19 @@ internal static class GrindRunner
                 probes++;
                 Thread.Sleep(ClickProbeSettleMs);
 
-                if (reader.ReadTargetGuid() != unit.Guid) continue;
+                WowBGuid after = reader.ReadTargetGuid();
+                if (after != unit.Guid)
+                {
+                    /* Nothing selected after the click: that pixel is ground (or blank UI), which
+                     * makes it a safe place to deselect later - see DeselectIfPossible. */
+                    if (after.IsEmpty && !_emptyPixelKnown)
+                    {
+                        _emptyPixelX = dx;
+                        _emptyPixelY = dy;
+                        _emptyPixelKnown = true;
+                    }
+                    continue;
+                }
 
                 foundX = dx;
                 foundY = dy;
