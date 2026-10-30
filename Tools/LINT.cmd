@@ -22,4 +22,5 @@ python Tools\lint_cs_constants.py
 python Tools\lint_cs_overflow_literals.py .
 python Tools\lint_call_arity.py . --strict
 python Tools\lint_cs_undeclared.py .
+python Tools\lint_cs_duplicate_types.py
 endlocal

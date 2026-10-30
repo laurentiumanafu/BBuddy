@@ -41,7 +41,7 @@ public sealed class RoutePoint
 /// author encoded "these mobs are worth killing at level 14" as TargetMinLevel /
 /// TargetMaxLevel, and the factions as the mobs' faction ids.
 /// </summary>
-public sealed class GrindArea
+public sealed class ProfileGrindArea
 {
     /// <summary>The SubProfile's name, which is how these appear in the profile.</summary>
     public string Name { get; set; } = "";
@@ -111,9 +111,9 @@ public static class ProfileRoute
     /// best area - walk 13 hotspots and stop, which looks exactly like a bot that
     /// "worked" and quietly did nothing after 2 minutes.
     /// </summary>
-    public static List<GrindArea> LoadGrindAreas(string path)
+    public static List<ProfileGrindArea> LoadGrindAreas(string path)
     {
-        var areas = new List<GrindArea>();
+        var areas = new List<ProfileGrindArea>();
         if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return areas;
 
         XDocument doc;
@@ -124,7 +124,7 @@ public static class ProfileRoute
         {
             if (grind.Name.LocalName != "GrindArea") continue;
 
-            var area = new GrindArea();
+            var area = new ProfileGrindArea();
 
             XElement? sub = null;
             foreach (XElement ancestor in grind.Ancestors())

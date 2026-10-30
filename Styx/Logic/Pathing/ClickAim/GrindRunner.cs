@@ -94,7 +94,7 @@ internal static class GrindRunner
             return false;
         }
 
-        List<GrindArea> areas = ProfileRoute.LoadGrindAreas(profilePath);
+        List<ProfileGrindArea> areas = ProfileRoute.LoadGrindAreas(profilePath);
         if (areas.Count == 0)
         {
             Logging.Write("[Grind] " + profilePath + " has no <GrindArea> hotspots. A quest "
@@ -120,7 +120,7 @@ internal static class GrindRunner
             if (d < best) { best = d; nearest = i; }
         }
 
-        GrindArea area = areas[nearest];
+        ProfileGrindArea area = areas[nearest];
         Logging.Write(string.Format(CultureInfo.InvariantCulture,
             "[Grind] {0}: {1} grind area(s) in the file; using \"{2}\" - {3} hotspot(s), {4:F0} yd "
             + "from the player. Target level {5}-{6}, factions '{7}' (read, not enforced: the "
@@ -138,7 +138,7 @@ internal static class GrindRunner
         return true;
     }
 
-    private static void Run(GrindArea area, int minutes)
+    private static void Run(ProfileGrindArea area, int minutes)
     {
         int started = Environment.TickCount;
         int budgetMs = minutes <= 0 ? int.MaxValue : minutes * 60000;
