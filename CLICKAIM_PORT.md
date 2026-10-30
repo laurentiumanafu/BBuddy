@@ -1510,3 +1510,56 @@ One line is left that a reader might wonder about — `the only thing the client
 corpse (health 0) - walking on without touching it`. That is TAB, the client's own targeting,
 finding nothing but the body it just stood over. The bot does not press a key on it and does not
 stop for it; it walks on.
+## 19:07 run — settings, Moonfire, and a window to change both
+
+The user's words for this run: *"ran pretty well. Next I want settings - eat/dring at certain
+Hp/MP procent, and using up new skills (I learn moonfire but the bot isn't using it or if I want
+to use a new class With different skills)"*. Looting is settled; this run is about the numbers the
+rotation works to and about spells it did not know.
+
+**Moonfire was on the bar all evening and was never cast.** Slot 5 held 8921 from the first log to
+the last. The old rotation looked for a *direct-damage* spell and for a heal, and 8921 was in
+neither list, so a DoT the character had learned was invisible to the bot. Two things follow from
+that:
+
+- **Roles are derived from the spell NAME, not from an id list.** `KnownSpells` still maps id to
+  name (ids are the only thing on the bar), but what a spell is *for* comes from `RolesByName`.
+  One new id, one new line, and the role follows. The table now covers the 3.3.5a families for
+  every class, because the next character may not be a druid.
+- **A DoT is applied once per target, not spammed.** Casting it every rotation would be a global
+  cooldown spent for nothing. It is put on a target guid once and re-applied only after
+  `DotRefreshSeconds` (default 12 s, which covers Moonfire/Corruption/Pain/Immolate at low ranks).
+  The client's debuff list is not readable on this build, so the timer is the bot's own cast time
+  — the honest version of "is it still ticking".
+
+**Eating and drinking.** Between fights, out of combat, with nothing on us: release the movement
+keys, stop, press the food or drink key, and wait. The thresholds are the user's, in percent, and
+`0` turns the rule off. Food and drink are *items on the action bar* (slot 11 was 159, Refreshing
+Spring Water; slot 12 was 4536, Shiny Red Apple), so this is a key press like everything else —
+no Lua, no item API.
+
+**The mana percentage needed a different denominator.** Every log line on this build says
+`pow=139/100`: the max-power word is a candidate and lies here. A percentage taken from it would
+read 139% and the drink rule would never fire. The fix is the session peak — `max(recorded max,
+highest power seen)` — and it is self-correcting because power only climbs while resting or on a
+level-up, both of which the peak follows within one read.
+
+**The settings are a file and a window.** `Settings\clickaim-grind.txt` holds the numbers
+(`EatBelowPercent`, `DrinkBelowPercent`, `HealBelowPercent`, `UseDamageOverTime`, `UseBuffs`,
+`FoodSlot`, `DrinkSlot`, `DotRefreshSeconds`, `RestMs`), `Settings\clickaim-skills.txt` holds the
+user's own spell roles (`<spell id> = Attack|Damage|Dot|Heal|Buff|Utility|Ignore`). Both are read
+by `ClickAimSettings.Load()` at the start of every run, and both are written by the **Combat
+settings** button in the CopilotBuddy window — which is visible before the client is attached, so
+the numbers can be set up front. The window is a view: the files stay authoritative, a hand edit is
+picked up the same way, and there is no second source of truth to disagree with.
+
+The Spells tab exists for exactly the case the user described — a spell the bot does not recognise,
+or a class whose bar it has never seen. It lists every filled slot with the key it is bound to and
+the role the rotation will use, and a role set there wins over the name table, including `Ignore`
+for a spell that must never be pressed. If the bar cannot be read (no client attached) the tab
+falls back to the roles already set by hand, so a bad override can be undone without the game
+running.
+
+Both self-tests grew: `Grind settings self-test` covers the parser, the clamping and the round
+trip; `Combat self-test` now checks that Moonfire is a DoT, that a hand-set role beats the table in
+both directions, and that food/drink are told apart by item id.

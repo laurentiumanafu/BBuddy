@@ -397,6 +397,11 @@ public static class ClickAimDiagnostics
         try { Logging.Write(ClickAimCombat.SelfTest()); }
         catch (Exception ex) { Logging.Write("[Combat] self-test threw: " + ex.Message); }
 
+        // The user's own numbers: eat/drink/heal percentages and the DoT switch. A settings
+        // file that silently ignores a line is worse than no settings at all.
+        try { Logging.Write(ClickAimSettings.SelfTest()); }
+        catch (Exception ex) { Logging.Write("[Grind] settings self-test threw: " + ex.Message); }
+
         // The bot loop is disabled on x64, but the navmesh engine only needs
         // Navigation.dll (now built for x64) and the mmaps directory.
         bool mesh = false;

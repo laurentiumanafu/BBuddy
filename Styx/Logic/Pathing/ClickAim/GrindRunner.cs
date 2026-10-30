@@ -350,6 +350,11 @@ internal static class GrindRunner
                     break;
                 }
 
+                /* Once, before the first fight rather than in the middle of one: whatever this
+                 * class buffs itself with (Mark of the Wild, Arcane Intellect, ...). */
+                string buffed = ApplyBuffsIfNeeded(hwnd);
+                if (buffed.Length > 0) Logging.Write("[Grind] " + buffed);
+
                 string combatReport;
                 if (TryEngage(hwnd, out combatReport))
                 {
@@ -365,6 +370,12 @@ internal static class GrindRunner
                 }
 
                 if (combatReport.Length > 0) Logging.Write("[Grind] " + combatReport);
+
+                /* Between fights, with nothing on us: eat and drink if the user's percentages say
+                 * so. This is the cheapest place in the loop to sit - the next thing it would do
+                 * is walk, and walking is what cancels a meal. */
+                string rested = RestIfNeeded(hwnd);
+                if (rested.Length > 0) Logging.Write("[Grind] " + rested);
 
                 RoutePoint next = area.Hotspots[index % area.Hotspots.Count];
                 index++;
@@ -453,6 +464,16 @@ internal static class GrindRunner
             Logging.Write("[Grind] memory: no WowB reader - nothing can be read");
             return;
         }
+
+        /* The user's own numbers, from Settings\clickaim-grind.txt. Read here, once per run, so
+         * a change made in the window (or in a text editor) is what this run uses. */
+        ClickAimSettings.Load();
+        _dotGuid = default(WowBGuid);
+        _dotUntil = 0;
+        _manaPeak = 0;
+        _healthPeak = 0;
+        _buffsApplied = false;
+        Logging.Write("[Grind] combat settings: " + ClickAimSettings.Describe());
 
         int level = reader.ReadPlayerLevel();
         Logging.Write(level > 0
@@ -913,6 +934,189 @@ internal static class GrindRunner
             fought, killed, loot.Length == 0 ? "" : "; " + loot);
     }
 
+    /// <summary>
+    /// Presses the self-buffs on the bar once per run: Mark of the Wild, Thorns, Arcane
+    /// Intellect, Power Word: Fortitude - whatever this class has. The client's buff list is not
+    /// readable on this build, so "is it already up" cannot be asked; once per run is the honest
+    /// version of the question, and a duplicate buff costs one global cooldown.
+    /// </summary>
+    private static string ApplyBuffsIfNeeded(IntPtr hwnd)
+    {
+        if (_buffsApplied || _stop || !ClickAimSettings.UseBuffs) return "";
+
+        /* Out of combat only: a buff is a cast, and a cast in a fight is a wasted global. The
+         * flag stays false until a quiet moment actually happens, so a run that starts next to
+         * a mob still gets its buffs on the first calm iteration. */
+        if (PlayerInCombat() || UnderAttack()) return "";
+        _buffsApplied = true;
+
+        Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
+        if (reader == null) return "";
+
+        List<ClickAimAction> bar = ClickAimCombat.ReadBar(reader);
+        var applied = new List<string>();
+        for (int i = 0; i < bar.Count && applied.Count < 2 && !_stop; i++)
+        {
+            if (!bar[i].IsBuff) continue;
+            ClickAimInput.TapKey(hwnd, bar[i].KeyVk, 40);
+            _presses++;
+            Thread.Sleep(ClickAimCombat.CastSettleMs);
+            applied.Add(bar[i].Name + " (slot " + bar[i].Slot + " '"
+                        + ClickAimCombat.KeyLabel(bar[i].KeyVk) + "')");
+        }
+
+        if (applied.Count == 0) return "";
+        return "buffed with " + string.Join(", ", applied.ToArray());
+    }
+
+    // ------------------------------------------------------------------ eating and drinking
+
+    /// <summary>
+    /// Health as a percentage, or -1 when it cannot be read. Max health is a real field on this
+    /// build (every log line agrees: 131/131), so it is used directly.
+    /// </summary>
+    private static int HealthPercent()
+    {
+        Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
+        if (reader == null) return -1;
+
+        WowBWorldSnapshot? snap;
+        WowBObservedUnit me;
+        if (!Capture(out snap) || snap == null || !snap.TryGetLocalPlayer(out me)) return -1;
+
+        Styx.WoWInternals.WowBReader.WowBUnitFields f;
+        if (!reader.TryGetUnitFields(me.UnitAddress, out f)) return -1;
+
+        if (f.Health > _healthPeak) _healthPeak = f.Health;
+        uint max = f.MaxHealth > 0 ? f.MaxHealth : _healthPeak;
+        if (max == 0) return -1;
+
+        int percent = (int)Math.Round(f.Health * 100.0 / max);
+        return percent > 100 ? 100 : percent;
+    }
+
+    /// <summary>
+    /// Mana as a percentage, or -1 when it cannot be read.
+    ///
+    /// The max-power word is a CANDIDATE on this build and it lies: every log line prints
+    /// "pow=139/100" for a character whose mana bar is full at 139. A percentage over that 100
+    /// would read 139% and the drink rule would never fire, so the denominator is the larger of
+    /// the field and the highest value seen this session.
+    /// </summary>
+    private static int ManaPercent()
+    {
+        Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
+        if (reader == null) return -1;
+
+        WowBWorldSnapshot? snap;
+        WowBObservedUnit me;
+        if (!Capture(out snap) || snap == null || !snap.TryGetLocalPlayer(out me)) return -1;
+
+        Styx.WoWInternals.WowBReader.WowBUnitFields f;
+        if (!reader.TryGetUnitFields(me.UnitAddress, out f)) return -1;
+
+        if (f.Power > _manaPeak) _manaPeak = f.Power;
+        uint max = f.MaxPower;
+        if (max < _manaPeak) max = _manaPeak;
+        if (max == 0) return -1;
+
+        int percent = (int)Math.Round(f.Power * 100.0 / max);
+        return percent > 100 ? 100 : percent;
+    }
+
+    /// <summary>
+    /// Eats and drinks between fights, at the percentages from the settings, and never while
+    /// something is on the character.
+    ///
+    /// Both are ordinary items on the action bar - slot 11 held Refreshing Spring Water and slot
+    /// 12 a Shiny Red Apple on the character this was written for - so this is a key press like
+    /// everything else, and the client does the sitting. Nothing moves during the wait: in this
+    /// client any movement cancels a meal, which is why the walk is stopped first and the loop
+    /// does not touch the movement keys until the rest is over.
+    /// </summary>
+    private static string RestIfNeeded(IntPtr hwnd)
+    {
+        if (_stop) return "";
+        if (ClickAimSettings.EatBelowPercent <= 0 && ClickAimSettings.DrinkBelowPercent <= 0) return "";
+        if (PlayerInCombat() || UnderAttack()) return "";
+
+        Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
+        if (reader == null) return "";
+
+        List<ClickAimAction> bar = ClickAimCombat.ReadBar(reader);
+        ClickAimAction? food = ClickAimCombat.FindFood(bar, ClickAimSettings.FoodSlot);
+        ClickAimAction? drink = ClickAimCombat.FindDrink(bar, ClickAimSettings.DrinkSlot);
+
+        int health = HealthPercent();
+        int mana = ManaPercent();
+
+        bool wantFood = food != null && ClickAimSettings.EatBelowPercent > 0
+                        && health >= 0 && health <= ClickAimSettings.EatBelowPercent;
+        bool wantDrink = drink != null && ClickAimSettings.DrinkBelowPercent > 0
+                         && mana >= 0 && mana <= ClickAimSettings.DrinkBelowPercent;
+
+        if (!wantFood && !wantDrink)
+        {
+            /* Say why once, when a rule is close to firing and cannot: the usual reason is that
+             * the item is not on the bar, which is a thing the user can fix in one drag. */
+            if (food == null && ClickAimSettings.EatBelowPercent > 0 && health >= 0
+                && health <= ClickAimSettings.EatBelowPercent)
+                return string.Format(CultureInfo.InvariantCulture,
+                    "health is {0}% and the rule says eat, but there is no food item on the action bar "
+                    + "(put food on a slot, or set FoodSlot with the Combat settings button)", health);
+            if (drink == null && ClickAimSettings.DrinkBelowPercent > 0 && mana >= 0
+                && mana <= ClickAimSettings.DrinkBelowPercent)
+                return string.Format(CultureInfo.InvariantCulture,
+                    "mana is {0}% and the rule says drink, but there is no drink item on the action bar "
+                    + "(put a drink on a slot, or set DrinkSlot with the Combat settings button)", mana);
+            return "";
+        }
+
+        ClickAimKeySteer.ReleaseHeld();
+        StopAndSettle(hwnd);
+
+        var said = new List<string>();
+        if (wantFood)
+        {
+            ClickAimInput.TapKey(hwnd, food!.KeyVk, 40);
+            _presses++;
+            said.Add(string.Format(CultureInfo.InvariantCulture,
+                "ate {0} (slot {1} '{2}') at {3}% health", food.Name, food.Slot,
+                ClickAimCombat.KeyLabel(food.KeyVk), health));
+        }
+        if (wantDrink)
+        {
+            ClickAimInput.TapKey(hwnd, drink!.KeyVk, 40);
+            _presses++;
+            said.Add(string.Format(CultureInfo.InvariantCulture,
+                "drank {0} (slot {1} '{2}') at {3}% mana", drink.Name, drink.Slot,
+                ClickAimCombat.KeyLabel(drink.KeyVk), mana));
+        }
+
+        /* Sit and let it work. The loops stops at the first read that is clear of both rules,
+         * so a character that was only a little low is back to work in a second or two. */
+        int started = Environment.TickCount;
+        int afterHealth = health;
+        int afterMana = mana;
+        while (unchecked(Environment.TickCount - started) < ClickAimSettings.RestMs && !_stop)
+        {
+            Thread.Sleep(500);
+            afterHealth = HealthPercent();
+            afterMana = ManaPercent();
+
+            bool healthOk = !wantFood || afterHealth < 0
+                            || afterHealth > ClickAimSettings.EatBelowPercent;
+            bool manaOk = !wantDrink || afterMana < 0
+                          || afterMana > ClickAimSettings.DrinkBelowPercent;
+            if (healthOk && manaOk) break;
+            if (UnderAttack()) break;
+        }
+
+        return string.Join("; ", said.ToArray()) + string.Format(CultureInfo.InvariantCulture,
+            " -> health {0}%, mana {1}% after {2:F1} s", afterHealth, afterMana,
+            unchecked(Environment.TickCount - started) / 1000.0);
+    }
+
     // ------------------------------------------------------------------ looting
     /// <summary>
     /// Right-clicks corpses so the client loots them.
@@ -1131,6 +1335,27 @@ internal static class GrindRunner
 
     /// <summary>Something started hitting the character while the loot was being reached.</summary>
     private const int LootUnderAttack = -1;
+
+    // ---- the rotation's memory across one fight -------------------------------------------
+
+    /// <summary>Target the damage-over-time spell was last put on.</summary>
+    private static WowBGuid _dotGuid;
+
+    /// <summary>When that DoT is assumed to have run out (see ClickAimSettings.DotRefreshSeconds).</summary>
+    private static int _dotUntil;
+
+    /// <summary>
+    /// The highest mana this session has seen. The max-power word on this build is a candidate
+    /// and reads 100 while the character has 139 (every log line says "pow=139/100"), so a
+    /// percentage taken from it would be over 100% and the drink rule would never fire. The peak
+    /// is the honest denominator: mana only goes up while resting or from a level-up, both of
+    /// which the peak follows within one read.
+    /// </summary>
+    private static uint _manaPeak;
+    private static uint _healthPeak;
+
+    /// <summary>Buffs are pressed once per run; see <see cref="ApplyBuffsIfNeeded"/>.</summary>
+    private static bool _buffsApplied;
 
     /// <summary>
     /// The windows of a unit object that the loot probe reads. They bracket the fields this
@@ -1584,6 +1809,8 @@ internal static class GrindRunner
         int faceFailures = 0;
         bool meleeOnce = false;
 
+
+
         bool castEverLanded = false;        // a Wrath has demonstrably cast this fight
         bool melee = false;                 // set when casting is shown not to work
         bool announced = false;
@@ -1606,9 +1833,10 @@ internal static class GrindRunner
 
         Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
         List<ClickAimAction> bar = ClickAimCombat.ReadBar(reader);
-        ClickAimAction? damage = ClickAimCombat.FirstDamage(bar);      // Wrath
-        ClickAimAction? heal = ClickAimCombat.FirstHeal(bar);          // Healing Touch
-        ClickAimAction? auto = ClickAimCombat.AutoAttack(bar);         // Attack (6603)
+        ClickAimAction? damage = ClickAimCombat.FirstDamageOrDot(bar);  // Wrath, or Moonfire alone
+        ClickAimAction? heal = ClickAimCombat.FirstHeal(bar);           // Healing Touch
+        ClickAimAction? auto = ClickAimCombat.AutoAttack(bar);          // Attack (6603)
+        ClickAimAction? dot = ClickAimCombat.FirstDot(bar);             // Moonfire, Corruption, ...
 
         /* Whatever the walk was doing, it is over: the first thing this fight does is press a
          * key, and a cast begun while the character is still moving is refused by the client
@@ -1678,15 +1906,21 @@ internal static class GrindRunner
             {
                 announced = true;
                 Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                    "[Grind] rotation: heal at {0:F0}% health ({1}), damage {2}, auto-attack {3}",
-                    ClickAimCombat.HealBelowPercent,
+                    "[Grind] rotation: heal at {0}% health ({1}), damage {2}, damage over time {3}, "
+                    + "auto-attack {4}",
+                    ClickAimSettings.HealBelowPercent == 0 ? "never" : ClickAimSettings.HealBelowPercent.ToString(CultureInfo.InvariantCulture),
                     heal == null ? "none on the bar" : "slot " + heal.Slot + " '" + ClickAimCombat.KeyLabel(heal.KeyVk) + "' " + heal.Name,
                     damage == null ? "none on the bar" : "slot " + damage.Slot + " '" + ClickAimCombat.KeyLabel(damage.KeyVk) + "' " + damage.Name,
+                    !ClickAimSettings.UseDamageOverTime || dot == null
+                        ? "off"
+                        : "slot " + dot.Slot + " '" + ClickAimCombat.KeyLabel(dot.KeyVk) + "' " + dot.Name
+                          + " every " + ClickAimSettings.DotRefreshSeconds.ToString(CultureInfo.InvariantCulture) + " s",
                     auto == null ? "right-click only" : "slot " + auto.Slot + " '" + ClickAimCombat.KeyLabel(auto.KeyVk) + "'"));
             }
 
             /* ---- 1. heal, where Singular puts it: before everything else ---- */
-            if (heal != null && myMaxHealth > 0 && myPercent <= ClickAimCombat.HealBelowPercent
+            if (heal != null && ClickAimSettings.HealBelowPercent > 0
+                && myMaxHealth > 0 && myPercent <= ClickAimSettings.HealBelowPercent
                 && unchecked(Environment.TickCount - lastHealMs) >= ClickAimCombat.HealRetryMs)
             {
                 lastHealMs = Environment.TickCount;
@@ -1741,6 +1975,40 @@ internal static class GrindRunner
                     ClickAimInput.TapKey(hwnd, TabVk, 40);
                     Thread.Sleep(TabSettleMs);
                 }
+                continue;
+            }
+
+            /* ---- 1b. the damage-over-time spell, ONCE per target ----
+             *
+             * This is what the 19:07 run never did: Moonfire sat on slot 5 for the whole
+             * evening while the log printed "spell 8921 (not in the table yet)", because the
+             * rotation only ever looked for a direct-damage spell. A DoT is worth a global
+             * cooldown once and worthless fifty times, so it is applied per target and then
+             * left alone until ClickAimSettings.DotRefreshSeconds has passed. The client's
+             * debuff list is not readable on this build, so the timer is our own cast - being
+             * a second late costs nothing, being early costs mana. */
+            if (dot != null && ClickAimSettings.UseDamageOverTime && !melee
+                && myMana >= 10 && d <= ClickAimCombat.CasterRangeYd
+                && (_dotGuid != target.Guid || unchecked(Environment.TickCount - _dotUntil) >= 0))
+            {
+                StopAndSettle(hwnd);
+                if (!ClickAimKeySteer.Face(target.Location.X, target.Location.Y, hwnd, 25.0, 4))
+                {
+                    Thread.Sleep(120);
+                    continue;
+                }
+
+                ClickAimInput.TapKey(hwnd, dot.KeyVk, 40);
+                presses++;
+                _presses++;
+                _dotGuid = target.Guid;
+                _dotUntil = Environment.TickCount + ClickAimSettings.DotRefreshSeconds * 1000;
+                Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                    "[Grind] {0} (slot {1}, key '{2}') on {3} at {4:F1} yd - it stays on the target for "
+                    + "the next {5} s and is refreshed by a timer, not by spamming it",
+                    dot.Name, dot.Slot, ClickAimCombat.KeyLabel(dot.KeyVk), target.Guid, d,
+                    ClickAimSettings.DotRefreshSeconds));
+                Thread.Sleep(ClickAimCombat.CastSettleMs);
                 continue;
             }
 

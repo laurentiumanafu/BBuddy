@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
+using System.Text;
 using Styx.WoWInternals;
 
 namespace Styx.Logic.Pathing;
@@ -46,6 +48,27 @@ internal enum ClickAimActionKind
     Item = 1
 }
 
+/// <summary>What a spell on the bar is for. See <see cref="ClickAimCombat.RoleOf"/>.</summary>
+internal enum ClickAimSpellRole
+{
+    Unknown = 0,
+    Attack,      // auto-attack / auto shot: not a cast
+    Damage,      // a direct-damage spell, pressed over and over
+    Dot,         // damage over time: applied once per target, refreshed on a timer
+    Heal,
+    Buff,
+    Utility,     // roots, fear, stealth: known, never pressed by the rotation
+    Ignore       // the user's veto: never press this one, whatever the name table thinks
+}
+
+/// <summary>What an item on the bar is for.</summary>
+internal enum ClickAimItemUse
+{
+    Other = 0,
+    Food,
+    Drink
+}
+
 /// <summary>One slot of the client's stored action bar.</summary>
 internal sealed class ClickAimAction
 {
@@ -58,8 +81,10 @@ internal sealed class ClickAimAction
 
     public bool IsAutoAttack { get { return Kind == ClickAimActionKind.Spell && Id == ClickAimCombat.AttackSpellId; } }
     public bool IsDamage { get { return Kind == ClickAimActionKind.Spell && ClickAimCombat.IsDamageSpell(Id); } }
+    public bool IsDot { get { return Kind == ClickAimActionKind.Spell && ClickAimCombat.IsDotSpell(Id); } }
     public bool IsHeal { get { return Kind == ClickAimActionKind.Spell && ClickAimCombat.IsHealSpell(Id); } }
     public bool IsBuff { get { return Kind == ClickAimActionKind.Spell && ClickAimCombat.IsBuffSpell(Id); } }
+    public bool IsAttack { get { return Kind == ClickAimActionKind.Spell && ClickAimCombat.IsAttackSpell(Id); } }
 
     public override string ToString()
     {
@@ -118,34 +143,402 @@ internal static class ClickAimCombat
         { 8928, "Moonfire" }, { 8929, "Moonfire" },
         { 2912, "Starfire" }, { 8949, "Starfire" },
         { 339, "Entangling Roots" }, { 1062, "Entangling Roots" },
+        { 5195, "Entangling Roots" }, { 5196, "Entangling Roots" },
         { 467, "Thorns" }, { 1126, "Mark of the Wild" },
-        { 20549, "War Stomp" }, { 20550, "Endurance" }, { 20583, "Nature Resistance" }
+        { 20549, "War Stomp" }, { 20550, "Endurance" }, { 20583, "Nature Resistance" },
+
+        /* Moonfire rank 1 is 8921 and it was the one spell the level-4 druid's own bar had
+         * that this table did not know (the 19:07 run prints "spell 8921 (not in the table
+         * yet)" on every single engagement). The ranks below are the whole family, because a
+         * character that just trained rank 2 has a different id and would go quiet again. */
+        { 8921, "Moonfire" }, { 8922, "Moonfire" }, { 8923, "Moonfire" }, { 8924, "Moonfire" },
+        { 9833, "Moonfire" }, { 9834, "Moonfire" }, { 9835, "Moonfire" },
+        { 770, "Faerie Fire" }, { 778, "Faerie Fire" }, { 9749, "Faerie Fire" },
+        { 5570, "Insect Swarm" }, { 24974, "Insect Swarm" }, { 24975, "Insect Swarm" },
+        { 8936, "Regrowth" }, { 8938, "Regrowth" }, { 8939, "Regrowth" },
+        { 8940, "Regrowth" }, { 8941, "Regrowth" }, { 9750, "Regrowth" },
+
+        /* --- Mage --- */
+        { 133, "Fireball" }, { 143, "Fireball" }, { 145, "Fireball" }, { 3140, "Fireball" },
+        { 8400, "Fireball" }, { 8401, "Fireball" }, { 8402, "Fireball" }, { 10148, "Fireball" },
+        { 10149, "Fireball" }, { 10150, "Fireball" }, { 10151, "Fireball" },
+        { 116, "Frostbolt" }, { 205, "Frostbolt" }, { 837, "Frostbolt" }, { 7322, "Frostbolt" },
+        { 8406, "Frostbolt" }, { 8407, "Frostbolt" }, { 8408, "Frostbolt" },
+        { 10179, "Frostbolt" }, { 10180, "Frostbolt" }, { 10181, "Frostbolt" },
+        { 5143, "Arcane Missiles" }, { 5144, "Arcane Missiles" }, { 5145, "Arcane Missiles" },
+        { 8416, "Arcane Missiles" }, { 8417, "Arcane Missiles" },
+        { 2136, "Fire Blast" }, { 2137, "Fire Blast" }, { 2138, "Fire Blast" },
+        { 8412, "Fire Blast" }, { 8413, "Fire Blast" }, { 10197, "Fire Blast" },
+        { 1459, "Arcane Intellect" }, { 1460, "Arcane Intellect" }, { 1461, "Arcane Intellect" },
+        { 168, "Frost Armor" }, { 7300, "Frost Armor" }, { 7301, "Frost Armor" },
+        { 122, "Frost Nova" }, { 865, "Frost Nova" }, { 6131, "Frost Nova" },
+        { 118, "Polymorph" },
+
+        /* --- Priest --- */
+        { 585, "Smite" }, { 591, "Smite" }, { 598, "Smite" }, { 984, "Smite" },
+        { 1004, "Smite" }, { 6060, "Smite" }, { 10933, "Smite" }, { 10934, "Smite" },
+        { 589, "Shadow Word: Pain" }, { 594, "Shadow Word: Pain" }, { 970, "Shadow Word: Pain" },
+        { 992, "Shadow Word: Pain" }, { 2767, "Shadow Word: Pain" },
+        { 10892, "Shadow Word: Pain" }, { 10893, "Shadow Word: Pain" }, { 10894, "Shadow Word: Pain" },
+        { 2050, "Lesser Heal" }, { 2052, "Lesser Heal" }, { 2053, "Lesser Heal" },
+        { 2060, "Heal" }, { 2054, "Heal" }, { 2055, "Heal" }, { 6063, "Heal" }, { 6064, "Heal" },
+        { 139, "Renew" }, { 6074, "Renew" }, { 6075, "Renew" }, { 6076, "Renew" },
+        { 6077, "Renew" }, { 6078, "Renew" }, { 10927, "Renew" }, { 10928, "Renew" }, { 10929, "Renew" },
+        { 2061, "Flash Heal" }, { 9472, "Flash Heal" }, { 9473, "Flash Heal" },
+        { 9474, "Flash Heal" }, { 10915, "Flash Heal" }, { 10916, "Flash Heal" }, { 10917, "Flash Heal" },
+        { 8092, "Mind Blast" }, { 8102, "Mind Blast" }, { 8103, "Mind Blast" },
+        { 8104, "Mind Blast" }, { 8105, "Mind Blast" }, { 8106, "Mind Blast" },
+        { 1243, "Power Word: Fortitude" }, { 1244, "Power Word: Fortitude" },
+        { 1245, "Power Word: Fortitude" }, { 2791, "Power Word: Fortitude" },
+        { 17, "Power Word: Shield" }, { 592, "Power Word: Shield" }, { 600, "Power Word: Shield" },
+        { 14914, "Holy Fire" },
+
+        /* --- Warlock --- */
+        { 686, "Shadow Bolt" }, { 695, "Shadow Bolt" }, { 705, "Shadow Bolt" },
+        { 1088, "Shadow Bolt" }, { 1106, "Shadow Bolt" }, { 7641, "Shadow Bolt" },
+        { 11659, "Shadow Bolt" }, { 11660, "Shadow Bolt" }, { 11661, "Shadow Bolt" },
+        { 172, "Corruption" }, { 6222, "Corruption" }, { 6223, "Corruption" },
+        { 7648, "Corruption" }, { 11671, "Corruption" }, { 11672, "Corruption" },
+        { 348, "Immolate" }, { 707, "Immolate" }, { 1094, "Immolate" },
+        { 2941, "Immolate" }, { 11665, "Immolate" }, { 11667, "Immolate" }, { 11668, "Immolate" },
+        { 980, "Curse of Agony" }, { 1014, "Curse of Agony" }, { 6217, "Curse of Agony" },
+        { 11711, "Curse of Agony" }, { 11712, "Curse of Agony" }, { 11713, "Curse of Agony" },
+        { 689, "Drain Life" }, { 699, "Drain Life" }, { 709, "Drain Life" },
+        { 7651, "Drain Life" }, { 11699, "Drain Life" }, { 11700, "Drain Life" },
+        { 687, "Demon Skin" }, { 696, "Demon Skin" },
+        { 1454, "Life Tap" }, { 1455, "Life Tap" }, { 1456, "Life Tap" },
+
+        /* --- Shaman --- */
+        { 403, "Lightning Bolt" }, { 529, "Lightning Bolt" }, { 548, "Lightning Bolt" },
+        { 915, "Lightning Bolt" }, { 943, "Lightning Bolt" }, { 6041, "Lightning Bolt" },
+        { 10391, "Lightning Bolt" }, { 10392, "Lightning Bolt" },
+        { 15207, "Lightning Bolt" }, { 15208, "Lightning Bolt" },
+        { 331, "Healing Wave" }, { 332, "Healing Wave" }, { 547, "Healing Wave" },
+        { 913, "Healing Wave" }, { 939, "Healing Wave" }, { 959, "Healing Wave" },
+        { 8005, "Healing Wave" }, { 10395, "Healing Wave" }, { 10396, "Healing Wave" },
+        { 8004, "Lesser Healing Wave" }, { 8008, "Lesser Healing Wave" },
+        { 8010, "Lesser Healing Wave" }, { 10405, "Lesser Healing Wave" },
+        { 10406, "Lesser Healing Wave" }, { 10407, "Lesser Healing Wave" },
+        { 8042, "Earth Shock" }, { 8044, "Earth Shock" }, { 8045, "Earth Shock" },
+        { 8046, "Earth Shock" }, { 10412, "Earth Shock" }, { 10413, "Earth Shock" },
+        { 8050, "Flame Shock" }, { 8052, "Flame Shock" }, { 8053, "Flame Shock" },
+        { 10447, "Flame Shock" }, { 10448, "Flame Shock" }, { 10449, "Flame Shock" },
+        { 8056, "Frost Shock" }, { 8058, "Frost Shock" }, { 10472, "Frost Shock" },
+        { 10473, "Frost Shock" },
+        { 324, "Lightning Shield" }, { 325, "Lightning Shield" }, { 905, "Lightning Shield" },
+        { 945, "Lightning Shield" }, { 8134, "Lightning Shield" },
+        { 8017, "Rockbiter Weapon" }, { 8018, "Rockbiter Weapon" }, { 8019, "Rockbiter Weapon" },
+
+        /* --- Paladin --- */
+        { 635, "Holy Light" }, { 639, "Holy Light" }, { 647, "Holy Light" },
+        { 1026, "Holy Light" }, { 1042, "Holy Light" }, { 3472, "Holy Light" },
+        { 10328, "Holy Light" }, { 10329, "Holy Light" },
+        { 19750, "Flash of Light" }, { 19939, "Flash of Light" }, { 19940, "Flash of Light" },
+        { 19941, "Flash of Light" }, { 19942, "Flash of Light" }, { 19943, "Flash of Light" },
+        { 20165, "Seal of Righteousness" }, { 20166, "Seal of Righteousness" },
+        { 20271, "Judgement" }, { 853, "Hammer of Justice" }, { 465, "Devotion Aura" },
+
+        /* --- Warrior --- */
+        { 78, "Heroic Strike" }, { 284, "Heroic Strike" }, { 285, "Heroic Strike" },
+        { 1608, "Heroic Strike" }, { 11564, "Heroic Strike" }, { 11565, "Heroic Strike" },
+        { 11566, "Heroic Strike" }, { 11567, "Heroic Strike" },
+        { 772, "Rend" }, { 6546, "Rend" }, { 6547, "Rend" }, { 6548, "Rend" },
+        { 11574, "Rend" }, { 11575, "Rend" }, { 11576, "Rend" },
+        { 634, "Thunder Clap" }, { 8198, "Thunder Clap" }, { 8204, "Thunder Clap" },
+        { 8205, "Thunder Clap" }, { 11580, "Thunder Clap" }, { 11581, "Thunder Clap" },
+        { 5308, "Execute" }, { 100, "Charge" },
+        { 6673, "Battle Shout" }, { 5242, "Battle Shout" }, { 6192, "Battle Shout" },
+        { 11549, "Battle Shout" }, { 11550, "Battle Shout" }, { 11551, "Battle Shout" },
+
+        /* --- Rogue --- */
+        { 1752, "Sinister Strike" }, { 1757, "Sinister Strike" }, { 1758, "Sinister Strike" },
+        { 1759, "Sinister Strike" }, { 1760, "Sinister Strike" }, { 8621, "Sinister Strike" },
+        { 11293, "Sinister Strike" }, { 11294, "Sinister Strike" },
+        { 2098, "Eviscerate" }, { 6760, "Eviscerate" }, { 6761, "Eviscerate" },
+        { 6762, "Eviscerate" }, { 8623, "Eviscerate" }, { 8624, "Eviscerate" },
+        { 53, "Backstab" }, { 2589, "Backstab" }, { 2590, "Backstab" }, { 2591, "Backstab" },
+        { 8721, "Backstab" }, { 11279, "Backstab" }, { 11280, "Backstab" }, { 11281, "Backstab" },
+        { 1784, "Stealth" }, { 1776, "Gouge" },
+
+        /* --- Hunter: the auto shot that IS the hunter's attack, and the shots around it --- */
+        { 75, "Auto Shot" }, { 2973, "Raptor Strike" }, { 1495, "Mongoose Bite" },
+        { 1978, "Serpent Sting" }, { 13549, "Serpent Sting" }, { 13550, "Serpent Sting" },
+        { 13551, "Serpent Sting" }, { 13552, "Serpent Sting" }, { 13553, "Serpent Sting" },
+        { 13554, "Serpent Sting" }, { 13555, "Serpent Sting" },
+        { 3044, "Arcane Shot" }, { 14281, "Arcane Shot" }, { 14282, "Arcane Shot" },
+        { 14283, "Arcane Shot" }, { 14284, "Arcane Shot" }, { 14285, "Arcane Shot" },
+        { 14286, "Arcane Shot" }, { 14287, "Arcane Shot" },
+        { 1130, "Hunter's Mark" }, { 13165, "Aspect of the Hawk" }
     };
 
-    private static readonly HashSet<int> DamageSpells = new HashSet<int>
+    /// <summary>
+    /// What a slot is FOR. This used to be three hand-written sets of ids - damage, heal, buff -
+    /// and anything not in them printed as "spell &lt;id&gt; (not in the table yet)" and was never
+    /// pressed. That is exactly why the level-4 druid carried Moonfire (8921) on slot 5 for a
+    /// whole evening and never cast it: the name table skipped rank 1 and no set had it.
+    ///
+    /// The role is now derived from the spell's NAME, so adding an id to the name table is
+    /// enough to make it usable, and a rank nobody has listed yet still behaves like its family
+    /// as soon as its id is added once.
+    /// </summary>
+    private static readonly System.Collections.Generic.Dictionary<string, ClickAimSpellRole> RolesByName =
+        new System.Collections.Generic.Dictionary<string, ClickAimSpellRole>(StringComparer.OrdinalIgnoreCase)
     {
-        5176, 5177, 5178, 5179, 5180,          // Wrath
-        8925, 8926, 8927, 8928, 8929,          // Moonfire
-        2912, 8949,                            // Starfire
-        339, 1062,                             // Entangling Roots (damage over time, Singular's pull)
-        20549                                  // War Stomp
+        { "Attack", ClickAimSpellRole.Attack },
+        { "Auto Shot", ClickAimSpellRole.Attack },
+
+        /* Direct damage: what the rotation presses when there is nothing better to do. */
+        { "Wrath", ClickAimSpellRole.Damage }, { "Starfire", ClickAimSpellRole.Damage },
+        { "Fireball", ClickAimSpellRole.Damage }, { "Frostbolt", ClickAimSpellRole.Damage },
+        { "Arcane Missiles", ClickAimSpellRole.Damage }, { "Fire Blast", ClickAimSpellRole.Damage },
+        { "Smite", ClickAimSpellRole.Damage }, { "Holy Fire", ClickAimSpellRole.Damage },
+        { "Mind Blast", ClickAimSpellRole.Damage }, { "Shadow Bolt", ClickAimSpellRole.Damage },
+        { "Drain Life", ClickAimSpellRole.Damage }, { "Lightning Bolt", ClickAimSpellRole.Damage },
+        { "Earth Shock", ClickAimSpellRole.Damage }, { "Frost Shock", ClickAimSpellRole.Damage },
+        { "Judgement", ClickAimSpellRole.Damage }, { "Holy Shock", ClickAimSpellRole.Damage },
+        { "Heroic Strike", ClickAimSpellRole.Damage }, { "Execute", ClickAimSpellRole.Damage },
+        { "Thunder Clap", ClickAimSpellRole.Damage }, { "Sinister Strike", ClickAimSpellRole.Damage },
+        { "Eviscerate", ClickAimSpellRole.Damage }, { "Backstab", ClickAimSpellRole.Damage },
+        { "Arcane Shot", ClickAimSpellRole.Damage }, { "Raptor Strike", ClickAimSpellRole.Damage },
+        { "Mongoose Bite", ClickAimSpellRole.Damage }, { "War Stomp", ClickAimSpellRole.Damage },
+
+        /* Damage over time: applied once per target and refreshed on a timer, not spammed. */
+        { "Moonfire", ClickAimSpellRole.Dot }, { "Insect Swarm", ClickAimSpellRole.Dot },
+        { "Shadow Word: Pain", ClickAimSpellRole.Dot }, { "Corruption", ClickAimSpellRole.Dot },
+        { "Immolate", ClickAimSpellRole.Dot }, { "Curse of Agony", ClickAimSpellRole.Dot },
+        { "Flame Shock", ClickAimSpellRole.Dot }, { "Serpent Sting", ClickAimSpellRole.Dot },
+        { "Rend", ClickAimSpellRole.Dot },
+
+        /* Healing. */
+        { "Healing Touch", ClickAimSpellRole.Heal }, { "Rejuvenation", ClickAimSpellRole.Heal },
+        { "Regrowth", ClickAimSpellRole.Heal }, { "Lesser Heal", ClickAimSpellRole.Heal },
+        { "Heal", ClickAimSpellRole.Heal }, { "Flash Heal", ClickAimSpellRole.Heal },
+        { "Renew", ClickAimSpellRole.Heal }, { "Healing Wave", ClickAimSpellRole.Heal },
+        { "Lesser Healing Wave", ClickAimSpellRole.Heal }, { "Holy Light", ClickAimSpellRole.Heal },
+        { "Flash of Light", ClickAimSpellRole.Heal },
+
+        /* Buffs: pressed out of combat, once. */
+        { "Thorns", ClickAimSpellRole.Buff }, { "Mark of the Wild", ClickAimSpellRole.Buff },
+        { "Arcane Intellect", ClickAimSpellRole.Buff }, { "Frost Armor", ClickAimSpellRole.Buff },
+        { "Power Word: Fortitude", ClickAimSpellRole.Buff },
+        { "Power Word: Shield", ClickAimSpellRole.Buff },
+        { "Demon Skin", ClickAimSpellRole.Buff }, { "Lightning Shield", ClickAimSpellRole.Buff },
+        { "Rockbiter Weapon", ClickAimSpellRole.Buff }, { "Battle Shout", ClickAimSpellRole.Buff },
+        { "Devotion Aura", ClickAimSpellRole.Buff }, { "Seal of Righteousness", ClickAimSpellRole.Buff },
+        { "Aspect of the Hawk", ClickAimSpellRole.Buff }, { "Endurance", ClickAimSpellRole.Buff },
+        { "Nature Resistance", ClickAimSpellRole.Buff },
+
+        /* Known, but not something to press on its own. */
+        { "Entangling Roots", ClickAimSpellRole.Utility }, { "Faerie Fire", ClickAimSpellRole.Utility },
+        { "Frost Nova", ClickAimSpellRole.Utility }, { "Polymorph", ClickAimSpellRole.Utility },
+        { "Hammer of Justice", ClickAimSpellRole.Utility }, { "Charge", ClickAimSpellRole.Utility },
+        { "Stealth", ClickAimSpellRole.Utility }, { "Gouge", ClickAimSpellRole.Utility },
+        { "Life Tap", ClickAimSpellRole.Utility }, { "Hunter's Mark", ClickAimSpellRole.Utility }
     };
 
-    private static readonly HashSet<int> HealSpells = new HashSet<int>
+    /// <summary>
+    /// The role of a spell id: the user's own word first, then the name table, then
+    /// <see cref="ClickAimSpellRole.Unknown"/>.
+    /// </summary>
+    public static ClickAimSpellRole RoleOf(int id)
     {
-        5185, 5186, 5187, 5188, 5189,          // Healing Touch
-        774, 1058, 1430, 2090, 2091,           // Rejuvenation
-        8936, 8938, 8939                       // Regrowth
-    };
+        ClickAimSpellRole role;
+        if (RoleOverrides.TryGetValue(id, out role)) return role;
 
-    private static readonly HashSet<int> BuffSpells = new HashSet<int>
+        string name;
+        if (!KnownSpells.TryGetValue(id, out name)) return ClickAimSpellRole.Unknown;
+        return RolesByName.TryGetValue(name, out role) ? role : ClickAimSpellRole.Unknown;
+    }
+
+    public static bool IsDamageSpell(int id) { return RoleOf(id) == ClickAimSpellRole.Damage; }
+    public static bool IsDotSpell(int id) { return RoleOf(id) == ClickAimSpellRole.Dot; }
+    public static bool IsHealSpell(int id) { return RoleOf(id) == ClickAimSpellRole.Heal; }
+    public static bool IsBuffSpell(int id) { return RoleOf(id) == ClickAimSpellRole.Buff; }
+    public static bool IsAttackSpell(int id) { return RoleOf(id) == ClickAimSpellRole.Attack; }
+
+    // ------------------------------------------------------------------ role overrides
+
+    /// <summary>
+    /// Spell id to role, exactly as the user set it in the Combat settings window.
+    ///
+    /// The name table above covers the 3.3.5a spellbook; this covers what it cannot: a rank a
+    /// private server added, a spell whose name never got into the table, or a spell the user
+    /// would rather the bot never pressed at all. It is consulted first, so an override always
+    /// wins, and it lives in its own file so a hand edit and the window write the same thing.
+    /// </summary>
+    private static readonly Dictionary<int, ClickAimSpellRole> RoleOverrides =
+        new Dictionary<int, ClickAimSpellRole>();
+
+    /// <summary>How many spells the user has classified by hand.</summary>
+    public static int OverrideCount { get { return RoleOverrides.Count; } }
+
+    /// <summary>Forgets every override - used by the window's Reset and by the self-test.</summary>
+    public static void ClearRoleOverrides() { RoleOverrides.Clear(); }
+
+    /// <summary>Sets one override; <see cref="ClickAimSpellRole.Unknown"/> removes it again.</summary>
+    public static void SetRoleOverride(int id, ClickAimSpellRole role)
     {
-        467, 1126, 20550, 20583                // Thorns, Mark of the Wild, racial passives
+        if (id <= 0) return;
+        if (role == ClickAimSpellRole.Unknown) RoleOverrides.Remove(id);
+        else RoleOverrides[id] = role;
+    }
+
+    /// <summary>The user's word for this spell, or Unknown when they have not given one.</summary>
+    public static ClickAimSpellRole RoleOverrideOf(int id)
+    {
+        ClickAimSpellRole role;
+        return RoleOverrides.TryGetValue(id, out role) ? role : ClickAimSpellRole.Unknown;
+    }
+
+    /// <summary>Every overridden id, ascending, so a saved file has a stable order.</summary>
+    public static List<int> OverrideIds()
+    {
+        var ids = new List<int>(RoleOverrides.Keys);
+        ids.Sort();
+        return ids;
+    }
+
+    /// <summary>Writes <c>Settings\clickaim-skills.txt</c>; false when the file could not be written.</summary>
+    public static bool SaveRoleOverrides()
+    {
+        string path;
+        try { path = ClickAimSettings.SkillsPath; }
+        catch (Exception ex)
+        {
+            Styx.Helpers.Logging.Write("[Combat] no place to write the spell roles: " + ex.Message);
+            return false;
+        }
+
+        var text = new StringBuilder();
+        text.AppendLine("# CopilotBuddy spell roles: what each spell on the bar is for.");
+        text.AppendLine("# Written by the Combat settings window. One line per spell:");
+        text.AppendLine("#   <spell id> = Attack | Damage | Dot | Heal | Buff | Utility | Ignore");
+        text.AppendLine("# Delete a line to go back to what the built-in name table says.");
+        List<int> ids = OverrideIds();
+        for (int i = 0; i < ids.Count; i++)
+        {
+            text.AppendLine(ids[i].ToString(CultureInfo.InvariantCulture) + " = "
+                            + RoleOverrides[ids[i]].ToString());
+        }
+
+        try
+        {
+            string dir = Path.GetDirectoryName(path);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+            File.WriteAllText(path, text.ToString());
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Styx.Helpers.Logging.Write("[Combat] could not write " + path + ": " + ex.Message);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Reads the override file. A missing file is a first run; an unreadable line is skipped
+    /// rather than fatal, because a typo in an id must not stop the grind from starting.
+    /// </summary>
+    public static void LoadRoleOverrides()
+    {
+        RoleOverrides.Clear();
+
+        string path;
+        try { path = ClickAimSettings.SkillsPath; }
+        catch { return; }
+
+        string[] lines;
+        try
+        {
+            if (!File.Exists(path)) return;
+            lines = File.ReadAllLines(path);
+        }
+        catch (Exception ex)
+        {
+            Styx.Helpers.Logging.Write("[Combat] could not read " + path + ": " + ex.Message);
+            return;
+        }
+
+        for (int i = 0; i < lines.Length; i++)
+        {
+            string line = lines[i].Trim();
+            if (line.Length == 0 || line[0] == '#') continue;
+            int eq = line.IndexOf('=');
+            if (eq <= 0) continue;
+
+            int id;
+            if (!int.TryParse(line.Substring(0, eq).Trim(), NumberStyles.Integer,
+                              CultureInfo.InvariantCulture, out id) || id <= 0)
+                continue;
+
+            ClickAimSpellRole role;
+            if (!Enum.TryParse(line.Substring(eq + 1).Trim(), true, out role)) continue;
+            if (role == ClickAimSpellRole.Unknown) continue;
+            RoleOverrides[id] = role;
+        }
+    }
+
+    // ------------------------------------------------------------------ consumables
+
+    /// <summary>
+    /// Food and drink, by item id. Both are items on the action bar - slot 11 carried 159
+    /// (Refreshing Spring Water) and slot 12 carried 4536 (Shiny Red Apple) on the character this
+    /// was written for - so eating and drinking is a key press, like everything else here.
+    /// </summary>
+    private static readonly HashSet<int> FoodItems = new HashSet<int>
+    {
+        117, 228, 414, 422, 724, 733,                       // Tough Jerky, Haunch of Meat, ...
+        2679, 2680, 2681, 2685, 2686, 2687,                 // cooked meats
+        4536, 4537, 4538, 4539,                             // Shiny Red Apple, Tel'Abim Banana, ...
+        4540, 4541, 4542, 4544, 4604, 4605, 4606, 4607, 4608,
+        5349, 11100                                         // Conjured Bread, Conjured Pumpernickel
     };
 
-    public static bool IsDamageSpell(int id) { return DamageSpells.Contains(id); }
-    public static bool IsHealSpell(int id) { return HealSpells.Contains(id); }
-    public static bool IsBuffSpell(int id) { return BuffSpells.Contains(id); }
+    private static readonly HashSet<int> DrinkItems = new HashSet<int>
+    {
+        159, 1179, 1205, 1645, 1708, 8766,                  // Spring Water, Ice Cold Milk, ...
+        28399, 27860, 18300,                                // Filtered Draenic Water, ...
+        5350, 8077                                          // Conjured Water, Conjured Purified Water
+    };
+
+    /// <summary>What an item on the bar is for, as far as the rest loop cares.</summary>
+    public static ClickAimItemUse ItemUseOf(int itemId)
+    {
+        if (FoodItems.Contains(itemId)) return ClickAimItemUse.Food;
+        if (DrinkItems.Contains(itemId)) return ClickAimItemUse.Drink;
+        return ClickAimItemUse.Other;
+    }
+
+    /// <summary>The food on the bar: the configured slot first, then the first item that is food.</summary>
+    public static ClickAimAction? FindFood(List<ClickAimAction> bar, int slot)
+    {
+        return FindItem(bar, slot, ClickAimItemUse.Food);
+    }
+
+    /// <summary>The drink on the bar: the configured slot first, then the first item that is drink.</summary>
+    public static ClickAimAction? FindDrink(List<ClickAimAction> bar, int slot)
+    {
+        return FindItem(bar, slot, ClickAimItemUse.Drink);
+    }
+
+    private static ClickAimAction? FindItem(List<ClickAimAction> bar, int slot, ClickAimItemUse wanted)
+    {
+        if (slot > 0)
+        {
+            for (int i = 0; i < bar.Count; i++)
+            {
+                if (bar[i].Slot != slot) continue;
+                if (bar[i].Kind != ClickAimActionKind.Item) continue;
+                return bar[i];
+            }
+        }
+        for (int i = 0; i < bar.Count; i++)
+        {
+            if (bar[i].Kind != ClickAimActionKind.Item) continue;
+            if (ItemUseOf(bar[i].Id) == wanted) return bar[i];
+        }
+        return null;
+    }
 
     public static string NameOf(int id)
     {
@@ -223,6 +616,27 @@ internal static class ClickAimCombat
         return null;
     }
 
+    /// <summary>The first damage-over-time spell on the bar, or null.</summary>
+    public static ClickAimAction? FirstDot(List<ClickAimAction> bar)
+    {
+        for (int i = 0; i < bar.Count; i++) if (bar[i].IsDot) return bar[i];
+        return null;
+    }
+
+    /// <summary>The first direct-damage spell on the bar, or a DoT when that is all there is.</summary>
+    public static ClickAimAction? FirstDamageOrDot(List<ClickAimAction> bar)
+    {
+        ClickAimAction? direct = FirstDamage(bar);
+        return direct ?? FirstDot(bar);
+    }
+
+    /// <summary>The first self-buff on the bar, or null.</summary>
+    public static ClickAimAction? FirstBuff(List<ClickAimAction> bar)
+    {
+        for (int i = 0; i < bar.Count; i++) if (bar[i].IsBuff) return bar[i];
+        return null;
+    }
+
     /// <summary>The first heal on the bar, or null.</summary>
     public static ClickAimAction? FirstHeal(List<ClickAimAction> bar)
     {
@@ -287,6 +701,46 @@ internal static class ClickAimCombat
         check(AttackSpellId == 6603 && NameOf(6603) == "Attack", "attack");
         check(!IsDamageSpell(6603), "attackIsNotACast");
         check(HealBelowPercent == 60.0, "healAt60");
+
+        /* The spell the 19:07 run carried on slot 5 and never cast. */
+        check(NameOf(8921) == "Moonfire", "name8921");
+        check(IsDotSpell(8921) && !IsDamageSpell(8921), "moonfireIsADot");
+        check(RoleOf(8925) == ClickAimSpellRole.Dot, "moonfireRank2");
+
+        /* The user's word beats the table both ways: a spell they classified themselves, and a
+         * spell they vetoed outright. Wrath is Damage in the table, so both directions show. */
+        ClearRoleOverrides();
+        SetRoleOverride(5176, ClickAimSpellRole.Ignore);
+        check(RoleOf(5176) == ClickAimSpellRole.Ignore, "overrideWins");
+        check(!IsDamageSpell(5176), "overrideVetoes");
+        SetRoleOverride(8921, ClickAimSpellRole.Damage);
+        check(IsDamageSpell(8921) && !IsDotSpell(8921), "overridePromotes");
+        SetRoleOverride(8921, ClickAimSpellRole.Unknown);
+        check(IsDotSpell(8921), "overrideCleared");
+        ClearRoleOverrides();
+        check(RoleOf(5176) == ClickAimSpellRole.Damage && OverrideCount == 0, "overrideReset");
+        check(RoleOf(5176) == ClickAimSpellRole.Damage, "wrathIsDamage");
+        check(RoleOf(339) == ClickAimSpellRole.Utility, "rootsIsUtility");
+        check(NameOf(5176) != NameOf(8921), "noMixedNames");
+
+        /* One spell per class, so a character that is not a druid is not a blank bar. */
+        check(IsDamageSpell(133), "mageFireball");
+        check(IsHealSpell(2050), "priestLesserHeal");
+        check(IsDotSpell(589), "priestSwPain");
+        check(IsDamageSpell(686), "warlockShadowBolt");
+        check(IsDotSpell(172), "warlockCorruption");
+        check(IsDamageSpell(403), "shamanLightningBolt");
+        check(IsHealSpell(331), "shamanHealingWave");
+        check(IsHealSpell(635), "paladinHolyLight");
+        check(IsDamageSpell(78), "warriorHeroicStrike");
+        check(IsDamageSpell(1752), "rogueSinisterStrike");
+        check(IsDamageSpell(3044), "hunterArcaneShot");
+        check(IsAttackSpell(75), "hunterAutoShot");
+
+        /* Food and drink, by item id, from the two slots this character actually carries. */
+        check(ItemUseOf(159) == ClickAimItemUse.Drink, "water159");
+        check(ItemUseOf(4536) == ClickAimItemUse.Food, "apple4536");
+        check(ItemUseOf(118) == ClickAimItemUse.Other, "potionIsNotFood");
 
         if (fails.Length == 0) return string.Format("Combat self-test {0}/{1} passed", passed, total);
         return string.Format("Combat self-test {0}/{1} FAILED:{2}", passed, total, fails);

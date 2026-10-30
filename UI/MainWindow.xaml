@@ -137,6 +137,22 @@
             </Viewbox>
         </Button>
 
+        <!-- Combat settings: heal / eat / drink percentages and the DoT switch.
+             Always visible, because these numbers describe the character and can be
+             set before the client is attached. -->
+        <Button x:Name="btnAimCombatSettings"
+                Height="25"
+                Margin="0,213,136,0"
+                VerticalAlignment="Top"
+                HorizontalAlignment="Right"
+                Width="120"
+                ToolTip="When to heal, eat and drink, and whether damage-over-time spells and self-buffs are used (Settings\clickaim-grind.txt)"
+                Click="btnAimCombatSettings_Click">
+            <Viewbox Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center">
+                <TextBlock Text="Combat settings"/>
+            </Viewbox>
+        </Button>
+
         <!-- ClickAim hotspots (x64 diagnostic mode only, hidden elsewhere) -->
         <Button x:Name="btnAimHotspot"
                 Height="25"

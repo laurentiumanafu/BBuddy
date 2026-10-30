@@ -1375,6 +1375,28 @@ namespace CopilotBuddy.UI
             }
         }
 
+        /// <summary>
+        /// The grind loop's combat numbers, in a window instead of in a text file. The file is
+        /// still the source of truth: the window loads it, Save writes it, and the next Start
+        /// reads it - so a hand edit and the window can never disagree.
+        /// </summary>
+        private void btnAimCombatSettings_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                var window = new ClickAimCombatSettingsWindow { Owner = this };
+                bool? shown = window.ShowDialog();
+                if (shown == true && window.Saved)
+                    SetStatus("Combat settings saved");
+            }
+            catch (Exception ex)
+            {
+                Logging.Write("[Grind] combat settings window failed: " + ex.Message);
+                MessageBox.Show(this, "The combat settings window could not open: " + ex.Message,
+                                "Combat settings", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+        }
+
         private void btnAimOffsets_Click(object sender, RoutedEventArgs e)
         {
             try
