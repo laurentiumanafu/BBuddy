@@ -38,9 +38,10 @@ namespace CopilotBuddy.UI
             public string Key { get; set; }
             public string Spell { get; set; }
             public string Role { get; set; }
+            public string Range { get; set; }
             public string Source { get; set; }
 
-            public SpellRow() { Slot = ""; Key = ""; Spell = ""; Role = ""; Source = ""; }
+            public SpellRow() { Slot = ""; Key = ""; Spell = ""; Role = ""; Range = ""; Source = ""; }
         }
 
         private readonly List<SpellRow> _rows = new List<SpellRow>();
@@ -68,6 +69,7 @@ namespace CopilotBuddy.UI
         private void LoadFromSettings()
         {
             txtHeal.Text = Text(ClickAimSettings.HealBelowPercent);
+            txtHealMana.Text = Text(ClickAimSettings.HealMinManaPercent);
             txtEat.Text = Text(ClickAimSettings.EatBelowPercent);
             txtDrink.Text = Text(ClickAimSettings.DrinkBelowPercent);
             txtDotSeconds.Text = Text(ClickAimSettings.DotRefreshSeconds);
@@ -90,8 +92,9 @@ namespace CopilotBuddy.UI
         /// </summary>
         private bool ApplyToSettings()
         {
-            int heal, eat, drink, dotSeconds, foodSlot, drinkSlot, restMs;
+            int heal, healMana, eat, drink, dotSeconds, foodSlot, drinkSlot, restMs;
             if (!TryRead(txtHeal, "Heal at or below", out heal)) return false;
+            if (!TryRead(txtHealMana, "Heal only above", out healMana)) return false;
             if (!TryRead(txtEat, "Eat at or below", out eat)) return false;
             if (!TryRead(txtDrink, "Drink at or below", out drink)) return false;
             if (!TryRead(txtDotSeconds, "Refresh seconds", out dotSeconds)) return false;
@@ -100,6 +103,7 @@ namespace CopilotBuddy.UI
             if (!TryRead(txtRestMs, "Rest time", out restMs)) return false;
 
             ClickAimSettings.HealBelowPercent = heal;
+            ClickAimSettings.HealMinManaPercent = healMana;
             ClickAimSettings.EatBelowPercent = eat;
             ClickAimSettings.DrinkBelowPercent = drink;
             ClickAimSettings.DotRefreshSeconds = dotSeconds;
@@ -174,6 +178,7 @@ namespace CopilotBuddy.UI
                     var row = new SpellRow { Id = ids[i], Slot = "-", Key = "-" };
                     row.Spell = SpellName(ids[i]);   // name table only: no bar to read
                     row.Role = RoleText(ClickAimCombat.RoleOf(ids[i]));
+                    row.Range = RangeText(ids[i]);
                     row.Source = "hand";
                     _rows.Add(row);
                 }
@@ -198,6 +203,7 @@ namespace CopilotBuddy.UI
                 Spell = action.Name + " (" + action.Id.ToString(CultureInfo.InvariantCulture) + ")"
             };
             row.Role = RoleText(ClickAimCombat.RoleOf(action.Id));
+            row.Range = RangeText(action.Id);
             row.Source = ClickAimCombat.RoleOverrideOf(action.Id) == ClickAimSpellRole.Unknown
                 ? "built-in" : "hand";
             return row;
@@ -208,6 +214,20 @@ namespace CopilotBuddy.UI
         {
             string name = ClickAimCombat.NameOf(id);
             return name + " (" + id.ToString(CultureInfo.InvariantCulture) + ")";
+        }
+
+        /// <summary>
+        /// How far the spell reaches, in the words that matter: "melee" for the 5 yd kit, the
+        /// number otherwise. This is the column that answers "the bot thinks everything is
+        /// ranged" - a Claw reading "melee 5 yd" is a promise the rotation will walk in first.
+        /// </summary>
+        private static string RangeText(int id)
+        {
+            double range = ClickAimCombat.RangeOf(id);
+            if (range <= 0.0) return "?";
+            return ClickAimCombat.IsMeleeSpell(id)
+                ? "melee " + range.ToString("F0", CultureInfo.InvariantCulture) + " yd"
+                : range.ToString("F0", CultureInfo.InvariantCulture) + " yd";
         }
 
         private static string RoleText(ClickAimSpellRole role)

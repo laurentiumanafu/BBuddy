@@ -86,6 +86,12 @@ internal sealed class ClickAimAction
     public bool IsBuff { get { return Kind == ClickAimActionKind.Spell && ClickAimCombat.IsBuffSpell(Id); } }
     public bool IsAttack { get { return Kind == ClickAimActionKind.Spell && ClickAimCombat.IsAttackSpell(Id); } }
 
+    /// <summary>How far this slot reaches, in yards (0 = unknown spell).</summary>
+    public double RangeYd { get { return ClickAimCombat.RangeOf(Id); } }
+
+    /// <summary>True when this is a 5 yd melee ability rather than a cast.</summary>
+    public bool IsMelee { get { return Kind == ClickAimActionKind.Spell && ClickAimCombat.IsMeleeSpell(Id); } }
+
     public override string ToString()
     {
         return string.Format(CultureInfo.InvariantCulture,
@@ -127,6 +133,12 @@ internal static class ClickAimCombat
     public const double CasterRangeYd = 28.0;
 
     /// <summary>
+    /// The client's melee range. A spell this short is not a cast: the character has to be
+    /// standing on the mob, so the melee half of the rotation drives it.
+    /// </summary>
+    public const double MeleeRangeYd = 5.0;
+
+    /// <summary>
     /// The spells this rotation knows by name, from Classic (1.12) ids. Everything not
     /// listed is still fired if it is the only thing on the bar - it just prints as
     /// <c>spell &lt;id&gt;</c>, which is how the next id gets added here.
@@ -157,6 +169,28 @@ internal static class ClickAimCombat
         { 5570, "Insect Swarm" }, { 24974, "Insect Swarm" }, { 24975, "Insect Swarm" },
         { 8936, "Regrowth" }, { 8938, "Regrowth" }, { 8939, "Regrowth" },
         { 8940, "Regrowth" }, { 8941, "Regrowth" }, { 9750, "Regrowth" },
+
+        /* Feral: these are MELEE abilities on a 5 yd bar, and the rotation used to treat every
+         * spell on the bar as a 28 yd cast - so a cat would stand 25 yd from the mob pressing
+         * Claw. The ids were missing entirely, which is why they printed as "spell <id>". */
+        { 1082, "Claw" }, { 3029, "Claw" }, { 5201, "Claw" }, { 9849, "Claw" },
+        { 9850, "Claw" },
+        { 6807, "Maul" }, { 6808, "Maul" }, { 6809, "Maul" }, { 8972, "Maul" },
+        { 9745, "Maul" }, { 9880, "Maul" }, { 9881, "Maul" },
+        { 779, "Swipe" }, { 62078, "Swipe" },
+        { 5221, "Shred" }, { 6800, "Shred" }, { 8992, "Shred" }, { 9829, "Shred" },
+        { 9830, "Shred" },
+        { 1822, "Rake" }, { 1823, "Rake" }, { 1824, "Rake" }, { 9904, "Rake" },
+        { 1079, "Rip" }, { 9492, "Rip" }, { 9493, "Rip" }, { 9752, "Rip" },
+        { 9894, "Rip" }, { 9896, "Rip" },
+        { 22568, "Ferocious Bite" }, { 22827, "Ferocious Bite" }, { 22828, "Ferocious Bite" },
+        { 22829, "Ferocious Bite" }, { 24248, "Ferocious Bite" },
+        { 33876, "Mangle" }, { 33987, "Mangle" },
+        { 9005, "Pounce" }, { 9823, "Pounce" }, { 9827, "Pounce" },
+        { 5211, "Bash" }, { 6798, "Bash" }, { 8983, "Bash" },
+        { 99, "Demoralizing Roar" }, { 1735, "Demoralizing Roar" }, { 9490, "Demoralizing Roar" },
+        { 9747, "Demoralizing Roar" },
+        { 768, "Cat Form" }, { 5487, "Bear Form" },
 
         /* --- Mage --- */
         { 133, "Fireball" }, { 143, "Fireball" }, { 145, "Fireball" }, { 3140, "Fireball" },
@@ -228,6 +262,7 @@ internal static class ClickAimCombat
         { 324, "Lightning Shield" }, { 325, "Lightning Shield" }, { 905, "Lightning Shield" },
         { 945, "Lightning Shield" }, { 8134, "Lightning Shield" },
         { 8017, "Rockbiter Weapon" }, { 8018, "Rockbiter Weapon" }, { 8019, "Rockbiter Weapon" },
+        { 17364, "Stormstrike" },
 
         /* --- Paladin --- */
         { 635, "Holy Light" }, { 639, "Holy Light" }, { 647, "Holy Light" },
@@ -237,6 +272,7 @@ internal static class ClickAimCombat
         { 19941, "Flash of Light" }, { 19942, "Flash of Light" }, { 19943, "Flash of Light" },
         { 20165, "Seal of Righteousness" }, { 20166, "Seal of Righteousness" },
         { 20271, "Judgement" }, { 853, "Hammer of Justice" }, { 465, "Devotion Aura" },
+        { 35395, "Crusader Strike" },
 
         /* --- Warrior --- */
         { 78, "Heroic Strike" }, { 284, "Heroic Strike" }, { 285, "Heroic Strike" },
@@ -247,6 +283,9 @@ internal static class ClickAimCombat
         { 634, "Thunder Clap" }, { 8198, "Thunder Clap" }, { 8204, "Thunder Clap" },
         { 8205, "Thunder Clap" }, { 11580, "Thunder Clap" }, { 11581, "Thunder Clap" },
         { 5308, "Execute" }, { 100, "Charge" },
+        { 7384, "Overpower" }, { 1464, "Slam" }, { 1680, "Whirlwind" }, { 1715, "Hamstring" },
+        { 845, "Cleave" }, { 7386, "Sunder Armor" }, { 6572, "Revenge" },
+        { 23922, "Shield Slam" }, { 12294, "Mortal Strike" }, { 20252, "Intercept" },
         { 6673, "Battle Shout" }, { 5242, "Battle Shout" }, { 6192, "Battle Shout" },
         { 11549, "Battle Shout" }, { 11550, "Battle Shout" }, { 11551, "Battle Shout" },
 
@@ -259,9 +298,13 @@ internal static class ClickAimCombat
         { 53, "Backstab" }, { 2589, "Backstab" }, { 2590, "Backstab" }, { 2591, "Backstab" },
         { 8721, "Backstab" }, { 11279, "Backstab" }, { 11280, "Backstab" }, { 11281, "Backstab" },
         { 1784, "Stealth" }, { 1776, "Gouge" },
+        { 1766, "Kick" }, { 6770, "Sap" }, { 8676, "Ambush" }, { 1833, "Cheap Shot" },
+        { 703, "Garrote" }, { 1943, "Rupture" }, { 408, "Kidney Shot" }, { 8647, "Expose Armor" },
+        { 5938, "Shiv" },
 
         /* --- Hunter: the auto shot that IS the hunter's attack, and the shots around it --- */
         { 75, "Auto Shot" }, { 2973, "Raptor Strike" }, { 1495, "Mongoose Bite" },
+        { 2974, "Wing Clip" },
         { 1978, "Serpent Sting" }, { 13549, "Serpent Sting" }, { 13550, "Serpent Sting" },
         { 13551, "Serpent Sting" }, { 13552, "Serpent Sting" }, { 13553, "Serpent Sting" },
         { 13554, "Serpent Sting" }, { 13555, "Serpent Sting" },
@@ -301,13 +344,25 @@ internal static class ClickAimCombat
         { "Eviscerate", ClickAimSpellRole.Damage }, { "Backstab", ClickAimSpellRole.Damage },
         { "Arcane Shot", ClickAimSpellRole.Damage }, { "Raptor Strike", ClickAimSpellRole.Damage },
         { "Mongoose Bite", ClickAimSpellRole.Damage }, { "War Stomp", ClickAimSpellRole.Damage },
+        { "Claw", ClickAimSpellRole.Damage }, { "Maul", ClickAimSpellRole.Damage },
+        { "Swipe", ClickAimSpellRole.Damage }, { "Shred", ClickAimSpellRole.Damage },
+        { "Ferocious Bite", ClickAimSpellRole.Damage }, { "Mangle", ClickAimSpellRole.Damage },
+        { "Overpower", ClickAimSpellRole.Damage }, { "Slam", ClickAimSpellRole.Damage },
+        { "Whirlwind", ClickAimSpellRole.Damage }, { "Cleave", ClickAimSpellRole.Damage },
+        { "Sunder Armor", ClickAimSpellRole.Damage }, { "Revenge", ClickAimSpellRole.Damage },
+        { "Shield Slam", ClickAimSpellRole.Damage }, { "Mortal Strike", ClickAimSpellRole.Damage },
+        { "Ambush", ClickAimSpellRole.Damage }, { "Cheap Shot", ClickAimSpellRole.Damage },
+        { "Garrote", ClickAimSpellRole.Damage }, { "Kidney Shot", ClickAimSpellRole.Damage },
+        { "Expose Armor", ClickAimSpellRole.Damage }, { "Shiv", ClickAimSpellRole.Damage },
+        { "Crusader Strike", ClickAimSpellRole.Damage }, { "Stormstrike", ClickAimSpellRole.Damage },
 
         /* Damage over time: applied once per target and refreshed on a timer, not spammed. */
         { "Moonfire", ClickAimSpellRole.Dot }, { "Insect Swarm", ClickAimSpellRole.Dot },
         { "Shadow Word: Pain", ClickAimSpellRole.Dot }, { "Corruption", ClickAimSpellRole.Dot },
         { "Immolate", ClickAimSpellRole.Dot }, { "Curse of Agony", ClickAimSpellRole.Dot },
         { "Flame Shock", ClickAimSpellRole.Dot }, { "Serpent Sting", ClickAimSpellRole.Dot },
-        { "Rend", ClickAimSpellRole.Dot },
+        { "Rend", ClickAimSpellRole.Dot }, { "Rake", ClickAimSpellRole.Dot },
+        { "Rip", ClickAimSpellRole.Dot }, { "Rupture", ClickAimSpellRole.Dot },
 
         /* Healing. */
         { "Healing Touch", ClickAimSpellRole.Heal }, { "Rejuvenation", ClickAimSpellRole.Heal },
@@ -333,7 +388,56 @@ internal static class ClickAimCombat
         { "Frost Nova", ClickAimSpellRole.Utility }, { "Polymorph", ClickAimSpellRole.Utility },
         { "Hammer of Justice", ClickAimSpellRole.Utility }, { "Charge", ClickAimSpellRole.Utility },
         { "Stealth", ClickAimSpellRole.Utility }, { "Gouge", ClickAimSpellRole.Utility },
-        { "Life Tap", ClickAimSpellRole.Utility }, { "Hunter's Mark", ClickAimSpellRole.Utility }
+        { "Life Tap", ClickAimSpellRole.Utility }, { "Hunter's Mark", ClickAimSpellRole.Utility },
+        { "Hamstring", ClickAimSpellRole.Damage }, { "Kick", ClickAimSpellRole.Utility },
+        { "Sap", ClickAimSpellRole.Utility }, { "Pounce", ClickAimSpellRole.Utility },
+        { "Bash", ClickAimSpellRole.Utility }, { "Demoralizing Roar", ClickAimSpellRole.Utility },
+        { "Wing Clip", ClickAimSpellRole.Utility }, { "Intercept", ClickAimSpellRole.Utility },
+        { "Cat Form", ClickAimSpellRole.Buff }, { "Bear Form", ClickAimSpellRole.Buff }
+    };
+
+    /// <summary>
+    /// How far a spell reaches, in yards, for the spells that are NOT the 28 yd default.
+    ///
+    /// Everything the rotation used to do assumed one number - <see cref="CasterRangeYd"/> - and
+    /// that is wrong for half the classes: Claw, Heroic Strike, Sinister Strike, Rend and the
+    /// rest of the melee kit are 5 yd abilities. A cat standing 25 yd from a mob pressing Claw
+    /// is exactly the client's "out of range" and nothing else, which is what the user saw as
+    /// "the bot thinks all skills are ranged". The default stays ranged because that is what
+    /// most spells are; this table lists the exceptions, by name, so a rank is covered by one
+    /// entry like every other table here.
+    ///
+    /// <see cref="MeleeRangeYd"/> is the client's own melee range. A spell at that range is
+    /// driven by the melee half of the rotation (close in, auto-attack, press the key), not by
+    /// the cast loop - a 5 yd "cast" that waits 3.2 s for a global cooldown would be a very
+    /// expensive way to miss.
+    /// </summary>
+    private static readonly Dictionary<string, double> RangesByName =
+        new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase)
+    {
+        /* Melee: 5 yd, warrior / rogue / feral druid / paladin / shaman / hunter. */
+        { "Heroic Strike", MeleeRangeYd }, { "Execute", MeleeRangeYd },
+        { "Thunder Clap", MeleeRangeYd }, { "Overpower", MeleeRangeYd },
+        { "Slam", MeleeRangeYd }, { "Whirlwind", MeleeRangeYd }, { "Cleave", MeleeRangeYd },
+        { "Sunder Armor", MeleeRangeYd }, { "Revenge", MeleeRangeYd },
+        { "Shield Slam", MeleeRangeYd }, { "Mortal Strike", MeleeRangeYd },
+        { "Hamstring", MeleeRangeYd }, { "Rend", MeleeRangeYd },
+        { "Sinister Strike", MeleeRangeYd }, { "Eviscerate", MeleeRangeYd },
+        { "Backstab", MeleeRangeYd }, { "Ambush", MeleeRangeYd }, { "Cheap Shot", MeleeRangeYd },
+        { "Garrote", MeleeRangeYd }, { "Kidney Shot", MeleeRangeYd },
+        { "Expose Armor", MeleeRangeYd }, { "Shiv", MeleeRangeYd },
+        { "Rupture", MeleeRangeYd },
+        { "Claw", MeleeRangeYd }, { "Maul", MeleeRangeYd }, { "Swipe", MeleeRangeYd },
+        { "Shred", MeleeRangeYd }, { "Rake", MeleeRangeYd }, { "Rip", MeleeRangeYd },
+        { "Ferocious Bite", MeleeRangeYd }, { "Mangle", MeleeRangeYd },
+        { "Crusader Strike", MeleeRangeYd }, { "Stormstrike", MeleeRangeYd },
+        { "Raptor Strike", MeleeRangeYd }, { "Mongoose Bite", MeleeRangeYd },
+        { "War Stomp", MeleeRangeYd },
+
+        /* Short but not melee: instants that are cast from a few yards out. */
+        { "Judgement", 10.0 }, { "Hammer of Justice", 10.0 },
+        { "Earth Shock", 20.0 }, { "Frost Shock", 20.0 },
+        { "Fire Blast", 20.0 }, { "Wing Clip", MeleeRangeYd }
     };
 
     /// <summary>
@@ -348,6 +452,42 @@ internal static class ClickAimCombat
         string name;
         if (!KnownSpells.TryGetValue(id, out name)) return ClickAimSpellRole.Unknown;
         return RolesByName.TryGetValue(name, out role) ? role : ClickAimSpellRole.Unknown;
+    }
+
+    /// <summary>
+    /// How far a spell on the bar reaches. <see cref="CasterRangeYd"/> unless
+    /// <see cref="RangesByName"/> says otherwise; 0 when the id is not in the name table at all,
+    /// which the caller must treat as "no idea" rather than as "point blank".
+    /// </summary>
+    public static double RangeOf(int id)
+    {
+        string name;
+        if (!KnownSpells.TryGetValue(id, out name)) return 0.0;
+
+        double range;
+        if (RangesByName.TryGetValue(name, out range)) return range;
+
+        ClickAimSpellRole role;
+        // Auto-attack / Auto Shot: the swing is the 5 yd one; the shot is a ranged attack.
+        if (RolesByName.TryGetValue(name, out role) && role == ClickAimSpellRole.Attack)
+            return string.Equals(name, "Auto Shot", StringComparison.OrdinalIgnoreCase)
+                ? CasterRangeYd
+                : MeleeRangeYd;
+
+        return CasterRangeYd;
+    }
+
+    /// <summary>
+    /// True when this spell is a melee ability - 5 yd, pressed standing next to the mob.
+    /// Unknown spells answer false: the cast loop gets one refusal and says so, which is a
+    /// better failure than closing to arm's length for a 30 yd nuke.
+    /// </summary>
+    public static bool IsMeleeSpell(int id)
+    {
+        string name;
+        if (!KnownSpells.TryGetValue(id, out name)) return false;
+        double range;
+        return RangesByName.TryGetValue(name, out range) && range <= MeleeRangeYd + 0.01;
     }
 
     public static bool IsDamageSpell(int id) { return RoleOf(id) == ClickAimSpellRole.Damage; }
@@ -623,10 +763,28 @@ internal static class ClickAimCombat
         return null;
     }
 
-    /// <summary>The first direct-damage spell on the bar, or a DoT when that is all there is.</summary>
+    /// <summary>The first direct-damage spell the character can cast from range, or null.</summary>
+    public static ClickAimAction? FirstRangedDamage(List<ClickAimAction> bar)
+    {
+        for (int i = 0; i < bar.Count; i++) if (bar[i].IsDamage && !bar[i].IsMelee) return bar[i];
+        return null;
+    }
+
+    /// <summary>The first melee damage ability on the bar (Claw, Heroic Strike, ...), or null.</summary>
+    public static ClickAimAction? FirstMeleeDamage(List<ClickAimAction> bar)
+    {
+        for (int i = 0; i < bar.Count; i++) if (bar[i].IsDamage && bar[i].IsMelee) return bar[i];
+        return null;
+    }
+
+    /// <summary>
+    /// The first direct-damage spell on the bar, or a DoT when that is all there is. A ranged
+    /// spell is preferred over a melee one: if the character has both, opening from 28 yd is
+    /// free damage and closing in is what it does afterwards anyway.
+    /// </summary>
     public static ClickAimAction? FirstDamageOrDot(List<ClickAimAction> bar)
     {
-        ClickAimAction? direct = FirstDamage(bar);
+        ClickAimAction? direct = FirstRangedDamage(bar) ?? FirstDamage(bar);
         return direct ?? FirstDot(bar);
     }
 
@@ -735,6 +893,31 @@ internal static class ClickAimCombat
         check(IsDamageSpell(78), "warriorHeroicStrike");
         check(IsDamageSpell(1752), "rogueSinisterStrike");
         check(IsDamageSpell(3044), "hunterArcaneShot");
+
+        /* Range: the half of the table that is not a 28 yd cast. A cat pressing Claw from 25 yd
+         * was the user's "the bot thinks all skills are ranged". */
+        check(RangeOf(5176) == CasterRangeYd && !IsMeleeSpell(5176), "wrathIsRanged");
+        check(RangeOf(8921) == CasterRangeYd && !IsMeleeSpell(8921), "moonfireIsRanged");
+        check(IsMeleeSpell(78) && RangeOf(78) == MeleeRangeYd, "heroicStrikeIsMelee");
+        check(IsMeleeSpell(1752), "sinisterStrikeIsMelee");
+        check(IsMeleeSpell(1082) && RangeOf(1082) == MeleeRangeYd, "clawIsMelee");
+        check(IsMeleeSpell(772), "rendIsMeleeDot");
+        check(IsMeleeSpell(5221), "shredIsMelee");
+        check(!IsMeleeSpell(133) && RangeOf(133) == CasterRangeYd, "fireballIsRanged");
+        check(RangeOf(20271) == 10.0 && !IsMeleeSpell(20271), "judgementIsShortRanged");
+        check(RangeOf(75) == CasterRangeYd, "autoShotIsRanged");
+        check(RangeOf(999999) == 0.0, "unknownSpellHasNoRange");
+
+        /* And the choice between them: a bar carrying both opens from range. */
+        var both = new List<ClickAimAction>
+        {
+            new ClickAimAction { Slot = 1, Id = 1082, Kind = ClickAimActionKind.Spell },
+            new ClickAimAction { Slot = 2, Id = 5176, Kind = ClickAimActionKind.Spell },
+            new ClickAimAction { Slot = 3, Id = 78, Kind = ClickAimActionKind.Spell }
+        };
+        check(FirstRangedDamage(both) != null && FirstRangedDamage(both)!.Slot == 2, "prefersRanged");
+        check(FirstMeleeDamage(both) != null && FirstMeleeDamage(both)!.Slot == 1, "findsMelee");
+        check(FirstDamageOrDot(both) != null && FirstDamageOrDot(both)!.Slot == 2, "opensFromRange");
         check(IsAttackSpell(75), "hunterAutoShot");
 
         /* Food and drink, by item id, from the two slots this character actually carries. */

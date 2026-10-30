@@ -33,6 +33,15 @@ internal static class ClickAimSettings
     public static int HealBelowPercent = 60;
 
     /// <summary>
+    /// ...and only while power is at least this percentage of its maximum. A heal costs mana,
+    /// and a caster that keeps pressing a heal it cannot afford dies with a full bar of nothing:
+    /// the press fails, the global cooldown is gone, the mob keeps hitting, and the next press
+    /// fails the same way. Below this line the rotation fights instead - auto-attack and any
+    /// spell it can still pay for. 0 removes the check.
+    /// </summary>
+    public static int HealMinManaPercent = 25;
+
+    /// <summary>
     /// Use damage-over-time spells (Moonfire, Corruption, Shadow Word: Pain, Immolate ...).
     /// One DoT per target, refreshed when it has been on long enough to have run out.
     /// </summary>
@@ -95,6 +104,7 @@ internal static class ClickAimSettings
         EatBelowPercent = 55;
         DrinkBelowPercent = 35;
         HealBelowPercent = 60;
+        HealMinManaPercent = 25;
         UseDamageOverTime = true;
         UseBuffs = true;
         FoodSlot = 0;
@@ -175,6 +185,11 @@ internal static class ClickAimSettings
             if (hasNumber) HealBelowPercent = number;
             return true;
         }
+        if (string.Equals(key, "HealMinManaPercent", StringComparison.OrdinalIgnoreCase))
+        {
+            if (hasNumber) HealMinManaPercent = number;
+            return true;
+        }
         if (string.Equals(key, "UseDamageOverTime", StringComparison.OrdinalIgnoreCase))
         {
             UseDamageOverTime = flag;
@@ -214,6 +229,7 @@ internal static class ClickAimSettings
         EatBelowPercent = ClampPercent(EatBelowPercent);
         DrinkBelowPercent = ClampPercent(DrinkBelowPercent);
         HealBelowPercent = ClampPercent(HealBelowPercent);
+        HealMinManaPercent = ClampPercent(HealMinManaPercent);
         FoodSlot = Math.Max(0, Math.Min(12, FoodSlot));
         DrinkSlot = Math.Max(0, Math.Min(12, DrinkSlot));
         DotRefreshSeconds = Math.Max(4, Math.Min(60, DotRefreshSeconds));
@@ -245,6 +261,7 @@ internal static class ClickAimSettings
         text.AppendLine("EatBelowPercent = " + EatBelowPercent.ToString(CultureInfo.InvariantCulture));
         text.AppendLine("DrinkBelowPercent = " + DrinkBelowPercent.ToString(CultureInfo.InvariantCulture));
         text.AppendLine("HealBelowPercent = " + HealBelowPercent.ToString(CultureInfo.InvariantCulture));
+        text.AppendLine("HealMinManaPercent = " + HealMinManaPercent.ToString(CultureInfo.InvariantCulture));
         text.AppendLine("UseDamageOverTime = " + (UseDamageOverTime ? "true" : "false"));
         text.AppendLine("UseBuffs = " + (UseBuffs ? "true" : "false"));
         text.AppendLine("FoodSlot = " + FoodSlot.ToString(CultureInfo.InvariantCulture));
@@ -270,13 +287,14 @@ internal static class ClickAimSettings
     public static string Describe()
     {
         return string.Format(CultureInfo.InvariantCulture,
-            "heal at {0}% (0 = never), eat at {1}%, drink at {2}%, damage over time {3}, buffs {4}, "
-            + "food slot {5}, drink slot {6}, {7} spell role(s) set by hand",
+            "heal at {0}% (0 = never) and only above {8}% power, eat at {1}%, drink at {2}%, "
+            + "damage over time {3}, buffs {4}, food slot {5}, drink slot {6}, "
+            + "{7} spell role(s) set by hand",
             HealBelowPercent, EatBelowPercent, DrinkBelowPercent,
             UseDamageOverTime ? "on" : "off", UseBuffs ? "on" : "off",
             FoodSlot == 0 ? "auto" : FoodSlot.ToString(CultureInfo.InvariantCulture),
             DrinkSlot == 0 ? "auto" : DrinkSlot.ToString(CultureInfo.InvariantCulture),
-            ClickAimCombat.OverrideCount);
+            ClickAimCombat.OverrideCount, HealMinManaPercent);
     }
 
     /// <summary>
@@ -295,10 +313,13 @@ internal static class ClickAimSettings
         };
 
         ResetDefaults();
-        check(EatBelowPercent == 55 && DrinkBelowPercent == 35 && HealBelowPercent == 60, "defaults");
+        check(EatBelowPercent == 55 && DrinkBelowPercent == 35 && HealBelowPercent == 60,
+              "defaults");
+        check(HealMinManaPercent == 25, "defaultHealMana");
 
         check(Apply("EatBelowPercent", "70") && EatBelowPercent == 70, "applyEat");
         check(Apply("HealBelowPercent", "0") && HealBelowPercent == 0, "applyHealZero");
+        check(Apply("HealMinManaPercent", "40") && HealMinManaPercent == 40, "applyHealMana");
         check(Apply("UseDamageOverTime", "false") && !UseDamageOverTime, "applyFalse");
         check(Apply("UseBuffs", "true") && UseBuffs, "applyTrue");
         check(!Apply("NoSuchKey", "1"), "unknownKey");

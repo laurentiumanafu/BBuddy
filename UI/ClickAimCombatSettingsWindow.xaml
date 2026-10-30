@@ -23,18 +23,19 @@
                     <ColumnDefinition Width="80"/>
                 </Grid.ColumnDefinitions>
                 <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/>  <!-- 0 intro      -->
-                    <RowDefinition Height="Auto"/>  <!-- 1 heal       -->
-                    <RowDefinition Height="Auto"/>  <!-- 2 eat        -->
-                    <RowDefinition Height="Auto"/>  <!-- 3 drink      -->
-                    <RowDefinition Height="Auto"/>  <!-- 4 dot        -->
-                    <RowDefinition Height="Auto"/>  <!-- 5 dot secs   -->
-                    <RowDefinition Height="Auto"/>  <!-- 6 buffs      -->
-                    <RowDefinition Height="Auto"/>  <!-- 7 food slot  -->
-                    <RowDefinition Height="Auto"/>  <!-- 8 drink slot -->
-                    <RowDefinition Height="Auto"/>  <!-- 9 rest ms    -->
-                    <RowDefinition Height="Auto"/>  <!-- 10 file      -->
-                    <RowDefinition Height="*"/>     <!-- 11 spacer    -->
+                    <RowDefinition Height="Auto"/>  <!-- 0 intro       -->
+                    <RowDefinition Height="Auto"/>  <!-- 1 heal        -->
+                    <RowDefinition Height="Auto"/>  <!-- 2 heal power  -->
+                    <RowDefinition Height="Auto"/>  <!-- 3 eat         -->
+                    <RowDefinition Height="Auto"/>  <!-- 4 drink       -->
+                    <RowDefinition Height="Auto"/>  <!-- 5 dot         -->
+                    <RowDefinition Height="Auto"/>  <!-- 6 dot secs    -->
+                    <RowDefinition Height="Auto"/>  <!-- 7 buffs       -->
+                    <RowDefinition Height="Auto"/>  <!-- 8 food slot   -->
+                    <RowDefinition Height="Auto"/>  <!-- 9 drink slot  -->
+                    <RowDefinition Height="Auto"/>  <!-- 10 rest ms    -->
+                    <RowDefinition Height="Auto"/>  <!-- 11 file       -->
+                    <RowDefinition Height="*"/>     <!-- 12 spacer     -->
                 </Grid.RowDefinitions>
 
                 <TextBlock Grid.Row="0" Grid.ColumnSpan="2" TextWrapping="Wrap" Margin="0,0,0,12"
@@ -45,39 +46,44 @@
                 <TextBox x:Name="txtHeal" Grid.Row="1" Grid.Column="1" Margin="0,0,0,8"/>
 
                 <TextBlock Grid.Row="2" Grid.Column="0" VerticalAlignment="Center" Margin="0,0,8,8"
-                           Text="Eat at or below (percent health)"/>
-                <TextBox x:Name="txtEat" Grid.Row="2" Grid.Column="1" Margin="0,0,0,8"/>
+                           Text="...but only while power is at least (percent)"/>
+                <TextBox x:Name="txtHealMana" Grid.Row="2" Grid.Column="1" Margin="0,0,0,8"
+                         ToolTip="A heal costs mana. Below this line the bot does not press it: it fights with auto-attack and whatever still casts."/>
 
                 <TextBlock Grid.Row="3" Grid.Column="0" VerticalAlignment="Center" Margin="0,0,8,8"
-                           Text="Drink at or below (percent mana)"/>
-                <TextBox x:Name="txtDrink" Grid.Row="3" Grid.Column="1" Margin="0,0,0,8"/>
+                           Text="Eat at or below (percent health)"/>
+                <TextBox x:Name="txtEat" Grid.Row="3" Grid.Column="1" Margin="0,0,0,8"/>
 
-                <CheckBox x:Name="chkDot" Grid.Row="4" Grid.ColumnSpan="2" Margin="0,8,0,4"
+                <TextBlock Grid.Row="4" Grid.Column="0" VerticalAlignment="Center" Margin="0,0,8,8"
+                           Text="Drink at or below (percent mana)"/>
+                <TextBox x:Name="txtDrink" Grid.Row="4" Grid.Column="1" Margin="0,0,0,8"/>
+
+                <CheckBox x:Name="chkDot" Grid.Row="5" Grid.ColumnSpan="2" Margin="0,8,0,4"
                           Content="Use damage-over-time spells (Moonfire, Corruption, Serpent Sting ...)"/>
 
-                <TextBlock Grid.Row="5" Grid.Column="0" VerticalAlignment="Center" Margin="0,0,8,8"
+                <TextBlock Grid.Row="6" Grid.Column="0" VerticalAlignment="Center" Margin="0,0,8,8"
                            Text="Refresh a damage-over-time spell after (seconds)"/>
-                <TextBox x:Name="txtDotSeconds" Grid.Row="5" Grid.Column="1" Margin="0,0,0,8"/>
+                <TextBox x:Name="txtDotSeconds" Grid.Row="6" Grid.Column="1" Margin="0,0,0,8"/>
 
-                <CheckBox x:Name="chkBuffs" Grid.Row="6" Grid.ColumnSpan="2" Margin="0,4,0,12"
+                <CheckBox x:Name="chkBuffs" Grid.Row="7" Grid.ColumnSpan="2" Margin="0,4,0,12"
                           Content="Apply self-buffs when the run starts"/>
 
-                <TextBlock Grid.Row="7" Grid.Column="0" VerticalAlignment="Center" Margin="0,0,8,8"
-                           Text="Food slot (0 = find it on the bar)"/>
-                <TextBox x:Name="txtFoodSlot" Grid.Row="7" Grid.Column="1" Margin="0,0,0,8"/>
-
                 <TextBlock Grid.Row="8" Grid.Column="0" VerticalAlignment="Center" Margin="0,0,8,8"
-                           Text="Drink slot (0 = find it on the bar)"/>
-                <TextBox x:Name="txtDrinkSlot" Grid.Row="8" Grid.Column="1" Margin="0,0,0,8"/>
+                           Text="Food slot (0 = find it on the bar)"/>
+                <TextBox x:Name="txtFoodSlot" Grid.Row="8" Grid.Column="1" Margin="0,0,0,8"/>
 
                 <TextBlock Grid.Row="9" Grid.Column="0" VerticalAlignment="Center" Margin="0,0,8,8"
-                           Text="Rest for at most (milliseconds)"/>
-                <TextBox x:Name="txtRestMs" Grid.Row="9" Grid.Column="1" Margin="0,0,0,8"/>
+                           Text="Drink slot (0 = find it on the bar)"/>
+                <TextBox x:Name="txtDrinkSlot" Grid.Row="9" Grid.Column="1" Margin="0,0,0,8"/>
 
-                <TextBlock x:Name="lblFile" Grid.Row="10" Grid.ColumnSpan="2" TextWrapping="Wrap"
+                <TextBlock Grid.Row="10" Grid.Column="0" VerticalAlignment="Center" Margin="0,0,8,8"
+                           Text="Rest for at most (milliseconds)"/>
+                <TextBox x:Name="txtRestMs" Grid.Row="10" Grid.Column="1" Margin="0,0,0,8"/>
+
+                <TextBlock x:Name="lblFile" Grid.Row="11" Grid.ColumnSpan="2" TextWrapping="Wrap"
                            Margin="0,8,0,0" FontSize="11" Opacity="0.7"/>
 
-                <TextBlock Grid.Row="11" Grid.ColumnSpan="2" TextWrapping="Wrap" Margin="0,12,0,0"
+                <TextBlock Grid.Row="12" Grid.ColumnSpan="2" TextWrapping="Wrap" Margin="0,12,0,0"
                            VerticalAlignment="Top" FontSize="11" Opacity="0.7"
                            Text="The character eats and drinks between fights, out of combat: it stops moving, presses the food or drink key, and waits."/>
             </Grid>
@@ -104,8 +110,9 @@
                             <GridViewColumn Header="Slot" Width="45" DisplayMemberBinding="{Binding Slot}"/>
                             <GridViewColumn Header="Key" Width="45" DisplayMemberBinding="{Binding Key}"/>
                             <GridViewColumn Header="Spell" Width="230" DisplayMemberBinding="{Binding Spell}"/>
-                            <GridViewColumn Header="Role" Width="110" DisplayMemberBinding="{Binding Role}"/>
-                            <GridViewColumn Header="Set by" Width="80" DisplayMemberBinding="{Binding Source}"/>
+                            <GridViewColumn Header="Role" Width="100" DisplayMemberBinding="{Binding Role}"/>
+                            <GridViewColumn Header="Range" Width="80" DisplayMemberBinding="{Binding Range}"/>
+                            <GridViewColumn Header="Set by" Width="70" DisplayMemberBinding="{Binding Source}"/>
                         </GridView>
                     </ListView.View>
                 </ListView>

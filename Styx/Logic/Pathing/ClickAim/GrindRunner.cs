@@ -476,6 +476,7 @@ internal static class GrindRunner
         _manaPeak = 0;
         _healthPeak = 0;
         _buffsApplied = false;
+        _healCostGuess = 0;
         Logging.Write("[Grind] combat settings: " + ClickAimSettings.Describe());
 
         int level = reader.ReadPlayerLevel();
@@ -972,6 +973,49 @@ internal static class GrindRunner
         return "buffed with " + string.Join(", ", applied.ToArray());
     }
 
+    // ------------------------------------------------------------------ the heal's price
+
+    /// <summary>
+    /// Whether there is enough power to pay for a heal.
+    ///
+    /// Two rules, and both come from a real failure. The user's character was below 60% health
+    /// with no mana and the rotation kept pressing Healing Touch: every press failed for want of
+    /// mana, every press ate a global cooldown, and the mob finished the character off. So:
+    ///
+    ///  * power must be at least <see cref="ClickAimSettings.HealMinManaPercent"/> of the best
+    ///    maximum this session has seen (the max-power word reads 100 for 139 power on this
+    ///    build, hence the peak rather than the field);
+    ///  * and, once a heal has been seen to cost something, power must cover that cost with a
+    ///    little to spare - a heal that leaves nothing behind is a heal that stops the fight.
+    ///
+    /// When this says no, the rotation does NOT heal. It fights with auto-attack and anything
+    /// still affordable, which is what a player does.
+    /// </summary>
+    private static bool HealPowerOk(uint power, uint maxPower)
+    {
+        uint denom = maxPower;
+        if (denom < _manaPeak) denom = _manaPeak;
+        if (denom == 0) return true;                       // nothing to measure against
+
+        if (ClickAimSettings.HealMinManaPercent > 0
+            && power * 100.0 / denom < ClickAimSettings.HealMinManaPercent)
+            return false;
+
+        if (_healCostGuess > 0 && power < _healCostGuess + _healCostGuess / 4)
+            return false;
+
+        return true;
+    }
+
+    /// <summary>Remembers what one heal costs, from a heal that demonstrably worked.</summary>
+    private static void LearnHealCost(uint before, uint after)
+    {
+        if (before <= after) return;                        // nothing was spent: no evidence
+        uint spent = before - after;
+        // Keep the largest single drop: a crit heal or a cheap rank would understate the price.
+        if (spent > _healCostGuess) _healCostGuess = spent;
+    }
+
     // ------------------------------------------------------------------ eating and drinking
 
     /// <summary>
@@ -1360,6 +1404,13 @@ internal static class GrindRunner
 
     /// <summary>Buffs are pressed once per run; see <see cref="ApplyBuffsIfNeeded"/>.</summary>
     private static bool _buffsApplied;
+
+    /// <summary>
+    /// What the heal has been seen to cost, in power. Learned from the first heal that actually
+    /// worked (power before minus power after), because this build exposes no spell costs and a
+    /// guess is what makes a character press a heal it cannot pay for.
+    /// </summary>
+    private static uint _healCostGuess;
 
     /// <summary>
     /// The windows of a unit object that the loot probe reads. They bracket the fields this
@@ -1818,6 +1869,9 @@ internal static class GrindRunner
         bool castEverLanded = false;        // a Wrath has demonstrably cast this fight
         bool melee = false;                 // set when casting is shown not to work
         bool announced = false;
+        int healFailures = 0;               // presses of the heal key that changed nothing
+        bool healBlocked = false;           // no power for it: fight instead of pressing it again
+        bool healRefusalLogged = false;
         var worked = new List<string>();
 
         WowBWorldSnapshot? snap;
@@ -1841,6 +1895,14 @@ internal static class GrindRunner
         ClickAimAction? heal = ClickAimCombat.FirstHeal(bar);           // Healing Touch
         ClickAimAction? auto = ClickAimCombat.AutoAttack(bar);          // Attack (6603)
         ClickAimAction? dot = ClickAimCombat.FirstDot(bar);             // Moonfire, Corruption, ...
+        ClickAimAction? meleeHit = ClickAimCombat.FirstMeleeDamage(bar); // Claw, Heroic Strike, ...
+
+        /* How far the damage spell actually reaches. Every spell used to be treated as a 28 yd
+         * cast, so a cat stood 25 yd off a mob pressing a 5 yd Claw - the user's "the bot thinks
+         * all skills are ranged". A melee ability is not cast at all: the melee half of the
+         * rotation closes in, auto-attacks, and presses the key from arm's length. */
+        double castRange = damage != null && damage.RangeYd > 0 ? damage.RangeYd : ClickAimCombat.CasterRangeYd;
+        double dotRange = dot != null && dot.RangeYd > 0 ? dot.RangeYd : ClickAimCombat.CasterRangeYd;
 
         /* Whatever the walk was doing, it is over: the first thing this fight does is press a
          * key, and a cast begun while the character is still moving is refused by the client
@@ -1890,13 +1952,14 @@ internal static class GrindRunner
                     d, GiveUpYd);
 
             /* My own vitals, from the same block the mob's health comes from. */
-            uint myHealth = 0, myMaxHealth = 0, myMana = 0;
+            uint myHealth = 0, myMaxHealth = 0, myMana = 0, myMaxMana = 0;
             Styx.WoWInternals.WowBReader.WowBUnitFields mine;
             if (reader != null && reader.TryGetUnitFields(me.UnitAddress, out mine))
             {
                 myHealth = mine.Health;
                 myMaxHealth = mine.MaxHealth;
                 myMana = mine.Power;
+                myMaxMana = mine.MaxPower;      // a candidate on this build: see HealPowerOk
             }
             double myPercent = myMaxHealth > 0 ? myHealth * 100.0 / myMaxHealth : 100.0;
 
@@ -1910,24 +1973,57 @@ internal static class GrindRunner
             {
                 announced = true;
                 Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                    "[Grind] rotation: heal at {0}% health ({1}), damage {2}, damage over time {3}, "
-                    + "auto-attack {4}",
-                    ClickAimSettings.HealBelowPercent == 0 ? "never" : ClickAimSettings.HealBelowPercent.ToString(CultureInfo.InvariantCulture),
+                    "[Grind] rotation: heal at {0}% health ({1}), damage {2} at {5:F0} yd{6}, "
+                    + "damage over time {3}, auto-attack {4}{7}",
+                    ClickAimSettings.HealBelowPercent == 0
+                        ? "never"
+                        : ClickAimSettings.HealBelowPercent.ToString(CultureInfo.InvariantCulture)
+                          + " and only above " + ClickAimSettings.HealMinManaPercent.ToString(CultureInfo.InvariantCulture)
+                          + "% power",
                     heal == null ? "none on the bar" : "slot " + heal.Slot + " '" + ClickAimCombat.KeyLabel(heal.KeyVk) + "' " + heal.Name,
                     damage == null ? "none on the bar" : "slot " + damage.Slot + " '" + ClickAimCombat.KeyLabel(damage.KeyVk) + "' " + damage.Name,
                     !ClickAimSettings.UseDamageOverTime || dot == null
                         ? "off"
                         : "slot " + dot.Slot + " '" + ClickAimCombat.KeyLabel(dot.KeyVk) + "' " + dot.Name
                           + " every " + ClickAimSettings.DotRefreshSeconds.ToString(CultureInfo.InvariantCulture) + " s",
-                    auto == null ? "right-click only" : "slot " + auto.Slot + " '" + ClickAimCombat.KeyLabel(auto.KeyVk) + "'"));
+                    auto == null ? "right-click only" : "slot " + auto.Slot + " '" + ClickAimCombat.KeyLabel(auto.KeyVk) + "'",
+                    castRange,
+                    damage == null || !damage.IsMelee ? ""
+                        : " - a melee ability, so the fight closes to arm's length",
+                    meleeHit == null ? ""
+                        : ", melee ability " + meleeHit.Name + " (slot " + meleeHit.Slot + " '"
+                          + ClickAimCombat.KeyLabel(meleeHit.KeyVk) + "')"));
             }
 
-            /* ---- 1. heal, where Singular puts it: before everything else ---- */
-            if (heal != null && ClickAimSettings.HealBelowPercent > 0
+            /* ---- 1. heal, where Singular puts it: before everything else ----
+             *
+             * ...but only when the character can PAY for it. A heal costs power, and a bot that
+             * keeps pressing a heal it cannot afford does not heal: the press fails, the global
+             * cooldown is gone, the mob keeps hitting, and the next press fails the same way.
+             * That is how the character the user reported died - below 60% health, no mana, and
+             * the rotation hammering the heal key while the mob finished it off. Below the line
+             * the heal is skipped and the loop carries on to damage and auto-attack, which cost
+             * nothing. */
+            bool healPowerOk = heal != null && HealPowerOk(myMana, myMaxMana);
+            if (heal != null && !healPowerOk && !healBlocked && !healRefusalLogged
+                && ClickAimSettings.HealBelowPercent > 0 && myPercent <= ClickAimSettings.HealBelowPercent)
+            {
+                healRefusalLogged = true;
+                Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                    "[Grind] health {0:F0}% is under the heal line and there is {1}/{2} power - not "
+                    + "enough for {3} (needs {4}% and a cast's worth), so this fight is fought with "
+                    + "auto-attack and whatever still casts", myPercent, myMana,
+                    myMaxMana > 0 ? myMaxMana : _manaPeak, heal.Name,
+                    ClickAimSettings.HealMinManaPercent));
+            }
+
+            if (heal != null && healPowerOk && !healBlocked
+                && ClickAimSettings.HealBelowPercent > 0
                 && myMaxHealth > 0 && myPercent <= ClickAimSettings.HealBelowPercent
                 && unchecked(Environment.TickCount - lastHealMs) >= ClickAimCombat.HealRetryMs)
             {
                 lastHealMs = Environment.TickCount;
+                uint powerBeforeHeal = myMana;
                 ClickAimInput.TapKey(hwnd, 0x70, 40);                  // F1 = target self (Blizzard default)
                 Thread.Sleep(120);
                 ClickAimInput.TapKey(hwnd, heal.KeyVk, 40);
@@ -1937,6 +2033,7 @@ internal static class GrindRunner
                  * reported "did not lift it (still 12/113)" for heals that were still being
                  * cast - four times in one fight. Poll instead. */
                 uint afterHealth = 0;
+                uint powerAfterHeal = powerBeforeHeal;
                 for (int waited = 0; waited < ClickAimCombat.HealVerifyMs && !_stop; waited += 300)
                 {
                     Thread.Sleep(300);
@@ -1944,7 +2041,10 @@ internal static class GrindRunner
                     if (reader == null || !Capture(out healed) || healed == null) continue;
                     if (healed.TryGetLocalPlayer(out WowBObservedUnit me2)
                         && reader.TryGetUnitFields(me2.UnitAddress, out mine))
+                    {
                         afterHealth = mine.Health;
+                        powerAfterHeal = mine.Power;
+                    }
                     if (afterHealth > myHealth) break;
                 }
 
@@ -1952,16 +2052,35 @@ internal static class GrindRunner
                 {
                     string label = "heal " + heal.Name;
                     if (!worked.Contains(label)) worked.Add(label);
+                    healFailures = 0;
+                    LearnHealCost(powerBeforeHeal, powerAfterHeal);
                     Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                        "[Grind] health {0:F0}% -> {1}/{2} with {3} (slot {4}). Back to the mob",
-                        myPercent, afterHealth, myMaxHealth, heal.Name, heal.Slot));
+                        "[Grind] health {0:F0}% -> {1}/{2} with {3} (slot {4}){5}. Back to the mob",
+                        myPercent, afterHealth, myMaxHealth, heal.Name, heal.Slot,
+                        _healCostGuess > 0
+                            ? " for " + _healCostGuess.ToString(CultureInfo.InvariantCulture) + " power"
+                            : ""));
                 }
                 else
                 {
+                    /* Two presses that neither lifted health nor spent power is a heal that
+                     * cannot be paid for (or a key that cannot cast). Either way pressing it a
+                     * third time costs another global cooldown in the middle of a fight the
+                     * character is losing, so the heal is off for the rest of this fight. */
+                    healFailures++;
+                    bool powerSpent = powerAfterHeal < powerBeforeHeal;
                     Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                        "[Grind] health {0:F0}% and {1} did not lift it (still {2}/{3}) - either F1 is not "
-                        + "bound to target-self or the key did not cast; carrying on",
-                        myPercent, heal.Name, afterHealth, myMaxHealth));
+                        "[Grind] health {0:F0}% and {1} did not lift it (still {2}/{3}, power {4} -> {5}, "
+                        + "{6}) - failure {7} this fight; fighting on instead of pressing it again",
+                        myPercent, heal.Name, afterHealth, myMaxHealth, powerBeforeHeal, powerAfterHeal,
+                        powerSpent ? "so it cast and the mob out-damaged it" : "the press did nothing at all",
+                        healFailures));
+                    if (healFailures >= 2)
+                    {
+                        healBlocked = true;
+                        Logging.Write("[Grind] the heal is off for the rest of this fight: two presses "
+                                    + "did nothing useful, so the power goes to attacks instead");
+                    }
                 }
 
                 /* Retarget the SAME mob. A single TAB is not enough: if F1 did move the
@@ -1992,7 +2111,7 @@ internal static class GrindRunner
              * debuff list is not readable on this build, so the timer is our own cast - being
              * a second late costs nothing, being early costs mana. */
             if (dot != null && ClickAimSettings.UseDamageOverTime && !melee
-                && myMana >= 10 && d <= ClickAimCombat.CasterRangeYd
+                && (dot.IsMelee || myMana >= 10) && d <= dotRange
                 && (_dotGuid != target.Guid || unchecked(Environment.TickCount - _dotUntil) >= 0))
             {
                 StopAndSettle(hwnd);
@@ -2021,9 +2140,12 @@ internal static class GrindRunner
              * The 16:46 run had the character casting and then closing into melee, which is
              * the one thing a caster should not do while it has mana. So: approach only
              * while out of casting range, and stop the moment the target is inside it. */
-            bool canCast = !melee && damage != null && myMana >= 10;
+            /* A melee ability is not cast: it is pressed standing next to the mob, and the
+             * melee branch below is what closes the distance and swings. So "can cast" means
+             * "there is a spell on the bar that reaches the mob from here". */
+            bool canCast = !melee && damage != null && !damage.IsMelee && myMana >= 10;
 
-            if (canCast && d > ClickAimCombat.CasterRangeYd)
+            if (canCast && d > castRange)
             {
                 double approach;
                 ClickAimKeySteer.Steer(target.Location.X, target.Location.Y, hwnd, true, out approach);
@@ -2031,7 +2153,7 @@ internal static class GrindRunner
                 continue;
             }
 
-            if (canCast && d > ClickAimCombat.CasterRangeYd - 2.0)
+            if (canCast && d > castRange - 2.0)
                 ClickAimKeySteer.ReleaseHeld();      // arrived: stop walking before casting
 
             /* ---- 3. Wrath, on the global cooldown timer ----
@@ -2154,9 +2276,13 @@ internal static class GrindRunner
             {
                 meleeOnce = true;
                 Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                    "[Grind] melee from here: casting is {0} (damage spell {1}, mana {2}, {3} failed cast(s))",
-                    melee ? "switched off for this fight" : "not available",
-                    damage == null ? "none on the bar" : damage.Name, myMana, castFailures));
+                    "[Grind] melee from here: casting is {0} (damage spell {1}{2}, power {3}, {4} failed cast(s))",
+                    melee ? "switched off for this fight"
+                          : damage != null && damage.IsMelee ? "not applicable: the damage spell is a melee ability"
+                          : "not available",
+                    damage == null ? "none on the bar" : damage.Name,
+                    meleeHit == null ? "" : " and " + meleeHit.Name + " to press at arm's length",
+                    myMana, castFailures));
             }
 
             if (d > AttackRangeYd)
@@ -2216,6 +2342,18 @@ internal static class GrindRunner
              * ahead can land on the character's own model - the key cannot miss, and the
              * target is already selected by TAB. */
             if (auto != null) ClickAimInput.TapKey(hwnd, auto.KeyVk, 40);
+
+            /* The melee half of the bar: Claw, Heroic Strike, Sinister Strike, Rend. These are
+             * 5 yd abilities, so this is the only branch that can use them - the cast loop would
+             * have stood at 28 yd pressing a key the client refuses. Rage and energy are not
+             * readable apart from mana here, so the press goes out and a refusal costs the
+             * client's own error line, not a global cooldown the bot spends twice. */
+            if (meleeHit != null)
+            {
+                ClickAimInput.TapKey(hwnd, meleeHit.KeyVk, 40);
+                if (!worked.Contains(meleeHit.Name + " (pressed at arm's length)"))
+                    worked.Add(meleeHit.Name + " (pressed at arm's length)");
+            }
             presses++;
             Thread.Sleep(AttackSettleMs);
 
@@ -2369,6 +2507,27 @@ internal static class GrindRunner
             string span = LevelSpan(areas);
             check("levelSpan", span.Contains("1-6") && span.Contains("25-30"));
 
+            /* The heal's price. The failure this guards is the one the user reported: a heal
+             * pressed with no power to pay for it, over and over, until the character died.
+             * 139/100 is the character from the 19:07 log, whose max-power word reads 100. */
+            _manaPeak = 0;
+            _healCostGuess = 0;
+            ClickAimSettings.HealMinManaPercent = 25;
+            check("healPowerEnough", HealPowerOk(139, 100));        // full bar
+            check("healPowerTooLow", !HealPowerOk(20, 100));        // 20% - under the 25% line
+            check("healPowerAtLine", HealPowerOk(25, 100));
+            _healCostGuess = 60;
+            check("healPowerLearnedCost", !HealPowerOk(60, 100) && HealPowerOk(100, 100));
+            _healCostGuess = 0;
+            ClickAimSettings.HealMinManaPercent = 0;
+            check("healPowerRuleOff", HealPowerOk(1, 100));
+            LearnHealCost(139, 99);
+            check("healCostLearned", _healCostGuess == 40);
+            LearnHealCost(139, 139);                                  // nothing spent: no evidence
+            check("healCostIgnoresNoSpend", _healCostGuess == 40);
+            _healCostGuess = 0;
+            ClickAimSettings.HealMinManaPercent = 25;
+
             /* Which mobs are worth attacking, from the level word the 15:57 dump confirmed:
              * a level-2 character fighting level 3 and 4 mobs is inside the band, level 9 is
              * not, and a level that did not read is allowed rather than skipped. */
@@ -2385,6 +2544,12 @@ internal static class GrindRunner
                               && ChaseYd < ClickAimCombat.CasterRangeYd
                               && ClickAimCombat.CasterRangeYd < SearchYd
                               && SearchYd < GiveUpYd);
+
+            /* Melee reach sits inside the melee chase: a 5 yd ability is pressed from inside
+             * the distance the melee branch is willing to close. Getting this wrong is a
+             * character that walks to 5 yd and then presses a key the client refuses. */
+            check("meleeReachNests", ClickAimCombat.MeleeRangeYd <= ChaseYd
+                                   && AttackRangeYd <= ClickAimCombat.MeleeRangeYd);
             check("interruptInsideSearch", InterruptYd < SearchYd && InterruptYd > AttackRangeYd);
 
             /* The choice itself: with the level inside a band, the area picked must be one

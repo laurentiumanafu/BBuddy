@@ -1595,3 +1595,49 @@ Fixed the way a player handles it:
   `stopWhenBlocked: true`, which keeps its blackspot behaviour.
 - **A jump is part of the sidestep.** Space is jump, it is free, and a kerb, a stump or the lip
   of a hill is what stops a click-walk most often in Elwynn.
+## Two things the user found in play: a heal it cannot pay for, and melee skills treated as ranged
+
+**1. "below 60% and no mana → it tries to heal until it dies."** Exactly what the code did: the
+heal gate was `health <= HealBelowPercent && cooldown` and nothing else, so a character with 8
+power pressed Healing Touch every 4 s. Each press failed for want of mana, each press ate the
+global cooldown, and the mob finished it off. Three changes:
+
+- **`HealMinManaPercent` (default 25, in the settings file and the window)** — the heal is only
+  considered while power is at least that share of the highest maximum seen this session. Below
+  it, the heal is skipped **and the loop carries on** to damage and auto-attack, which is the
+  behaviour asked for: fight with what you can still afford.
+- **The cost is learned, not assumed.** `LearnHealCost` records the biggest power drop a
+  successful heal has produced this session (`_healCostGuess`); after that, `HealPowerOk` also
+  requires the current power to cover that cost with 25% spare. No spell-cost API exists on this
+  build, so this is the honest version of "can I afford this".
+- **Two dud presses end it for the fight.** If a heal neither lifts health nor spends power, that
+  is counted; at two, the heal is off for the rest of the fight and the log says so. Previously
+  the only exits were the mob dying or the character dying.
+
+The failure line now distinguishes the two cases — `power 20 -> 20, the press did nothing at all`
+versus `power 139 -> 99, so it cast and the mob out-damaged it` — because they have different
+fixes (more mana / smaller heal) and used to read the same.
+
+**2. "the bot thinks all skills are ranged."** True: every spell was driven at `CasterRangeYd`
+(28 yd). Claw, Heroic Strike, Sinister Strike, Rend and the rest of the melee kit are 5 yd
+abilities, so a cat stood 25 yd off the mob pressing Claw — the client's "out of range", nothing
+else.
+
+- **`RangesByName` + `RangeOf(id)` / `IsMeleeSpell(id)`** in `ClickAimCombat`. The default stays
+  28 yd (that is what most spells are); the table lists the exceptions by name, so one entry
+  covers a whole rank family like every other table here. `MeleeRangeYd = 5`.
+- **A melee ability is not a cast.** `canCast` now requires a *ranged* damage spell; a melee one
+  goes to the melee branch, which closes to `AttackRangeYd`, right-clicks, presses Attack and
+  presses the ability. Waiting 3.2 s for a "cast" of Claw would be an expensive way to miss.
+- **The DoT has its own range** (`dotRange`), so melee DoTs (Rend, Rake, Rip, Rupture) are
+  applied at arm's length instead of never.
+- **Missing ids added**: the whole feral druid kit (Claw, Maul, Shred, Swipe, Rake, Rip, Ferocious
+  Bite, Mangle, Pounce, Bash, Demoralizing Roar, Cat/Bear Form) plus the warrior, rogue, paladin,
+  shaman and hunter melee abilities the name table never had — `spell <id>` in the log is now a
+  name.
+- **The Spells tab shows the reach** of every slot (`melee 5 yd` / `28 yd`), so "is this skill
+  ranged?" is answered by the window rather than by watching the character stand still.
+
+Self-tests grew accordingly: `wrathIsRanged`, `clawIsMelee`, `rendIsMeleeDot`,
+`judgementIsShortRanged`, `unknownSpellHasNoRange`, `prefersRanged`/`findsMelee`, plus
+`healPowerEnough`/`healPowerTooLow`/`healPowerLearnedCost` and `meleeReachNests`.
