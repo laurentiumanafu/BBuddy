@@ -65,16 +65,29 @@ internal static class GrindRunner
 
     // ---- attacking ---------------------------------------------------------
     /// <summary>
-    /// Keys tried in order. 1-5 are the first five action-bar slots; T and F are the
-    /// common attack/interact bindings. Only keys that measurably remove health are kept.
+    /// The word in <c>UnitFlags</c> every mob the client let us hit carried on 2026-10-30:
+    /// 0x80800 for the one that was being fought, 0x800 for the ones standing around in
+    /// Mulgore, and 0x80808 for the player. 0x0 units were the ones TAB refused to select.
+    /// It is used as a PREFERENCE, not a gate: the nearest flagged unit wins over a nearer
+    /// unflagged one, and when nothing in range carries the flag the unflagged ones are used
+    /// anyway - a wrong bit must not empty the world.
     /// </summary>
-    private static readonly int[] AttackKeys = { 0x31, 0x32, 0x33, 0x34, 0x35, 0x54, 0x46 };
+    private const uint HostileUnitFlag = 0x800;
+
+    /// <summary>
+    /// A mob's level, from <c>data+0x1E40</c>, against mine. Above +3 is a corpse run and
+    /// more than 4 below is grey (no experience, no loot worth the walk). Outside that band
+    /// the mob is skipped, which is the "do not wander at non-viable mobs" rule. An
+    /// unreadable level (0) is allowed through: a wrong offset must not skip every mob.
+    /// </summary>
+    private const int LevelAbovePlayer = 3;
+    private const int LevelBelowPlayer = 4;
+
+    /// <summary>Units this run has looked at and refused; capped so it cannot grow forever.</summary>
+    private static readonly HashSet<WowBGuid> _notViable = new HashSet<WowBGuid>();
 
     /// <summary>How long to wait for a key press to land before measuring health.</summary>
     private const int AttackSettleMs = 700;
-
-    /// <summary>Presses with no health change before moving to the next key.</summary>
-    private const int SwapKeyAfter = 3;
 
     /// <summary>Give up on one target after this long.</summary>
     private const int EngageTimeoutMs = 75000;
@@ -185,6 +198,7 @@ internal static class GrindRunner
         _clicks = 0;
         _gaveUpAt = 0;
         _gaveUpGuid = default(WowBGuid);
+        _notViable.Clear();
 
         /* What the client can be asked without Lua: level, health, the stored action bar
          * and what is standing around. It is printed once because it is the answer to
@@ -510,6 +524,24 @@ internal static class GrindRunner
             return false;
         }
 
+        /* TAB applies the client's own hostility filter but knows nothing about levels, so
+         * the level band is enforced here too. Killing something ten levels up is a corpse
+         * run, and a grey mob is a wasted walk. */
+        Styx.WoWInternals.WowBReader? esp = ObjectManager.WowB;
+        int myLevel = PlayerLevel();
+        if (esp != null && esp.TryGetUnitFields(target.UnitAddress,
+                out Styx.WoWInternals.WowBReader.WowBUnitFields tf) && !LevelViable(tf.Level, myLevel))
+        {
+            report = string.Format(CultureInfo.InvariantCulture,
+                "TAB selected a level-{0} unit and this character is level {1} (viable: {2}-{3}) - "
+                + "not attacking; ESC and walking on",
+                tf.Level, myLevel, Math.Max(1, myLevel - LevelBelowPlayer), myLevel + LevelAbovePlayer);
+            _notViable.Add(target.Guid);
+            if (_notViable.Count > 256) _notViable.Clear();   // a long session on a crowded map
+            ClickAimInput.TapKey(hwnd, 0x1B, 40);
+            return false;
+        }
+
 
         double d = ClickAimMath.Len(target.Location.X - px, target.Location.Y - py);
         if (d > SearchYd)
@@ -562,37 +594,70 @@ internal static class GrindRunner
          * is why this is the fallback. */
         Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
         var units = snap.Units;
+        int myLevel = PlayerLevel();
+
         WowBObservedUnit best = default(WowBObservedUnit);
         double bestYd = double.MaxValue;
         bool found = false;
-        int skipped = 0;
+        bool bestHostile = false;
+
+        WowBObservedUnit nearAny = default(WowBObservedUnit);
+        double nearAnyYd = double.MaxValue;
+        bool haveAny = false;
+
+        int skipped = 0, unviable = 0, lower = 0;
         for (int i = 0; i < units.Count; i++)
         {
             WowBObservedUnit unit = units[i];
             if (unit.IsLocalPlayer) continue;
             if (unit.HasPlayerVtable) continue;
             if (Refused(unit.Guid)) continue;
+            if (_notViable.Contains(unit.Guid)) continue;
             double d = ClickAimMath.Len(unit.Location.X - px, unit.Location.Y - py);
             if (d <= 0.5 || d > SearchYd) continue;
 
-            /* One filter that is certain: a corpse has no health. The level word is printed
-             * by the Offsets button but is not used to exclude anything here - it is marked
-             * V-ish, and a wrong level offset would silently skip every mob in the world. */
+            /* What the client says about it, if it says anything: a corpse has no health, the
+             * flags carry the reaction, and the level word decides whether the fight is worth
+             * the walk. Each of these is only applied when the word is actually readable. */
+            bool hostile = false;
             if (reader != null && reader.TryGetUnitFields(unit.UnitAddress,
-                    out Styx.WoWInternals.WowBReader.WowBUnitFields f) && f.Health == 0)
+                    out Styx.WoWInternals.WowBReader.WowBUnitFields f))
             {
-                skipped++;
-                continue;
+                if (f.Health == 0) { skipped++; continue; }
+                hostile = (f.UnitFlags & HostileUnitFlag) != 0;
+                if (!LevelViable(f.Level, myLevel)) { unviable++; continue; }
             }
+            else lower++;
 
-            if (d < bestYd) { bestYd = d; best = unit; found = true; }
+            if (d < nearAnyYd) { nearAnyYd = d; nearAny = unit; haveAny = true; }
+
+            /* A flagged unit wins over a nearer unflagged one; at equal standing the nearer
+             * one wins. This is the ordering, not a filter - see HostileUnitFlag. */
+            bool better = d < bestYd || (hostile && !bestHostile);
+            if (!found || better)
+            {
+                bestYd = d;
+                best = unit;
+                found = true;
+                bestHostile = hostile;
+            }
+        }
+
+        if (!found && haveAny)
+        {
+            best = nearAny;
+            bestYd = nearAnyYd;
+            found = true;
         }
 
         if (!found)
         {
             note = string.Format(CultureInfo.InvariantCulture,
-                "nothing clickable within {0:F0} yd ({1} corpse(s) skipped, or the only one is the "
-                + "target it just gave up on)", SearchYd, skipped);
+                "nothing clickable within {0:F0} yd of a level-{1} character: {2} corpse(s), "
+                + "{3} outside the {4}-{5} band, {6} with unreadable fields"
+                + ", and the rest is the target it just gave up on",
+                SearchYd, myLevel, skipped, unviable,
+                Math.Max(1, myLevel - LevelBelowPlayer), myLevel + LevelAbovePlayer, lower);
             return false;
         }
 
@@ -624,6 +689,20 @@ internal static class GrindRunner
             "[Grind] right-clicked the mob {0:F1} yd away - the client selected it and starts the attack itself",
             bestYd));
         return true;
+    }
+
+    /// <summary>
+    /// Whether a mob of <paramref name="mobLevel"/> is worth attacking at
+    /// <paramref name="myLevel"/>. A level the client did not report (0) is allowed: the
+    /// level word is read from <c>data+0x1E40</c>, which the 2026-10-30 dump confirmed for a
+    /// level-2 player and level-3/4 mobs, but a mob whose fields do not read must not be
+    /// silently invisible.
+    /// </summary>
+    private static bool LevelViable(uint mobLevel, int myLevel)
+    {
+        if (mobLevel == 0 || myLevel <= 0) return true;
+        if ((int)mobLevel > myLevel + LevelAbovePlayer) return false;
+        return (int)mobLevel >= myLevel - LevelBelowPlayer;
     }
 
     /// <summary>True while the target a fight gave up on is still off limits.</summary>
@@ -671,150 +750,317 @@ internal static class GrindRunner
     }
 
     /// <summary>
-    /// Closes to attack range and presses action-bar keys until the target dies, is lost,
-    /// or the timeout expires. The returned string is what the caller logs.
+    /// One fight: Singular's lowbie druid rotation, driven by the action bar the client
+    /// keeps in memory and verified against the mob's health and my own mana.
+    ///
+    /// The order is Singular's (<c>ClassSpecific/Druid/Lowbie.cs</c>), with the spells this
+    /// character does not have yet left out because they are not on the bar:
+    ///
+    ///   1. if health is at or below 60% and a heal is on the bar - heal self (F1, then the
+    ///      heal's slot key), which is Singular's <c>Spell.BuffSelf("Rejuvenation", ...)</c>;
+    ///   2. auto-attack: a right-click on the mob, which is Singular's
+    ///      <c>CreateAutoAttack(true)</c> plus the target selection it assumes;
+    ///   3. Wrath, from range, on the global cooldown timer.
+    ///
+    /// Every step is measured: a heal has to raise my health, a cast has to cost mana or
+    /// take health off the mob, and if two casts in a row do neither the rotation says the
+    /// key did not cast and falls back to melee. Nothing here is reported as working
+    /// because it was sent.
     /// </summary>
     private static string Fight(IntPtr hwnd, double px, double py)
     {
         int started = Environment.TickCount;
-        int keyIndex = 0;
-        int strikes = 0;
-        int presses = 0;
         int lastHealth = -1;
-        bool attacking = false;
-        var worked = new List<int>();
+        int presses = 0;
+        int castFailures = 0;
+        int lastHealMs = 0;
+        int lastCastMs = 0;
+        int quietRounds = 0;
+        bool melee = false;                 // set when casting is shown not to work
+        bool announced = false;
+        var worked = new List<string>();
 
         WowBWorldSnapshot? snap;
         WowBObservedUnit target;
-        if (!Capture(out snap) || !snap.TryGetSelectedTarget(out target))
+        if (!Capture(out snap) || snap == null || !snap.TryGetSelectedTarget(out target))
             return "engaged, then lost the target immediately";
 
         lastHealth = Health(target);
 
-        /* Start the swing before closing: a right-click on the mob IS the attack, and the
-         * client will swing as soon as the character is close enough. */
-        attacking = TryClickUnit(hwnd, target, px, py);
+        Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
+        List<ClickAimAction> bar = ClickAimCombat.ReadBar(reader);
+        ClickAimAction? damage = ClickAimCombat.FirstDamage(bar);      // Wrath
+        ClickAimAction? heal = ClickAimCombat.FirstHeal(bar);          // Healing Touch
+        ClickAimAction? auto = ClickAimCombat.AutoAttack(bar);         // Attack (6603)
 
         Logging.Write(string.Format(CultureInfo.InvariantCulture,
-            "[Grind] engaged at {0:F1} yd (health {1}); {2}",
+            "[Grind] engaged at {0:F1} yd (mob health {1}); bar: {2}",
             ClickAimMath.Len(target.Location.X - px, target.Location.Y - py),
             lastHealth >= 0 ? lastHealth.ToString(CultureInfo.InvariantCulture) : "unknown",
-            attacking ? "right-clicked it, so the client's own auto-attack is running"
-                      : "no click could be placed, so the keys are being tried"));
+            ClickAimCombat.Describe(bar)));
 
         while (!_stop && unchecked(Environment.TickCount - started) < EngageTimeoutMs)
         {
-            if (!Capture(out snap)) break;
+            if (!Capture(out snap) || snap == null) break;
             if (!snap.TryGetSelectedTarget(out target))
-                return "target gone (dead, despawned or out of range) after "
-                       + ((Environment.TickCount - started) / 1000).ToString(CultureInfo.InvariantCulture) + " s";
+            {
+                /* A mob that dies takes the target with it, and so does one that runs out of
+                 * range, so this is "killed or fled". Saying only "gone" made a run with real
+                 * kills report zero of them. */
+                string secs = ((Environment.TickCount - started) / 1000).ToString(CultureInfo.InvariantCulture);
+                return worked.Count == 0
+                    ? "target gone after " + secs + " s and nothing had landed - it fled or the client dropped it"
+                    : "killed or fled after " + secs + " s; what landed: " + string.Join(", ", worked.ToArray());
+            }
 
             if (target.HasPlayerVtable)
                 return "the target turned out to be a player - disengaged";
 
             int health = Health(target);
             if (health >= 0 && lastHealth > 0 && health == 0)
-                return "killed";
+                return "killed" + (worked.Count == 0 ? "" : " with " + string.Join(", ", worked.ToArray()));
 
-            if (!snap.TryGetLocalPlayer(out WowBObservedUnit me)) break;
-            double px2 = me.Location.X, py2 = me.Location.Y;
-            double d = ClickAimMath.Len(target.Location.X - px2, target.Location.Y - py2);
+            WowBObservedUnit me;
+            if (!snap.TryGetLocalPlayer(out me)) break;
+            double d = ClickAimMath.Len(target.Location.X - me.Location.X, target.Location.Y - me.Location.Y);
 
             if (d > ChaseYd)
                 return string.Format(CultureInfo.InvariantCulture,
                     "target is {0:F0} yd away and moving; giving up on it", d);
 
-            if (d > AttackRangeYd)
+            /* My own vitals, from the same block the mob's health comes from. */
+            uint myHealth = 0, myMaxHealth = 0, myMana = 0;
+            Styx.WoWInternals.WowBReader.WowBUnitFields mine;
+            if (reader != null && reader.TryGetUnitFields(me.UnitAddress, out mine))
             {
-                /* Approach with the same closed loop that walks routes: face the target,
-                 * hold forward. Steer is given the TARGET's position, so "walk toward the
-                 * thing I am fighting" is literally the existing mover. */
-                double rem;
-                ClickAimKeySteer.Steer(target.Location.X, target.Location.Y, hwnd, true, out rem);
+                myHealth = mine.Health;
+                myMaxHealth = mine.MaxHealth;
+                myMana = mine.Power;
+            }
+            double myPercent = myMaxHealth > 0 ? myHealth * 100.0 / myMaxHealth : 100.0;
+
+            if (!announced)
+            {
+                announced = true;
+                Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                    "[Grind] rotation: heal at {0:F0}% health ({1}), damage {2}, auto-attack {3}",
+                    ClickAimCombat.HealBelowPercent,
+                    heal == null ? "none on the bar" : "slot " + heal.Slot + " '" + (char)heal.KeyVk + "' " + heal.Name,
+                    damage == null ? "none on the bar" : "slot " + damage.Slot + " '" + (char)damage.KeyVk + "' " + damage.Name,
+                    auto == null ? "right-click only" : "slot " + auto.Slot + " '" + (char)auto.KeyVk + "'"));
+            }
+
+            /* ---- 1. heal, where Singular puts it: before everything else ---- */
+            if (heal != null && myMaxHealth > 0 && myPercent <= ClickAimCombat.HealBelowPercent
+                && unchecked(Environment.TickCount - lastHealMs) >= ClickAimCombat.HealRetryMs)
+            {
+                lastHealMs = Environment.TickCount;
+                ClickAimInput.TapKey(hwnd, 0x70, 40);                  // F1 = target self (Blizzard default)
+                Thread.Sleep(120);
+                ClickAimInput.TapKey(hwnd, heal.KeyVk, 40);
+                Thread.Sleep(ClickAimCombat.CastSettleMs);
+
+                uint afterHealth = 0;
+                WowBWorldSnapshot? healed;
+                if (reader != null && Capture(out healed) && healed != null
+                    && healed.TryGetLocalPlayer(out WowBObservedUnit me2)
+                    && reader.TryGetUnitFields(me2.UnitAddress, out mine))
+                    afterHealth = mine.Health;
+
+                if (afterHealth > myHealth)
+                {
+                    string label = "heal " + heal.Name;
+                    if (!worked.Contains(label)) worked.Add(label);
+                    Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                        "[Grind] health {0:F0}% -> {1}/{2} with {3} (slot {4}). Back to the mob",
+                        myPercent, afterHealth, myMaxHealth, heal.Name, heal.Slot));
+                }
+                else
+                {
+                    Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                        "[Grind] health {0:F0}% and {1} did not lift it (still {2}/{3}) - either F1 is not "
+                        + "bound to target-self or the key did not cast; carrying on",
+                        myPercent, heal.Name, afterHealth, myMaxHealth));
+                }
+
+                /* The heal took the target away; TAB gives it back - the client's own
+                 * nearest enemy, which is the mob that is hitting us. */
+                ClickAimInput.TapKey(hwnd, TabVk, 40);
+                Thread.Sleep(TabSettleMs);
+                continue;
+            }
+
+            /* ---- 2. how to reach it: from range if casting works, else close in ---- */
+            if (!melee && d > ClickAimCombat.CasterRangeYd)
+            {
+                double approach;
+                ClickAimKeySteer.Steer(target.Location.X, target.Location.Y, hwnd, true, out approach);
                 Thread.Sleep(90);
                 continue;
             }
 
-            // In range: stop moving, face it, hit it.
-            double remaining;
-            ClickAimKeySteer.Steer(target.Location.X, target.Location.Y, hwnd, false, out remaining);
-
-            /* Right-clicking the mob is the client's own attack: whatever auto-attack the
-             * character has starts swinging, on the client's thread, with no Lua and no
-             * guessed key. It is repeated only when health has stopped moving for three
-             * attempts, because a click on an already-attacking target is pointless and this
-             * loop runs at 1.4 Hz. The key is tried while no click can be placed. */
-            int vk = AttackKeys[keyIndex];
-            if (!attacking && strikes >= 2)
+            /* ---- 3. Wrath, on the global cooldown timer ---- */
+            if (!melee && damage != null && myMana >= 10
+                && unchecked(Environment.TickCount - lastCastMs) >= ClickAimCombat.CastSettleMs)
             {
-                attacking = TryClickUnit(hwnd, target, px2, py2);
-                if (attacking) strikes = 0;
-            }
-            presses++;
-            if (!attacking)
-            {
-                ClickAimInput.TapKey(hwnd, vk, 40);
+                lastCastMs = Environment.TickCount;
+                uint manaBefore = myMana;
+                ClickAimInput.TapKey(hwnd, damage.KeyVk, 40);
+                presses++;
                 _presses++;
-            }
-            Thread.Sleep(AttackSettleMs);
+                Thread.Sleep(ClickAimCombat.CastSettleMs);
 
-            if (!Capture(out snap) || !snap.TryGetSelectedTarget(out target))
-                return "target gone while attacking after "
-                       + ((Environment.TickCount - started) / 1000).ToString(CultureInfo.InvariantCulture) + " s";
-
-            health = Health(target);
-            bool damaged = health >= 0 && lastHealth >= 0 && health < lastHealth;
-            int token = attacking ? 0 : vk;    // 0 means "the right-click attack", not a key
-
-            if (damaged)
-            {
-                if (worked.IndexOf(token) < 0)
+                uint manaAfter = 0;
+                int mobAfter = -1;
+                WowBWorldSnapshot? afterCast;
+                if (Capture(out afterCast) && afterCast != null)
                 {
-                    worked.Add(token);
-                    Logging.Write(attacking
-                        ? string.Format(CultureInfo.InvariantCulture,
-                            "[Grind] the right-click attack does damage: health {0} -> {1}. Remembering it",
-                            lastHealth, health)
-                        : string.Format(CultureInfo.InvariantCulture,
-                            "[Grind] key {0} does damage: health {1} -> {2}. Remembering it",
-                            KeyName(vk), lastHealth, health));
+                    WowBObservedUnit me3;
+                    if (reader != null && afterCast.TryGetLocalPlayer(out me3)
+                        && reader.TryGetUnitFields(me3.UnitAddress, out mine))
+                        manaAfter = mine.Power;
+                    WowBObservedUnit t3;
+                    if (afterCast.TryGetSelectedTarget(out t3)) mobAfter = Health(t3);
                 }
-                lastHealth = health;
-                strikes = 0;
+
+                bool spentMana = manaAfter > 0 && manaAfter < manaBefore;
+                bool hurtMob = mobAfter >= 0 && lastHealth >= 0 && mobAfter < lastHealth;
+
+                if (spentMana || hurtMob)
+                {
+                    string label = damage.Name + " (slot " + damage.Slot.ToString(CultureInfo.InvariantCulture) + ")";
+                    if (!worked.Contains(label)) worked.Add(label);
+                    if (hurtMob)
+                    {
+                        Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                            "[Grind] {0} does damage: mob health {1} -> {2} (mana {3} -> {4})",
+                            damage.Name, lastHealth, mobAfter, manaBefore, manaAfter));
+                        lastHealth = mobAfter;
+                    }
+                    castFailures = 0;
+                    continue;
+                }
+
+                castFailures++;
+                Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                    "[Grind] {0} (slot {1}, key '{2}') changed nothing: mana {3} -> {4}, mob health {5}"
+                    + " - {6} of 2 before falling back to melee",
+                    damage.Name, damage.Slot, (char)damage.KeyVk, manaBefore, manaAfter,
+                    mobAfter >= 0 ? mobAfter.ToString(CultureInfo.InvariantCulture) : "unreadable",
+                    castFailures));
+
+                if (castFailures >= 2)
+                {
+                    melee = true;
+                    Logging.Write("[Grind] the spell keys do not cast on this client (or a different key is "
+                                  + "bound to that slot); switching to auto-attack for this mob");
+                }
                 continue;
             }
 
-            strikes++;
-
-            /* Attacking, but nothing has come off the mob's health for two rounds: the swing
-             * stopped (out of melee, a miss streak, a dead auto-attack). Let the next round
-             * click it again, and the keys take over if the click cannot be placed. */
-            if (attacking && strikes >= 2) attacking = false;
-
-            if (strikes >= SwapKeyAfter)
+            /* ---- 4. melee: close, right-click, let the client swing ---- */
+            if (d > AttackRangeYd)
             {
-                strikes = 0;
-                keyIndex++;
-                if (keyIndex >= AttackKeys.Length)
-                {
-                    /* Every key has been pressed and none of them removed health. Say it
-                     * once and stop, rather than pressing them all again for a minute. */
-                    ClickAimKeySteer.Release(hwnd);
-                    return worked.Count == 0
-                        ? "neither the right-click attack nor any key removed health (health read "
-                          + (health >= 0 ? health.ToString(CultureInfo.InvariantCulture) : "unavailable")
-                          + "). The keyboard can walk on this client but it cannot attack; a fight "
-                          + "needs the action bar through Lua"
-                        : "target survived " + presses + " presses of what does damage - "
-                          + "it may be out of melee, immune, or need a different ability";
-                }
-                Logging.Write("[Grind] key " + KeyName(AttackKeys[keyIndex]) + " next ("
-                              + strikes + " presses of the previous one changed nothing)");
+                double closer;
+                ClickAimKeySteer.Steer(target.Location.X, target.Location.Y, hwnd, true, out closer);
+                Thread.Sleep(90);
+                continue;
             }
+
+            double facingLeft;
+            ClickAimKeySteer.Steer(target.Location.X, target.Location.Y, hwnd, false, out facingLeft);
+
+            if (TryClickUnit(hwnd, target, me.Location.X, me.Location.Y))
+            {
+                _clicks++;
+                if (!worked.Contains("right-click auto-attack")) worked.Add("right-click auto-attack");
+            }
+            else if (auto != null)
+            {
+                ClickAimInput.TapKey(hwnd, auto.KeyVk, 40);       // slot 1 = Attack
+            }
+            presses++;
+            Thread.Sleep(AttackSettleMs);
+
+            WowBWorldSnapshot? afterSwing;
+            if (!Capture(out afterSwing) || afterSwing == null || !afterSwing.TryGetSelectedTarget(out target))
+                return worked.Count == 0
+                    ? "target gone while attacking and nothing had landed"
+                    : "killed or fled while attacking; what landed: " + string.Join(", ", worked.ToArray());
+
+            health = Health(target);
+            if (health >= 0 && lastHealth >= 0 && health < lastHealth)
+            {
+                Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                    "[Grind] auto-attack does damage: mob health {0} -> {1}", lastHealth, health));
+                lastHealth = health;
+                continue;
+            }
+
+            /* Melee and ranged both reported nothing: stop at twelve rounds rather than
+             * standing there for the full engage timeout. */
+            if (++quietRounds >= 12) break;
         }
 
         ClickAimKeySteer.Release(hwnd);
-        return "gave up on the target after " + presses + " presses";
+
+        if (worked.Count > 0)
+            return "gave up on the target after " + presses + " press(es) but "
+                   + string.Join(", ", worked.ToArray()) + " landed";
+
+        return "nothing landed on the target: "
+               + (damage == null ? "no damage spell on the bar" : "the spell key did not cast")
+               + (auto == null ? "" : " and auto-attack did not start")
+               + "; its health is still "
+               + (lastHealth >= 0 ? lastHealth.ToString(CultureInfo.InvariantCulture) : "unreadable");
+    }
+
+    /// <summary>
+    /// A unit's health straight out of its data block, or -1 when the block will not read.
+    ///
+    /// This used to come from the snapshot's diagnostic candidate words, which are only
+    /// sampled for the player and the selected target. Reading the block directly works for
+    /// any unit, which is what "is this mob dying" needs, and it is the same 0x1E30 word the
+    /// attach line has been printing as hp=75/95 since the max-health word was fixed.
+    /// </summary>
+    private static int Health(WowBObservedUnit unit)
+    {
+        Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
+        if (reader != null && reader.TryGetUnitFields(unit.UnitAddress, out Styx.WoWInternals.WowBReader.WowBUnitFields f))
+            return f.Health > int.MaxValue ? -1 : (int)f.Health;
+
+        /* Fall back to the snapshot's sample, which exists only for the player and the
+         * selected target - better than claiming -1 when the block read failed. */
+        if (!unit.CandidateHealth.HasValue) return -1;
+        uint current = unit.CandidateHealth.Value.CurrentLow32;
+        return current > int.MaxValue ? -1 : (int)current;
+    }
+
+    private static int CountNear(WowBWorldSnapshot snap, double px, double py, double yards)
+    {
+        int count = 0;
+        for (int i = 0; i < snap.Units.Count; i++)
+        {
+            WowBObservedUnit unit = snap.Units[i];
+            if (unit.IsLocalPlayer) continue;
+            if (ClickAimMath.Len(unit.Location.X - px, unit.Location.Y - py) <= yards) count++;
+        }
+        return count;
+    }
+
+    private static bool Capture(out WowBWorldSnapshot? snapshot)
+    {
+        snapshot = null;
+        WowBReader? reader = ObjectManager.WowB;
+        if (reader == null) return false;
+        try
+        {
+            return reader.TryCaptureWorldSnapshot(out snapshot) && snapshot != null;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     /// <summary>
@@ -885,6 +1131,15 @@ internal static class GrindRunner
             string span = LevelSpan(areas);
             check("levelSpan", span.Contains("1-6") && span.Contains("25-30"));
 
+            /* Which mobs are worth attacking, from the level word the 15:57 dump confirmed:
+             * a level-2 character fighting level 3 and 4 mobs is inside the band, level 9 is
+             * not, and a level that did not read is allowed rather than skipped. */
+            check("viableSameLevel", LevelViable(2, 2));
+            check("viableTheDumpedMobs", LevelViable(3, 2) && LevelViable(4, 2));
+            check("viableTooHigh", !LevelViable(9, 2));
+            check("viableGrey", !LevelViable(1, 9));
+            check("viableUnknownLevel", LevelViable(0, 2) && LevelViable(4, 0));
+
             /* The choice itself: with the level inside a band, the area picked must be one
              * whose band contains it - never merely the closest one. */
             if (areas.Count == 5)
@@ -912,58 +1167,6 @@ internal static class GrindRunner
         return string.Format("Grind self-test {0}/{1} FAILED:{2}", passed, total, fails);
     }
 
-    /// <summary>
-    /// A unit's health straight out of its data block, or -1 when the block will not read.
-    ///
-    /// This used to come from the snapshot's diagnostic candidate words, which are only
-    /// sampled for the player and the selected target. Reading the block directly works for
-    /// any unit, which is what "is this mob dying" needs, and it is the same 0x1E30 word the
-    /// attach line has been printing as hp=95/95 all along.
-    /// </summary>
-    private static int Health(WowBObservedUnit unit)
-    {
-        Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
-        if (reader != null && reader.TryGetUnitFields(unit.UnitAddress, out Styx.WoWInternals.WowBReader.WowBUnitFields f))
-            return f.Health > int.MaxValue ? -1 : (int)f.Health;
-
-        /* Fall back to the snapshot's sample, which exists only for the player and the
-         * selected target - better than claiming -1 when the block read failed. */
-        if (!unit.CandidateHealth.HasValue) return -1;
-        uint current = unit.CandidateHealth.Value.CurrentLow32;
-        return current > int.MaxValue ? -1 : (int)current;
-    }
-
-    private static int CountNear(WowBWorldSnapshot snap, double px, double py, double yards)
-    {
-        int count = 0;
-        for (int i = 0; i < snap.Units.Count; i++)
-        {
-            WowBObservedUnit unit = snap.Units[i];
-            if (unit.IsLocalPlayer) continue;
-            if (ClickAimMath.Len(unit.Location.X - px, unit.Location.Y - py) <= yards) count++;
-        }
-        return count;
-    }
-
-    private static bool Capture(out WowBWorldSnapshot? snapshot)
-    {
-        snapshot = null;
-        WowBReader? reader = ObjectManager.WowB;
-        if (reader == null) return false;
-        try
-        {
-            return reader.TryCaptureWorldSnapshot(out snapshot) && snapshot != null;
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    private static string KeyName(int vk)
-    {
-        return "'" + (char)vk + "'";
-    }
 
     private static IntPtr Handle()
     {

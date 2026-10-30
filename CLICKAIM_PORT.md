@@ -978,3 +978,58 @@ logs, in one block:
 Nothing is written and no Lua is used. Paste the block and the missing offsets
 (level/reaction on a mob, the action-slot packing, spell ids) can be pinned down
 without guessing.
+
+## 2026-10-30, the offsets arrived — combat is now the real spells
+
+The 15:57:29 Offsets block settled the three questions the second run could not:
+
+| word | value on a level-2 Tauren druid | verdict |
+|---|---|---|
+| `data+0x1E30` | 75 (mob: 64, 71) | current health |
+| `data+0x1E34` | 0 | padding — this is why every line read `/0` |
+| `data+0x1E38` | 95 | **max health** (the old read took `+0x1E34` as the max) |
+| `data+0x1E40` | 2 (mobs: 3, 4) | level, and it matches `UnitLevel("player")` |
+| `data+0x1BC8` / `+0x1BD0` | 92 / 100 | power / max power |
+| `data+0x1E60` | `0x80808` player, `0x80800` the mob being fought, `0x800` the idle ones, `0x0` the ones TAB refused | unit flags |
+
+`0x7DFF4E0`, 8 of 51 slots: `6603` Attack, `5176` Wrath, `5185` Healing Touch,
+`20549` War Stomp, `20552` Tauren racial, and `0x800000000000009F` = item 159
+(Refreshing Spring Water). So the packing is `id = raw & 0xFFFFFFFF`,
+`type = raw >> 32` (`0x80000000` = item). Those are the **real spell ids**, which is
+what makes a rotation possible without Lua.
+
+### The rotation is Singular's, the keys are the bar's
+
+`Styx/Logic/Pathing/ClickAim/ClickAimCombat.cs` decodes the bar and holds the spell
+table; `GrindRunner.Fight` runs it. The order is copied from
+`Singular wotlk/ClassSpecific/Druid/Lowbie.cs`, minus the two spells this character
+does not have (Cat Form, Moonfire — they are not on the bar):
+
+1. **heal self** at `HealthPercent <= 60` — Singular's
+   `Spell.BuffSelf("Rejuvenation", …)`; F1 (target self), then the heal's slot key;
+2. **auto-attack** — a right-click on the mob, which is `CreateAutoAttack(true)`
+   plus the selection it assumes;
+3. **Wrath** from up to 28 yd on a 1.8 s global-cooldown timer;
+4. **melee** — close to 4 yd, right-click, swing — and the fallback whenever two
+   casts in a row neither spend mana nor take health off the mob.
+
+Nothing is assumed to have worked. A heal has to raise my health reading, a cast has
+to spend mana or remove mob health, and both are printed with the numbers (`mana
+92 -> 78`, `mob health 64 -> 52`). The slot→key map (1…9, 0, `-`, `=`) is checked by
+`ClickAimCombat.SelfTest()` at attach, because a wrong key map looks exactly like
+"the keyboard does not work".
+
+### Choosing what to fight
+
+`TryClickAttack` now reads the same fields before clicking: a corpse is skipped
+(`health == 0`), a unit outside the level band `player-4 … player+3` is skipped
+(`data+0x1E40`), and `UnitFlags & 0x800` makes a unit *preferred* over a nearer
+unflagged one rather than filtering it out — a wrong bit must not empty the world.
+TAB's own selection is level-checked the same way before a fight starts. A mob that
+dies takes the target with it, so that case is reported as "killed or fled; what
+landed: …" and counts as a kill, which the last run's zero did not.
+
+The Offsets button now dumps the **unit object** at `+0x1E00`/`+0x1B80` (the two
+empty windows in the 15:57 block were the wrong base — `DumpWords` also no longer
+requires 8-byte alignment, which monster unit objects do not have) and prints the
+decoded bar as the rotation reads it.

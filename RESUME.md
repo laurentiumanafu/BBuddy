@@ -171,3 +171,24 @@ crash 14952 `1B8uicrSGJjZKNjuNWdBc3dqp6qDOf4MA`; crash 14472
 `1mpKbi54ieOW_7_9n9ksFKpH4JUzfKTol`; hunt45 v2
 `133PfyAeXaWFfwTNkbr3Lui-aHmpnoqvE`; hunt46 `1AwpLBWDDmGvwWu11VutqboDeV9UQxR-R`;
 client video `1mBLM2XVc9x3Y4jaC5mEetsdZOMCs9bMe`.
+
+
+## 2026-10-30, after the offsets run — combat presses the character's own spells
+
+The 15:57:29 Offsets block pinned health/max-health/level/power/unit-flags and the
+action-slot packing (see `CLICKAIM_PORT.md`, "the offsets arrived"). What changed in
+the tree:
+
+* `Styx/Logic/Pathing/ClickAim/ClickAimCombat.cs` (new) — the stored action bar
+  decoded (`id = low32`, item bit in the high dword), the slot→key map, and the
+  spell table with the Singular priorities.
+* `GrindRunner.Fight` — Singular's lowbie druid rotation (heal at 60%, auto-attack,
+  Wrath on the cooldown, melee fallback), every step verified against mana and the
+  mob's health rather than assumed.
+* `GrindRunner.TryClickAttack` / `TryEngage` — corpse filter, level band
+  (`player-4 … player+3`), `UnitFlags & 0x800` as a preference, and "killed or fled"
+  counted as a kill.
+* `WowBReader.TryGetUnitFields` — max health/power read from their own dwords
+  (`+0x1E38`/`+0x1BD0`); `DumpWords` no longer rejects 4-byte-aligned units.
+* `ClickAimDiagnostics.OffsetsCore` — dumps the unit object at `+0x1E00`/`+0x1B80`,
+  the data block, and the decoded bar.

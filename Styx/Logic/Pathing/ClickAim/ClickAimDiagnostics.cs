@@ -266,8 +266,13 @@ public static class ClickAimDiagnostics
         else
             Logging.Write("[Offsets] the player's unit fields did not read at 0x" + me.UnitAddress.ToString("X"));
 
-        Logging.Write("[Offsets] player data block +0x{0:X} = {1}", Styx.Offsets.WowBOffsets.UnitDataLevelOffset - 0x40,
-            reader.DumpWords(me.UnitAddress + Styx.Offsets.WowBOffsets.UnitDataLevelOffset - 0x40, 32));
+        /* The unit OBJECT, not the data block: the 15:57 run dumped data+0x1E00 and printed
+         * the tail of the unit object instead of the block, which is why the mob windows came
+         * back empty. Both bases are printed so the next log leaves no doubt which is which. */
+        Logging.Write("[Offsets] player unit object +0x1E00: " +
+            reader.DumpWords(me.UnitAddress + 0x1E00, 24));
+        Logging.Write("[Offsets] player data block +0x1E00: " +
+            reader.DumpWords(DataBlock(reader, me.UnitAddress), 24));
 
         /* ---- the action bar ---- */
         List<Styx.WoWInternals.WowBReader.WowBActionSlot> bar = reader.ReadActionBar();
@@ -276,6 +281,13 @@ public static class ClickAimDiagnostics
             Styx.Offsets.WowBOffsets.StoredActionArray, bar.Count,
             Styx.WoWInternals.WowBReader.ActionSlotCount));
         for (int i = 0; i < bar.Count; i++) Logging.Write("[Offsets]   " + bar[i]);
+
+        /* The decoded bar is what the grind loop actually presses: slot -> key -> spell. If
+         * a key here is wrong, the rotation presses the wrong button, so it is printed as
+         * the rotation sees it rather than as raw words. */
+        List<ClickAimAction> decoded = ClickAimCombat.ReadBar(reader);
+        Logging.Write("[Offsets] the rotation reads " + ClickAimCombat.Describe(decoded));
+        Logging.Write("[Offsets] " + ClickAimCombat.SelfTest());
 
         /* ---- what is around, nearest first ---- */
         var units = new List<WowBObservedUnit>();
@@ -325,16 +337,30 @@ public static class ClickAimDiagnostics
             if (unit.HasPlayerVtable) continue;
             if (!reader.TryGetUnitFields(unit.UnitAddress, out Styx.WoWInternals.WowBReader.WowBUnitFields nf)) continue;
 
+            Logging.Write("[Offsets] nearest mob unit object +0x1E00: " +
+                reader.DumpWords(unit.UnitAddress + 0x1E00, 24));
+            Logging.Write("[Offsets] nearest mob unit object +0x1B80: " +
+                reader.DumpWords(unit.UnitAddress + 0x1B80, 24));
             Logging.Write("[Offsets] nearest mob data block +0x1E00: " +
-                reader.DumpWords(unit.UnitAddress + Styx.Offsets.WowBOffsets.UnitDataLevelOffset - 0x40, 32));
-            Logging.Write("[Offsets] nearest mob data block +0x1B80: " +
-                reader.DumpWords(unit.UnitAddress + Styx.Offsets.WowBOffsets.UnitDataPowerOffset - 0x48, 32));
+                reader.DumpWords(DataBlock(reader, unit.UnitAddress), 24));
             Logging.Write(string.Format(CultureInfo.InvariantCulture,
                 "[Offsets] nearest mob at {0:F1} yd: {1}", order[i].Key, nf));
             break;
         }
 
         Logging.Write("[Offsets] done. Paste this block and the offset table can be finished without another run.");
+    }
+
+    /// <summary>
+    /// The unit's data block - the pointer the stat fields are relative to. It is readable
+    /// straight out of the unit object at <c>RecordDataBlockPtrOffset</c>, so this uses the
+    /// reader's own field access rather than a second pointer walk, and returns 0 (which
+    /// <see cref="Styx.WoWInternals.WowBReader.DumpWords"/> rejects) when it cannot be read.
+    /// </summary>
+    private static ulong DataBlock(Styx.WoWInternals.WowBReader reader, ulong unitAddress)
+    {
+        Styx.WoWInternals.WowBReader.WowBUnitFields fields;
+        return reader.TryGetUnitFields(unitAddress, out fields) ? fields.DataPtr : 0UL;
     }
 
     /// <summary>
@@ -365,6 +391,11 @@ public static class ClickAimDiagnostics
         // enough to check here, and both fail silently when they are wrong.
         try { Logging.Write(GrindRunner.SelfTest()); }
         catch (Exception ex) { Logging.Write("[Grind] self-test threw: " + ex.Message); }
+
+        // The spell table and the slot->key map: pressing the wrong key looks exactly like
+        // "the keyboard does not work", so this is checked at startup.
+        try { Logging.Write(ClickAimCombat.SelfTest()); }
+        catch (Exception ex) { Logging.Write("[Combat] self-test threw: " + ex.Message); }
 
         // The bot loop is disabled on x64, but the navmesh engine only needs
         // Navigation.dll (now built for x64) and the mmaps directory.

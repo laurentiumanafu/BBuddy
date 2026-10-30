@@ -299,13 +299,25 @@ namespace Styx.Offsets
 		public const ulong RecordClassBStride = 0x110;      // [V] world records (transform)
 		public const ulong RecordDataBlockPtrOffset = 0xD8; // [V] -> unit data block
 		public const ulong RecordOwnerDescriptorOffset = 0x08; // [V] arena/zone descriptor
-		// ---- Unit data block (*(record+0xD8)) stat fields: reference
-		// layout survives on 70291 (health pair confirmed numerically).
-		public const ulong UnitDataHealthOffset = 0x1E30;    // u32 health
-		public const ulong UnitDataMaxHealthOffset = 0x1E38; // u32 max health
-		public const ulong UnitDataPowerOffset = 0x1BC8;     // u32 power (mana/rage/...)
-		public const ulong UnitDataMaxPowerOffset = 0x1BD0;  // [C] u32 max power
-		public const ulong UnitDataUnitFlagsOffset = 0x1E60; // u32 unit flags
+		// ---- Unit data block (*(record+0xD8)) stat fields.
+		// VERIFIED 2026-10-30 15:57 by the Offsets button, against a live level-2
+		// Tauren druid and four mobs in Mulgore. The words are 8 bytes apart and
+		// each is 32 bits wide; the player's raw window read
+		//
+		//   0x1E30 = 0x0000004B (75 hp)   0x1E34 = 0         <- padding, NOT max hp
+		//   0x1E38 = 0x0000005F (95 max)  0x1E3C = 0
+		//   0x1E40 = 0x00000002 (level 2) 0x1E44..0x1E54 = 0
+		//   0x1E58 = 0xCECECE00           0x1E5C = 6
+		//   0x1E60 = 0x00080808 (flags)   0x1E64 = 0x800
+		//
+		// and the same offsets read 64/…,3 and 71/…,4 for monsters. Level 2 also
+		// matches what Lua's UnitLevel("player") said on the same character, and
+		// 95 matches UnitHealthMax, so health/max/level are no longer candidates.
+		public const ulong UnitDataHealthOffset = 0x1E30;    // [V] u32 health
+		public const ulong UnitDataMaxHealthOffset = 0x1E38; // [V] u32 max health
+		public const ulong UnitDataPowerOffset = 0x1BC8;     // [V] u32 power (mana/rage/...)
+		public const ulong UnitDataMaxPowerOffset = 0x1BD0;  // [V] u32 max power (100 on the same character)
+		public const ulong UnitDataUnitFlagsOffset = 0x1E60; // [V] u32 unit flags
 		/// <summary>[V-ish] hunt31 §6: level. Player 2 / NPC 5 in the live
 		/// sample, and the two neighbouring qwords (+0x1E48/+0x1E50) carry
 		/// the same value on the NPC (effective level / scaling level).
@@ -313,7 +325,7 @@ namespace Styx.Offsets
 		/// consistent with the modern int64 descriptor layout.
 		/// Still to be eyeballed against the character sheet: hunt32 prints
 		/// it for every record it validates as a real unit.</summary>
-		public const ulong UnitDataLevelOffset = 0x1E40;     // u32 level [V-ish]
+		public const ulong UnitDataLevelOffset = 0x1E40;     // [V] u32 level (player 2 = Lua's UnitLevel, mobs 3 and 4)
 		/// <summary>[V] hunt31: the unit object stores its own PACKED HANDLE
 		/// at +0x38 (e.g. 0x0200000000000010 for the player, slot 16).
 		/// This is the value FnEntityGetGuid expects a pointer to — and it
@@ -421,6 +433,12 @@ namespace Styx.Offsets
 
 		// ==================== Quest / action-bar globals ====================
 		public const ulong QuestSelectedId = 0x6305B88;    // [V] u32, 0 idle
+		/// <summary>[V] 0x198 bytes of 8-byte action slots (51 slots), dumped by the Offsets
+		/// button on 2026-10-30: 8 filled on a level-2 druid, and the low 32 bits are the
+		/// SPELL id - 6603 Attack, 5176 Wrath, 5185 Healing Touch, 20549 Tauren War Stomp are
+		/// exactly the slots the player had on his bar. An item slot carries 0x80000000 in the
+		/// high dword (Refreshing Spring Water = 159). So: id = low32, type = high32
+		/// (0 = spell, 0x80000000 = item). UseAction(slot) is 1-based over this array.</summary>
 		public const ulong StoredActionArray = 0x7DFF4E0;  // [V] 0x198 u64 slots
 		public const ulong QuestV2Table = 0x7B538C0;       // [S]
 		public const ulong QuestV2Provider = 0x5DF5F50;    // [S]

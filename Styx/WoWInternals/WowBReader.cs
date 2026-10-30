@@ -766,18 +766,30 @@ namespace Styx.WoWInternals
             if (head == null || head.Length != 8)
                 return false;
 
+            /* The four words are 8 bytes apart, not 4: the first dump from the Offsets
+             * button (2026-10-30 15:57) printed the player as hp=75/0 while the block read
+             *
+             *   0x1E30 = 0x0000004B (75)   0x1E34 = 0
+             *   0x1E38 = 0x0000005F (95)   0x1E3C = 0
+             *
+             * so max health is the dword at +0x1E38 and +0x1E34 is padding. Same shape for
+             * power (+0x1BC8 / +0x1BD0). Reading 8 bytes at the first word and taking the
+             * halves as current/max is what produced every "/0" in that log. */
             byte[]? level = _memory.ReadBytes64(data + WowBOffsets.UnitDataLevelOffset, 4);
-            byte[]? hp = _memory.ReadBytes64(data + WowBOffsets.UnitDataHealthOffset, 8);
+            byte[]? hp = _memory.ReadBytes64(data + WowBOffsets.UnitDataHealthOffset, 4);
+            byte[]? maxHp = _memory.ReadBytes64(data + WowBOffsets.UnitDataMaxHealthOffset, 4);
             byte[]? flags = _memory.ReadBytes64(data + WowBOffsets.UnitDataUnitFlagsOffset, 4);
-            byte[]? pow = _memory.ReadBytes64(data + WowBOffsets.UnitDataPowerOffset, 8);
-            if (level == null || level.Length != 4 || hp == null || hp.Length != 8 ||
-                flags == null || flags.Length != 4 || pow == null || pow.Length != 8)
+            byte[]? pow = _memory.ReadBytes64(data + WowBOffsets.UnitDataPowerOffset, 4);
+            byte[]? maxPow = _memory.ReadBytes64(data + WowBOffsets.UnitDataMaxPowerOffset, 4);
+            if (level == null || level.Length != 4 || hp == null || hp.Length != 4 ||
+                maxHp == null || maxHp.Length != 4 || flags == null || flags.Length != 4 ||
+                pow == null || pow.Length != 4 || maxPow == null || maxPow.Length != 4)
                 return false;
 
             fields = new WowBUnitFields(
-                BitConverter.ToUInt32(hp, 0), BitConverter.ToUInt32(hp, 4),
+                BitConverter.ToUInt32(hp, 0), BitConverter.ToUInt32(maxHp, 0),
                 BitConverter.ToUInt32(level, 0), BitConverter.ToUInt32(flags, 0),
-                BitConverter.ToUInt32(pow, 0), BitConverter.ToUInt32(pow, 4), data);
+                BitConverter.ToUInt32(pow, 0), BitConverter.ToUInt32(maxPow, 0), data);
             return true;
         }
 
@@ -799,7 +811,10 @@ namespace Styx.WoWInternals
         /// </summary>
         public string DumpWords(ulong address, int count)
         {
-            if (!IsUserPointer(address) || count <= 0 || count > 128)
+            /* A monster's unit object is legitimately 4-byte aligned on this build, so the
+             * 8-byte IsUserPointer test blanks exactly the dump that was wanted: the 15:57
+             * log printed two empty windows under "nearest mob" for that reason. */
+            if (address <= 0x10000UL || address >= 0x00007FFFFFFFFFFFUL || count <= 0 || count > 128)
                 return "";
             byte[]? bytes = _memory.ReadBytes64(address, count * 4);
             if (bytes == null || bytes.Length != count * 4)
