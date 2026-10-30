@@ -113,10 +113,12 @@ internal static class HotspotFile
 
             // Writing through a temporary file and moving it into place: if the process
             // dies mid-write the old list is still there, whole.
+            /* Temp then move, with overwrite: deleting the old file first leaves a
+             * window where the list does not exist at all, and a crash there loses every
+             * point that was ever captured. */
             string temp = file + ".tmp";
             doc.Save(temp);
-            if (File.Exists(file)) File.Delete(file);
-            File.Move(temp, file);
+            File.Move(temp, file, true);
 
             return Count(file);
         }
@@ -142,8 +144,7 @@ internal static class HotspotFile
                     new XElement("Hotspots")));
             string temp = file + ".tmp";
             doc.Save(temp);
-            File.Delete(file);
-            File.Move(temp, file);
+            File.Move(temp, file, true);
             return true;
         }
         catch (Exception ex)
