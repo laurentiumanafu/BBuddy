@@ -633,20 +633,20 @@ internal static class ClickAimKeySteer
             if (!swapped && Math.Abs(delta) > 2.0 && Math.Sign(delta) != Math.Sign(error))
             {
                 swapped = true;
-                {
-                    /* The key turned it the wrong way: swap the pair, permanently, and say
-                     * so. This is the difference between turning onto a mob and turning
-                     * one's back on it. */
-                    int swap = _turnPosVk;
-                    _turnPosVk = _turnNegVk;
-                    _turnNegVk = swap;
-                    double swapRate = _turnPosRate;
-                    _turnPosRate = -_turnNegRate;
-                    _turnNegRate = -swapRate;
-                    Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                        "[Keys] the turn keys were the wrong way round (a {0:F0} ms tap moved the facing "
-                        + "{1:+0;-0} deg while {2:+0;-0} was wanted) - swapped them", ms, step, error));
-                }
+
+                /* The key turned it the wrong way: swap the pair, permanently, and say so.
+                 * This is the difference between turning onto a mob and turning one's back
+                 * on it. */
+                int swap = _turnPosVk;
+                _turnPosVk = _turnNegVk;
+                _turnNegVk = swap;
+                double swapRate = _turnPosRate;
+                _turnPosRate = -_turnNegRate;
+                _turnNegRate = -swapRate;
+
+                Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                    "[Keys] the turn keys were the wrong way round (a {0:F0} ms tap moved the facing "
+                    + "{1:+0;-0} deg while {2:+0;-0} was wanted) - swapped them", ms, delta, error));
             }
 
             lastTapMs = (int)Math.Round(ms);

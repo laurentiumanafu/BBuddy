@@ -1081,3 +1081,32 @@ Two follow-ups the same log makes obvious, both done: the `<Grind> … is 17.8 y
 stopping the walk` interrupt fired correctly on the second run (the first run's
 `0 hotspot(s)` was the stand-and-give-up loop), and the action-bar keys print as `-`
 and `=` now, so slot 11/12 no longer read as `½`/`»`.
+
+## CS0103 'step' — and the lint that now catches its whole class
+
+A one-line build break: `ClickAimKeySteer.cs(648,91): error CS0103: The name 'step' does
+not exist`. It was a rename (`step` -> `delta`) where one occurrence sat inside a wrapped
+`string.Format(...)` argument list and the text replacement missed it. The line reads:
+
+```csharp
++ "{1:+0;-0} deg while {2:+0;-0} was wanted) - swapped them", ms, delta, error));
+```
+
+Nothing in `LINT.cmd` could see it: a parse check finds a valid argument list, and
+`lint_cs_undeclared.py` only looks at *calls* (`Foo(...)`), not at names passed as *values*.
+The two earlier CS0103s from the same machine (`RestMs`, `AimGaveUp`) were also names used
+as values, so this is the third of one shape.
+
+`Tools/lint_cs_bare_names.py` closes it. It reports every `identifier` used as a value (an
+argument, an operand, a return, an initializer) that the file declares **nowhere** - the
+rule is deliberately blunt, because a name declared nowhere is always a bug while a name
+declared somewhere is the compiler's problem. Declarations it knows about include
+`foreach` variables, lambda parameters, `is`/`out var` designations, `catch` declarations,
+enum members and XAML-free fields; it exempts `partial` types whose other half is in the
+repository, types with a base class this repository does not declare, and `*.xaml.cs`.
+
+Verified the only way that counts: `step` was reintroduced and the check reported
+`ClickAimKeySteer.cs:649:87: 'step' is used as a value and declared nowhere in this file`,
+then the fix was restored and it reported zero. Scoped to the tree under work like the
+undeclared-call check - over the whole repository it reports 508 legacy findings
+(`TreeSharp`, `Tripper`, discards and generated fields), none of them ours.
