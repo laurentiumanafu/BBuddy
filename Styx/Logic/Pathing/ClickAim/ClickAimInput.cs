@@ -107,6 +107,27 @@ internal static class ClickAimInput
         PostMessageInternal(hWnd, WM_RBUTTONUP, IntPtr.Zero, Lp(x1, cy));
     }
 
+    /// <summary>
+    /// Holds a key down, or lets it up - no timeout, no repeat. This is what a movement
+    /// key needs: the client walks for as long as the key is down, so the hold lasts
+    /// until the caller says otherwise.
+    ///
+    /// The lParam carries the scan code in bits 16-23, which is what the client reads to
+    /// decide which physical key this is; <see cref="TapKey"/> sends a bare 1 there and
+    /// gets away with it because a tap is also accepted on the virtual-key code alone.
+    /// </summary>
+    public static void HoldKey(IntPtr hWnd, int vk, bool down)
+    {
+        if (vk <= 0 || hWnd == IntPtr.Zero) return;
+        int scan = MapVirtualKey((uint)vk, 0);
+        int lp = 1 | (scan << 16);
+        if (!down) lp |= unchecked(0xC0000000);   // previous state + transition, as Windows sends it
+        PostMessageInternal(hWnd, down ? WM_KEYDOWN : WM_KEYUP, new IntPtr(vk), new IntPtr(lp));
+    }
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern int MapVirtualKey(uint uCode, uint uMapType);
+
     /// <summary>Holds a key for <paramref name="ms"/> (movement keys stop a walk).</summary>
     public static void TapKey(IntPtr hWnd, int vk, int ms)
     {

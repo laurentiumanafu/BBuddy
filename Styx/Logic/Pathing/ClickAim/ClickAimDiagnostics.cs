@@ -65,6 +65,9 @@ public static class ClickAimDiagnostics
 
         // Checks the destination finder against synthetic records, so a failure here
         // is a code problem and not a client problem.
+        try { Logging.Write(ClickAimKeySteer.SelfTest()); }
+        catch (Exception ex) { Logging.Write("[Keys] self-test threw: " + ex.Message); }
+
         try { Logging.Write(ClickAimDestHunt.SelfTest()); }
         catch (Exception ex) { Logging.Write("[Dest] self-test threw: " + ex.Message); }
 
@@ -805,6 +808,27 @@ public static class ClickAimDiagnostics
                 else if (arg.StartsWith("--clickaim-walk=", StringComparison.OrdinalIgnoreCase))
                 {
                     spec = arg.Substring("--clickaim-walk=".Length);
+                }
+                else if (arg.Equals("--keywalk", StringComparison.OrdinalIgnoreCase))
+                {
+                    // BloogBot's movement: write the heading, hold the forward key. No
+                    // camera and no pixels - see ClickAimKeySteer.
+                    string kspec = i + 1 < args.Length ? args[i + 1] : null;
+                    if (kspec != null && kspec.StartsWith("--", StringComparison.Ordinal)) kspec = null;
+                    var kw = new Thread(() => ClickAimKeySteer.Run(kspec));
+                    kw.IsBackground = true;
+                    kw.Name = "ClickAimKeySteer";
+                    kw.Start();
+                    continue;
+                }
+                else if (arg.StartsWith("--keywalk=", StringComparison.OrdinalIgnoreCase))
+                {
+                    string kspec = arg.Substring("--keywalk=".Length);
+                    var kw = new Thread(() => ClickAimKeySteer.Run(kspec));
+                    kw.IsBackground = true;
+                    kw.Name = "ClickAimKeySteer";
+                    kw.Start();
+                    continue;
                 }
                 else if (arg.Equals("--clickdest", StringComparison.OrdinalIgnoreCase))
                 {
