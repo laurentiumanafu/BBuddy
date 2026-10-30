@@ -397,6 +397,27 @@ public sealed class ClickAimMover : IPlayerMover
         }
     }
 
+    /// <summary>
+    /// Forgets that this goal was blocked and allows the detours again, so the next
+    /// <see cref="MoveTowards"/> dispatches a click. The pilot calls this after stepping around
+    /// whatever was in the way: "cannot get there" was a statement about the last position,
+    /// not about the goal, and leaving <see cref="Blocked"/> set means nothing is ever aimed
+    /// again - which is the 19:07 run standing still at 25.5 yd for 25 s.
+    /// </summary>
+    public void ClearBlock()
+    {
+        lock (_gate)
+        {
+            Blocked = false;
+            AimGaveUp = false;
+            _warnedStuck = false;
+            _stuck = 0;
+            _detourAttempt = 0;
+            _phase = Phase.Idle;
+            _bestRemaining = double.MaxValue;
+        }
+    }
+
     public void MoveStop()
     {
         lock (_gate)

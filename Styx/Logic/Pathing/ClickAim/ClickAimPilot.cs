@@ -63,11 +63,27 @@ public static class ClickAimPilot
          * end - every component thought it was making its next attempt. So: remember
          * the best distance reached; if it has not improved by two yards in twenty
          * five seconds, stop and say so. That is a statement about the walk, not about
-         * one click, and it is the caller's business to re-plan from there. */
+         * one click, and it is the caller's business to re-plan from there.
+         *
+         * Since the 19:07 run there is one more thing before that timer: the sidestep
+         * below. Stopping is the last resort, not the first answer to an obstacle. */
         double bestRemaining = double.MaxValue;
         int lastProgressMs = started;
+        int sidesteps = 0;
         const double ProgressYd = 2.0;
         const int StallMs = 25000;
+
+        /* A click-walk goes where it is pointed and stops at the first thing it meets, and on
+         * this client a click that meets something simply ends the walk. The 19:07 run walked
+         * 11 yd of a 37 yd leg, stood at 25.5 yd from the point for 25 s, and the grind gave up
+         * on the leg: nothing in the loop was ever going to move it, because every component
+         * thought it was making its next attempt.
+         *
+         * What a player does there is take a step to the side and go on. So before the stall
+         * timer or the detour budget ends the walk, sidestep: aim at a point a few yards off
+         * the straight line, walk that, and ask for the goal again from the new position. The
+         * first step goes to the right, the second to the left, so a wall on one side is not
+         * tested twice. */
 
         while (unchecked(Environment.TickCount - started) < timeoutMs)
         {
@@ -94,10 +110,24 @@ public static class ClickAimPilot
                 return false;
             }
 
+            /* The mover says it has spent its detours on this goal: that is a statement about
+             * where the character is standing, not about the goal, so step aside and try again. */
+            if (mover.Blocked && !stopWhenBlocked && TrySidestep(mover, goal, ref sidesteps, verbose))
+            {
+                lastProgressMs = Environment.TickCount;
+                continue;
+            }
+
             if (mover.LastRemaining < bestRemaining - ProgressYd)
             {
                 bestRemaining = mover.LastRemaining;
                 lastProgressMs = Environment.TickCount;
+            }
+            else if (unchecked(Environment.TickCount - lastProgressMs) > SidestepAfterMs
+                     && TrySidestep(mover, goal, ref sidesteps, verbose))
+            {
+                lastProgressMs = Environment.TickCount;
+                continue;
             }
             else if (unchecked(Environment.TickCount - lastProgressMs) > StallMs)
             {
@@ -106,9 +136,10 @@ public static class ClickAimPilot
                 {
                     Logging.Write(string.Format(CultureInfo.InvariantCulture,
                         "[ClickAim] no progress for {0:F0} s: stuck at {1:F1} yd from the point "
-                        + "(best was {2:F1}). Stopped instead of clicking at it forever.",
+                        + "(best was {2:F1}) after {3} sidestep(s). Stopped instead of clicking at it "
+                        + "forever.",
                         (Environment.TickCount - lastProgressMs) / 1000.0,
-                        mover.LastRemaining, bestRemaining));
+                        mover.LastRemaining, bestRemaining, sidesteps));
                 }
                 return false;
             }
@@ -148,6 +179,90 @@ public static class ClickAimPilot
                 mover.LastRemaining, mover.Legs));
         }
         return false;
+    }
+
+    /// <summary>How long without two yards of progress before a sidestep is tried.</summary>
+    private const int SidestepAfterMs = 8000;
+
+    /// <summary>Sidesteps allowed per walk: right, left, right, and then it is a wall.</summary>
+    private const int MaxSidesteps = 3;
+
+    /// <summary>How far to the side a sidestep aims, in yards.</summary>
+    private const double SidestepYd = 7.0;
+
+    /// <summary>How long one sidestep may take before the walk resumes toward the goal.</summary>
+    private const int SidestepMs = 5000;
+
+    /// <summary>Space: jump. A one-yard lip is what stops a click-walk most often.</summary>
+    private const int JumpVk = 0x20;
+
+    /// <summary>
+    /// Steps around whatever is between the character and the goal: aims at a point
+    /// <see cref="SidestepYd"/> yards off the straight line, on alternating sides, walks it, and
+    /// leaves the mover ready to dispatch toward the real goal again. Returns false (and says so
+    /// in <c>report</c>) when there is nothing to step from or the sidestep budget is spent.
+    /// </summary>
+    private static bool TrySidestep(ClickAimMover mover, WoWPoint goal, ref int sidesteps, bool verbose)
+    {
+        if (sidesteps >= MaxSidesteps) return false;
+        sidesteps++;
+
+        string report;
+        bool ok = Sidestep(mover, goal, sidesteps, out report);
+        if (verbose) Logging.Write("[ClickAim] " + report);
+        return ok;
+    }
+
+    private static bool Sidestep(ClickAimMover mover, WoWPoint goal, int attempt, out string report)
+    {
+        report = "";
+        double px, py;
+        if (!ClickAimPositions.TryRead(out px, out py))
+        {
+            report = "a sidestep was wanted but there is no player position to take it from";
+            return false;
+        }
+
+        double dx = goal.X - px;
+        double dy = goal.Y - py;
+        double len = ClickAimMath.Len(dx, dy);
+        if (len < 1.0)
+        {
+            report = "a sidestep was wanted but the goal is on top of the character";
+            return false;
+        }
+        dx /= len;
+        dy /= len;
+
+        double side = (attempt % 2 == 1) ? 1.0 : -1.0;   // right first, then left
+        var to = new WoWPoint((float)(px - dy * side * SidestepYd),
+                              (float)(py + dx * side * SidestepYd),
+                              goal.Z);
+
+        /* "Cannot get there" was about the last position: forget it, or the mover will not
+         * dispatch a click at all. */
+        mover.ClearBlock();
+
+        /* A jump is free and it clears the small things a click-walk trips on - a kerb, a
+         * stump, the lip of a hill. It is also what a player presses when they are stuck. */
+        IntPtr hwnd = IntPtr.Zero;
+        try { hwnd = Styx.WoWInternals.ObjectManager.Wow.WindowHandle; } catch { }
+        if (hwnd != IntPtr.Zero) ClickAimInput.TapKey(hwnd, JumpVk, 40);
+
+        int started = Environment.TickCount;
+        while (unchecked(Environment.TickCount - started) < SidestepMs)
+        {
+            mover.MoveTowards(to);
+            if (mover.Blocked) break;
+            Thread.Sleep(60);
+        }
+
+        double left = mover.LastRemaining;
+        mover.ClearBlock();
+        report = string.Format(CultureInfo.InvariantCulture,
+            "stepped {0:F0} yd to the {1} to get around something in the way (sidestep {2}, {3:F1} yd left of it)",
+            SidestepYd, side > 0 ? "right" : "left", attempt, left);
+        return true;
     }
 
     /// <summary>The 26-check report belongs in the log once per process, not once per leg.</summary>

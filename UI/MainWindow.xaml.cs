@@ -1392,7 +1392,7 @@ namespace CopilotBuddy.UI
             catch (Exception ex)
             {
                 Logging.Write("[Grind] combat settings window failed: " + ex.Message);
-                MessageBox.Show(this, "The combat settings window could not open: " + ex.Message,
+                System.Windows.MessageBox.Show(this, "The combat settings window could not open: " + ex.Message,
                                 "Combat settings", MessageBoxButton.OK, MessageBoxImage.Warning);
             }
         }

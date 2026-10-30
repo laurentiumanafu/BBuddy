@@ -29,7 +29,7 @@ namespace CopilotBuddy.UI
         public bool Saved { get; private set; }
 
         /// <summary>One row of the spells list. Rebuilt wholesale, so no change notification.</summary>
-        internal sealed class SpellRow
+        public sealed class SpellRow
         {
             // Properties, not fields: the ListView columns bind to these, and WPF binding only
             // resolves properties.
@@ -116,14 +116,14 @@ namespace CopilotBuddy.UI
             return true;
         }
 
-        private static bool TryRead(TextBox box, string label, out int value)
+        private static bool TryRead(System.Windows.Controls.TextBox box, string label, out int value)
         {
             value = 0;
             string text = (box.Text ?? string.Empty).Trim();
             if (int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out value))
                 return true;
 
-            MessageBox.Show(label + " must be a whole number (0 turns it off).",
+            System.Windows.MessageBox.Show(label + " must be a whole number (0 turns it off).",
                             "Combat settings", MessageBoxButton.OK, MessageBoxImage.Warning);
             box.Focus();
             box.SelectAll();
@@ -259,7 +259,7 @@ namespace CopilotBuddy.UI
             var row = lstSpells.SelectedItem as SpellRow;
             if (row == null)
             {
-                MessageBox.Show("Pick a spell in the list first.",
+                System.Windows.MessageBox.Show("Pick a spell in the list first.",
                                 "Combat settings", MessageBoxButton.OK, MessageBoxImage.Information);
                 return;
             }
@@ -289,7 +289,7 @@ namespace CopilotBuddy.UI
             bool roles = ClickAimCombat.SaveRoleOverrides();
             if (!numbers || !roles)
             {
-                MessageBox.Show("The settings files could not be written. See the log for the path.",
+                System.Windows.MessageBox.Show("The settings files could not be written. See the log for the path.",
                                 "Combat settings", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }

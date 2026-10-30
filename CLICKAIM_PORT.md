@@ -1568,3 +1568,30 @@ running.
 Both self-tests grew: `Grind settings self-test` covers the parser, the clamping and the round
 trip; `Combat self-test` now checks that Moonfire is a DoT, that a hand-set role beats the table in
 both directions, and that food/drink are told apart by item id.
+
+## The 19:07 leg that ended at 25.5 yd — sidestep before giving up
+
+    [ClickAim] no progress for 25 s: stuck at 25.5 yd from the point (best was 26.3)
+    [Route] stopping at waypoint 1/1: the mover did not arrive
+
+A 37 yd leg, 11 yd of it walked. What happened is the shape of a click-walk: the client
+walks in a straight line from where the character stands and **stops at the first thing it
+meets**. The mover noticed (`Blocked`, after two clicks that moved nothing and its one
+detour spent), but `WalkSteps` asks `WalkTo` with `stopWhenBlocked: false` — so nobody looked
+at `Blocked`, the mover refused to dispatch another click, and the pilot kept calling
+`MoveTowards` into a mover that had already given up. Nothing in that loop was ever going to
+move the character; the only exit was the 25 s stall timer, and the grind then abandoned the
+leg.
+
+Fixed the way a player handles it:
+
+- **Sidestep first.** Blocked, or eight seconds without two yards of progress → aim seven yards
+  off the straight line (right, then left, then right), jump once, walk that, then ask for the
+  goal again from the new position. `ClickAimMover.ClearBlock()` clears `Blocked`, `_stuck` and
+  the detour count, because "cannot get there" was a statement about where the character was
+  standing, not about the goal.
+- **Three sidesteps per walk**, then the old 25 s give-up still fires (and now says how many
+  sidesteps were spent). The mesh path is untouched: it re-plans on its own and passes
+  `stopWhenBlocked: true`, which keeps its blackspot behaviour.
+- **A jump is part of the sidestep.** Space is jump, it is free, and a kerb, a stump or the lip
+  of a hill is what stops a click-walk most often in Elwynn.
