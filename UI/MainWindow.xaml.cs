@@ -116,7 +116,14 @@ namespace CopilotBuddy.UI
             {
                 Interval = TimeSpan.FromSeconds(1)
             };
-            _infoTimer.Tick += (s, e) => UpdateInfoPanel();
+            /* The panel reads ObjectManager.Me, which on wowb.exe is a 32-bit wrapper over a
+             * client that does not have one. A throw here would kill the window from a timer
+             * tick, so the tick swallows it and the panel simply shows the counters. */
+            _infoTimer.Tick += (s, e) =>
+            {
+                try { UpdateInfoPanel(); }
+                catch (Exception ex) { Logging.WriteDebug("info panel: " + ex.Message); }
+            };
             
             // Subscribe to StatusText changes — updates StatusBar like HB 4.3.4
             TreeRoot.OnStatusTextChanged += (sender, e) =>
@@ -192,7 +199,13 @@ namespace CopilotBuddy.UI
                             // ported, plugin/bot constructors and legacy SQLite
                             // cannot be treated as safe or available. Leave
                             // normal x86 startup unchanged.
-                            Logging.Write("[Attach] WowB diagnostic mode: bot, routine and plugin startup is disabled; x64 gameplay is not available yet.");
+                            /* The behaviour tree and the combat routines still cannot start on
+                             * this client, but the window is now the way in: Load Profile ->
+                             * Grind -> Start runs the ClickAim grind loop. Say that instead of
+                             * saying everything is disabled, which stopped being true. */
+                            Logging.Write("[Attach] WowB mode: the behaviour tree is not used here. "
+                                          + "Load Profile, pick \"Grind\", press Start - that runs the "
+                                          + "ClickAim loop on the loaded profile.");
 
                             // Movement does not need the object model - it needs the
                             // player's X/Y, which the WowB reader already provides. Arm
@@ -226,6 +239,35 @@ namespace CopilotBuddy.UI
                                 btnAimPlanHotspots.IsEnabled = true;
                                 btnAimClearHotspots.Visibility = Visibility.Visible;
                                 btnAimClearHotspots.IsEnabled = true;
+
+                                /* Enable the three controls that do something on this client.
+                                 * Everything else stays as ToggleButtons(false) left it, because
+                                 * it still needs the object model this client does not expose. */
+                                try
+                                {
+                                    /* Deliberately NOT BotManager.Instance.Bots: touching it
+                                     * instantiates every BotBase in the assembly, and some of
+                                     * them own a SQLite database and a 32-bit object model -
+                                     * on the UI thread, on a client where none of them can
+                                     * run. Grind is the one bot with a 64-bit implementation,
+                                     * and it is the only entry the list needs. */
+                                    cmbBotSelector.Items.Clear();
+                                    cmbBotSelector.Items.Add(Styx.Logic.Pathing.ClickAimUi.GrindBotName);
+                                    cmbBotSelector.SelectedIndex = 0;
+                                    cmbBotSelector.IsEnabled = true;
+                                }
+                                catch (Exception ex)
+                                {
+                                    Logging.Write("[Attach] bot list: " + ex.Message);
+                                }
+
+                                btnLoadProfile.IsEnabled = true;
+                                btnStart.IsEnabled = true;
+                                EnhancedMode.IsEnabled = true;
+
+                                // The grind loop can end on its own; the info timer is what puts
+                                // the buttons back when it does.
+                                _infoTimer?.Start();
                             });
                             return;
                         }
@@ -756,7 +798,8 @@ namespace CopilotBuddy.UI
                 btnStopGroup.Visibility = Visibility.Hidden;
                 btnLoadProfile.IsEnabled = true;
                 cmbBotSelector.IsEnabled = true;
-                btnSettings.IsEnabled = true;
+                // Settings needs the object model; on wowb it stays as the attach left it.
+                btnSettings.IsEnabled = !Styx.Logic.Pathing.ClickAimUi.IsWowB;
                 SetStatus("Grind finished");
             }
 
@@ -772,7 +815,8 @@ namespace CopilotBuddy.UI
             sb.AppendLine($"BGs Won: {GameStats.BGsWon} Lost: {GameStats.BGsLost} Total: {GameStats.BGsCompleted} ({GameStats.BGsPerHour:F0}/hr)");
 
             // TTL only meaningful below max level (80 in WotLK 3.3.5a)
-            var me = ObjectManager.Me;
+            Styx.WoWInternals.WoWObjects.LocalPlayer? me = null;
+            try { me = ObjectManager.Me; } catch { me = null; }
             if (me != null && me.Level < 80 && GameStats.TimeToLevel > TimeSpan.Zero)
             {
                 var ttl = GameStats.TimeToLevel;
@@ -845,7 +889,19 @@ namespace CopilotBuddy.UI
                     Logging.Write("Auto-load profile from /loadprofile: {0}", autoLoadProfile);
                     try
                     {
-                        ProfileManager.LoadNew(autoLoadProfile);
+                        /* Same split as the button: on wowb the legacy profile object is not
+                         * built, because the loop that uses the file does not need it. */
+                        if (Styx.Logic.Pathing.ClickAimUi.IsWowB)
+                        {
+                            string loaded = Styx.Logic.Pathing.ClickAimUi.Load(autoLoadProfile);
+                            Logging.Write("{0}", loaded);
+                            if (cmbBotSelector.Items.Contains(Styx.Logic.Pathing.ClickAimUi.GrindBotName))
+                                cmbBotSelector.SelectedItem = Styx.Logic.Pathing.ClickAimUi.GrindBotName;
+                        }
+                        else
+                        {
+                            ProfileManager.LoadNew(autoLoadProfile);
+                        }
                         Logging.Write("Profile loaded: {0}", System.IO.Path.GetFileName(autoLoadProfile));
                     }
                     catch (Exception ex)
@@ -905,19 +961,15 @@ namespace CopilotBuddy.UI
         {
             if (_isRunning) return;
 
-            if (BotManager.Current == null)
-            {
-                Logging.Write(Colors.Red, "No bot selected!");
-                return;
-            }
-
             /* wowb.exe: the behaviour tree cannot run, so Start means "run the grind loop on
-             * the profile this window loaded". Doing this before the UI is disabled means a
-             * refusal leaves the window usable instead of half-stopped. */
+             * the profile this window loaded". The bot name comes from the list, not from
+             * BotManager.Current, because a bot that failed to instantiate still has a name
+             * the user can pick - and Grind only needs its name. Doing this before the UI is
+             * disabled means a refusal leaves the window usable instead of half-stopped. */
             if (Styx.Logic.Pathing.ClickAimUi.IsWowB)
             {
-                SaveSettings();
-                string report = Styx.Logic.Pathing.ClickAimUi.Start(BotManager.Current.Name);
+                string? chosen = cmbBotSelector.SelectedItem?.ToString();
+                string report = Styx.Logic.Pathing.ClickAimUi.Start(chosen);
                 if (!Styx.Logic.Pathing.ClickAimUi.Running)
                 {
                     Logging.Write(Colors.Red, "{0}", report);
@@ -934,6 +986,12 @@ namespace CopilotBuddy.UI
                 cmbBotSelector.IsEnabled = false;
                 btnSettings.IsEnabled = false;
                 SetStatus("Grinding...");
+                return;
+            }
+
+            if (BotManager.Current == null)
+            {
+                Logging.Write(Colors.Red, "No bot selected!");
                 return;
             }
 
@@ -1128,6 +1186,15 @@ namespace CopilotBuddy.UI
             if (cmbBotSelector.SelectedItem == null) return;
 
             string? botName = cmbBotSelector.SelectedItem.ToString();
+            /* wowb.exe: only the NAME matters (Start passes it to ClickAimUi) and the bot's
+             * configuration form is built on the object model, so nothing else happens here -
+             * a config button that throws on click is worse than no config button. */
+            if (Styx.Logic.Pathing.ClickAimUi.IsWowB)
+            {
+                Logging.Write("[Attach] bot selected: {0}", botName ?? "(none)");
+                return;
+            }
+
             if (botName != null && BotManager.Instance.Bots.TryGetValue(botName, out BotBase? bot) && bot != null)
             {
                 BotManager.Instance.SetCurrent(bot);
@@ -1351,7 +1418,9 @@ namespace CopilotBuddy.UI
             btnBotConfig.Visibility = Visibility.Hidden;
             btnClassConfig.Visibility = Visibility.Hidden;
             btnPlugins.Visibility = Visibility.Hidden;
-            btnDevTools.Visibility = Visibility.Hidden;
+            // on wowb this button is the read-only world snapshot view, not Developer Tools
+            if (!Styx.Logic.Pathing.ClickAimUi.IsWowB)
+                btnDevTools.Visibility = Visibility.Hidden;
             
             // Save setting
             UISettings.Instance.EnhancedMode = false;
