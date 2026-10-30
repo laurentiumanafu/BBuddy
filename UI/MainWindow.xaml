@@ -137,6 +137,63 @@
             </Viewbox>
         </Button>
 
+        <!-- ClickAim hotspots (x64 diagnostic mode only, hidden elsewhere) -->
+        <Button x:Name="btnAimHotspot"
+                Height="25"
+                Visibility="Hidden"
+                Margin="0,265,8,0"
+                VerticalAlignment="Top"
+                HorizontalAlignment="Right"
+                Width="120"
+                ToolTip="Remember where the character is standing as a hotspot (Settings\clickaim-hotspots.xml)"
+                Click="btnAimHotspot_Click">
+            <Viewbox Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center">
+                <TextBlock Text="Add hotspot"/>
+            </Viewbox>
+        </Button>
+
+        <Button x:Name="btnAimHotspots"
+                Height="25"
+                Visibility="Hidden"
+                Margin="0,291,8,0"
+                VerticalAlignment="Top"
+                HorizontalAlignment="Right"
+                Width="120"
+                ToolTip="Walk the captured hotspots in the order they were added"
+                Click="btnAimHotspots_Click">
+            <Viewbox Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center">
+                <TextBlock Text="Walk hotspots"/>
+            </Viewbox>
+        </Button>
+
+        <Button x:Name="btnAimPlanHotspots"
+                Height="25"
+                Visibility="Hidden"
+                Margin="0,317,8,0"
+                VerticalAlignment="Top"
+                HorizontalAlignment="Right"
+                Width="120"
+                ToolTip="Plan a mesh route to every hotspot and print it; nothing moves"
+                Click="btnAimPlanHotspots_Click">
+            <Viewbox Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center">
+                <TextBlock Text="Plan hotspots"/>
+            </Viewbox>
+        </Button>
+
+        <Button x:Name="btnAimClearHotspots"
+                Height="25"
+                Visibility="Hidden"
+                Margin="0,343,8,0"
+                VerticalAlignment="Top"
+                HorizontalAlignment="Right"
+                Width="120"
+                ToolTip="Empty the hotspot list (the file stays)"
+                Click="btnAimClearHotspots_Click">
+            <Viewbox Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center">
+                <TextBlock Text="Clear hotspots"/>
+            </Viewbox>
+        </Button>
+
         <!-- Start Button -->
         <Button x:Name="btnStart"
                 HorizontalAlignment="Right"

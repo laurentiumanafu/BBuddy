@@ -146,6 +146,41 @@ that is the transport problem, not a pathfinding problem.
 and refuses legs beyond `ProfileRoute.MaxClickWalkYd` (100 yd) when one is not,
 instead of aiming a click at something 600 yd away.
 
+### Building a hotspot list in the field
+
+The profile above is a file somebody else wrote. `Settings\clickaim-hotspots.xml` is the
+same thing written from the game: an ordinary profile with one `<Hotspot>` per point, so
+it can be walked, replaced with a real HonorBuddy profile, or hand-edited.
+
+In x64 diagnostic mode, next to "ClickAim 40 yd", four buttons appear after attaching:
+
+| Button | What it does |
+|---|---|
+| **Add hotspot** | reads the player's X/Y/Z and appends a `<Hotspot>` element. Stand where you want a point and press it. |
+| **Walk hotspots** | walks the list in the order it was captured — whole file, not just the cluster nearest you, because every point in it was added on purpose. |
+| **Plan hotspots** | plans a mesh path to every point from where you stand and prints the length and detour per point, **without moving**. This is the "test more points against the mesh" button. |
+| **Clear hotspots** | empties the list; the file stays. |
+
+The same list from a shell:
+
+```
+Tools\Walk.cmd hotspots           walk the captured list
+Tools\Walk.cmd profile:C:\p\a.xml   walk any profile's hotspots
+```
+
+`Add hotspot` reports as `[Route] hotspot 7 = (-623.6, -4286.8, 44.5) - 7 hotspots in
+clickaim-hotspots.xml: (-682, -4351), ...`, and `Plan hotspots` prints one
+`[Route] plan only, no walking` block per point, so a point that is off the mesh or
+unreachable says so before anything walks.
+
+Two things that are deliberate:
+
+* **a capture is a position read, not a click.** Nothing is dispatched, so pressing Add
+  hotspot in the middle of a walk does not disturb it.
+* **the file is written temp-then-move.** A half-written profile is a hotspot list that
+  silently stops loading, and that failure is indistinguishable from "the bot ignored
+  the profile".
+
 ### The mesh is live now
 
 This section used to say there was no mesh on 70291. Both blockers are gone:

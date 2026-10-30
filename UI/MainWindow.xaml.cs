@@ -212,6 +212,14 @@ namespace CopilotBuddy.UI
                                 btnDevTools.IsEnabled = true;
                                 btnAimWalk.Visibility = Visibility.Visible;
                                 btnAimWalk.IsEnabled = true;
+                                btnAimHotspot.Visibility = Visibility.Visible;
+                                btnAimHotspot.IsEnabled = true;
+                                btnAimHotspots.Visibility = Visibility.Visible;
+                                btnAimHotspots.IsEnabled = true;
+                                btnAimPlanHotspots.Visibility = Visibility.Visible;
+                                btnAimPlanHotspots.IsEnabled = true;
+                                btnAimClearHotspots.Visibility = Visibility.Visible;
+                                btnAimClearHotspots.IsEnabled = true;
                             });
                             return;
                         }
@@ -1166,6 +1174,61 @@ namespace CopilotBuddy.UI
             catch (Exception ex)
             {
                 Logging.Write("[ClickAim] walk failed: " + ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// x64 diagnostic only: remember the current position as a hotspot. Press it
+        /// where you want a waypoint; the list is Settings\clickaim-hotspots.xml, which
+        /// is an ordinary profile and can be walked or replaced with a real one.
+        /// </summary>
+        private void btnAimHotspot_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                if (Styx.Logic.Pathing.ClickAimDiagnostics.CaptureHotspot())
+                    SetStatus(Styx.Logic.Pathing.HotspotFile.Describe());
+            }
+            catch (Exception ex)
+            {
+                Logging.Write("[Route] capturing a hotspot failed: " + ex.Message);
+            }
+        }
+
+        private void btnAimHotspots_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                Styx.Logic.Pathing.ClickAimDiagnostics.WalkHotspots();
+            }
+            catch (Exception ex)
+            {
+                Logging.Write("[Route] walking the hotspots failed: " + ex.Message);
+            }
+        }
+
+        private void btnAimPlanHotspots_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                Styx.Logic.Pathing.ClickAimDiagnostics.PlanHotspots();
+            }
+            catch (Exception ex)
+            {
+                Logging.Write("[Route] planning the hotspots failed: " + ex.Message);
+            }
+        }
+
+        private void btnAimClearHotspots_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                if (Styx.Logic.Pathing.ClickAimDiagnostics.ClearHotspots())
+                    SetStatus("Hotspot list cleared");
+            }
+            catch (Exception ex)
+            {
+                Logging.Write("[Route] clearing the hotspots failed: " + ex.Message);
             }
         }
 

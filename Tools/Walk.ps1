@@ -13,6 +13,8 @@
         Tools\Walk.cmd 100               100 yd, so the mesh has something to route
         Tools\Walk.cmd 1977.5,232         walk to a world position
         Tools\Walk.cmd 1977.5,232,3       ... with a 3 yd tolerance
+        Tools\Walk.cmd hotspots          walk the list the "Add hotspot" button builds
+        Tools\Walk.cmd profile:C:\p\a.xml   walk any HonorBuddy profile's hotspots
         Tools\Walk.cmd 20 -Seconds 120    watch for two minutes instead of 60
         Tools\Walk.cmd 20 -Root "F:\World of Warcraft\patch33\BBuddy-clickaim\bin\x64\Release\net10.0-windows7.0"
 
@@ -69,6 +71,13 @@ if (-not (Test-Path (Join-Path $Root "CopilotBuddy.exe"))) {
 $settings = Join-Path $Root "Settings"
 $request = Join-Path $settings "clickaim-walk.txt"
 if (-not (Test-Path $settings)) { New-Item -ItemType Directory -Path $settings | Out-Null }
+
+# "hotspots" is shorthand for the list the Add hotspot button builds. Spelled out
+# rather than guessed so the request file always says exactly which profile it means.
+if ($Goal -eq 'hotspots' -or $Goal -eq 'Hotspots') {
+    $Goal = 'profile:' + (Join-Path $settings 'clickaim-hotspots.xml')
+    Write-Host "hotspot list: $Goal"
+}
 
 Write-Host "goal '$Goal'"
 Set-Content -Path $request -Value $Goal -NoNewline -Encoding ASCII

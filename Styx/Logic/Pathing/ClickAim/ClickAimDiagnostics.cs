@@ -48,6 +48,142 @@ public static class ClickAimDiagnostics
     }
 
     /// <summary>
+    /// Puts a line in the request file. Everything that can ask the pilot to move goes
+    /// through this file, so a button, a .cmd script and a hand-typed line all take the
+    /// same path - and a bug in that path shows up in every one of them.
+    /// </summary>
+    public static bool WriteRequest(string text)
+    {
+        try
+        {
+            string path = RequestPath;
+            string dir = Path.GetDirectoryName(path) ?? ".";
+            if (dir.Length > 0) Directory.CreateDirectory(dir);
+            File.WriteAllText(path, text + Environment.NewLine);
+            Logging.Write("[ClickAim] request: \"" + text + "\" -> " + path);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Logging.Write("[ClickAim] could not write the request file: " + ex.Message);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Remembers where the character is standing as a hotspot.
+    ///
+    /// This is the button that makes a profile without a text editor: stand somewhere
+    /// interesting, press it, and the point goes into
+    /// <c>Settings\clickaim-hotspots.xml</c> - which is an ordinary profile with
+    /// <c>&lt;Hotspot&gt;</c> elements, so the same file can be walked, replaced with a
+    /// real HonorBuddy profile, or hand-edited.
+    /// </summary>
+    public static bool CaptureHotspot()
+    {
+        double x, y;
+        if (!ClickAimPositions.TryRead(out x, out y))
+        {
+            Logging.Write("[Route] no player position, so there is no hotspot to capture");
+            return false;
+        }
+
+        double z = ClickAimPositions.Z();
+        if (double.IsNaN(z)) z = 0.0;
+
+        string error;
+        int count = HotspotFile.Add(x, y, z, out error);
+        if (count < 0)
+        {
+            Logging.Write("[Route] could not add the hotspot: " + error);
+            return false;
+        }
+
+        Logging.Write(string.Format(CultureInfo.InvariantCulture,
+            "[Route] hotspot {0} = ({1:F1}, {2:F1}, {3:F1}) - {4}",
+            count, x, y, z, HotspotFile.Describe()));
+        return true;
+    }
+
+    /// <summary>Walks the captured hotspot list, in the order it was captured.</summary>
+    public static bool WalkHotspots()
+    {
+        string path = HotspotFile.DefaultPath;
+        if (HotspotFile.Count(path) == 0)
+        {
+            Logging.Write("[Route] there are no hotspots yet: stand where you want one and press "
+                          + "\"Add hotspot\", or write \"profile:<path>\" into the request file to "
+                          + "walk an existing profile");
+            return false;
+        }
+
+        Logging.Write("[Route] hotspot list: " + HotspotFile.Describe(path));
+        // wholeFile: the list is ours and short, so every point in it is meant, not just
+        // the cluster nearest the player - a capture made across two areas would
+        // otherwise silently drop half of what the user just recorded.
+        return StartProfile(path, 0, 0, false, true);
+    }
+
+    /// <summary>Forgets the captured hotspots (the file stays, empty).</summary>
+    public static bool ClearHotspots()
+    {
+        string error;
+        if (!HotspotFile.Clear(out error))
+        {
+            Logging.Write("[Route] could not clear the hotspots: " + error);
+            return false;
+        }
+        Logging.Write("[Route] hotspot list cleared - " + HotspotFile.DefaultPath);
+        return true;
+    }
+
+    /// <summary>
+    /// Plans a mesh route to every hotspot and prints it, WITHOUT moving anything.
+    ///
+    /// This is the "test points against the mesh" half of the hotspot list: it answers,
+    /// per point, whether Detour can get there from where the player is standing, how
+    /// long the path is and how far it detours. Nothing is dispatched, so a bad point
+    /// costs a log line instead of a walk.
+    /// </summary>
+    public static void PlanHotspots()
+    {
+        var points = HotspotFile.Read(HotspotFile.DefaultPath);
+        if (points.Count == 0)
+        {
+            Logging.Write("[Route] there are no hotspots to plan");
+            return;
+        }
+
+        var thread = new Thread(() =>
+        {
+            Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                "[Route] planning {0} hotspot(s) from where the player stands; nothing will move",
+                points.Count));
+
+            for (int i = 0; i < points.Count; i++)
+            {
+                RoutePoint point = points[i];
+                Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                    "[Route] hotspot {0}/{1}", i + 1, points.Count));
+                try
+                {
+                    RouteReport(string.Format(CultureInfo.InvariantCulture, "{0},{1},{2}",
+                        point.X, point.Y, point.Z));
+                }
+                catch (Exception ex)
+                {
+                    Logging.Write("[Route] hotspot " + (i + 1) + " threw: " + ex.Message);
+                }
+            }
+
+            Logging.Write("[Route] hotspot planning done");
+        });
+        thread.IsBackground = true;
+        thread.Name = "ClickAimPlanHotspots";
+        thread.Start();
+    }
+
+    /// <summary>
     /// Called once after a successful attach. Logs the self-test so the 26 checks
     /// are visible in the log even when no bot is started, then arms the triggers.
     /// </summary>
