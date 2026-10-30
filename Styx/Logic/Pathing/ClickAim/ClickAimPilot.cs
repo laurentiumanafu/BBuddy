@@ -111,11 +111,26 @@ public static class ClickAimPilot
             }
 
             /* The mover says it has spent its detours on this goal: that is a statement about
-             * where the character is standing, not about the goal, so step aside and try again. */
-            if (mover.Blocked && !stopWhenBlocked && TrySidestep(mover, goal, ref sidesteps, verbose))
+             * where the character is standing, not about the goal, so step aside and try again.
+             * When the sidesteps are spent too, say so now instead of calling into a mover that
+             * has already refused to aim for another twenty-five seconds. */
+            if (mover.Blocked && !stopWhenBlocked)
             {
-                lastProgressMs = Environment.TickCount;
-                continue;
+                if (TrySidestep(mover, goal, ref sidesteps, verbose))
+                {
+                    lastProgressMs = Environment.TickCount;
+                    continue;
+                }
+
+                double left = mover.LastRemaining;
+                mover.MoveStop();
+                if (verbose)
+                {
+                    Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                        "[ClickAim] blocked with {0:F1} yd remaining and {1} sidestep(s) did not get "
+                        + "around it - giving up on this leg", left, sidesteps));
+                }
+                return false;
             }
 
             if (mover.LastRemaining < bestRemaining - ProgressYd)
