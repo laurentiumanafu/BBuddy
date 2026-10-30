@@ -1414,3 +1414,61 @@ Fixed:
   with the projection recomputed from the moved camera — the body is then well to the side of the
   character's silhouette and the click lands. Turning is only used when the cheap offsets fail, and
   the log names which one worked.
+
+## 18:50 run — stop guessing pixels: find the body with left-clicks
+
+User: *"still failed for the other monster"*. The log is unambiguous:
+
+```
+[18:52:46.410] [Loot] could not reach the body of 0x…21A7 with the mouse:
+                      none of 11 click points around the projected one selected it
+```
+
+Eleven right-clicks at a body four yards away, every one a guess. The run before had looted a
+corpse at 2.8 yd with a `40,60 px` offset; this one at ~4 yd found nothing in a ladder, in 35° and
+55° turns, or anywhere else. **The projection is simply not accurate enough to aim a click with,
+and a right-click is the wrong probe to discover that with** — a missed right-click walks the
+character or attacks something.
+
+### The probe is now a left-click
+
+A left-click on a unit only **selects** it. A left-click on the ground only clears the selection.
+Neither moves the character, starts a fight, or presses a key. So it is safe to click somewhere,
+read the client's target guid, and learn whether the body was under that pixel.
+
+`FindUnitPixel`:
+
+1. Start at the projected point, corrected by the offset learned earlier this session.
+2. Probe outward in rings — radii `0, 40, 80, 130, 190, 260` px, eight directions each, at most 40
+   probes. The rings are in *hundreds* of pixels on purpose: a body a few yards ahead projects
+   onto the character's own model, so the error is not a nudge, it is most of the character.
+3. Each probe: left-click, wait 70 ms, read `targetGuid`. Equal to the body's guid means that
+   pixel has the body under it.
+4. Remember `found - projected` as the session offset, so the *first* probe of the next search is
+   already right.
+5. Right-click **that** pixel — a click that cannot miss the body because the client just said
+   the body is there.
+
+The loot line now reads what actually happened:
+
+```
+[Loot] left-click probe 1 found it 40,60 px from the projected point; that offset is now used to
+       start every search
+[Loot] left-click probe 7 found it -80,130 px from the projected point; ...
+[Loot] 40 left-click probe(s) found no pixel with that unit under it (search centred 12,44 px from
+       the screen centre)
+```
+
+The last form is the useful failure: it says the body was not under any of 40 pixels near where
+the projection expected it, and where the search was centred.
+
+One case a left-click cannot settle: the unit is **already the target**, so the guid cannot
+change and every probe looks like a miss. There the right-click goes to the projected point and
+the log says so (`it was already the target, so this right-click went to the projected point
+unverified`).
+
+### Also in this log, not fixed here
+
+`[ClickAim] no progress for 25 s: stuck at 25.5 yd from the point … [Grind] could not walk to
+hotspot` — the click-to-move fallback used when Detour refuses a leg stalled 25 yd out and the
+bot stood there until it gave up. That is the mover, not the loot; it needs its own run.

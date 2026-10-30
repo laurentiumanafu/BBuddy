@@ -308,3 +308,16 @@ spell cast through the memory action bar. What the run exposed and what changed:
   line naming the distance).
 - Sweep now includes yaw turns (±35°, ±55°) with the projection recomputed from the moved camera,
   for bodies hidden behind the character's own model; cheap pixel offsets are still tried first.
+
+## Latest: 18:50 run — left-click probing replaces blind right-clicks
+
+- `ClickAimInput.LeftClick` (a left-click selects, never walks or attacks) + `FindUnitPixel`:
+  probe rings `0,40,80,130,190,260` px around the projected point, 8 directions, 40 probes max,
+  verifying against `ReadTargetGuid`; the winning offset from the projection is cached in
+  `_clickBiasX/_clickBiasY` for the session.
+- Loot = find the pixel with left-click probes, then one right-click on that pixel. Failure is
+  reported as "40 probes found no pixel with that unit under it (search centred X,Y px)".
+- Already-targeted units cannot be probed (guid cannot change) - there the right-click goes to the
+  projected point and says it is unverified.
+- Open, not touched here: the click-to-move fallback (`no route on the mesh … clicking straight`)
+  stalls ~25 yd out with `no progress for 25 s` and the grind gives up on the hotspot.

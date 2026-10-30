@@ -79,6 +79,34 @@ internal static class ClickAimInput
     }
 
     /// <summary>
+    /// Left-click at a client-space offset from the centre.
+    ///
+    /// This is the only mouse button a search can use. A right-click on the ground is a walk
+    /// order and a right-click on a unit is an attack, so probing with it moves the character
+    /// and starts fights; a left-click on a unit only SELECTS it, and a left-click on the
+    /// ground only clears the selection. That makes it a safe probe for "is the body I want
+    /// under this pixel", and the target guid read back afterwards is the answer.
+    /// </summary>
+    public static void LeftClick(IntPtr hWnd, int dx, int dy)
+    {
+        int w, h;
+        if (!ClientSize(hWnd, out w, out h)) return;
+        int x = w / 2 + dx;
+        int y = h / 2 + dy;
+        if (x < 1) x = 1;
+        if (y < 1) y = 1;
+        if (x > w - 2) x = w - 2;
+        if (y > h - 2) y = h - 2;
+        PostMessageInternal(hWnd, WM_MOUSEMOVE, IntPtr.Zero, Lp(x, y));
+        Thread.Sleep(12);
+        PostMessageInternal(hWnd, WM_LBUTTONDOWN, new IntPtr(MK_LBUTTON), Lp(x, y));
+        Thread.Sleep(35);
+        PostMessageInternal(hWnd, WM_LBUTTONUP, IntPtr.Zero, Lp(x, y));
+        Thread.Sleep(5);
+        PostMessageInternal(hWnd, WM_LBUTTONUP, IntPtr.Zero, Lp(x, y));
+    }
+
+    /// <summary>
     /// Horizontal right-drag of <paramref name="dragPx"/> pixels: positive drags
     /// right. The right button stays down for the whole drag, which is why the
     /// character runs during it - the caller must treat the leg as a turn AND a

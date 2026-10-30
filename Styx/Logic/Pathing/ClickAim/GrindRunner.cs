@@ -1373,113 +1373,155 @@ internal static class GrindRunner
     /// kept for the rest of the session (<see cref="_clickBiasX"/>), which turns every later
     /// unit click back into a single click.
     /// </summary>
+    /// <summary>Most left-click probes one search may spend looking for a body.</summary>
+    private const int ClickProbeMax = 40;
+
+    /// <summary>How long a probe waits for the client to answer with a target.</summary>
+    private const int ClickProbeSettleMs = 70;
+
     private static bool TryClickUnit(IntPtr hwnd, WowBObservedUnit unit, double px, double py,
                                      bool mustSelect, out string how)
     {
         how = "";
-        Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
-        bool canVerify = mustSelect && reader != null && reader.ReadTargetGuid() != unit.Guid;
 
-        /* The offset that worked last time. If it stops working (the camera moved, the
-         * character turned) the sweep below relearns it. */
-        if (_clickBiasKnown)
+        if (!mustSelect)
         {
-            int bx, by;
-            if (TryProject(hwnd, px, py, unit.Location.X, unit.Location.Y, unit.Location.Z, out bx, out by))
-            {
-                ClickAimInput.Click(hwnd, bx + _clickBiasX, by + _clickBiasY);
-                if (!canVerify) return true;
-                Thread.Sleep(150);
-                if (reader != null && reader.ReadTargetGuid() == unit.Guid)
-                {
-                    how = string.Format(CultureInfo.InvariantCulture,
-                        "the click landed on the learned offset {0},{1} px", _clickBiasX, _clickBiasY);
-                    return true;
-                }
-                _clickBiasKnown = false;
-                ClickAimKeySteer.ReleaseHeld();
-                ClickAimInput.TapKey(hwnd, 0x57, 40);      // W: cancel a click-walk the miss started
-            }
-        }
-
-        /* Candidates: a yaw to turn the character by, then a pixel offset from wherever the
-         * projection puts the body after that turn.
-         *
-         * The pixel ladder alone was not enough. A unit a few yards in front of the character
-         * sits almost on the camera's own axis - the camera looks THROUGH the character at it -
-         * so its projected point can be squarely on the character's own model, and no offset of
-         * a hundred pixels gets off it. Turning by 35 or 55 degrees does: the projection is
-         * recomputed from the moved camera, so the body is now well to the side of the
-         * character's silhouette and the click lands on it. The first entry is the plain
-         * projected point, then the offsets that have actually worked in the field. */
-        double[] yaws = { 0, 0, 0, 0, 0, 0, 0, 35, -35, 55, -55 };
-        int[] offsetsX = { 0, 0, 0, 40, -40, 40, -40, 0, 0, 0, 0 };
-        int[] offsetsY = { 0, 30, 60, 60, 60, 30, 30, 20, 20, 20, 20 };
-
-        int tried = 0;
-        double turned = 0;
-        for (int i = 0; i < yaws.Length && !_stop; i++)
-        {
-            double yaw = yaws[i];
-            if (yaw != turned)
-            {
-                /* Face a point at that bearing so the camera swings with the character; the
-                 * projection follows the camera, so it is re-read afterwards. */
-                double vx = unit.Location.X - px, vy = unit.Location.Y - py;
-                double len = ClickAimMath.Len(vx, vy);
-                if (len < 0.3) return false;
-                double rad = yaw * Math.PI / 180.0;
-                double cos = Math.Cos(rad), sin = Math.Sin(rad);
-                double tx = px + (vx * cos - vy * sin) / len * 10.0;
-                double ty = py + (vx * sin + vy * cos) / len * 10.0;
-                ClickAimKeySteer.Face(tx, ty, hwnd, 25.0, 4);
-                Thread.Sleep(250);            // the camera has to settle behind the new facing
-                turned = yaw;
-            }
-
             int dx, dy;
-            if (!TryProject(hwnd, px, py, unit.Location.X, unit.Location.Y, unit.Location.Z, out dx, out dy))
+            if (!TryProject(hwnd, px, py, unit.Location.X, unit.Location.Y, unit.Location.Z,
+                            out dx, out dy))
             {
                 how = "the projected point is behind the camera or off the screen";
-                continue;
+                return false;
             }
-
-            ClickAimInput.Click(hwnd, dx + offsetsX[i], dy + offsetsY[i]);
-            tried++;
-            if (!canVerify) return true;
-
-            Thread.Sleep(150);
-            if (reader == null) return true;
-            if (reader.ReadTargetGuid() != unit.Guid)
-            {
-                /* A click that missed the body landed on the ground, and a right-click on the
-                 * ground walks there. Stop the walk before the next try, or the whole ladder is
-                 * climbed from somewhere else. */
-                ClickAimKeySteer.ReleaseHeld();
-                ClickAimInput.TapKey(hwnd, 0x57, 40);
-                continue;
-            }
-
-            if (yaw == 0)
-            {
-                _clickBiasX = offsetsX[i];
-                _clickBiasY = offsetsY[i];
-                _clickBiasKnown = true;
-                how = string.Format(CultureInfo.InvariantCulture,
-                    "the projected point missed the body; {0},{1} px from it selected it, and that offset "
-                    + "is now used for every unit click", offsetsX[i], offsetsY[i]);
-            }
-            else
-            {
-                how = string.Format(CultureInfo.InvariantCulture,
-                    "the body was hidden behind the character from straight ahead; turning {0:F0} deg "
-                    + "brought it out and the click landed", yaw);
-            }
+            ClickAimInput.Click(hwnd, dx + (_clickBiasKnown ? _clickBiasX : 0),
+                                dy + (_clickBiasKnown ? _clickBiasY : 0));
             return true;
         }
 
+        /* mustSelect: FIND the body with left-click probes, then right-click the pixel that
+         * provably has it. Guessing a right-click point and hoping was the wrong shape of
+         * thing - the 18:50 run spent eleven right-clicks on a body 4 yd away, every one of
+         * which either hit the character's own model or the ground, and there was no way to
+         * tell from the log which. */
+        int fx, fy;
+        if (FindUnitPixel(hwnd, unit, px, py, out fx, out fy, out how))
+        {
+            ClickAimInput.Click(hwnd, fx, fy);
+            return true;
+        }
+
+        /* The one case a left-click cannot confirm: the unit is ALREADY the target, so the
+         * target guid cannot change and every probe looks like a miss. Right-click the
+         * projected point anyway - it is a best effort and the caller is told so. */
+        Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
+        if (reader == null || reader.ReadTargetGuid() != unit.Guid) return false;
+
+        int bx, by;
+        if (!TryProject(hwnd, px, py, unit.Location.X, unit.Location.Y, unit.Location.Z, out bx, out by))
+            return false;
+        ClickAimInput.Click(hwnd, bx + (_clickBiasKnown ? _clickBiasX : 0),
+                            by + (_clickBiasKnown ? _clickBiasY : 0));
+        how += "; it was already the target, so this right-click went to the projected point unverified";
+        return true;
+    }
+
+    /// <summary>
+    /// Finds the screen pixel a unit is under, using LEFT clicks and the client's own target
+    /// guid as the answer. A left-click selects a unit and does nothing else, so a probe that
+    /// misses costs nothing: no walk, no attack, no key.
+    ///
+    /// The search starts on the projected point (corrected by any offset already learned) and
+    /// spirals outward in rings, because a body a few yards ahead of the character projects
+    /// onto the character's own model and the error is measured in hundreds of pixels, not
+    /// tens. When a probe selects the unit, the difference between that pixel and the projected
+    /// one is kept as the session's offset, so later searches start from the right place.
+    ///
+    /// Returns offsets from the client centre, the same space <see cref="ClickAimInput.Click"/>
+    /// takes.
+    /// </summary>
+    private static bool FindUnitPixel(IntPtr hwnd, WowBObservedUnit unit, double px, double py,
+                                      out int foundX, out int foundY, out string how)
+    {
+        foundX = 0;
+        foundY = 0;
+
+        Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
+        if (reader == null)
+        {
+            how = "the client reader is gone";
+            return false;
+        }
+
+        if (reader.ReadTargetGuid() == unit.Guid)
+        {
+            how = "it is already the target, so a left-click cannot confirm a pixel for it";
+            return false;
+        }
+
+        int baseDx, baseDy;
+        bool projected = TryProject(hwnd, px, py, unit.Location.X, unit.Location.Y, unit.Location.Z,
+                                    out baseDx, out baseDy);
+        if (!projected)
+        {
+            baseDx = 0;
+            baseDy = 0;
+        }
+
+        int centreX = baseDx + (_clickBiasKnown ? _clickBiasX : 0);
+        int centreY = baseDy + (_clickBiasKnown ? _clickBiasY : 0);
+
+        int[] radii = { 0, 40, 80, 130, 190, 260 };
+        int probes = 0;
+        for (int r = 0; r < radii.Length; r++)
+        {
+            int radius = radii[r];
+            int steps = radius == 0 ? 1 : 8;
+            for (int s = 0; s < steps; s++)
+            {
+                if (_stop || probes >= ClickProbeMax) break;
+
+                int dx = centreX;
+                int dy = centreY;
+                if (radius > 0)
+                {
+                    double angle = (Math.PI * 2.0 / steps) * s;
+                    dx += (int)Math.Round(Math.Cos(angle) * radius);
+                    dy += (int)Math.Round(Math.Sin(angle) * radius);
+                }
+
+                ClickAimInput.LeftClick(hwnd, dx, dy);
+                probes++;
+                Thread.Sleep(ClickProbeSettleMs);
+
+                if (reader.ReadTargetGuid() != unit.Guid) continue;
+
+                foundX = dx;
+                foundY = dy;
+                if (projected)
+                {
+                    _clickBiasX = dx - baseDx;
+                    _clickBiasY = dy - baseDy;
+                    _clickBiasKnown = true;
+                    how = string.Format(CultureInfo.InvariantCulture,
+                        "left-click probe {0} found it {1},{2} px from the projected point; that offset is "
+                        + "now used to start every search", probes, _clickBiasX, _clickBiasY);
+                }
+                else
+                {
+                    how = string.Format(CultureInfo.InvariantCulture,
+                        "left-click probe {0} found it at {1},{2} px after the projection was refused",
+                        probes, dx, dy);
+                }
+                return true;
+            }
+        }
+
         how = string.Format(CultureInfo.InvariantCulture,
-            "none of {0} click points around the projected one selected it", tried);
+            "{0} left-click probe(s) found no pixel with that unit under it{1}", probes,
+            projected
+                ? string.Format(CultureInfo.InvariantCulture, " (search centred {0},{1} px from the screen centre)",
+                                centreX, centreY)
+                : " (the projection was refused, so the search was centred on the screen)");
         return false;
     }
 
