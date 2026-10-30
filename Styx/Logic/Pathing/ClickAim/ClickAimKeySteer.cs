@@ -9,37 +9,33 @@ using Styx.WoWInternals;
 namespace Styx.Logic.Pathing;
 
 /// <summary>
-/// Movement the way BloogBot does it, which is the way that has never needed a camera.
+/// Movement by turning the character with the keyboard and reading the heading back.
 ///
-/// BloogBot's whole movement layer is two calls (BloogBot/Game/Objects/LocalPlayer.cs):
+/// The starting point was BloogBot, whose whole movement layer is two calls
+/// (BloogBot/Game/Objects/LocalPlayer.cs):
 ///
 ///     public void MoveToward(Position pos)
 ///     {
-///         Face(pos);                         // SetFacing(bearing) - write the player's heading
-///         StartMovement(ControlBits.Front);  // SetControlBit(Front, 1, tick) - walk forward
+///         Face(pos);                         // SetFacing(bearing)
+///         StartMovement(ControlBits.Front);  // hold forward
 ///     }
 ///
-/// and <c>Face</c> just computes <c>GetFacingForPosition(pos)</c> from two positions. No
-/// camera, no pixels, no scales, no drag gain, no field of view. It supports 1.12.1,
-/// 2.4.3 AND 3.3.5a with that same pair, which makes it the only movement model in this
-/// project that has ever worked on more than one client.
+/// On 3.3.5a <c>Face</c> is a client FUNCTION. On the builds where BloogBot writes the
+/// heading field instead, this project measured the write and it does not move anything:
+/// on 2026-10-30 two probes wrote 81 deg and 151 deg and the character walked bearing 81
+/// both times - it keeps its own facing - and the outgoing field at -0x1C behaved the
+/// same. A field this client ignores is not a heading, however plausible the address.
 ///
-/// Every mechanism tried here on 2026-10-29 aimed a MOUSE at a pixel, and all of them
-/// failed for the same reason: the pixel only means a direction once you know the
-/// camera's orientation, and nothing in this project can read it (the position that is
-/// readable drifts +4.6 deg per tick with the character standing still).
+/// What IS true is that the field is readable and equals the direction the character
+/// actually walks. So the heading is not written, it is READ, and the turn keys are what
+/// change it:
 ///
-/// So this does not aim anything. It writes the heading the character should have - a
-/// number this project already READS every tick (<c>facing=3.59</c> in every attach log,
-/// <c>WowBOffsets.RecordFacingOffset</c>) - and holds the forward key. The character then
-/// walks along the heading given, and nothing has to be aimed.
+///     read facing -> tap arrow-left/right until facing == wanted -> hold W
 ///
-/// The one thing that is NOT assumed is the angle convention: whether the client's facing
-/// is radians clockwise from north, radians counter-clockwise from east, or something with
-/// a sign flip is measured here, not guessed. <see cref="Calibrate"/> writes two headings,
-/// measures the bearing actually walked on each, and derives the linear map between them.
-/// If the two disagree, the field is not the heading and the run says so instead of
-/// walking in circles.
+/// No memory writes, no camera, no pixels, no drag gain, no field of view - the five
+/// things every earlier attempt in this project died on. <see cref="Calibrate"/> measures
+/// which arrow key turns which way and how fast, and whether the facing really is the
+/// walked bearing; <see cref="Steer"/> closes the loop one tap at a time.
 /// </summary>
 internal static class ClickAimKeySteer
 {
@@ -53,12 +49,6 @@ internal static class ClickAimKeySteer
     /// client, which is why holding it also stops a click.</summary>
     private const int StopKeyVk = 0x57;
 
-    /// <summary>Headings this far apart are used for the calibration pair.</summary>
-
-    /// <summary>A probe walk shorter than this measured nothing.</summary>
-    private const double MinProbeYd = 2.5;
-
-    private const int MaxProbeMs = 2500;
     private const int PollMs = 60;
 
     /// <summary>
@@ -84,12 +74,6 @@ internal static class ClickAimKeySteer
     private static double _offsetDeg = double.NaN; // bearing = slope*input + offset
 
     private static bool _keyDown;
-    private static int _lastWriteMs = -100000;
-    private static double _lastFacing = double.NaN;
-
-    /// <summary>A heading change bigger than this needs the key released and pressed again,
-    /// because the client only reads the facing when a movement key goes down.</summary>
-    private const double RepressDeg = 12.0;
 
     public static bool Calibrated { get { return _calibrated; } }
     public static bool KeyDown { get { return _keyDown; } }
@@ -306,6 +290,52 @@ internal static class ClickAimKeySteer
                 : "THE FACING IS NOT THE WALKED DIRECTION (" + gap.ToString("F0", CultureInfo.InvariantCulture)
                   + " deg apart), so the loop closes on measured bearings instead");
         return true;
+    }
+
+
+    /// <summary>
+    /// Releases everything and waits until two position reads agree to 5 cm.
+    ///
+    /// A click-walk or a held key both take a moment to actually stop, and a probe
+    /// started in that moment measures the OLD walk - which is exactly the 51/51 result
+    /// in the 12:04 log.
+    /// </summary>
+    public static bool StopAndRest(IntPtr hwnd, out string report)
+    {
+        report = "";
+        Release(hwnd);
+
+        if (hwnd != IntPtr.Zero)
+        {
+            ClickAimInput.TapKey(hwnd, StopKeyVk, 80);
+            ClickAimInput.ReleaseAll(hwnd, StopKeyVk, 80);
+        }
+
+        double lx = 0, ly = 0;
+        bool have = false;
+        int still = 0;
+
+        for (int waited = 0; waited < RestTimeoutMs; waited += PollMs)
+        {
+            Thread.Sleep(PollMs);
+            double nx, ny;
+            if (!ClickAimPositions.TryRead(out nx, out ny)) continue;
+
+            if (!have) { lx = nx; ly = ny; have = true; continue; }
+
+            if (ClickAimMath.Len(nx - lx, ny - ly) < 0.05) still += PollMs;
+            else still = 0;
+
+            lx = nx;
+            ly = ny;
+
+            if (still >= RestMs) return true;
+        }
+
+        report = string.Format(CultureInfo.InvariantCulture,
+            "still moving {0} ms after the stop key (last two reads never agreed to 5 cm)",
+            RestTimeoutMs);
+        return false;
     }
 
     /// <summary>Turns for <paramref name="ms"/> and returns the change in facing, in degrees.</summary>

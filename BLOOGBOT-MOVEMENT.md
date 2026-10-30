@@ -42,7 +42,30 @@ The addresses it needs, per client (`BloogBot/Game/MemoryAddresses.cs`):
 | `SendMovementUpdateFunPtr` | 0x007413F0 | 0x0060D200 | **0x007413F0** |
 | `SetControlBitFunPtr` | 0x005FBE10 | 0x005343A0 | **0x005FBE10** |
 | `SetControlBitDevicePtr` | 0x00D3F78C | 0x00CF31E4 | **0x00D3F78C** |
-| `LocalPlayer_SetFacingOffset` | 0x7A8 | 0xBE0 | 0x9A8 |
+| `LocalPlayer_SetFacingOffset` | 0x9A8 | 0xBE0 | 0x7A8 |
+
+**Correction (re-read from `BloogBot/Game/MemoryAddresses.cs`, 2026-10-30): the facing
+offset was transcribed the wrong way round.** The three blocks in that file are
+`WotLK` (0x7A8), `TBC` (0xBE0) and `Vanilla` (0x9A8) - so `0x9A8` is **1.12.1**, and
+`0x7A8` is **3.3.5a**. It does not change anything here, because on WotLK BloogBot does
+not write the field at all:
+
+```csharp
+public void SetFacing(float facing)
+{
+    if (ClientHelper.ClientVersion == ClientVersion.WotLK)
+        Functions.SetFacing(Pointer, facing);          // 0x0072EA50 - a FUNCTION
+    else
+    {
+        Functions.SetFacing(IntPtr.Add(Pointer, MemoryAddresses.LocalPlayer_SetFacingOffset), facing);
+        Functions.SendMovementUpdate(Pointer, SET_FACING_OPCODE);
+    }
+}
+```
+
+So the field-plus-opcode path is Vanilla/TBC only, and on 3.3.5a `Face` is one call on
+the player pointer. That is the shape to look for on 70291: a function that takes the
+player pointer and a heading - not another offset to poke.
 
 **The first four are 3.3.5a build 12340 values, which this project still claims to
 support.** They are the missing pieces for the 3.3.5a path in `WoWMovement.cs`: the
@@ -127,9 +150,16 @@ This one corrects something the first version of `ClickAimKeySteer` got wrong.
 > "server reconciliation" ... and `FACING_OFFSET` will be overwritten with the true value
 > from the server.
 
+(That quote is chapter 18 on 1.12.1: `0x9C4` readable, `0x9A8` outgoing - the
+Vanilla offsets in the corrected table above.)
+
 So: writing the **readable** field alone can look like it works and then be reverted, and
 the field that actually steers on his build is the **outgoing** one, 0x1C *before* the
-readable one. `ClickAimKeySteer` now:
+readable one.
+
+**That second half did not hold for 70291.** Both fields were written on 2026-10-30 and
+the character ignored both, so there is no sign-flip or field-choice left to try - see
+"The 12:57 run" below. `ClickAimKeySteer` now:
 
 * writes the readable field first (it is the one the client's own movement code uses, and
   while moving the client is authoritative over its facing);
@@ -190,6 +220,14 @@ direction. Worse, the stop key did not cancel it, because `TapKey` was posting
 `lParam = 0x00010001`: repeat 1, **scan code 0**. A keystroke with no scan code is one a
 client can legitimately ignore. `TapKey` now sends the real scan code.
 
+That fix is testable on its own, cheaply, without committing to a walk:
+`Tools\StopTest.cmd` (`--clickstop`) clicks at the centre, waits for the walk to begin,
+then taps one key at a time - W, arrow left, arrow right, A - and measures how far the
+character still travels after each tap. It stops itself at 25 yd and releases everything.
+If it reports that a key stopped the walk, a click becomes a *bounded* primitive for the
+first time; if not, the click fallback stays disabled and turning the keys is the only
+route.
+
 ## So: turn keys, and a closed loop on the facing
 
 The remaining lever is the turn keys (arrow left/right). They change the facing the
@@ -211,6 +249,12 @@ to a mover that walks 120 yd in a random direction and will not stop, and the mo
 refuses any click whose aim is more than 25 deg off.
 
 ## The 12:04 run: the facing write works, the probe was measuring the previous walk
+
+> **RETRACTED by the 12:57 run above.** The conclusion in this section - that the write
+> steers and only the probe was broken - is wrong. Identity between the written heading
+> and the walked bearing is also exactly what *ignoring* the write looks like, and once
+> the probe was fixed the second, different write was ignored too. Read the 12:57 section
+> first; this one is kept because the probe-ordering fix it describes is real.
 
 ```
 [Route] not steering by facing: wrote 51 deg then 121 deg and the character walked

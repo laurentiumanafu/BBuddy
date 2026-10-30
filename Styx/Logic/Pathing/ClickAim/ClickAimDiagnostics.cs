@@ -841,6 +841,16 @@ public static class ClickAimDiagnostics
                     hunt.Start();
                     continue;
                 }
+                else if (arg.Equals("--clickstop", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Does a key press cancel a click-walk on this build? The scan-code fix
+                    // in ClickAimInput is only worth anything if this answers yes.
+                    var st = new Thread(ClickAimStopTest.Run);
+                    st.IsBackground = true;
+                    st.Name = "ClickAimStopTest";
+                    st.Start();
+                    continue;
+                }
                 else if (arg.Equals("--sigscan", StringComparison.OrdinalIgnoreCase))
                 {
                     // Winkr's scanner + resig.py, ported: see WowBSigScan. Runs once, in the
