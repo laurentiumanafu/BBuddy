@@ -226,6 +226,15 @@ public sealed class ClickAimMover : IPlayerMover
     public bool Blocked { get; private set; }
 
     /// <summary>
+    /// True once the aim was REFUSED (see <see cref="AimRefuseDeg"/>), which is different
+    /// from the aim being unavailable: unavailable falls through to the pixel ladder,
+    /// refused stops the walk. On 2026-10-30 a centre click with the camera 30+ deg off
+    /// walked 120.4 yd and would not stop, twice; the pixel ladder would do the same
+    /// thing again, so a refusal has to end the leg rather than try the next rung.
+    /// </summary>
+    public bool AimGaveUp { get; private set; }
+
+    /// <summary>
     /// Clicks actually dispatched. The route asks this before blaming the ground: a
     /// walk that never clicked has not learned anything about the terrain, so
     /// blacklisting polygons on the strength of it is how 52 of them got marked on
@@ -237,6 +246,7 @@ public sealed class ClickAimMover : IPlayerMover
     public void ResetBlocked()
     {
         Blocked = false;
+        AimGaveUp = false;
         _detourAttempt = 0;
         _warnedStuck = false;
         _stuck = 0;
@@ -347,6 +357,7 @@ public sealed class ClickAimMover : IPlayerMover
     {
         lock (_gate)
         {
+            AimGaveUp = false;
             IntPtr hwnd = Handle();
             // A held movement key is a runaway waiting to happen: release it first, always.
             ClickAimKeySteer.Release(hwnd);
@@ -488,6 +499,15 @@ public sealed class ClickAimMover : IPlayerMover
         {
             _legWantYd = rem;
             Dispatch(leg, px, py, now);
+            return;
+        }
+
+        if (AimGaveUp)
+        {
+            /* Refused, not unavailable. Falling through to the pixel ladder is exactly
+             * the behaviour that produced the two unstoppable 120 yd walks, so end the
+             * leg and let the caller re-plan or give up. */
+            Blocked = true;
             return;
         }
 
@@ -881,6 +901,7 @@ public sealed class ClickAimMover : IPlayerMover
 
         // Facing it (or out of drags): a middle click walks along the camera axis.
         // No offset, no scale.
+        AimGaveUp = false;
         if (Math.Abs(error) > AimRefuseDeg)
         {
             /* A centre click with the camera off the target is not a short hop in the
@@ -891,7 +912,8 @@ public sealed class ClickAimMover : IPlayerMover
              * far off is refused outright. */
             Logging.Write(string.Format(CultureInfo.InvariantCulture,
                 "[Aim] {0:F0} deg off; refusing to click - a click this far off the camera axis "
-                + "walked 120 yd and would not stop on 2026-10-30", error));
+                + "walked 120 yd and stopped only when the character was 138 yd from the goal on "
+                + "2026-10-30. Stopping the walk instead.", error));
             AimGaveUp = true;
             return false;
         }

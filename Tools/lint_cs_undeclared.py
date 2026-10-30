@@ -10,6 +10,18 @@ and which no other lint here could see. The constants lint only judges names tha
 constants somewhere; the arity lint only indexes names that exist; the fields lint only
 looks at `_underscore` names. A deleted public method falls between all three.
 
+The same hole exists for a name that is *assigned* rather than called: `AimGaveUp = true;`
+in ClickAimMover was CS0103 for the same reason (`AimGaveUp` was never declared), and it
+was found by the user's compiler, not by this tool. So unqualified assignments and
+increments are judged too, and the flag is cleared again once the fix is in.
+
+Reads are NOT judged, deliberately. Every identifier in an expression would have to be
+cleared, and without a type system the only honest clearance is "declared in this
+repository" - which fails on every external TYPE used normally: `StringBuilder`,
+`Thickness`, `Exception`, `VerticalAlignment`. Measured on this repository that is 8408
+findings, all noise. Judging calls and assignment targets is the part that can be decided
+without a type system, and it has now caught both real CS0103 bugs it was built for.
+
 How it judges, and why the false-positive rate is low: in C# almost every unqualified
 call is a member of the same type or a local/parameter - BCL statics are written
 `Math.Round`, `String.Format`, always qualified. So this collects unqualified calls only
@@ -213,6 +225,38 @@ def calls_in(root, opaque_ids):
     return out
 
 
+def assignments_in(root, opaque_ids):
+    """Unqualified assignment / increment targets: (line, col, name, in_opaque_type)."""
+    out = []
+    for n in walk(root):
+        target = None
+        if n.type == "assignment_expression":
+            target = n.child_by_field_name("left")
+            # `new Foo { Bar = 1 }` and `x with { Bar = 1 }` name the CONSTRUCTED type's
+            # members, not a name in this scope.
+            parent = n.parent
+            inside_initializer = False
+            while parent is not None:
+                if parent.type in {"initializer_expression", "with_expression"}:
+                    inside_initializer = True
+                    break
+                parent = parent.parent
+            if inside_initializer:
+                continue
+        elif n.type in {"postfix_unary_expression", "prefix_unary_expression"}:
+            op = next((c for c in n.children if c.type in {"++", "--"}), None)
+            if op is None:
+                continue
+            target = next((c for c in n.children if c.type == "identifier"), None)
+        if target is None or target.type != "identifier":
+            continue
+        t = enclosing_type(n)
+        out.append((n.start_point[0] + 1, n.start_point[1],
+                    target.text.decode("utf-8", "replace"),
+                    t is not None and t.id in opaque_ids))
+    return out
+
+
 def cs_files(roots):
     for r in roots:
         if os.path.isfile(r):
@@ -259,6 +303,13 @@ def main(argv):
                 continue
             print("{0}:{1}: '{2}' is called here but no type in this repository declares "
                   "it (CS0103 unless it is a using-static or a local)".format(path, line, name))
+            findings += 1
+
+        for line, _col, name, in_opaque in assignments_in(root, opaque):
+            if name in local or name in repo or name in ALLOW or in_opaque:
+                continue
+            print("{0}:{1}: '{2}' is assigned here but no type in this repository declares "
+                  "it (CS0103)".format(path, line, name))
             findings += 1
 
     print("{0} file(s) scanned, {1} finding(s).".format(len(scan), findings))

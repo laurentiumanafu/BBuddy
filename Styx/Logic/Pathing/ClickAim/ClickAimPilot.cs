@@ -75,12 +75,21 @@ public static class ClickAimPilot
 
             if (stopWhenBlocked && mover.Blocked)
             {
+                /* Read the reason BEFORE MoveStop, which clears it. "Refused" and "dead
+                 * clicks" are different failures: a refusal is the camera being too far
+                 * off to click safely, and re-planning will not fix it. */
+                bool refused = mover.AimGaveUp;
                 mover.MoveStop();
                 if (verbose)
                 {
                     Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                        "[ClickAim] blocked with {0:F1} yd remaining, {1} legs, {2} detours spent",
-                        mover.LastRemaining, mover.Legs, mover.Detours));
+                        "[ClickAim] blocked with {0:F1} yd remaining, {1} legs, {2} detours spent"
+                        + "{3}",
+                        mover.LastRemaining, mover.Legs, mover.Detours,
+                        refused
+                            ? " - the aim was REFUSED (camera more than 25 deg off the point), so no "
+                              + "click was made. Point the camera at the goal, or steer with the keys."
+                            : ""));
                 }
                 return false;
             }
