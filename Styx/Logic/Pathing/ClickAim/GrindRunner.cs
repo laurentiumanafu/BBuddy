@@ -110,6 +110,36 @@ internal static class GrindRunner
     /// <summary>Health and mana this high count as "rested enough"; see <see cref="RestIfNeeded"/>.</summary>
     private const int RestFullPercent = 90;
 
+    /// <summary>
+    /// How close the walk stops short of the mob: inside <see cref="AttackRangeYd"/> once the
+    /// character's own momentum has been spent, instead of through it and out the other side.
+    /// </summary>
+    private const double MeleeEngageYd = AttackRangeYd + 1.2;
+
+    /// <summary>
+    /// How long to leave the client's swing alone before re-pressing Attack. A swing lands every
+    /// ~2-3 s; pressing the key more often than that is a global cooldown spent for nothing.
+    /// </summary>
+    private const int MeleePressMs = 1200;
+
+    /// <summary>
+    /// How long without a landing swing before the character turns onto the mob again. Facing is
+    /// only needed because the client refuses a swing it is not facing for; a character that is
+    /// hurting the mob is already facing it, and re-facing it every pass is what made the 23:00
+    /// run circle the mob.
+    /// </summary>
+    private const int MeleeRefaceAfterMs = 2500;
+
+    /// <summary>
+    /// The gap between clicks used to START a swing when the bar has no Attack key. A click at
+    /// arm's length can land on the ground and become a walk order, so it is a last resort and
+    /// never more than one every few seconds.
+    /// </summary>
+    private const int MeleeClickMs = 2500;
+
+    /// <summary>How long to wait in melee when nothing was sent this pass.</summary>
+    private const int MeleeWaitMs = 350;
+
     /// <summary>How long to wait for the client to take the body before deciding it is bones.</summary>
     private const int LootSettleMs = 1500;
 
@@ -1944,6 +1974,13 @@ internal static class GrindRunner
         bool healBlocked = false;           // no power for it: fight instead of pressing it again
         bool healRefusalLogged = false;
         bool powerShortLogged = false;
+
+        /* Melee bookkeeping: whether the client's swing is running, when it last landed, and
+         * when a key or click was last sent. See the melee section of the loop. */
+        bool meleeSwinging = false;
+        int lastMeleeDamageMs = 0;
+        int lastAttackPressMs = 0;
+        int lastMeleeClickMs = 0;
         var worked = new List<string>();
 
         WowBWorldSnapshot? snap;
@@ -2368,13 +2405,12 @@ internal static class GrindRunner
                 continue;
             }
 
-            /* ---- 4. melee: close, right-click, let the client swing ----
+            /* ---- 4. melee: close the distance, then press keys and stand still ----
              *
-             * This is the fallback, not a habit: it runs only when casting is off the table
-             * (no damage spell, under 10 mana, or three casts that landed nothing), because
-             * a right-click both starts auto-attack AND walks the character into the mob.
-             * If it ever runs while the character still has mana, that is the bug the user
-             * reported twice - "auto-attacking while casting wrath" - so it says so. */
+             * This is the fallback, not a habit: it runs when casting is off the table (no
+             * damage spell, not enough power for the one on the bar, or three casts that
+             * landed nothing). Walking in is the only movement here; inside AttackRangeYd the
+             * character stops, presses Attack, and lets the client's swing do the work. */
             if (!meleeOnce)
             {
                 meleeOnce = true;
@@ -2388,7 +2424,12 @@ internal static class GrindRunner
                     myMana, castFailures));
             }
 
-            if (d > AttackRangeYd)
+            /* Stop the walk a yard and a bit early. A character that walks until it is inside
+             * AttackRangeYd is still moving when the key comes up, coasts past the mob, finds
+             * itself out of range on the far side and walks back - the ping-pong the user saw
+             * as "runs back and forward". Stopping at MeleeEngageYd lets the coast land inside
+             * the range instead of through it. */
+            if (d > MeleeEngageYd)
             {
                 /* Walk in, but not across the whole ring: melee is a decision, and a mob that
                  * keeps backing off is not worth chasing. If it is on US, the limit is the
@@ -2405,60 +2446,101 @@ internal static class GrindRunner
                 continue;
             }
 
-            /* In melee the character has to face the mob for its swings to land and for the
-             * right-click to select it (it selects what is on screen, and the mob is at our
-             * feet). Turn, and only swing once the turn has actually happened. */
-            /* Do NOT steer by bearing when the mob is underfoot. At 0.7-1.1 yd the bearing to
-             * the target is numerically unstable - a hand's width of player movement flips it
-             * by 180 deg - and the 17:36 log is that failure in full: "want 62 / want 176 /
-             * want -1 / want 157" with a 400 ms arrow tap each time, for 25 s, on a corpse.
-             * Inside 2 yd, face the point with a wide tolerance and swing. */
-            if (d > 2.0)
+            /* ---- in melee: swing, do not steer ----
+             *
+             * The 23:00 run is the reason this section is shaped like this. It did what the
+             * old version said to do and looked like a bot having a fit: every pass through
+             * the loop re-aimed at the mob (Steer with turn-only), re-faced with the arrow
+             * keys, and RIGHT-CLICKED the mob's projected point. A right-click on a mob that is
+             * standing on your feet lands on the ground beside it, and a right-click on the
+             * ground is a WALK ORDER - so the character ran forward, the distance changed, the
+             * loop steered again, and it circled the mob for thirty seconds while auto-attack
+             * quietly did the damage. The log is that circle: facing 271 -> 317 -> 245 -> 333
+             * -> 175, ninety degrees at a time.
+             *
+             * So: nothing here moves the character. The walk in is above; inside
+             * AttackRangeYd the only things sent are the Attack key, a melee ability key, and -
+             * when the swing is NOT running - at most one click every few seconds to start it.
+             * And the arrow keys are used only when no swing has landed for a while, because a
+             * character that is hurting the mob is already facing it and turning is what broke
+             * the last run. */
+            ClickAimKeySteer.ReleaseHeld();
+
+            int sinceDamageMs = unchecked(Environment.TickCount - lastMeleeDamageMs);
+
+            /* Nothing has landed for a few seconds and the mob is still a couple of yards off:
+             * the character stopped a shade too early. One short step forward, aimed by the same
+             * facing call the walk uses, and no click - a click here is a walk order with no
+             * aim and no stop. */
+            if (!meleeSwinging && sinceDamageMs > MeleeRefaceAfterMs && d > 2.5)
             {
-                double facingLeft;
-                ClickAimKeySteer.Steer(target.Location.X, target.Location.Y, hwnd, false, out facingLeft);
-            }
-            double tolerance = d <= 2.0 ? 60.0 : 20.0;
-            if (!ClickAimKeySteer.Face(target.Location.X, target.Location.Y, hwnd, tolerance, 4))
-            {
-                faceFailures++;
-                if (faceFailures == 1 || faceFailures % 5 == 0)
-                    Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                        "[Grind] cannot turn onto the mob at arm's length ({0:F1} yd) - the arrow keys are "
-                        + "not moving the facing field ({1} time(s))", d, faceFailures));
-                Thread.Sleep(120);
-                continue;
+                double nudged;
+                ClickAimKeySteer.Steer(target.Location.X, target.Location.Y, hwnd, true, out nudged);
+                Thread.Sleep(220);
+                ClickAimKeySteer.ReleaseHeld();
             }
 
-            /* A click that lands is not a click that damages: the 17:36 log kept reporting
-             * "right-click auto-attack landed" for swings at a corpse. Credit it only when
-             * the mob's health actually moved, below. */
-            /* Same rule for the swing: no click while the forward key is still down. Turning
-             * is fine, walking is not. */
-            ClickAimKeySteer.ReleaseHeld();
-            if (TryClickUnit(hwnd, target, me.Location.X, me.Location.Y))
+            if (!meleeSwinging || sinceDamageMs > MeleeRefaceAfterMs)
             {
-                _clicks++;
+                /* Wide tolerance at arm's length: the client's own melee arc is generous and a
+                 * precise turn from 3 yd is what produced ninety-degree arrow taps. */
+                if (!ClickAimKeySteer.Face(target.Location.X, target.Location.Y, hwnd, 45.0, 3))
+                {
+                    faceFailures++;
+                    if (faceFailures == 1 || faceFailures % 5 == 0)
+                        Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                            "[Grind] cannot turn onto the mob at arm's length ({0:F1} yd) - the arrow keys "
+                            + "are not moving the facing field ({1} time(s))", d, faceFailures));
+                    Thread.Sleep(150);
+                    continue;
+                }
             }
-            /* The Attack hotkey goes out whether the click landed or not. The click is what a
-             * player would do and it also selects the mob, but a click aimed at a body 1 yd
-             * ahead can land on the character's own model - the key cannot miss, and the
-             * target is already selected by TAB. */
-            if (auto != null) ClickAimInput.TapKey(hwnd, auto.KeyVk, 40);
+
+            /* Start the swing. The Attack key is a keyboard press: it cannot be mistaken for a
+             * walk order, so it is always preferred. A click is only used when the bar has no
+             * Attack - and then once per MeleeClickMs, never every pass. */
+            bool attacked = false;
+            if (auto != null)
+            {
+                if (!meleeSwinging || unchecked(Environment.TickCount - lastAttackPressMs) >= MeleePressMs)
+                {
+                    ClickAimInput.TapKey(hwnd, auto.KeyVk, 40);
+                    lastAttackPressMs = Environment.TickCount;
+                    presses++;
+                    _presses++;
+                    attacked = true;
+                }
+            }
+            else if (!meleeSwinging
+                     && unchecked(Environment.TickCount - lastMeleeClickMs) >= MeleeClickMs)
+            {
+                lastMeleeClickMs = Environment.TickCount;
+                if (TryClickUnit(hwnd, target, me.Location.X, me.Location.Y))
+                {
+                    _clicks++;
+                    presses++;
+                    attacked = true;
+                }
+            }
 
             /* The melee half of the bar: Claw, Heroic Strike, Sinister Strike, Rend. These are
              * 5 yd abilities, so this is the only branch that can use them - the cast loop would
              * have stood at 28 yd pressing a key the client refuses. Rage and energy are not
-             * readable apart from mana here, so the press goes out and a refusal costs the
-             * client's own error line, not a global cooldown the bot spends twice. */
-            if (meleeHit != null)
+             * readable apart from mana here, so the press goes out, and a refusal costs the
+             * client's own error line rather than a global cooldown spent twice. */
+            if (meleeHit != null && (!meleeSwinging || sinceDamageMs >= MeleePressMs))
             {
                 ClickAimInput.TapKey(hwnd, meleeHit.KeyVk, 40);
+                presses++;
+                _presses++;
                 if (!worked.Contains(meleeHit.Name + " (pressed at arm's length)"))
                     worked.Add(meleeHit.Name + " (pressed at arm's length)");
+                attacked = true;
             }
-            presses++;
-            Thread.Sleep(AttackSettleMs);
+
+            /* Nothing was sent this pass: wait out the swing instead of spinning. A level-1
+             * swing lands every ~3 s and the loop would otherwise pass here ten times a second. */
+            Thread.Sleep(attacked ? AttackSettleMs : MeleeWaitMs);
 
             WowBWorldSnapshot? afterSwing;
             if (!Capture(out afterSwing) || afterSwing == null || !afterSwing.TryGetSelectedTarget(out target))
@@ -2469,10 +2551,19 @@ internal static class GrindRunner
             health = Health(target);
             if (health >= 0 && lastHealth >= 0 && health < lastHealth)
             {
-                if (!worked.Contains("right-click auto-attack")) worked.Add("right-click auto-attack");
+                if (!worked.Contains("auto-attack")) worked.Add("auto-attack");
+                if (!meleeSwinging)
+                {
+                    meleeSwinging = true;
+                    Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                        "[Grind] the swing is running (mob health {0} -> {1}) - holding position and "
+                        + "letting the client swing", lastHealth, health));
+                }
                 Logging.Write(string.Format(CultureInfo.InvariantCulture,
                     "[Grind] auto-attack does damage: mob health {0} -> {1}", lastHealth, health));
                 lastHealth = health;
+                lastMeleeDamageMs = Environment.TickCount;
+                quietRounds = 0;
                 continue;
             }
 
@@ -2675,6 +2766,13 @@ internal static class GrindRunner
              * character that walks to 5 yd and then presses a key the client refuses. */
             check("meleeReachNests", ClickAimCombat.MeleeRangeYd <= ChaseYd
                                    && AttackRangeYd <= ClickAimCombat.MeleeRangeYd);
+
+            /* The walk stops short of the mob so the coast lands inside the range rather than
+             * through it - running past and back is the "back and forward" the user saw. */
+            check("meleeEngageHysteresis", AttackRangeYd < MeleeEngageYd && MeleeEngageYd < ChaseYd);
+            check("meleeWaitsAreSane", MeleePressMs < MeleeRefaceAfterMs
+                                    && MeleeClickMs > MeleePressMs
+                                    && MeleeWaitMs < AttackSettleMs);
             check("interruptInsideSearch", InterruptYd < SearchYd && InterruptYd > AttackRangeYd);
 
             /* The choice itself: with the level inside a band, the area picked must be one

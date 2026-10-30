@@ -1694,3 +1694,43 @@ is what actually walked those legs.
 
 And the dwarf racials are named: 20594 `Stoneform`, 2481 `Find Treasure` (both `Utility`, never
 pressed - the log just stopped printing "spell 20594 (not in the table yet)").
+## The 23:00 run — out of mana it circled the mob instead of hitting it
+
+    [Grind] 9 of power left and Shadow Bolt needs about 30 - not casting again ... auto-attacking instead
+    [Grind] auto-attack does damage: mob health 42 -> 37
+    [Keys] facing 271 deg, want 88 deg: +177 deg -> left arrow for 400 ms
+    [Keys] facing 317 deg, want 149 deg: -168 deg -> right arrow for 400 ms
+    [Keys] facing 245 deg, want 149 deg: -96 deg  -> right arrow for 400 ms
+    [Grind] cannot turn onto the mob at arm's length (3.1 yd) - the arrow keys are not moving the facing field
+
+The mana gate did its job — it stopped casting at 9 power and started swinging (the mob's health
+was dropping). What went wrong is everything the melee branch did around that swing:
+
+- **It right-clicked the mob on every pass.** At arm's length the mob's projected point is its own
+  feet or the ground beside it, and a right-click on the ground is a **walk order**. The character
+  ran forward, the distance changed, the loop steered again — that is the "runs back and forward",
+  and because each walk order turned it, the same loop produced the circus: `facing 271 -> 317 ->
+  245 -> 333 -> 175`, ninety degrees at a time, orbiting the mob while auto-attack did the damage.
+- **It re-aimed and re-faced on every pass** (`Steer` turn-only, then `Face` with a 20 deg
+  tolerance) even while swings were landing.
+- **The walk stopped exactly at `AttackRangeYd`**, so the character was still moving when the key
+  came up, coasted past the mob, found itself out of range on the far side and walked back.
+
+Fixed:
+
+- **Inside `MeleeEngageYd` (5.2 yd) nothing moves the character.** The only things sent are the
+  Attack key, a melee ability key, and — if the bar has no Attack at all — one click every 2.5 s.
+- **The Attack key is preferred to the click** for exactly this reason: a key cannot be mistaken
+  for a walk order.
+- **Facing only when nothing has landed for 2.5 s** (`MeleeRefaceAfterMs`), with a 45 deg
+  tolerance; a character that is hurting the mob is already facing it.
+- **The swing is tracked** (`meleeSwinging`, set when the mob's health actually drops) and the
+  loop says `the swing is running ... holding position and letting the client swing`.
+- **The walk stops 1.2 yd short** (`MeleeEngageYd`) so the coast lands inside the range; and if
+  nothing lands for 2.5 s while the mob is 2.5+ yd away, one short steered step forward closes it
+  — a step, not a click.
+- **`quietRounds` resets whenever damage lands**, so a long melee no longer abandons the mob after
+  twelve passes.
+
+The rotation banner also reads properly now: only the first log line in that run still carried the
+old broken string, from the build before `9ce9165`.
