@@ -210,9 +210,6 @@ internal static class ClickAimKeySteer
             return false;
         }
 
-        double f0;
-        if (!TryReadFacing(out f0)) { report = "cannot read the facing field"; return false; }
-
         // ---- which way do the turn keys go ------------------------------------
         double right = TurnFor(hwnd, TurnRightVk, 200, out report);
         if (double.IsNaN(right)) return false;
