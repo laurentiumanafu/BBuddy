@@ -1185,3 +1185,30 @@ Two bugs, both about the same edge:
 
 Also: out of mana with a mob on the character, the melee chase limit is `GiveUpYd` rather
 than `ChaseYd`, so it walks to the thing hitting it instead of refusing at 21 yd.
+
+## 2026-10-30 17:36 — it fights corpses
+
+The run beat the game (kill at 17:36:55 with two heals and four Wraths), and then fought the
+**body** three times: `engaged at 2.8 yd (mob health 0)`, three 3.2 s Wrath attempts, 25 s of
+turning in circles, `gave up on the target after 15 press(es)`, then again at 1.1 yd, then
+again at 0.7 yd.
+
+Nothing filtered a corpse after the kill. `TryEngage` accepted whatever the client had
+selected, and a kill leaves the body selected - TAB moves to the next live enemy, and when
+there is none the body stays. Three fixes:
+
+* **TAB now cycles past a corpse.** Each press's result is checked; `health == 0` means press
+  again rather than accept. If nothing live comes up, ESC clears the body, the guid goes into
+  `_notViable`, and the loop walks on with `the only thing the client offered was a corpse`.
+* **`Fight` refuses to start on one**: `lastHealth == 0` at entry returns
+  `the target is already dead (health 0)`, because the death check inside the loop needs a
+  health reading that was once above zero - which a corpse can never give.
+* **No bearing-steering within 2 yd.** The spin is visible in the raw log:
+  `want 62 / want 176 / want -1 / want 157`, a 400 ms arrow tap each time. At 0.7-1.1 yd the
+  bearing to the target flips 180 deg for a hand's width of movement, so `Steer` was chasing
+  its own tail. Inside 2 yd it now just faces the point with a 60 deg tolerance and swings.
+
+Also: `right-click auto-attack landed` is credited only when the mob's health actually
+moved - the click alone used to count as a hit, which is why 15 presses at a corpse still
+reported success, and why the "nothing landed" path (which bans a target for the session)
+never triggered.

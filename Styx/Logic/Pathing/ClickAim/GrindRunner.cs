@@ -586,16 +586,45 @@ internal static class GrindRunner
             py = player.Location.Y;
         }
 
+        Styx.WoWInternals.WowBReader? selReader = ObjectManager.WowB;
         for (int i = 0; i < TabTries && !have; i++)
         {
             ClickAimInput.TapKey(hwnd, TabVk, 40);
             Thread.Sleep(TabSettleMs);
             if (!Capture(out snap)) return false;
-            if (snap.TryGetSelectedTarget(out target)) have = true;
+            if (!snap.TryGetSelectedTarget(out target)) continue;
+
+            /* Keep cycling past a corpse. Straight after a kill the body is still selected
+             * and TAB is what moves off it; accepting it here is what made the 17:36 run
+             * fight the same dead mob three times. */
+            Styx.WoWInternals.WowBReader.WowBUnitFields sel;
+            if (selReader != null && selReader.TryGetUnitFields(target.UnitAddress, out sel)
+                && sel.Health == 0)
+                continue;
+
+            have = true;
         }
 
         if (!have)
         {
+            /* Nothing LIVE came up. If the client still has a corpse selected - which is what
+             * a kill leaves behind, and what TAB with nowhere to go leaves alone - clear it,
+             * so the next attempt starts from nothing instead of from a body. */
+            Styx.WoWInternals.WowBReader? corpseReader = ObjectManager.WowB;
+            Styx.WoWInternals.WowBReader.WowBUnitFields corpseFields;
+            if (!target.Guid.IsEmpty && corpseReader != null
+                && corpseReader.TryGetUnitFields(target.UnitAddress, out corpseFields)
+                && corpseFields.Health == 0)
+            {
+                _notViable.Add(target.Guid);
+                if (_notViable.Count > 256) _notViable.Clear();
+                ClickAimInput.TapKey(hwnd, 0x1B, 40);          // ESC: drop the corpse
+                Thread.Sleep(200);
+                report = "the only thing the client offered was a corpse (health 0) - cleared it and "
+                         + "walking on";
+                return false;
+            }
+
             /* Nothing selected means nothing hostile in front. In a town that is the whole
              * population: 27 friendly units within 40 yd at 17:22, none of them an enemy. */
             if (near > 0)
@@ -937,6 +966,14 @@ internal static class GrindRunner
 
         lastHealth = Health(target);
 
+        /* The kill leaves the corpse selected, and TAB keeps a target when there is nothing
+         * else to move to - so the next "engage" is the body of the mob that just died. The
+         * 17:36 run did exactly that three times: three 3.2 s Wrath attempts at a
+         * health-0 target, then 25 s of turning in circles at 0.7 yd. The death check below
+         * needs a health reading that was ever above zero, which a corpse can never give. */
+        if (lastHealth == 0)
+            return "the target is already dead (health 0) - that is a corpse left selected, not a fight";
+
         Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
         List<ClickAimAction> bar = ClickAimCombat.ReadBar(reader);
         ClickAimAction? damage = ClickAimCombat.FirstDamage(bar);      // Wrath
@@ -1229,9 +1266,18 @@ internal static class GrindRunner
             /* In melee the character has to face the mob for its swings to land and for the
              * right-click to select it (it selects what is on screen, and the mob is at our
              * feet). Turn, and only swing once the turn has actually happened. */
-            double facingLeft;
-            ClickAimKeySteer.Steer(target.Location.X, target.Location.Y, hwnd, false, out facingLeft);
-            if (!ClickAimKeySteer.Face(target.Location.X, target.Location.Y, hwnd, 20.0, 6))
+            /* Do NOT steer by bearing when the mob is underfoot. At 0.7-1.1 yd the bearing to
+             * the target is numerically unstable - a hand's width of player movement flips it
+             * by 180 deg - and the 17:36 log is that failure in full: "want 62 / want 176 /
+             * want -1 / want 157" with a 400 ms arrow tap each time, for 25 s, on a corpse.
+             * Inside 2 yd, face the point with a wide tolerance and swing. */
+            if (d > 2.0)
+            {
+                double facingLeft;
+                ClickAimKeySteer.Steer(target.Location.X, target.Location.Y, hwnd, false, out facingLeft);
+            }
+            double tolerance = d <= 2.0 ? 60.0 : 20.0;
+            if (!ClickAimKeySteer.Face(target.Location.X, target.Location.Y, hwnd, tolerance, 4))
             {
                 faceFailures++;
                 if (faceFailures == 1 || faceFailures % 5 == 0)
@@ -1242,10 +1288,12 @@ internal static class GrindRunner
                 continue;
             }
 
+            /* A click that lands is not a click that damages: the 17:36 log kept reporting
+             * "right-click auto-attack landed" for swings at a corpse. Credit it only when
+             * the mob's health actually moved, below. */
             if (TryClickUnit(hwnd, target, me.Location.X, me.Location.Y))
             {
                 _clicks++;
-                if (!worked.Contains("right-click auto-attack")) worked.Add("right-click auto-attack");
             }
             else if (auto != null)
             {
@@ -1263,6 +1311,7 @@ internal static class GrindRunner
             health = Health(target);
             if (health >= 0 && lastHealth >= 0 && health < lastHealth)
             {
+                if (!worked.Contains("right-click auto-attack")) worked.Add("right-click auto-attack");
                 Logging.Write(string.Format(CultureInfo.InvariantCulture,
                     "[Grind] auto-attack does damage: mob health {0} -> {1}", lastHealth, health));
                 lastHealth = health;

@@ -246,3 +246,15 @@ spell cast through the memory action bar. What the run exposed and what changed:
   so interrupt -> refuse -> walk -> interrupt spun 40x/s with the character rooted. A refused
   target is now fought when the player is in combat and the unit carries the in-combat bit,
   and a fruitless interrupt silences the next for `InterruptRetryMs` (4 s).
+
+
+## 2026-10-30, 17:36 run — kills, then three fights against the corpse
+
+* TAB cycles past `health == 0` units; when nothing live is offered, ESC clears the body and
+  the guid is banned for the session (`the only thing the client offered was a corpse`).
+* `Fight` returns immediately if the target is already at 0 health - the in-loop death check
+  needs a health reading that was once above zero.
+* no `Steer` within 2 yd: the bearing flips 180 deg there, which is what produced 25 s of
+  arrow taps at a body. Inside 2 yd it faces with a 60 deg tolerance and swings.
+* `right-click auto-attack` counts only when health actually moved, so the summary and the
+  "nothing landed -> banned" rule are truthful.
