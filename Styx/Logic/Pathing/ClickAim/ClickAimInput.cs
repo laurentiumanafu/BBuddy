@@ -121,7 +121,10 @@ internal static class ClickAimInput
         if (vk <= 0 || hWnd == IntPtr.Zero) return;
         int scan = (int)MapVirtualKey((uint)vk, 0);
         int lp = 1 | (scan << 16);
-        if (!down) lp |= unchecked(0xC0000000);   // previous state + transition, as Windows sends it
+        // The cast goes INSIDE unchecked(): unchecked() suppresses overflow checking, it
+        // does NOT change a literal's type. 0xC0000000 is typed uint, so
+        // `lp |= unchecked(0xC0000000)` is int |= uint and does not compile.
+        if (!down) lp |= unchecked((int)0xC0000000);   // previous state + transition
         PostMessageInternal(hWnd, down ? WM_KEYDOWN : WM_KEYUP, new IntPtr(vk), new IntPtr(lp));
     }
 
