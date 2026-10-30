@@ -181,6 +181,31 @@ Two things that are deliberate:
   silently stops loading, and that failure is indistinguishable from "the bot ignored
   the profile".
 
+### Starting from the window
+
+The window is the interface: **Load Profile** → pick **Grind** in the bot list → **Start**.
+On a 3.3.5a client that starts the behaviour tree; on `wowb.exe` the tree refuses to start
+(`TreeRoot.Start` still needs the 32-bit object model), so the same three clicks now run
+`GrindRunner` on the profile the window loaded (`Styx/Logic/Pathing/ClickAim/ClickAimUi.cs`).
+
+* **Load Profile** on `wowb.exe` does not build the legacy `Profile` object - it remembers the
+  path and reports what is in the file: `loaded Horde12-60_cloth.xml: 19 grind area(s), 214
+  hotspot(s), first "Durotar 1-6". Press Start to grind.` A file the old parser would have
+  rejected still loads, because the machinery that rejected it is not in the path any more.
+* **Start** decides what to run from the file, not from a setting: a profile with
+  `<GrindArea>` blocks is ground (circle them, fight, pick the area by level band); a profile
+  with plain `Hotspot`/`RunTo` waypoints is walked once. Picking any bot other than Grind
+  prints which bot does work on this client instead of silently doing nothing.
+* **Stop** ends the loop after the step it is on (a mid-click stop on this client is an
+  unstoppable walk), and **Pause** in the arrow menu stops it and remembers the profile so
+  **Resume** starts the same one again.
+* The window keeps itself honest: when the loop ends on its own - an unreachable ring, an
+  empty area, a stop request - the buttons go back to Start instead of leaving a dead
+  "running" state.
+
+The .cmd tools still work and still write the same request file, but nothing needs them:
+they are for scripting and for when the window is not up.
+
 ### Grinding: circling hotspots and fighting what you meet
 
 ```

@@ -78,8 +78,16 @@ public static class RouteRunner
     /// before every hotspot - four seconds of turning on the spot at each point, which
     /// looks like a bot having a fit. One mover keeps its calibration.
     /// </summary>
+    /// <summary>
+    /// Set to end a walk from outside - the window's Stop button, or "stop" in the request
+    /// file. The leg loop checks it between waypoints, so the character finishes the step it
+    /// is on instead of stopping dead mid-click, which on this client is an unstoppable walk.
+    /// </summary>
+    public static volatile bool StopRequested;
+
     public static bool Run(ClickAimMover mover, IList<RoutePoint> route, int maxLegs)
     {
+        StopRequested = false;
         if (mover == null) throw new ArgumentNullException(nameof(mover));
         if (route == null || route.Count == 0)
         {
@@ -108,6 +116,13 @@ public static class RouteRunner
 
         for (int i = 0; i < route.Count; i++)
         {
+            if (StopRequested)
+            {
+                Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                    "[Route] stopped on request after {0} of {1} waypoint(s)", walked, route.Count));
+                return walked > 0;
+            }
+
             if (maxLegs > 0 && walked >= maxLegs)
             {
                 Logging.Write(string.Format(CultureInfo.InvariantCulture,

@@ -45,6 +45,12 @@ namespace CopilotBuddy.UI
         private DispatcherTimer? _infoTimer;
 
         /// <summary>
+        /// True while the Start button is running the ClickAim grind loop instead of the
+        /// behaviour tree - the case on wowb.exe, where the tree refuses to start.
+        /// </summary>
+        private bool _grindStarted;
+
+        /// <summary>
         /// Mutex that claims ownership of the attached WoW process.
         /// Prevents another CopilotBuddy from attaching to the same WoW.
         /// HB 4.3.4 pattern: held for entire session lifetime.
@@ -739,6 +745,21 @@ namespace CopilotBuddy.UI
 
         private void UpdateInfoPanel()
         {
+            /* The grind loop can end on its own - a ring it cannot reach, an empty area, the
+             * user's "stop" request. The window must go back to Start when it does, or the
+             * next click does nothing and looks broken. */
+            if (_grindStarted && !Styx.Logic.Pathing.ClickAimUi.Running)
+            {
+                _grindStarted = false;
+                _isRunning = false;
+                btnStart.Visibility = Visibility.Visible;
+                btnStopGroup.Visibility = Visibility.Hidden;
+                btnLoadProfile.IsEnabled = true;
+                cmbBotSelector.IsEnabled = true;
+                btnSettings.IsEnabled = true;
+                SetStatus("Grind finished");
+            }
+
             // HB 4.3.4 pattern: always display current values; no IsMeasuring gate.
             // Values start at 0 and accumulate once the bot starts.
             var sb = new System.Text.StringBuilder();
@@ -890,6 +911,32 @@ namespace CopilotBuddy.UI
                 return;
             }
 
+            /* wowb.exe: the behaviour tree cannot run, so Start means "run the grind loop on
+             * the profile this window loaded". Doing this before the UI is disabled means a
+             * refusal leaves the window usable instead of half-stopped. */
+            if (Styx.Logic.Pathing.ClickAimUi.IsWowB)
+            {
+                SaveSettings();
+                string report = Styx.Logic.Pathing.ClickAimUi.Start(BotManager.Current.Name);
+                if (!Styx.Logic.Pathing.ClickAimUi.Running)
+                {
+                    Logging.Write(Colors.Red, report);
+                    SetStatus("Not started");
+                    return;
+                }
+
+                Logging.Write(report);
+                _grindStarted = true;
+                _isRunning = true;
+                btnStart.Visibility = Visibility.Hidden;
+                btnStopGroup.Visibility = Visibility.Visible;
+                btnLoadProfile.IsEnabled = false;
+                cmbBotSelector.IsEnabled = false;
+                btnSettings.IsEnabled = false;
+                SetStatus("Grinding...");
+                return;
+            }
+
             // Save settings before starting bot (HB 4.3.4 pattern)
             SaveSettings();
 
@@ -955,6 +1002,13 @@ namespace CopilotBuddy.UI
             SetStatus("Stopping...");
 
             Logging.Write("Stopping the bot!");
+            if (_grindStarted)
+            {
+                _grindStarted = false;
+                Logging.Write(Styx.Logic.Pathing.ClickAimUi.Stop());
+                SetStatus("Stopped");
+                return;
+            }
             TreeRoot.Stop();
         }
 
@@ -996,6 +1050,28 @@ namespace CopilotBuddy.UI
         private void btnPause_Click(object sender, RoutedEventArgs e)
         {
             var item = (System.Windows.Controls.MenuItem)sender;
+
+            /* The grind loop has no tree to pause: Pause stops it and Resume starts the same
+             * profile again, which is what the user means by pausing a grind. */
+            if (_grindStarted || Styx.Logic.Pathing.ClickAimUi.Paused)
+            {
+                if (Styx.Logic.Pathing.ClickAimUi.Paused)
+                {
+                    string resumed = Styx.Logic.Pathing.ClickAimUi.Resume(BotManager.Current?.Name);
+                    item.Header = "Pause";
+                    Logging.Write(resumed);
+                    SetStatus(Styx.Logic.Pathing.ClickAimUi.Running ? "Grinding..." : resumed);
+                }
+                else
+                {
+                    string paused = Styx.Logic.Pathing.ClickAimUi.Pause(BotManager.Current?.Name);
+                    item.Header = "Resume";
+                    Logging.Write(paused);
+                    SetStatus("Paused");
+                }
+                return;
+            }
+
             if (TreeRoot.IsPaused)
             {
                 item.Header = "Pause";
@@ -1079,6 +1155,17 @@ namespace CopilotBuddy.UI
             {
                 try
                 {
+                    /* wowb.exe cannot build the legacy profile object, and the grind loop does
+                     * not need it: it reads the XML itself. So Load means "remember this path
+                     * and tell me what is in it". */
+                    if (Styx.Logic.Pathing.ClickAimUi.IsWowB)
+                    {
+                        string report = Styx.Logic.Pathing.ClickAimUi.Load(openFileDialog.FileName);
+                        Logging.Write(report);
+                        SetStatus(report);
+                        return;
+                    }
+
                     ProfileManager.LoadNew(openFileDialog.FileName);
                     Logging.Write($"Profile loaded: {Path.GetFileName(openFileDialog.FileName)}");
                 }

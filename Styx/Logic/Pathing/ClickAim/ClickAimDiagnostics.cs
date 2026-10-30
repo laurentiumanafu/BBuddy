@@ -124,6 +124,22 @@ public static class ClickAimDiagnostics
         return StartProfile(path, 0, 0, false, true);
     }
 
+    /// <summary>True while a profile or hotspot walk is still running.</summary>
+    public static bool RouteRunning
+    {
+        get { lock (Gate) { return _walking || _pendingRoute != null; } }
+    }
+
+    /// <summary>Asks a running walk to end after the waypoint it is on.</summary>
+    public static void RequestStop()
+    {
+        lock (Gate)
+        {
+            _pendingRoute = null;          // a request that has not started must not start
+            RouteRunner.StopRequested = true;
+        }
+    }
+
     /// <summary>Forgets the captured hotspots (the file stays, empty).</summary>
     public static bool ClearHotspots()
     {
