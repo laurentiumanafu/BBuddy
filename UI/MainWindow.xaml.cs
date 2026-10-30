@@ -920,12 +920,12 @@ namespace CopilotBuddy.UI
                 string report = Styx.Logic.Pathing.ClickAimUi.Start(BotManager.Current.Name);
                 if (!Styx.Logic.Pathing.ClickAimUi.Running)
                 {
-                    Logging.Write(Colors.Red, report);
+                    Logging.Write(Colors.Red, "{0}", report);
                     SetStatus("Not started");
                     return;
                 }
 
-                Logging.Write(report);
+                Logging.Write("{0}", report);
                 _grindStarted = true;
                 _isRunning = true;
                 btnStart.Visibility = Visibility.Hidden;
@@ -1005,7 +1005,7 @@ namespace CopilotBuddy.UI
             if (_grindStarted)
             {
                 _grindStarted = false;
-                Logging.Write(Styx.Logic.Pathing.ClickAimUi.Stop());
+                Logging.Write("{0}", Styx.Logic.Pathing.ClickAimUi.Stop());
                 SetStatus("Stopped");
                 return;
             }
@@ -1059,14 +1059,14 @@ namespace CopilotBuddy.UI
                 {
                     string resumed = Styx.Logic.Pathing.ClickAimUi.Resume(BotManager.Current?.Name);
                     item.Header = "Pause";
-                    Logging.Write(resumed);
+                    Logging.Write("{0}", resumed);
                     SetStatus(Styx.Logic.Pathing.ClickAimUi.Running ? "Grinding..." : resumed);
                 }
                 else
                 {
                     string paused = Styx.Logic.Pathing.ClickAimUi.Pause(BotManager.Current?.Name);
                     item.Header = "Resume";
-                    Logging.Write(paused);
+                    Logging.Write("{0}", paused);
                     SetStatus("Paused");
                 }
                 return;
@@ -1161,7 +1161,7 @@ namespace CopilotBuddy.UI
                     if (Styx.Logic.Pathing.ClickAimUi.IsWowB)
                     {
                         string report = Styx.Logic.Pathing.ClickAimUi.Load(openFileDialog.FileName);
-                        Logging.Write(report);
+                        Logging.Write("{0}", report);
                         SetStatus(report);
                         return;
                     }
