@@ -292,7 +292,7 @@ internal static class GrindRunner
                  * never turned round; a leg is a whole hotspot, so "check between legs" was
                  * checking every 40 s. */
                 RouteRunner.ShouldInterrupt = () => FightNeeded(hwnd, InterruptYd);
-                bool ok;
+                bool ok = false;
                 try { ok = RouteRunner.Run(mover, one, 1); }
                 finally { RouteRunner.ShouldInterrupt = null; }
 
@@ -517,7 +517,7 @@ internal static class GrindRunner
         report = "";
 
         WowBWorldSnapshot? snap;
-        if (!Capture(out snap))
+        if (!Capture(out snap) || snap == null)
         {
             report = "cannot read the world snapshot; nothing to fight";
             return false;
