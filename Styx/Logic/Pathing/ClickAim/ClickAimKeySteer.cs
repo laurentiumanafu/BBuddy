@@ -64,7 +64,7 @@ internal static class ClickAimKeySteer
 
     private static bool _keyDown;
     private static int _lastWriteMs = -100000;
-    private static int _lastFacing = int.MinValue;
+    private static double _lastFacing = double.NaN;
 
     public static bool Calibrated { get { return _calibrated; } }
     public static bool KeyDown { get { return _keyDown; } }
@@ -318,7 +318,8 @@ internal static class ClickAimKeySteer
         // Rewrite the heading often enough that the client cannot drift off it, but not
         // so often that its own update fights every write.
         int now = Environment.TickCount & int.MaxValue;
-        if (Math.Abs(facing - _lastFacing) > 1e-4 || unchecked(now - _lastWriteMs) > 120)
+        if (double.IsNaN(_lastFacing) || Math.Abs(facing - _lastFacing) > 1e-4
+            || unchecked(now - _lastWriteMs) > 120)
         {
             TryWriteFacing(facing, _useOutgoing);
             _lastFacing = facing;
@@ -344,7 +345,7 @@ internal static class ClickAimKeySteer
     /// re-steering every tick, and report. Deliberately does not touch the mesh - this is
     /// the mechanism test, and mixing in pathing would hide which of the two failed.
     /// </summary>
-    public static void Run(string spec)
+    public static void Run(string? spec)
     {
         IntPtr hwnd = IntPtr.Zero;
         try
@@ -463,7 +464,7 @@ internal static class ClickAimKeySteer
 
     /// <summary>Accepts "x,y", or nothing at all: then it walks 20 yd along the current
     /// heading, which is enough to prove the mechanism.</summary>
-    private static bool Target(string spec, out double x, out double y)
+    private static bool Target(string? spec, out double x, out double y)
     {
         x = 0;
         y = 0;

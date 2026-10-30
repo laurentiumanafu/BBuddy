@@ -171,7 +171,8 @@ internal static class ClickAimDestHunt
                         "({0:F2}, {1:F2})", fx, fy);
                     if (hits.IndexOf(off) < 8)
                         Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                            "[Dest]   record + 0x{0:X} (absolute 0x{1:X})", key, record + (ulong)key));
+                            "[Dest]   record {0:+#;-#;0}0x{1:X} (absolute 0x{2:X})", key < 0 ? "-" : "+",
+                            Math.Abs(key), record + (ulong)(long)key));
                 }
 
                 Thread.Sleep(300);

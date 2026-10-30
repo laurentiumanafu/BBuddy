@@ -119,14 +119,14 @@ internal static class ClickAimInput
     public static void HoldKey(IntPtr hWnd, int vk, bool down)
     {
         if (vk <= 0 || hWnd == IntPtr.Zero) return;
-        int scan = MapVirtualKey((uint)vk, 0);
+        int scan = (int)MapVirtualKey((uint)vk, 0);
         int lp = 1 | (scan << 16);
         if (!down) lp |= unchecked(0xC0000000);   // previous state + transition, as Windows sends it
         PostMessageInternal(hWnd, down ? WM_KEYDOWN : WM_KEYUP, new IntPtr(vk), new IntPtr(lp));
     }
 
     [DllImport("user32.dll", SetLastError = true)]
-    private static extern int MapVirtualKey(uint uCode, uint uMapType);
+    private static extern uint MapVirtualKey(uint uCode, uint uMapType);
 
     /// <summary>Holds a key for <paramref name="ms"/> (movement keys stop a walk).</summary>
     public static void TapKey(IntPtr hWnd, int vk, int ms)

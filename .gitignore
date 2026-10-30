@@ -73,3 +73,4 @@ Tools/NavMeshBuilder/*.exe
 # zig emits an import library next to -shared output
 Lib/x64/*.lib
 Tools/CascAdt/*.o
+build-last.log
