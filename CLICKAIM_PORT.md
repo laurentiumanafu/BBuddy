@@ -1544,6 +1544,11 @@ read 139% and the drink rule would never fire. The fix is the session peak — `
 highest power seen)` — and it is self-correcting because power only climbs while resting or on a
 level-up, both of which the peak follows within one read.
 
+A meal is not one bite: the loop rests until health and mana are back to 90% (or `RestMs`, 20 s,
+runs out, or something starts hitting). Stopping the moment the threshold clears was the first
+version's mistake — a character at 34% mana drank for six seconds, reached 39%, walked off, and
+drank again at the next gap.
+
 **The settings are a file and a window.** `Settings\clickaim-grind.txt` holds the numbers
 (`EatBelowPercent`, `DrinkBelowPercent`, `HealBelowPercent`, `UseDamageOverTime`, `UseBuffs`,
 `FoodSlot`, `DrinkSlot`, `DotRefreshSeconds`, `RestMs`), `Settings\clickaim-skills.txt` holds the

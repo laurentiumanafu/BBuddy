@@ -55,8 +55,12 @@ internal static class ClickAimSettings
     /// </summary>
     public static int DotRefreshSeconds = 12;
 
-    /// <summary>How long to sit and eat or drink before checking the bar again.</summary>
-    public static int RestMs = 6000;
+    /// <summary>
+    /// The longest a single meal lasts. The loop stops earlier as soon as health and mana are
+    /// back to <c>RestFullPercent</c>, so this is a ceiling, not a target: a level-4 character
+    /// regens slowly and 20 s is what it takes to go from 35% mana to nearly full.
+    /// </summary>
+    public static int RestMs = 20000;
 
     private const string FileName = "clickaim-grind.txt";
 
@@ -96,7 +100,7 @@ internal static class ClickAimSettings
         FoodSlot = 0;
         DrinkSlot = 0;
         DotRefreshSeconds = 12;
-        RestMs = 6000;
+        RestMs = 20000;
     }
 
     /// <summary>
@@ -213,7 +217,7 @@ internal static class ClickAimSettings
         FoodSlot = Math.Max(0, Math.Min(12, FoodSlot));
         DrinkSlot = Math.Max(0, Math.Min(12, DrinkSlot));
         DotRefreshSeconds = Math.Max(4, Math.Min(60, DotRefreshSeconds));
-        RestMs = Math.Max(1000, Math.Min(20000, RestMs));
+        RestMs = Math.Max(1000, Math.Min(60000, RestMs));
     }
 
     private static int ClampPercent(int value)

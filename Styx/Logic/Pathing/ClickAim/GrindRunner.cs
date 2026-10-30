@@ -107,6 +107,9 @@ internal static class GrindRunner
     /// </summary>
     private const double LootYd = 18.0;
 
+    /// <summary>Health and mana this high count as "rested enough"; see <see cref="RestIfNeeded"/>.</summary>
+    private const int RestFullPercent = 90;
+
     /// <summary>How long to wait for the client to take the body before deciding it is bones.</summary>
     private const int LootSettleMs = 1500;
 
@@ -1093,8 +1096,11 @@ internal static class GrindRunner
                 ClickAimCombat.KeyLabel(drink.KeyVk), mana));
         }
 
-        /* Sit and let it work. The loops stops at the first read that is clear of both rules,
-         * so a character that was only a little low is back to work in a second or two. */
+        /* Sit and let it work, the way a player does: eat and drink to NEARLY full, not to one
+         * point past the threshold. The first version stopped the moment the rule cleared, so a
+         * character at 34% mana drank for 6 s, reached 39%, walked off, and drank again at the
+         * next gap - five meals where one would do. RestFullPercent is the "full enough" line;
+         * RestMs is only the ceiling for a character that regens too slowly to get there. */
         int started = Environment.TickCount;
         int afterHealth = health;
         int afterMana = mana;
@@ -1104,10 +1110,8 @@ internal static class GrindRunner
             afterHealth = HealthPercent();
             afterMana = ManaPercent();
 
-            bool healthOk = !wantFood || afterHealth < 0
-                            || afterHealth > ClickAimSettings.EatBelowPercent;
-            bool manaOk = !wantDrink || afterMana < 0
-                          || afterMana > ClickAimSettings.DrinkBelowPercent;
+            bool healthOk = !wantFood || afterHealth < 0 || afterHealth >= RestFullPercent;
+            bool manaOk = !wantDrink || afterMana < 0 || afterMana >= RestFullPercent;
             if (healthOk && manaOk) break;
             if (UnderAttack()) break;
         }
