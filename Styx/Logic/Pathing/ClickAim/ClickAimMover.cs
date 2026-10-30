@@ -44,11 +44,28 @@ public sealed class ClickAimMover : IPlayerMover
     private bool _keyTried;
 
     /// <summary>
-    /// Stop the keys this close to a waypoint. A held key cannot be told to stop "a bit
-    /// past" the point, so the mover releases it on arrival and the pilot hands over the
-    /// next waypoint, which is at most <c>RouteRunner.LookAheadYd</c> away.
+    /// "At a waypoint" - see <see cref="KeyLingerMs"/>. A held key cannot be told to stop
+    /// "a bit past" the point, so there has to be a rule about when it comes up.
     /// </summary>
     private const double KeyStopYd = 1.6;
+
+    /// <summary>
+    /// How long the character may sit inside <see cref="KeyStopYd"/> before the forward
+    /// key is released.
+    ///
+    /// It used to be released IMMEDIATELY at every waypoint, which is what made the
+    /// 13:11 walk choppy: 8 mesh points meant 8 stop-starts, and the pilot had already
+    /// been handed the next point before the key came back down. Passing through a
+    /// waypoint is not arriving at one; the pilot retargets within one 50 ms tick, so a
+    /// passing character is inside this radius for less than a tick and nothing is
+    /// released. A character that has genuinely stopped at a point - a wall, a mesh point
+    /// against geometry - still lets go after this long, so the warning that a key is
+    /// held is never more than a stop away.
+    /// </summary>
+    private const int KeyLingerMs = 900;
+
+    private bool _nearPoint;
+    private int _nearSince;
 
     private const double BlockedMove = 0.5;         // a leg shorter than this = stuck
     private const double PassRadius = 6.0;          // came this close, then grew ...
@@ -353,8 +370,25 @@ public sealed class ClickAimMover : IPlayerMover
                 LastRemaining = rem;
                 if (rem <= KeyStopYd)
                 {
-                    // Arrived: the keys come up, and the pilot moves to the next waypoint.
-                    ClickAimKeySteer.Release(hwnd);
+                    /* At the point: let it keep running. MoveStop is what ends a walk -
+                     * the pilot calls it on arrival at the last point, on a block, on a
+                     * timeout and on a stall - and passing through an intermediate point
+                     * is not one of those. The linger below is the safety net: a
+                     * character that stays inside this radius without the pilot moving
+                     * on gets the key back up. */
+                    if (!_nearPoint)
+                    {
+                        _nearPoint = true;
+                        _nearSince = Environment.TickCount;
+                    }
+                    else if (unchecked(Environment.TickCount - _nearSince) >= KeyLingerMs)
+                    {
+                        ClickAimKeySteer.Release(hwnd);
+                    }
+                }
+                else
+                {
+                    _nearPoint = false;
                 }
                 return;
             }
