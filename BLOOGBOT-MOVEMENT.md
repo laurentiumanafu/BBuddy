@@ -159,6 +159,31 @@ the write, and the run says so instead of walking in circles. The map is checked
 (identity, slope 1, slope −1, a +90 deg offset, and a ×2 scale all invert exactly) and at
 attach (`KeySteer self-test`), so a failure in the field is the client, not the arithmetic.
 
+## Where it is wired in
+
+Not a side experiment any more. `ClickAimMover.MoveTowards` is the one call the pilot
+makes on every tick, so the primitive was swapped inside it:
+
+```
+RouteRunner.WalkMesh
+  └─ mover.TryEnableKeySteering(...)      calibrated once, before the first waypoint
+       └─ ClickAimKeySteer.Calibrate      two probe walks -> slope + offset, or a reason
+  └─ ClickAimPilot.WalkTo(waypoint)       unchanged
+       └─ ClickAimMover.MoveTowards       key mode: write facing, hold the key,
+                                          release within 1.6 yd of the waypoint
+```
+
+Everything above the primitive keeps working unchanged - the 12 yd look-ahead, the
+stall watchdog, the re-plan, the blackspots. If the calibration fails the mover keeps
+clicking and the log says why, so a failure costs one message, not the walk.
+
+The 1.6 yd arrival radius matters: a held key cannot be asked to stop "a bit past" a
+point, so the pilot stops the keys when it is close and the next waypoint (at most 12 yd
+away) takes over. Simulated with a 7 yd/s character and a 250 ms loop: a 0 deg heading
+error ends 1.5 yd from a 12 yd waypoint having walked 10.5 yd, and even a 20 deg error
+converges (0.9 yd, 12.2 yd walked), because every tick re-aims from where the character
+actually is rather than dead-reckoning.
+
 ## Try it
 
 ```

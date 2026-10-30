@@ -246,11 +246,73 @@ public sealed class ClickAimMover : IPlayerMover
         }
     }
 
+    /// <summary>
+    /// Switches this mover to BloogBot's primitive: write the heading, hold the forward
+    /// key (see <see cref="ClickAimKeySteer"/>). Everything else stays - the pilot still
+    /// hands it one waypoint at a time, the stall watchdog still watches, the route still
+    /// re-plans - only "how the character is made to move" changes.
+    ///
+    /// Calibration happens once, at the first waypoint, and costs two short probe walks.
+    /// If it fails the mover keeps clicking and the report says why, so a failed
+    /// calibration costs one message and not the walk.
+    /// </summary>
+    public bool TryEnableKeySteering(IntPtr hwnd, out string report)
+    {
+        report = "";
+        if (_keyMode) return true;
+        if (_keyTried)
+        {
+            report = "key steering was already tried on this mover and did not calibrate";
+            return false;
+        }
+
+        _keyTried = true;
+        if (hwnd == IntPtr.Zero) hwnd = Handle();
+        if (hwnd == IntPtr.Zero)
+        {
+            report = "no game window, so a key cannot be posted";
+            return false;
+        }
+
+        string calibrated;
+        bool ok = ClickAimKeySteer.Calibrate(hwnd, out calibrated);
+        report = calibrated;
+        _keyMode = ok;
+        return ok;
+    }
+
+    /// <summary>True when movement is by facing + forward key rather than by clicking.</summary>
+    public bool KeyMode { get { return _keyMode; } }
+
     public void MoveTowards(WoWPoint location)
     {
         lock (_gate)
         {
             _targetZ = location.Z;
+
+            if (_keyMode)
+            {
+                /* The same call the pilot makes on every tick, with the primitive swapped.
+                 * A click is a request that the client may walk 3 yd or 21 yd to honour;
+                 * a heading plus a held key is steering, so the character can be *stopped*
+                 * at the waypoint instead of overshooting it. */
+                IntPtr hwnd = Handle();
+                double rem;
+                if (!ClickAimKeySteer.Steer(location.X, location.Y, hwnd, true, out rem))
+                {
+                    Blocked = true;
+                    return;
+                }
+
+                LastRemaining = rem;
+                if (rem <= KeyStopYd)
+                {
+                    // Arrived: the keys come up, and the pilot moves to the next waypoint.
+                    ClickAimKeySteer.Release(hwnd);
+                }
+                return;
+            }
+
             Tick(location.X, location.Y, Environment.TickCount & int.MaxValue);
         }
     }
@@ -260,6 +322,8 @@ public sealed class ClickAimMover : IPlayerMover
         lock (_gate)
         {
             IntPtr hwnd = Handle();
+            // A held movement key is a runaway waiting to happen: release it first, always.
+            ClickAimKeySteer.Release(hwnd);
             if (hwnd != IntPtr.Zero) ClickAimInput.ReleaseAll(hwnd, StopKeyVk, 120);
             _phase = Phase.Idle;
             _bestRemaining = double.MaxValue;

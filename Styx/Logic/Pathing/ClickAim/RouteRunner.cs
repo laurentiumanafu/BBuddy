@@ -196,6 +196,25 @@ public static class RouteRunner
         // 90 s walk into a wall into a 40 s walk into a wall plus a way around it.
         mover.DetourBudget = 1;
 
+        /* Before the first waypoint, try the movement primitive that does not need to
+         * aim anything: write the facing, hold the forward key (BloogBot's model, see
+         * ClickAimKeySteer). If it calibrates, every leg below is steered rather than
+         * clicked and none of the pixel machinery is used. If it does not, the mover
+         * keeps clicking and the log says exactly why not. */
+        if (!mover.KeyMode)
+        {
+            string keyReport;
+            if (mover.TryEnableKeySteering(IntPtr.Zero, out keyReport))
+            {
+                Logging.Write("[Route] steering by facing + forward key, like BloogBot: " + keyReport);
+            }
+            else
+            {
+                Logging.Write("[Route] not steering by facing: " + keyReport
+                              + " - falling back to clicks for this leg");
+            }
+        }
+
         double lastPx = double.NaN;
         double lastPy = double.NaN;
 
