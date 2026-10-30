@@ -40,6 +40,16 @@ public sealed class ClickAimMover : IPlayerMover
     private const int LegArmMs = 800;               // do not accept "rest" before this
     private const int MaxLegMs = 20000;             // a click can mean ~100 yd
     private const double WanderMaxYd = 120.0;       // more than this is not a click
+    private bool _keyMode;
+    private bool _keyTried;
+
+    /// <summary>
+    /// Stop the keys this close to a waypoint. A held key cannot be told to stop "a bit
+    /// past" the point, so the mover releases it on arrival and the pilot hands over the
+    /// next waypoint, which is at most <c>RouteRunner.LookAheadYd</c> away.
+    /// </summary>
+    private const double KeyStopYd = 1.6;
+
     private const double BlockedMove = 0.5;         // a leg shorter than this = stuck
     private const double PassRadius = 6.0;          // came this close, then grew ...
     private const double PassGiveUp = 0.5;          // ... by this much = passed it

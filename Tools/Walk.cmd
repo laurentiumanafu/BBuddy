@@ -5,17 +5,38 @@ rem   Walk.cmd 20                      20 yd straight ahead
 rem   Walk.cmd 1977.5,232              world position
 rem   Walk.cmd -1977.5,-232            negative coordinates work too
 rem   Walk.cmd route:-495.3,-4221.1    plan only, print the route, do not walk
-rem   Walk.cmd calibrate               measure the click model (do this first)
 rem   Walk.cmd 20 -Seconds 120         watch longer
-rem   Walk.cmd 1977,232 -Root "F:\World of Warcraft\patch33\BBuddy-clickaim\bin\x64\Release\net10.0-windows7.0"
+rem   Walk.cmd 1977,232 -Root "F:\...\net10.0-windows7.0"
 rem
-rem The goal is handed to PowerShell in an ENVIRONMENT VARIABLE, not as an
-rem argument. PowerShell splits an unquoted argument on commas, so
-rem "route:-495.3,-4221.1" arrived as two arguments and the second one was read as
-rem a parameter named "-4221.1"; a leading minus has the same problem. An
-rem environment variable is opaque to both cmd and PowerShell's argument parser.
+rem TWO things about cmd's parser are handled here, because both have produced
+rem half-written goals in real runs:
+rem
+rem  1. A COMMA IS AN ARGUMENT SEPARATOR. "Walk.cmd -623.6,-4286.8" arrives as
+rem     %1=-623.6 and %2=-4286.8, so reading only %1 wrote "-623.6" into the request
+rem     file and the walk went to a point 4286 yards away from any map. The two halves
+rem     are rejoined below when the second one is a number.
+rem  2. PowerShell splits an unquoted argument on commas as well, and reads a leading
+rem     minus as a parameter name, so the goal is handed over in an ENVIRONMENT
+rem     VARIABLE - opaque to both parsers.
 setlocal
 if "%~1"=="" goto usage
+
+set "ARG1=%~1"
+set "ARG2=%~2"
+set "CLICKAIM_GOAL=%ARG1%"
+
+rem ---- rejoin a comma-split coordinate --------------------------------------
+if "%ARG2%"=="" goto goalready
+set "C1=%ARG2:~0,1%"
+set "C2=%ARG2:~1,1%"
+if "%C1%"=="-" goto maybe_number
+if "%C1%"=="." goto maybe_number
+echo %C1%| findstr /r "^[0-9]$" >nul || goto goalready
+:maybe_number
+if "%C1%"=="-" echo %C2%| findstr /r "^[0-9.]$" >nul || goto goalready
+set "CLICKAIM_GOAL=%ARG1%,%ARG2%"
+shift
+:goalready
 
 rem Walk.ps1 has to be found from wherever this .cmd was copied: the exe folder,
 rem the Tools folder, or the repository root.
@@ -30,7 +51,8 @@ if not defined PS1 (
     exit /b 3
 )
 
-set "CLICKAIM_GOAL=%~1"
+echo Goal: %CLICKAIM_GOAL%
+
 set "CLICKAIM_SECONDS="
 set "CLICKAIM_ROOT="
 shift
@@ -59,9 +81,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "%PS1%"
 exit /b %errorlevel%
 
 :usage
-echo usage: Walk.cmd ^<yards^|x,y^|route:x,y^|calibrate^> [-Seconds N] [-Root "exe folder"]
-echo    Walk.cmd calibrate
+echo usage: Walk.cmd ^<yards^|x,y^|route:x,y^> [-Seconds N] [-Root "exe folder"]
 echo    Walk.cmd route:-495.3,-4221.1
 echo    Walk.cmd 20
 echo    Walk.cmd 1977.5,232 -Seconds 180
+echo Quotes also work and are never needed: Walk.cmd "-623.6,-4286.8"
 exit /b 2
