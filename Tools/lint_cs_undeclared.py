@@ -115,12 +115,20 @@ def name_of(node):
     return n.text.decode("utf-8", "replace")
 
 
+def is_pointer_artefact(node):
+    """`length * t` parses as a declaration of `t`; a real one has a type, not a pointer."""
+    if node.type != "declaration_expression":
+        return False
+    t = node.child_by_field_name("type")
+    return t is not None and t.type == "pointer_type"
+
+
 def declared_names(root):
     names = set()
     for n in walk(root):
         if n.type in DECLARES:
             name = name_of(n)
-            if name:
+            if name and not is_pointer_artefact(n):
                 names.add(name)
         elif n.type == "variable_declaration":
             for c in n.children:

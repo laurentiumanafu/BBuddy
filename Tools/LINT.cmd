@@ -24,4 +24,5 @@ python Tools\lint_call_arity.py . --strict
 rem no path: the undeclared check is file-local and is scoped to ClickAim on purpose
 python Tools\lint_cs_undeclared.py
 python Tools\lint_cs_duplicate_types.py
+python Tools\lint_cs_shadowing.py
 endlocal
