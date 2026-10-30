@@ -197,12 +197,12 @@ internal static class GrindRunner
                     if (now > 0 && now != level)
                     {
                         string climbed;
-                        int next = SelectArea(areas, now, out climbed);
-                        if (next != chosen)
+                        int nextArea = SelectArea(areas, now, out climbed);
+                        if (nextArea != chosen)
                         {
                             switches++;
                             Logging.Write("[Grind] level " + level + " -> " + now + ". " + climbed);
-                            chosen = next;
+                            chosen = nextArea;
                             area = areas[chosen];
                             index = 0;
                             dead = 0;
@@ -584,6 +584,7 @@ internal static class GrindRunner
         int casts = 0;
         int lastHealth = -1;
         int idleRounds = 0;
+        bool buffed = false;
         var worked = new Dictionary<int, string>();
         List<GameLua.ActionSlot>? bar = null;
         int next = 0;
@@ -620,7 +621,19 @@ internal static class GrindRunner
                 return string.Format(CultureInfo.InvariantCulture,
                     "target is {0:F0} yd away and moving; giving up on it", d);
 
-            if (d > AttackRangeYd)
+            /* Never fire into a cast. Singular's Spell.WaitForCast is at the top of every one
+             * of its combat behaviours for this reason: a second UseAction mid-cast interrupts
+             * the first, which on a caster means never landing anything at all. */
+            if (lua.IsCasting())
+            {
+                Thread.Sleep(150);
+                continue;
+            }
+
+            /* Close only when nothing on the bar reaches from here. A Lightning Bolt answered
+             * IsActionInRange at 30 yd, so a ranged character fights at 30 yd instead of
+             * walking into melee range because AttackRangeYd is a melee constant. */
+            if (d > AttackRangeYd && (bar == null || !lua.AnySlotInRange(bar)))
             {
                 double rem;
                 ClickAimKeySteer.Steer(target.Location.X, target.Location.Y, hwnd, true, out rem);
@@ -659,6 +672,22 @@ internal static class GrindRunner
                 slot = candidate.Slot;
                 next = (at + 1) % bar.Count;
                 break;
+            }
+
+            /* One self-buff before the first cast, which is Singular's PreCombatBuffs in one
+             * line: a slot the client reports as usable but NOT range-limited is a buff or a
+             * stance, not an attack, and the routines always put those up before pulling. */
+            if (!buffed)
+            {
+                buffed = true;
+                for (int i = 0; i < bar.Count; i++)
+                {
+                    if (!bar[i].Usable || bar[i].InRange.HasValue || bar[i].Cooldown > 0.2) continue;
+                    lua.UseSlot(bar[i].Slot);
+                    _casts++;
+                    Thread.Sleep(AttackSettleMs);
+                    break;
+                }
             }
 
             if (slot < 0)
@@ -701,6 +730,7 @@ internal static class GrindRunner
                 }
                 lastHealth = health;
                 idleRounds = 0;
+                next = 0;      // priority order: the best ability first, every time
             }
 
             // Keep the cooldown picture current without re-reading icons and range.

@@ -275,11 +275,54 @@ internal sealed class GameLua : IDisposable
         return left > 0 ? left : 0;
     }
 
+    /// <summary>
+    /// Re-reads whether each slot's ability reaches the current target, from where the
+    /// character is standing now.
+    ///
+    /// <c>IsActionInRange</c> is a property of the moment, not of the slot: a Lightning Bolt
+    /// is in range at 30 yd and out of it at 40. Singular decides when to move with
+    /// <c>Movement.CreateMoveToTargetBehavior(true, 20f)</c> and lets the spell's own range
+    /// do the rest; reading this is how the same decision can be made without knowing where
+    /// a spell came from or what it is called.
+    /// </summary>
+    public bool AnySlotInRange(List<ActionSlot> bar)
+    {
+        for (int i = 0; i < bar.Count; i++)
+        {
+            ActionSlot entry = bar[i];
+            if (!entry.Usable) continue;
+            string index = entry.Slot.ToString(CultureInfo.InvariantCulture);
+            LuaValue[]? range = Call("IsActionInRange", index, 1);
+            if (range == null || range.Length == 0 || range[0].Type == LuaType.Nil) continue;
+            bool inRange = range[0].Type == LuaType.Boolean ? range[0].Boolean : range[0].Number != 0;
+            entry.InRange = inRange;
+            if (inRange) return true;
+        }
+        return false;
+    }
+
     /// <summary>Re-reads cooldowns for slots already known to be filled.</summary>
     public void RefreshCooldowns(List<ActionSlot> bar)
     {
         double now = Number("GetTime") ?? 0;
         for (int i = 0; i < bar.Count; i++) bar[i].Cooldown = Cooldown(bar[i].Slot, now);
+    }
+
+    /// <summary>
+    /// True while the player is casting or channelling.
+    ///
+    /// This is Singular's <c>Spell.WaitForCast(true)</c>, and it matters more here than it
+    /// looks: pressing a second ability in the middle of a cast interrupts the first one, so
+    /// a loop that fires every 700 ms without asking can keep a caster permanently at the
+    /// start of a cast and never land anything. <c>UnitCastingInfo</c>/<c>UnitChannelInfo</c>
+    /// return nil when idle, and have done since vanilla.
+    /// </summary>
+    public bool IsCasting()
+    {
+        LuaValue[]? cast = Call("UnitCastingInfo", "player", 2);
+        if (cast != null && cast.Length > 0 && cast[0].Type != LuaType.Nil) return true;
+        LuaValue[]? channel = Call("UnitChannelInfo", "player", 2);
+        return channel != null && channel.Length > 0 && channel[0].Type != LuaType.Nil;
     }
 
     /// <summary>Fires an action-bar slot. This is the bot's attack.</summary>

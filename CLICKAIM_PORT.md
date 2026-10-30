@@ -248,11 +248,23 @@ so once and stops pressing, rather than attacking the void for ten minutes:
 > no key on the action bar removed health (health read 100). The keyboard can walk on
 > this client but it cannot attack - combat needs the routine, or a working Lua call
 
-The routines that were meant to define the rotation could not be read from this
-environment (Google Drive is not reachable from the sandbox), so the rotation here is
-derived from the action bar instead of from a spell list. If a routine turns up, the
-seam is `GameLua.CastSpell(name)` plus a spell order per class - the transport already
-works.
+The routines are **Singular (WotLK)**, read out of the user's Routines.zip. Their shape is a
+`PrioritySelector` of `Spell.Cast(name, on => target, ret => condition)`: never act while a
+cast is running (`Spell.WaitForCast(true)`), put self-buffs up before pulling
+(`PreCombatBuffs`), pull from the spell's own range and let
+`Movement.CreateMoveToTargetBehavior(true, 20f)` decide when to step in, and heal off
+`Me.HealthPercent`. Four of those port to an action bar whose abilities have no names:
+
+| Singular | here |
+| --- | --- |
+| `Spell.WaitForCast(true)` | `UnitCastingInfo`/`UnitChannelInfo` before every cast - a second `UseAction` mid-cast interrupts the first |
+| `Movement.CreateMoveToTargetBehavior(true, 20f)` | close only when `IsActionInRange` is false for every usable slot, so a ranged character fights at 30 yd instead of walking into melee's 4 |
+| `PreCombatBuffs` | one slot the client calls usable but NOT range-limited (a buff or a stance) before the first cast |
+| priority order | back to the top of the bar after every hit that lands, instead of round-robin |
+
+Not ported, because they need a spellbook and this build does not expose one: heals by
+health percentage, interrupts, and anything that has to know a spell's name, school or
+cooldown rather than a slot's. `GameLua.CastSpell(name)` is there for the day that changes.
 
 **Which area, though.** A levelling profile is a ladder - the 19-SubProfile
 `Horde12-60_cloth` file is one - so the area is not simply the nearest one. The loop asks
