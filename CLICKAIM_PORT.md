@@ -205,14 +205,53 @@ Each tick the loop does one of two things:
 2. Otherwise **walk to the next hotspot** in the ring, one leg at a time, through the
    same mesh route the walking tests use.
 
-Attacking is action-bar keys (`1`-`5`, `T`, `F`), and **a key is believed only when the
-selected target's health actually drops** - the one per-unit number the reader samples.
-The loop learns which keys work and logs it (`key '2' does damage: health 100 -> 87`); if
-none of them removes health it says so once and stops pressing, because the keyboard can
-walk on this client and may not be able to attack:
+Attacking has two modes, and the bot picks whichever it can reach.
+
+**Lua first.** `GameLua` attaches the resident x64 bridge
+(`GreenMagic/LuaBridge64.cs`) to `wowb.exe` when the grind starts, and asks the client
+itself what the character can do:
+
+```
+[Grind] Lua: pid 4321, payload resident (641 bytes), execution ServerThread
+[Grind]   UnitName('player') -> "Grunt"
+[Grind]   UnitLevel('player') -> 14
+[Grind]   HasAction(1) -> true
+[Grind] action bar (3 slot(s)):
+[Grind]   slot 1 [Spell_Shadow_ShadowBolt] usable=yes range=yes cd=0.0s
+```
+
+That bar is the first honest answer this bot has ever had to "which skills does this
+character have". A slot is fired only when the client's own `IsUsableAction`,
+`IsActionInRange` and `GetActionCooldown` all say yes - mana, reagents, range and
+cooldown are the client's judgement, not ours - through `UseAction(slot)`. Which of them
+actually hurt something is still decided by watching health, so a slot is only remembered
+once it has taken health off a target. `--lua-probe` does all of this once and stops,
+without walking, if the user wants the surface of the build without a fight:
+
+```
+BBuddy.exe --lua-probe
+```
+
+What the bridge cannot do, and therefore what is still not solved: **two-argument calls
+and expressions**. The payload runs exactly `pcall(globals[name], "one string")`, so
+`UnitReaction("target","player")`, `CastSpell(slot, book)` and every `C_` namespace are
+out of reach; hostility stays with the client's own TAB selection. Numbers get in only
+because Lua coerces `"3"` for a C function asking for a number.
+
+**Keys as the fallback.** If the bridge cannot attach (four gates: process, Lua canary,
+trampoline shape, Lua thread) the loop presses `1`-`5`, `T`, `F` and believes a key only
+when the selected target's health actually drops. The loop learns which keys work and
+logs it (`key '2' does damage: health 100 -> 87`); if none of them removes health it says
+so once and stops pressing, rather than attacking the void for ten minutes:
 
 > no key on the action bar removed health (health read 100). The keyboard can walk on
 > this client but it cannot attack - combat needs the routine, or a working Lua call
+
+The routines that were meant to define the rotation could not be read from this
+environment (Google Drive is not reachable from the sandbox), so the rotation here is
+derived from the action bar instead of from a spell list. If a routine turns up, the
+seam is `GameLua.CastSpell(name)` plus a spell order per class - the transport already
+works.
 
 Known gaps, stated rather than hidden: **combat is only checked between hotspots**, not
 mid-leg (`WalkTo` has no interrupt hook yet), so an add that aggros during a long leg is

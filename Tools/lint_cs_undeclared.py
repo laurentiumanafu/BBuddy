@@ -1,46 +1,47 @@
 #!/usr/bin/env python3
-"""Report a member that is CALLED but never DECLARED anywhere.
+"""Report a call to something that is called WITHOUT an object and declared NOWHERE.
 
-Written after ClickAimKeySteer lost `StopAndRest` in a rewrite: the method was still
-called on the calibration path and its body was gone, which is
+Every build break reported from the user's machine in this port has been one of two
+things, and both are invisible to a parser:
 
-    error CS0103: The name 'StopAndRest' does not exist in the current context
+    CS0103  'RestMs' does not exist in the current context
+    CS0103  'AimGaveUp' does not exist in the current context
 
-and which no other lint here could see. The constants lint only judges names that are
-constants somewhere; the arity lint only indexes names that exist; the fields lint only
-looks at `_underscore` names. A deleted public method falls between all three.
+Both were a name written into a method body that no class ever declared - code that reads
+perfectly, parses perfectly, and cannot compile. A parse check passes it, and the other
+lints here only compare against what IS declared, so a name that was never declared has
+nothing to fail against.
 
-The same hole exists for a name that is *assigned* rather than called: `AimGaveUp = true;`
-in ClickAimMover was CS0103 for the same reason (`AimGaveUp` was never declared), and it
-was found by the user's compiler, not by this tool. So unqualified assignments and
-increments are judged too, and the flag is cleared again once the fix is in.
+So: index every declared member name in the repository, then check every bare call
+(`Foo(...)` with no receiver). A bare call must resolve to something - the enclosing
+type, any type in the repository, a local, a parameter - and when it resolves to nothing
+at all, it is either a mistake in this repository or an unqualified call into a namespace
+nobody here declares. Both are worth a look before the user's compiler finds them.
 
-Reads are NOT judged, deliberately. Every identifier in an expression would have to be
-cleared, and without a type system the only honest clearance is "declared in this
-repository" - which fails on every external TYPE used normally: `StringBuilder`,
-`Thickness`, `Exception`, `VerticalAlignment`. Measured on this repository that is 8408
-findings, all noise. Judging calls and assignment targets is the part that can be decided
-without a type system, and it has now caught both real CS0103 bugs it was built for.
+Deliberately one-directional. It does not check receivers (`x.Foo()`), because it has no
+type system and would be guessing; it does not check fields against types. It answers one
+question honestly: is this name declared anywhere at all?
 
-How it judges, and why the false-positive rate is low: in C# almost every unqualified
-call is a member of the same type or a local/parameter - BCL statics are written
-`Math.Round`, `String.Format`, always qualified. So this collects unqualified calls only
-(`Foo(...)`, not `x.Foo(...)`) and clears a name when it is
+The rule has to be FILE-local, and the first draft got this wrong: a bare call is
+resolved against the enclosing type (and its base classes), never against a sibling type
+in the same namespace. So the index is built per file. Indexing the whole repository, the
+first version declared `RestMs` "declared" because `ClickAimMover` has a method of that
+name - and the real bug it was written for was exactly that call living in
+`ClickAimKeySteer`, where it does not exist.
 
-  * declared in the enclosing type (walking out through nesting),
-  * declared as a local function, local variable or parameter in the same file,
-  * declared as a member of ANY type in the repository (less precise than real scoping,
-    deliberately: a false negative costs nothing, a false positive costs trust),
-  * a type declared in the repository, or
-  * in VALUES/ALLOW below, or a C# keyword.
+Scope is the tree under work, for one more reason: a bare call can also be a legitimate
+implicit-`this` call into a base class that is not in this repository (`InitializeComponent`
+on a WPF window, `SuspendLayout` on a Form, `ContainsKey` on a Dictionary), and no
+receiver-less check can tell those from a mistake. In ClickAim that noise does not arise -
+those classes are static and call helpers with explicit receivers - so a bare name that is
+not declared in the file is a real CS0103 waiting for the user's compiler. `--all` runs
+the whole repository and is for reading, not for a gate.
 
 Usage:
-    python3 Tools/lint_cs_undeclared.py [path ...]
+    python3 Tools/lint_cs_undeclared.py [path ...]    (default: ClickAim and UI)
+    python3 Tools/lint_cs_undeclared.py --all         (whole repository; expect base-class noise)
 
-With no path it scans Styx/Logic/Pathing/ClickAim - the same narrow default as the
-constants lint, because that is the tree that changes every hour. Pass "." for the repo.
-Requires tree_sitter + tree_sitter_c_sharp; if they are missing it says so and exits 0
-so that LINT.cmd stays usable without them.
+Exit code 1 when anything is reported.
 """
 
 import os
@@ -53,34 +54,41 @@ except ImportError:
     print("lint_cs_undeclared: skipped - pip install tree_sitter tree_sitter_c_sharp")
     sys.exit(0)
 
-DEFAULT_ROOT = os.path.join("Styx", "Logic", "Pathing", "ClickAim")
+PARSER = Parser(Language(tree_sitter_c_sharp.language()))
 
-TYPES = {
-    "class_declaration", "struct_declaration", "interface_declaration",
-    "record_declaration", "enum_declaration",
-}
-# Nodes whose `name` field declares a member.
+SKIP_DIRS = {".git", "obj", "bin", "node_modules", "packages", ".vs"}
+
+# Members that declare a name usable without a receiver inside the same file.
 MEMBER_NODES = {
-    "method_declaration", "constructor_declaration", "property_declaration",
-    "field_declaration", "event_declaration", "delegate_declaration",
+    "method_declaration",
+    "local_function_statement",
+    "declaration_expression",      # out var x / is var x
+    "property_declaration",
+    "event_declaration",
+    "constructor_declaration",
+    "destructor_declaration",
+    "operator_declaration",
+    "conversion_operator_declaration",
+    "enum_member_declaration",
+    "variable_declarator",
+    "parameter",
+    "type_parameter",
+    "class_declaration",
+    "struct_declaration",
+    "interface_declaration",
+    "record_declaration",
+    "enum_declaration",
+    "delegate_declaration",
 }
-LOCAL_NODES = {"local_function_statement", "variable_declarator", "parameter",
-               "enum_member_declaration", "property_pattern_clause",
-               # `out var factory` and `is Foo f` - both declare a name
-               "declaration_expression", "declaration_pattern"}
 
-# Unqualified calls that are not members of the type and not in this repository.
-ALLOW = {
-    # C# operators and contextual keywords that parse as identifiers
-    "nameof", "typeof", "sizeof", "default", "checked", "unchecked", "await",
-    # namespace-level BCL statics people do call unqualified via `using static`
-    "Write", "WriteLine", "Sleep", "Max", "Min", "Abs", "Round", "Floor", "Ceiling",
-    "Sqrt", "Pow", "Atan2", "Cos", "Sin", "Tan", "Log", "Exp", "Truncate", "Sign",
-    # inherited from System.Object, so never declared here
-    "ReferenceEquals", "GetType", "Equals", "ToString", "GetHashCode", "MemberwiseClone",
+# Names that are not declared here and are not mistakes: C# aliases and the handful of
+# unqualified statics that are imported rather than written.
+ALLOWED = {
+    "nameof", "typeof", "sizeof", "default", "checked", "unchecked", "base", "this",
+    "value", "add", "remove", "get", "set", "init",
+    # object's own members, callable with no receiver and declared by no file here
+    "ReferenceEquals", "GetType", "ToString", "Equals", "GetHashCode", "MemberwiseClone",
 }
-
-CLASS_FIELDS = {"name", "type"}
 
 
 def walk(node):
@@ -91,6 +99,17 @@ def walk(node):
         stack.extend(reversed(n.children))
 
 
+def cs_files(root):
+    if os.path.isfile(root):
+        yield root
+        return
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+        for f in filenames:
+            if f.endswith(".cs"):
+                yield os.path.join(dirpath, f)
+
+
 def name_of(node):
     n = node.child_by_field_name("name")
     if n is None:
@@ -98,111 +117,26 @@ def name_of(node):
     return n.text.decode("utf-8", "replace")
 
 
-def declared_in_type(type_node):
-    """Member names declared directly in a type (not in nested types)."""
-    out = set()
-    names = set()
-    for child in walk(type_node):
-        if child is not type_node and child.type in TYPES:
-            names.add(child.id)     # do not descend into nested types' bodies
-        if child.type in MEMBER_NODES or child.type in LOCAL_NODES and child.type == "enum_member_declaration":
-            n = name_of(child)
-            if n:
-                out.add(n)
-            if child.type == "field_declaration":
-                for d in walk(child):
-                    if d.type == "variable_declarator" and d.parent is not None:
-                        v = name_of(d)
-                        if v:
-                            out.add(v)
-        if child.type == "method_declaration":
-            # a method declares itself, and its type parameters are names too
-            tp = child.child_by_field_name("type_parameters")
-            if tp is not None:
-                for t in walk(tp):
-                    if t.type == "type_parameter":
-                        tn = name_of(t)
-                        if tn:
-                            out.add(tn)
-    # drop names declared only inside nested types
-    return out
-
-
-def file_declarations(root):
-    """Every name declared anywhere in this file, for the local-scope clearance."""
+def declared_names(root):
+    """Every name this file declares, usable unqualified inside it."""
     out = set()
     for n in walk(root):
-        if n.type in MEMBER_NODES or n.type in LOCAL_NODES:
-            v = name_of(n)
-            if v:
-                out.add(v)
-            if n.type == "field_declaration":
-                for d in walk(n):
-                    if d.type == "variable_declarator":
-                        v = name_of(d)
-                        if v:
-                            out.add(v)
+        if n.type in MEMBER_NODES:
+            name = name_of(n)
+            if name:
+                out.add(name)
+        elif n.type == "variable_declaration":
+            # int a, b, c;  - the declarators are separate nodes but be explicit
+            for c in n.children:
+                if c.type == "variable_declarator":
+                    name = name_of(c)
+                    if name:
+                        out.add(name)
     return out
 
 
-def repo_member_index(files):
-    """Every member name declared in ANY of `files`, plus every type name."""
-    names = set()
-    for path in files:
-        try:
-            src = open(path, "rb").read()
-        except OSError:
-            continue
-        root = PARSER.parse(src).root_node
-        for n in walk(root):
-            if n.type in MEMBER_NODES or n.type in TYPES or n.type in LOCAL_NODES:
-                v = name_of(n)
-                if v:
-                    names.add(v)
-            if n.type == "field_declaration":
-                for d in walk(n):
-                    if d.type == "variable_declarator":
-                        v = name_of(d)
-                        if v:
-                            names.add(v)
-    return names
-
-
-def base_is_external(type_node, repo):
-    """True when the type inherits from something this repository does not declare.
-
-    A derived type can call any inherited member unqualified - `SetValue` inside a
-    Control, `ContainsKey` inside a Dictionary - and no static index can know the
-    surface of a BCL base without a full type system. Rather than guess, such a type is
-    not judged. The classes that matter here (`internal static class ...`) have no base
-    list at all, so they are always judged.
-    """
-    for child in type_node.children:
-        if child.type != "base_list":
-            continue
-        for b in child.children:
-            if b.type == "identifier":
-                if b.text.decode("utf-8", "replace") not in repo:
-                    return True
-            elif b.type in {"generic_name", "qualified_name"}:
-                head = next((c for c in walk(b) if c.type == "identifier"), None)
-                if head is None or head.text.decode("utf-8", "replace") not in repo:
-                    return True
-        return False
-    return False
-
-
-def enclosing_type(node):
-    n = node.parent
-    while n is not None:
-        if n.type in TYPES:
-            return n
-        n = n.parent
-    return None
-
-
-def calls_in(root, opaque_ids):
-    """Unqualified calls: (line, col, name, in_opaque_type)."""
+def bare_calls(root):
+    """(line, name) for every call written without a receiver."""
     out = []
     for n in walk(root):
         if n.type != "invocation_expression":
@@ -210,109 +144,59 @@ def calls_in(root, opaque_ids):
         fn = n.child_by_field_name("function")
         if fn is None:
             continue
-        name = None
         if fn.type == "identifier":
-            name = fn.text.decode("utf-8", "replace")
+            out.append((n.start_point[0] + 1, fn.text.decode("utf-8", "replace")))
         elif fn.type == "generic_name":
-            ident = next((c for c in fn.children if c.type == "identifier"), None)
+            ident = fn.child_by_field_name("name")
             if ident is not None:
-                name = ident.text.decode("utf-8", "replace")
-        if name is None:
-            continue
-        t = enclosing_type(n)
-        out.append((n.start_point[0] + 1, n.start_point[1], name,
-                    t is not None and t.id in opaque_ids))
+                out.append((n.start_point[0] + 1, ident.text.decode("utf-8", "replace")))
     return out
 
 
-def assignments_in(root, opaque_ids):
-    """Unqualified assignment / increment targets: (line, col, name, in_opaque_type)."""
-    out = []
-    for n in walk(root):
-        target = None
-        if n.type == "assignment_expression":
-            target = n.child_by_field_name("left")
-            # `new Foo { Bar = 1 }` and `x with { Bar = 1 }` name the CONSTRUCTED type's
-            # members, not a name in this scope.
-            parent = n.parent
-            inside_initializer = False
-            while parent is not None:
-                if parent.type in {"initializer_expression", "with_expression"}:
-                    inside_initializer = True
-                    break
-                parent = parent.parent
-            if inside_initializer:
-                continue
-        elif n.type in {"postfix_unary_expression", "prefix_unary_expression"}:
-            op = next((c for c in n.children if c.type in {"++", "--"}), None)
-            if op is None:
-                continue
-            target = next((c for c in n.children if c.type == "identifier"), None)
-        if target is None or target.type != "identifier":
-            continue
-        t = enclosing_type(n)
-        out.append((n.start_point[0] + 1, n.start_point[1],
-                    target.text.decode("utf-8", "replace"),
-                    t is not None and t.id in opaque_ids))
-    return out
+DEFAULT_ROOTS = [os.path.join("Styx", "Logic", "Pathing", "ClickAim")]
 
 
-def cs_files(roots):
-    for r in roots:
-        if os.path.isfile(r):
-            yield r
-            continue
-        for dirpath, dirnames, filenames in os.walk(r):
-            dirnames[:] = [d for d in dirnames
-                           if d not in {".git", "obj", "bin", "node_modules", "packages"}]
-            for f in filenames:
-                if f.endswith(".cs"):
-                    yield os.path.join(dirpath, f)
-
-
-PARSER = Parser(Language(tree_sitter_c_sharp.language()))
+def other_file(name, per_file, exclude):
+    for path, _root, names, _calls in per_file:
+        if path != exclude and name in names:
+            return path
+    return "another file"
 
 
 def main(argv):
-    roots = argv[1:] or [DEFAULT_ROOT]
-    scan = sorted(cs_files(roots))
-    if not scan:
-        print("lint_cs_undeclared: nothing to scan in " + " ".join(roots))
-        return 0
+    args = argv[1:]
+    report_all = "--all" in args
+    roots = [a for a in args if not a.startswith("--")] or (["."] if report_all else DEFAULT_ROOTS)
+    files = []
+    for r in roots:
+        files.extend(sorted(cs_files(r)))
 
-    # Index the WHOLE repository for declarations, scan only `roots`. A name that exists
-    # in another class is still CS0103 when reached unqualified - but that is the
-    # constants lint's job (it checks exclusivity); here the cheap clearance is enough.
-    everything = sorted(cs_files(["."]))
-    repo = repo_member_index(everything)
-
-    findings = 0
-    for path in scan:
+    repo_names = set()
+    per_file = []
+    for path in files:
         try:
             src = open(path, "rb").read()
         except OSError:
             continue
         root = PARSER.parse(src).root_node
-        local = file_declarations(root)
-        opaque = {n.id for n in walk(root) if n.type in TYPES and base_is_external(n, repo)}
-        for line, _col, name, in_opaque in calls_in(root, opaque):
-            if name in local or name in repo or name in ALLOW:
-                continue
-            # A call inside a type with an external base may be an inherited member.
-            if in_opaque:
-                continue
-            print("{0}:{1}: '{2}' is called here but no type in this repository declares "
-                  "it (CS0103 unless it is a using-static or a local)".format(path, line, name))
-            findings += 1
+        names = declared_names(root)
+        repo_names |= names
+        per_file.append((path, root, names, bare_calls(root)))
 
-        for line, _col, name, in_opaque in assignments_in(root, opaque):
-            if name in local or name in repo or name in ALLOW or in_opaque:
+    findings = 0
+    for path, _root, local_names, calls in per_file:
+        for line, name in calls:
+            if name in local_names or name in ALLOWED:
                 continue
-            print("{0}:{1}: '{2}' is assigned here but no type in this repository declares "
-                  "it (CS0103)".format(path, line, name))
             findings += 1
+            where = (" - the name exists in " + other_file(name, per_file, path) + ", which an "
+                     "unqualified call cannot reach") if name in repo_names else ""
+            print("%s:%d: '%s(...)' - called without a receiver and not declared in this file%s"
+                  % (path, line, name, where))
 
-    print("{0} file(s) scanned, {1} finding(s).".format(len(scan), findings))
+    print("%d file(s) scanned (%s), %d undeclared call(s), %d member name(s) indexed."
+          % (len(files), "whole repository" if report_all else ", ".join(roots),
+             findings, len(repo_names)))
     return 1 if findings else 0
 
 

@@ -877,6 +877,43 @@ public static class ClickAimDiagnostics
         }
     }
 
+    /// <summary>
+    /// <c>--lua-probe</c>: what the client's Lua answers to on this build, and what is on
+    /// the action bar. One shot, read-mostly, no walking. Every line is a real call whose
+    /// result is printed, so a missing global shows up as its own error rather than being
+    /// assumed to work.
+    /// </summary>
+    private static void LuaProbe()
+    {
+        string report;
+        GameLua? lua = GameLua.TryOpen(180, out report);
+        if (lua == null)
+        {
+            Logging.Write("[Lua] " + report);
+            return;
+        }
+
+        try
+        {
+            Logging.Write("[Lua] " + report);
+            foreach (string line in lua.Probe()) Logging.Write("[Lua]   " + line);
+
+            List<GameLua.ActionSlot> bar = lua.ReadActionBar();
+            Logging.Write("[Lua] action bar: " + bar.Count + " slot(s) filled");
+            foreach (GameLua.ActionSlot slot in bar) Logging.Write("[Lua]   " + slot);
+            if (lua.Error != null) Logging.Write("[Lua] last error: " + lua.Error);
+            Logging.Write("[Lua] " + lua.Calls + " call(s) answered by the client's Lua");
+        }
+        catch (Exception ex)
+        {
+            Logging.Write("[Lua] probe threw: " + ex.Message);
+        }
+        finally
+        {
+            lua.Dispose();
+        }
+    }
+
     /// <summary>Every number in a string, separators and spaces ignored.</summary>
     private static double[] ParseNumbers(string text)
     {
@@ -998,6 +1035,18 @@ public static class ClickAimDiagnostics
                 else if (arg.StartsWith("--grind=", StringComparison.OrdinalIgnoreCase))
                 {
                     GrindRunner.Start(arg.Substring("--grind=".Length), grindMinutes);
+                    continue;
+                }
+                else if (arg.Equals("--lua-probe", StringComparison.OrdinalIgnoreCase))
+                {
+                    /* Ask the client's Lua what it answers to, without grinding and without
+                     * walking: attach, call the handful of globals a rotation needs, print the
+                     * action bar, release. On its own thread because attaching finds a gadget
+                     * and samples threads before the first call. */
+                    var lt = new Thread(LuaProbe);
+                    lt.IsBackground = true;
+                    lt.Name = "LuaProbe";
+                    lt.Start();
                     continue;
                 }
                 else if (arg.Equals("--clickstop", StringComparison.OrdinalIgnoreCase))

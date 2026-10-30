@@ -73,6 +73,9 @@ internal static class GrindRunner
     private static volatile bool _stop;
     private static bool _running;
     private static int _presses;    // action-bar presses this session, for the summary
+    private static int _casts;      // Lua UseAction() calls this session, for the summary
+    private static GameLua? _lua;   // the client's own Lua, when the bridge came up
+    private static bool _barLogged;
 
     /// <summary>Set by the "stop" request. The loop ends after the current tick.</summary>
     public static void Stop()
@@ -151,6 +154,32 @@ internal static class GrindRunner
         int dead = 0;
         int kills = 0, fights = 0, hotspots = 0;
         _presses = 0;
+        _casts = 0;
+        _barLogged = false;
+
+        /* Combat runs on the client's own Lua when it can be reached at all: the action bar
+         * ignores key messages on this build, so UseAction(slot) is the only way to make a
+         * spell happen that does not depend on guessing a key mapping. Failure here is not
+         * fatal - the keyboard path is still there and still honest about doing nothing. */
+        try
+        {
+            int serveSeconds = minutes <= 0 ? 7200 : minutes * 60 + 300;
+            string report;
+            _lua = GameLua.TryOpen(serveSeconds, out report);
+            if (_lua == null)
+                Logging.Write("[Grind] Lua: " + report + " - fighting with the keyboard only, which "
+                              + "has not been shown to attack on this build");
+            else
+            {
+                Logging.Write("[Grind] Lua: " + report);
+                foreach (string line in _lua.Probe()) Logging.Write("[Grind]   " + line);
+            }
+        }
+        catch (Exception ex)
+        {
+            _lua = null;
+            Logging.Write("[Grind] Lua setup threw: " + ex.Message + " - keyboard only");
+        }
 
         try
         {
@@ -206,13 +235,20 @@ internal static class GrindRunner
         finally
         {
             try { mover.MoveStop(); } catch { }
+            if (_lua != null)
+            {
+                int calls = _lua.Calls;
+                try { _lua.Dispose(); } catch { }
+                _lua = null;
+                Logging.Write("[Grind] Lua: " + calls + " call(s) answered, payload released");
+            }
             _running = false;
         }
 
         Logging.Write(string.Format(CultureInfo.InvariantCulture,
             "[Grind] done: {0} hotspot(s) reached, {1} fight(s), {2} kill(s) confirmed, "
-            + "{3} action-bar key press(es), {4:F0} s", hotspots, fights, kills, _presses,
-            (Environment.TickCount - started) / 1000.0));
+            + "{3} action-bar key press(es), {4} Lua action(s), {5:F0} s", hotspots, fights, kills,
+            _presses, _casts, (Environment.TickCount - started) / 1000.0));
     }
 
     /// <summary>
@@ -244,6 +280,16 @@ internal static class GrindRunner
          * friendlies for us. */
         WowBObservedUnit target = default(WowBObservedUnit);
         bool have = false;
+
+        /* The same selection TAB makes, asked for directly. Worth trying first even though
+         * the keys are known to reach the client for movement: a Lua target costs one call
+         * and cannot be eaten by window focus. */
+        if (_lua != null && _lua.Live && _lua.TargetNearestEnemy())
+        {
+            Thread.Sleep(TabSettleMs);
+            if (Capture(out snap) && snap != null && snap.TryGetSelectedTarget(out target)) have = true;
+        }
+
         for (int i = 0; i < TabTries && !have; i++)
         {
             ClickAimInput.TapKey(hwnd, TabVk, 40);
@@ -275,7 +321,7 @@ internal static class GrindRunner
             return false;
         }
 
-        report = Fight(hwnd, px, py);
+        report = _lua != null && _lua.Live ? FightWithActions(hwnd, _lua, px, py) : Fight(hwnd, px, py);
         return true;
     }
 
@@ -393,6 +439,182 @@ internal static class GrindRunner
 
         ClickAimKeySteer.Release(hwnd);
         return "gave up on the target after " + presses + " presses";
+    }
+
+    /// <summary>
+    /// The same fight as <see cref="Fight"/>, but the abilities come from the client's
+    /// action bar instead of from a list of guessed keys.
+    ///
+    /// The bar is read once per session and logged, because it is the first honest answer to
+    /// "what skills does this character have" that this bot has ever been able to get: slot,
+    /// icon, whether the client thinks it is usable, whether the target is in range, and how
+    /// long its cooldown has left. A slot is fired only when the client itself says all three
+    /// of those are good - so mana, reagents, range and cooldown are the client's judgement,
+    /// not ours. Which of them actually hurt something is still decided by watching the
+    /// target's health, exactly as with the keys.
+    /// </summary>
+    private static string FightWithActions(IntPtr hwnd, GameLua lua, double px, double py)
+    {
+        int started = Environment.TickCount;
+        int casts = 0;
+        int lastHealth = -1;
+        int idleRounds = 0;
+        var worked = new Dictionary<int, string>();
+        List<GameLua.ActionSlot>? bar = null;
+        int next = 0;
+
+        WowBWorldSnapshot? snap;
+        WowBObservedUnit target;
+        if (!Capture(out snap) || snap == null || !snap.TryGetSelectedTarget(out target))
+            return "engaged, then lost the target immediately";
+
+        lastHealth = Health(target);
+        Logging.Write(string.Format(CultureInfo.InvariantCulture,
+            "[Grind] engaged at {0:F1} yd (health {1}); fighting with the action bar",
+            ClickAimMath.Len(target.Location.X - px, target.Location.Y - py),
+            lastHealth >= 0 ? lastHealth.ToString(CultureInfo.InvariantCulture) : "unknown"));
+
+        while (!_stop && unchecked(Environment.TickCount - started) < EngageTimeoutMs)
+        {
+            if (!Capture(out snap) || snap == null) break;
+            if (!snap.TryGetSelectedTarget(out target))
+                return "target gone (dead, despawned or out of range) after "
+                       + ((Environment.TickCount - started) / 1000).ToString(CultureInfo.InvariantCulture) + " s";
+
+            if (target.HasPlayerVtable)
+                return "the target turned out to be a player - disengaged";
+
+            int health = Health(target);
+            if (health >= 0 && lastHealth > 0 && health == 0)
+                return "killed" + (worked.Count == 0 ? "" : " with " + Describe(worked));
+
+            if (!snap.TryGetLocalPlayer(out WowBObservedUnit me)) break;
+            double d = ClickAimMath.Len(target.Location.X - me.Location.X, target.Location.Y - me.Location.Y);
+
+            if (d > ChaseYd)
+                return string.Format(CultureInfo.InvariantCulture,
+                    "target is {0:F0} yd away and moving; giving up on it", d);
+
+            if (d > AttackRangeYd)
+            {
+                double rem;
+                ClickAimKeySteer.Steer(target.Location.X, target.Location.Y, hwnd, true, out rem);
+                Thread.Sleep(90);
+                continue;
+            }
+
+            double remaining;
+            ClickAimKeySteer.Steer(target.Location.X, target.Location.Y, hwnd, false, out remaining);
+
+            /* Read the bar on the first in-range tick: IsUsableAction and IsActionInRange
+             * are only meaningful once the target is selected and close. */
+            if (bar == null || !_barLogged)
+            {
+                List<GameLua.ActionSlot> read = lua.ReadActionBar();
+                if (read.Count == 0)
+                {
+                    string why = lua.Error ?? "every slot reported empty";
+                    return "the action bar reads empty (" + why + ") - nothing to cast";
+                }
+                LogBar(read);
+                bar = read;
+                _barLogged = true;
+            }
+
+            // Refresh the state of the slots that could be next; the bar itself rarely changes.
+            int slot = -1;
+            for (int i = 0; i < bar.Count; i++)
+            {
+                int at = (next + i) % bar.Count;
+                GameLua.ActionSlot candidate = bar[at];
+                if (!candidate.Usable) continue;
+                if (candidate.InRange == false) continue;
+                if (candidate.Cooldown > 0.2) continue;
+                slot = candidate.Slot;
+                next = (at + 1) % bar.Count;
+                break;
+            }
+
+            if (slot < 0)
+            {
+                /* Everything is on cooldown or out of range. That is a legitimate state for
+                 * a second or two; ten seconds of it means the bar cannot reach this mob. */
+                if (++idleRounds >= 20)
+                    return "no usable ability for the selected target after "
+                           + ((Environment.TickCount - started) / 1000).ToString(CultureInfo.InvariantCulture)
+                           + " s - the bar has " + bar.Count + " slot(s): " + Describe(bar);
+                Thread.Sleep(400);
+                continue;
+            }
+
+            if (!lua.UseSlot(slot))
+            {
+                /* The call itself failed: report the client's own words once and stop, rather
+                 * than firing into an error a hundred times. */
+                return "UseAction(" + slot + ") failed: " + (lua.Error ?? "no reason given");
+            }
+
+            casts++;
+            _casts++;
+            Thread.Sleep(AttackSettleMs);
+
+            if (!Capture(out snap) || snap == null || !snap.TryGetSelectedTarget(out target))
+                return "target gone while casting after "
+                       + ((Environment.TickCount - started) / 1000).ToString(CultureInfo.InvariantCulture) + " s";
+
+            health = Health(target);
+            if (health >= 0 && lastHealth >= 0 && health < lastHealth)
+            {
+                string name = IconOf(bar, slot);
+                if (!worked.ContainsKey(slot))
+                {
+                    worked[slot] = name;
+                    Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                        "[Grind] slot {0} [{1}] does damage: health {2} -> {3}. Remembering it",
+                        slot, name, lastHealth, health));
+                }
+                lastHealth = health;
+                idleRounds = 0;
+            }
+
+            // Keep the cooldown picture current without re-reading icons and range.
+            lua.RefreshCooldowns(bar);
+        }
+
+        ClickAimKeySteer.Release(hwnd);
+        return "gave up on the target after " + casts + " action(s)"
+               + (worked.Count == 0 ? " and no damage at all - the bar answered, but nothing hurt it"
+                                       + (lua.Error == null ? "" : " (last error: " + lua.Error + ")")
+                                    : " using " + Describe(worked));
+    }
+
+    private static void LogBar(List<GameLua.ActionSlot> bar)
+    {
+        Logging.Write("[Grind] action bar (" + bar.Count + " slot(s)):");
+        for (int i = 0; i < bar.Count; i++)
+            Logging.Write("[Grind]   " + bar[i]);
+    }
+
+    private static string IconOf(List<GameLua.ActionSlot> bar, int slot)
+    {
+        for (int i = 0; i < bar.Count; i++)
+            if (bar[i].Slot == slot) return System.IO.Path.GetFileNameWithoutExtension(bar[i].Icon);
+        return "?";
+    }
+
+    private static string Describe(Dictionary<int, string> worked)
+    {
+        var parts = new List<string>();
+        foreach (KeyValuePair<int, string> pair in worked)
+            parts.Add("slot " + pair.Key.ToString(CultureInfo.InvariantCulture) + " [" + pair.Value + "]");
+        return string.Join(", ", parts.ToArray());
+    }
+
+    private static string Describe(List<GameLua.ActionSlot> bar)
+    {
+        var parts = new List<string>();
+        for (int i = 0; i < bar.Count; i++) parts.Add(bar[i].ToString());
+        return string.Join("; ", parts.ToArray());
     }
 
     /// <summary>The selected target's health, or -1 when the reader has no candidate.</summary>
