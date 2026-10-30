@@ -27,8 +27,8 @@ namespace Styx.Logic.Pathing;
 /// It also cannot call anything with two arguments, or an expression: the payload does
 /// <c>pcall(globals[name], "arg")</c> and nothing else. That rules out
 /// <c>UnitReaction("target","player")</c> and every <c>C_</c> namespace, and is why
-/// targeting stays with the client: <c>TargetNearestEnemy()</c> when Lua answers, the TAB
-/// key when it does not.
+/// targeting stays with the client: <c>TargetNearestEnemy()</c> when this bridge may raise
+/// events, the TAB key and a right-click on the mob when it may not.
 /// </summary>
 internal sealed class GameLua : IDisposable
 {
