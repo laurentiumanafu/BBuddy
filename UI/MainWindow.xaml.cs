@@ -239,6 +239,8 @@ namespace CopilotBuddy.UI
                                 btnAimPlanHotspots.IsEnabled = true;
                                 btnAimClearHotspots.Visibility = Visibility.Visible;
                                 btnAimClearHotspots.IsEnabled = true;
+                                btnAimOffsets.Visibility = Visibility.Visible;
+                                btnAimOffsets.IsEnabled = true;
 
                                 /* Enable the three controls that do something on this client.
                                  * Everything else stays as ToggleButtons(false) left it, because
@@ -1370,6 +1372,19 @@ namespace CopilotBuddy.UI
             catch (Exception ex)
             {
                 Logging.Write("[Route] planning the hotspots failed: " + ex.Message);
+            }
+        }
+
+        private void btnAimOffsets_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                Styx.Logic.Pathing.ClickAimDiagnostics.Offsets();
+                SetStatus("Reading offsets...");
+            }
+            catch (Exception ex)
+            {
+                Logging.Write("[Offsets] reading the offsets failed: " + ex.Message);
             }
         }
 

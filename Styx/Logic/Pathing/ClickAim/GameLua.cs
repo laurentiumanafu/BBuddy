@@ -103,6 +103,30 @@ internal sealed class GameLua : IDisposable
     /// </summary>
     public static GameLua? TryOpen(int serveSeconds, out string report)
     {
+        /* RETIRED 2026-10-30. Everything below still compiles and still describes what was
+         * measured, and none of it is reachable: the grind loop no longer opens a bridge,
+         * and this refuses before it touches the client. Two crash reports in one evening
+         * ended the experiment -
+         *
+         *   14:38  ASSERT(FrameScript_IsLuaThread())  FrameScriptEvents.cpp:208
+         *          TargetNearestEnemy() from the resident injected thread.
+         *   15:34  ASSERTALWAYSSAFE("Lua stack is unbalanced")  Ui/GameUI.cpp:8250
+         *          on the first command after a LuaThreadHijack takeover, followed by
+         *          a 0xC0000028 unwind fault in ntdll - the client's own Lua stack was
+         *          left unbalanced by a call that ran on its thread inside our own frame.
+         *
+         * The second mechanism is the interesting one: running a command ON the client's
+         * Lua thread from a suspended context means lua_pcall's frame is not the one the
+         * client's GameUI code expects to return into, and it checks. There is no version
+         * of "call Lua from outside" that satisfies both asserts without an in-process
+         * hook, so combat has to come from memory and input instead. */
+        report = "the Lua bridge is retired: it crashed wowb.exe twice on 2026-10-30 "
+                 + "(FrameScript_IsLuaThread, then \"Lua stack is unbalanced\" at GameUI.cpp:8250). "
+                 + "Combat uses memory reads and client input instead. Nothing was attached and "
+                 + "nothing was written.";
+        return null;
+
+#pragma warning disable CS0162
         int pid = 0;
         try
         {
@@ -177,6 +201,7 @@ internal sealed class GameLua : IDisposable
                  + hijackFailure + ") - READ-ONLY: questions only, because the client asserts "
                  + "FrameScript_IsLuaThread() and dies when an event is raised from our thread";
         return new GameLua(resident, false);
+#pragma warning restore CS0162
     }
 
     /// <summary>Attach, choose the execution mode, start. False (with the reason) on any gate.</summary>

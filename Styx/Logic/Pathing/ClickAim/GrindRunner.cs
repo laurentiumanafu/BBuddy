@@ -16,16 +16,22 @@ namespace Styx.Logic.Pathing;
 ///   * movement - <see cref="RouteRunner"/> on the mmaps, steered by turn keys and a
 ///     readable facing (256 yd and 105 yd routes, 2026-10-30, both around terrain);
 ///   * targeting - the client's own TAB selection, verified against
-///     <c>WowBWorldSnapshot.TargetGuid</c> and refusing players by vtable;
-///   * attacking - action-bar KEYS, believed only when the target's health actually
-///     drops.
+///     <c>WowBWorldSnapshot.TargetGuid</c> and refusing players by vtable, with a
+///     right-click on the nearest readable unit as the fallback;
+///   * attacking - a right-click on the mob, which the client turns into "select it and
+///     auto-attack", believed only when the target's health actually drops.
 ///
 /// The last point is the whole design. A routine knows which spells a character has; this
-/// does not, because no routine runs in WowB diagnostic mode and the spellbook has not
-/// been read on this build. What can be known is whether a key press did damage - the
-/// selected target's health is one of the few per-unit numbers the reader samples - so
-/// the loop presses a key, measures, and keeps the keys that work. When none of them
-/// works it says so instead of casting into the void for ten minutes.
+/// does not, because no routine runs in WowB diagnostic mode. What can be known is whether
+/// a click did damage - every unit's health is one 32-bit read in its data block - so the
+/// loop clicks, measures, and says so when nothing lands.
+///
+/// NO LUA. The Lua bridge is retired (see <see cref="GameLua"/>): taking the client's Lua
+/// thread over is the only way it could send a UseAction, and it crashed wowb twice on
+/// 2026-10-30 - FrameScript_IsLuaThread at FrameScriptEvents.cpp:208 on the first attempt,
+/// then "Lua stack is unbalanced" at Ui/GameUI.cpp:8250 and a 0xC0000028 unwind fault at
+/// 15:34 within a second of Start. A bot that walks and auto-attacks is worth more than one
+/// that crashes the client.
 ///
 /// Hostility is the client's judgement, not ours: TAB only selects things the client
 /// considers enemies, which is the faction filter every grind profile carries
@@ -73,24 +79,16 @@ internal static class GrindRunner
     /// <summary>How often to re-read the player's level and consider another grind area.</summary>
     private const int LevelCheckMs = 120000;
 
-    /// <summary>
-    /// Recover below this much health before pulling the next mob. Singular heals at 60%
-    /// (<c>Spell.Heal("Healing Wave", ret => Me.HealthPercent &lt; 60)</c>); the number is
-    /// theirs.
-    /// </summary>
-    private const double RecoverBelowPercent = 60.0;
-
-    /// <summary>Do not try to recover more often than this: it costs two Lua calls a tick.</summary>
-    private const int RecoverRetryMs = 5000;
-
     private static volatile bool _stop;
     private static bool _running;
     private static int _presses;    // action-bar presses this session, for the summary
-    private static int _casts;      // Lua UseAction() calls this session, for the summary
-    private static GameLua? _lua;   // the client's own Lua, when the bridge came up
-    private static bool _barLogged;
-    private static List<GameLua.ActionSlot>? _bar;   // the bar as last read, reused for recovery
-    private static int _lastRecoverMs;
+    /* No Lua, on purpose. Taking the client's own Lua thread over - the only way to send
+     * UseAction without tripping FrameScript_IsLuaThread - crashed wowb twice on 2026-10-30:
+     * the assert at FrameScriptEvents.cpp:208 on the first attempt, and on the second
+     * "Lua stack is unbalanced" at Ui/GameUI.cpp:8250 followed by a 0xC0000028 unwind fault
+     * in ntdll, both within a second of Start. Everything this loop needs is memory it
+     * already reads, or the client's own input handling. */
+    private static int _clicks;     // right-clicks that selected or attacked something
 
     /// <summary>
     /// The target a fight gave up on, and when. Without this the loop answers "that mob is
@@ -177,51 +175,20 @@ internal static class GrindRunner
         int lastLevelCheck = Environment.TickCount;
         int level = 0;
         _presses = 0;
-        _casts = 0;
-        _barLogged = false;
-        _bar = null;
-        _lastRecoverMs = 0;
+        _clicks = 0;
+        _gaveUpAt = 0;
+        _gaveUpGuid = default(WowBGuid);
 
-        /* Combat runs on the client's own Lua when it can be reached at all: the action bar
-         * ignores key messages on this build, so UseAction(slot) is the only way to make a
-         * spell happen that does not depend on guessing a key mapping. Failure here is not
-         * fatal - the keyboard path is still there and still honest about doing nothing. */
-        try
-        {
-            int serveSeconds = minutes <= 0 ? 7200 : minutes * 60 + 300;
-            string report;
-            _lua = GameLua.TryOpen(serveSeconds, out report);
-            if (_lua == null)
-                Logging.Write("[Grind] Lua: " + report + " - fighting with the keyboard only, which "
-                              + "has not been shown to attack on this build");
-            else
-            {
-                Logging.Write("[Grind] Lua: " + report);
-                foreach (string line in _lua.Probe()) Logging.Write("[Grind]   " + line);
-
-                /* Still worth reading the bar even when nothing may be fired through it: the
-                 * slot list is the first honest answer this bot has ever had to "what can
-                 * this character actually do", and it goes in the log either way. */
-                if (!_lua.EventsAllowed)
-                {
-                    List<GameLua.ActionSlot> bar = _lua.ReadActionBar();
-                    if (bar.Count > 0) LogBar(bar);
-                    Logging.Write("[Grind] the bar is read-only here, so combat is clicks and keys only: a "
-                                  + "right-click on the mob selects it and starts auto-attack, which the "
-                                  + "client runs itself");
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            _lua = null;
-            Logging.Write("[Grind] Lua setup threw: " + ex.Message + " - keyboard only");
-        }
+        /* What the client can be asked without Lua: level, health, the stored action bar
+         * and what is standing around. It is printed once because it is the answer to
+         * "does this build let a bot see anything at all" - and if any of it is missing the
+         * log says which read failed rather than pretending. */
+        ReportMemory();
 
         /* The profile's own level bands decide which area to grind, not proximity alone: a
          * 19-SubProfile levelling file is a ladder, and grinding the step below your level is
          * exactly the "wandering on non-viable mobs" this is supposed to avoid. */
-        level = PlayerLevel(_lua);
+        level = PlayerLevel();
         int chosen = SelectArea(areas, level, out string choice);
         Logging.Write("[Grind] " + choice);
         ProfileGrindArea area = areas[chosen];
@@ -230,14 +197,15 @@ internal static class GrindRunner
         {
             while (!_stop && unchecked(Environment.TickCount - started) < budgetMs)
             {
-                /* Every LevelCheckMs, ask the level again: a grind profile is a ladder, and the
-                 * rung below the one you are on stops being worth fighting. One Lua call, and
-                 * it is the only way this loop can ever climb. Timed rather than counted,
-                 * because a loop iteration is a whole hotspot leg, not a tick. */
+                /* Every LevelCheckMs, read the level again: a grind profile is a ladder, and the
+                 * rung below the one you are on stops being worth fighting. One 32-bit read in
+                 * the player's data block, and it is the only way this loop can ever climb.
+                 * Timed rather than counted, because a loop iteration is a whole hotspot leg,
+                 * not a tick. */
                 if (unchecked(Environment.TickCount - lastLevelCheck) >= LevelCheckMs)
                 {
                     lastLevelCheck = Environment.TickCount;
-                    int now = PlayerLevel(_lua);
+                    int now = PlayerLevel();
                     if (now > 0 && now != level)
                     {
                         string climbed;
@@ -255,17 +223,9 @@ internal static class GrindRunner
                     }
                 }
 
-                /* Recover first. A grind loop that never heals dies on the third mob, and
-                 * this is Singular's Heal behaviour reduced to what a bar without spell
-                 * names can express: below 60% health, fire one ability the client calls
-                 * usable and does NOT range-check - a self-buff or a self-heal, since an
-                 * attack that needed a target would be range-checked. */
-                string recovery;
-                if (TryRecover(_lua, out recovery))
-                {
-                    Logging.Write("[Grind] " + recovery);
-                    continue;
-                }
+                /* No recovery step: healing needs a cast, a cast needs the action bar, and
+                 * clicking a heal button 40 pixels wide on a 3D scene is a guess. Auto-attack
+                 * plus the client's own swing is what a level-2 character does anyway. */
 
                 /* Fight first, walk second. A grind area is a ring of points with mobs
                  * between them, so checking before each hop is checking every few
@@ -319,81 +279,77 @@ internal static class GrindRunner
         finally
         {
             try { mover.MoveStop(); } catch { }
-            if (_lua != null)
-            {
-                int calls = _lua.Calls;
-                try { _lua.Dispose(); } catch { }
-                _lua = null;
-                Logging.Write("[Grind] Lua: " + calls + " call(s) answered, payload released");
-            }
             _running = false;
         }
 
         Logging.Write(string.Format(CultureInfo.InvariantCulture,
             "[Grind] done: {0} hotspot(s) reached, {1} fight(s), {2} kill(s) confirmed, "
-            + "{3} action-bar key press(es), {4} Lua action(s), {5} area switch(es), {6:F0} s",
-            hotspots, fights, kills, _presses, _casts, switches,
+            + "{3} key press(es), {4} click(s) that landed, {5} area switch(es), {6:F0} s",
+            hotspots, fights, kills, _presses, _clicks, switches,
             (Environment.TickCount - started) / 1000.0));
     }
 
     /// <summary>
-    /// One attempt to get health back before pulling, or false with an empty report.
-    ///
-    /// It cannot know which slot is a heal: the build exposes slot state, not a spellbook.
-    /// What it can know is that an ability which does not need a target to be in range is a
-    /// self-cast, and that a character below 60% health with mana left should use one before
-    /// the next mob rather than after it dies. If the slot turns out to be a buff, the cost
-    /// is a wasted cooldown, which is the cheapest way to be wrong here.
+    /// What the client can be asked without Lua: the player's level and health from its own
+    /// memory, the stored action bar, and who is standing around. One block per run, because
+    /// it is the answer to "can this build tell a bot anything", and a failed read has to
+    /// look like a failed read rather than like an empty world.
     /// </summary>
-    private static bool TryRecover(GameLua? lua, out string report)
+    private static void ReportMemory()
     {
-        report = "";
-        /* EventsAllowed, not Live: a self-cast is a UseAction, and a UseAction sent from a
-         * thread the client does not consider its Lua thread kills it. */
-        if (lua == null || !lua.EventsAllowed) return false;
-        if (unchecked(Environment.TickCount - _lastRecoverMs) < RecoverRetryMs) return false;
-
-        double? percent = lua.HealthPercent();
-        if (percent == null || percent.Value >= RecoverBelowPercent) return false;
-
-        _lastRecoverMs = Environment.TickCount;
-        List<GameLua.ActionSlot> bar = _bar ?? lua.ReadActionBar();
-        _bar = bar;
-        for (int i = 0; i < bar.Count; i++)
+        Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
+        if (reader == null)
         {
-            GameLua.ActionSlot slot = bar[i];
-            if (!slot.Usable || slot.InRange.HasValue || slot.Cooldown > 0.2) continue;
-            if (!lua.UseSlot(slot.Slot)) return false;
-            _casts++;
-            Thread.Sleep(AttackSettleMs);
-            report = string.Format(CultureInfo.InvariantCulture,
-                "health {0:F0}% - used slot {1} [{2}] before the next mob",
-                percent.Value, slot.Slot, IconOf(bar, slot.Slot));
-            return true;
+            Logging.Write("[Grind] memory: no WowB reader - nothing can be read");
+            return;
         }
-        report = string.Format(CultureInfo.InvariantCulture,
-            "health {0:F0}% and no self-cast ability ready - pulling anyway, badly",
-            percent.Value);
-        return true;
+
+        int level = reader.ReadPlayerLevel();
+        Logging.Write(level > 0
+            ? "[Grind] memory: player level " + level.ToString(CultureInfo.InvariantCulture)
+              + " (the level word at data+" + Styx.Offsets.WowBOffsets.UnitDataLevelOffset.ToString("X", CultureInfo.InvariantCulture) + ")"
+            : "[Grind] memory: the player's level word did not read - the area will be picked by distance");
+
+        List<Styx.WoWInternals.WowBReader.WowBActionSlot> bar = reader.ReadActionBar();
+        if (bar.Count == 0)
+            Logging.Write("[Grind] memory: the stored action array at 0x"
+                + Styx.Offsets.WowBOffsets.StoredActionArray.ToString("X", CultureInfo.InvariantCulture)
+                + " reads empty - either the character has nothing on the bar or the packing is not a plain qword");
+        else
+        {
+            Logging.Write("[Grind] memory: " + bar.Count + " filled action slot(s):");
+            for (int i = 0; i < bar.Count; i++) Logging.Write("[Grind]   " + bar[i]);
+        }
+
+        WowBWorldSnapshot? snap;
+        if (Capture(out snap) && snap != null)
+        {
+            WowBObservedUnit me;
+            if (snap.TryGetLocalPlayer(out me))
+            {
+                if (reader.TryGetUnitFields(me.UnitAddress, out Styx.WoWInternals.WowBReader.WowBUnitFields f))
+                    Logging.Write("[Grind] memory: player " + f);
+                else
+                    Logging.Write("[Grind] memory: the player's unit fields did not read at 0x" + me.UnitAddress.ToString("X"));
+            }
+            Logging.Write("[Grind] memory: " + Math.Max(0, snap.Units.Count - 1)
+                + " other unit(s) in the pool; each fight line names the one it picked");
+        }
+        else
+            Logging.Write("[Grind] memory: the world snapshot did not validate this time");
     }
 
     /// <summary>
-    /// The character's level, or 0 when nothing can say.
-    ///
-    /// Asked of the client's Lua when the bridge is up (<c>UnitLevel("player")</c>), because
-    /// that is a real answer from the running client. There is deliberately no fallback to
-    /// the level offset here: <c>WowBOffsets.LevelOffset</c> is marked V-ish, and a wrong
-    /// level would move the loop to the wrong rung of a levelling profile - worse than
-    /// admitting it does not know and grinding the nearest area.
+    /// The character's level, read from the unit data block (the same one the snapshot reads
+    /// health from), or 0 when it cannot be read. This used to come from Lua
+    /// <c>UnitLevel("player")</c>; the Lua bridge is retired.
     /// </summary>
-    private static int PlayerLevel(GameLua? lua)
+    private static int PlayerLevel()
     {
-        if (lua != null && lua.Live)
-        {
-            double? level = lua.Number("UnitLevel", "player");
-            if (level.HasValue && level.Value >= 1 && level.Value <= 100) return (int)level.Value;
-        }
-        return 0;
+        Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
+        if (reader == null) return 0;
+        try { return reader.ReadPlayerLevel(); }
+        catch { return 0; }
     }
 
     /// <summary>
@@ -498,25 +454,16 @@ internal static class GrindRunner
 
         /* Three ways to make the client select something, and the order matters.
          *
-         * 1. TargetNearestEnemy() through Lua, but only when the bridge runs commands on
-         *    the client's own Lua thread (GameLua.EventsAllowed). On 2026-10-30 the same
-         *    call from the resident thread killed the client at the first hotspot, which is
-         *    why nothing else here may assume Lua can act.
-         * 2. TAB. No memory, no Lua, and the client applies its own hostility filter, so a
-         *    guard or a quest NPC is never picked. It is also how we find out whether the
+         * 1. TAB. No memory and no Lua, and the client applies its own hostility filter, so
+         *    a guard or a quest NPC is never picked. It is also how we find out whether the
          *    window still takes keyboard input at all.
-         * 3. A right-click on the nearest unit. Last because it has no hostility filter -
-         *    the snapshot says where units are, not who they are - so it is only used when
-         *    the two filtered ways found nothing, which is exactly the 2026-10-30 case
-         *    ("11 unit(s) within 40 yd but nothing selected them"). */
+         * 2. A right-click on the nearest unit. No hostility filter - the snapshot says
+         *    where units are, not who they are - so it is tried when TAB found nothing,
+         *    which is exactly the 2026-10-30 case ("11 unit(s) within 40 yd but nothing
+         *    selected them"). A unit that turns out to be friendly is remembered and never
+         *    clicked again, so the list of what NOT to attack is learned instead of assumed. */
         WowBObservedUnit target = default(WowBObservedUnit);
         bool have = false;
-
-        if (_lua != null && _lua.EventsAllowed && _lua.TargetNearestEnemy())
-        {
-            Thread.Sleep(TabSettleMs);
-            if (Capture(out snap) && snap != null && snap.TryGetSelectedTarget(out target)) have = true;
-        }
 
         for (int i = 0; i < TabTries && !have; i++)
         {
@@ -556,6 +503,7 @@ internal static class GrindRunner
             return false;
         }
 
+
         double d = ClickAimMath.Len(target.Location.X - px, target.Location.Y - py);
         if (d > SearchYd)
         {
@@ -564,12 +512,10 @@ internal static class GrindRunner
             return false;
         }
 
-        /* The action bar is the attack, so FightWithActions is only entered when the bridge
-         * may actually fire a slot. Otherwise the fight is the right-click attack: select
-         * the mob, let the client swing, and watch its health - which needs no Lua at all. */
-        GameLua? lua = _lua;
+        /* The fight is a right-click plus the client's own auto-attack, and the verdict comes
+         * from the mob's health in memory. No Lua is involved at any point. */
         int fightStarted = Environment.TickCount;
-        report = lua != null && lua.EventsAllowed ? FightWithActions(hwnd, lua, px, py) : Fight(hwnd, px, py);
+        report = Fight(hwnd, px, py);
 
         /* A fight that ended inside a second and a half never pressed anything: it gave up
          * (or lost) immediately. Remember the target so the next iteration walks instead of
@@ -602,13 +548,17 @@ internal static class GrindRunner
         int w, h;
         if (!ClickAimInput.ClientSize(hwnd, out w, out h)) return false;
 
-        /* Nearest viable unit: never the player, never anything with a player vtable
-         * (another player's pet class vtable is not worth finding out by clicking), and
-         * never the mob the last fight gave up on. */
+        /* Nearest viable unit: never the player, never anything with a player vtable, never
+         * the mob the last fight gave up on, and - from memory, not a guess - never a corpse
+         * or a unit with no level. Those two words are the only "is this a monster" test this
+         * client has offered so far; the hostility filter that actually works is TAB, which
+         * is why this is the fallback. */
+        Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
         var units = snap.Units;
         WowBObservedUnit best = default(WowBObservedUnit);
         double bestYd = double.MaxValue;
         bool found = false;
+        int skipped = 0;
         for (int i = 0; i < units.Count; i++)
         {
             WowBObservedUnit unit = units[i];
@@ -617,13 +567,22 @@ internal static class GrindRunner
             if (Refused(unit.Guid)) continue;
             double d = ClickAimMath.Len(unit.Location.X - px, unit.Location.Y - py);
             if (d <= 0.5 || d > SearchYd) continue;
+
+            if (reader != null && reader.TryGetUnitFields(unit.UnitAddress,
+                    out Styx.WoWInternals.WowBReader.WowBUnitFields f))
+            {
+                if (f.Health == 0) { skipped++; continue; }        // a corpse
+                if (f.Level == 0) { skipped++; continue; }         // nothing readable as a level
+            }
+
             if (d < bestYd) { bestYd = d; best = unit; found = true; }
         }
 
         if (!found)
         {
             note = string.Format(CultureInfo.InvariantCulture,
-                "nothing clickable within {0:F0} yd (or only the target it just gave up on)", SearchYd);
+                "nothing clickable within {0:F0} yd ({1} skipped as dead or levelless, or the only "
+                + "one is the target it just gave up on)", SearchYd, skipped);
             return false;
         }
 
@@ -635,6 +594,7 @@ internal static class GrindRunner
         }
 
         ClickAimInput.Click(hwnd, dx, dy);       // right-click: select + attack
+        _clicks++;
         Thread.Sleep(TabSettleMs);
 
         WowBWorldSnapshot? after;
@@ -848,213 +808,6 @@ internal static class GrindRunner
     }
 
     /// <summary>
-    /// The same fight as <see cref="Fight"/>, but the abilities come from the client's
-    /// action bar instead of from a list of guessed keys.
-    ///
-    /// The bar is read once per session and logged, because it is the first honest answer to
-    /// "what skills does this character have" that this bot has ever been able to get: slot,
-    /// icon, whether the client thinks it is usable, whether the target is in range, and how
-    /// long its cooldown has left. A slot is fired only when the client itself says all three
-    /// of those are good - so mana, reagents, range and cooldown are the client's judgement,
-    /// not ours. Which of them actually hurt something is still decided by watching the
-    /// target's health, exactly as with the keys.
-    /// </summary>
-    private static string FightWithActions(IntPtr hwnd, GameLua lua, double px, double py)
-    {
-        int started = Environment.TickCount;
-        int casts = 0;
-        int lastHealth = -1;
-        int idleRounds = 0;
-        bool buffed = false;
-        var worked = new Dictionary<int, string>();
-        List<GameLua.ActionSlot>? bar = null;
-        int next = 0;
-
-        WowBWorldSnapshot? snap;
-        WowBObservedUnit target;
-        if (!Capture(out snap) || snap == null || !snap.TryGetSelectedTarget(out target))
-            return "engaged, then lost the target immediately";
-
-        lastHealth = Health(target);
-        Logging.Write(string.Format(CultureInfo.InvariantCulture,
-            "[Grind] engaged at {0:F1} yd (health {1}); fighting with the action bar",
-            ClickAimMath.Len(target.Location.X - px, target.Location.Y - py),
-            lastHealth >= 0 ? lastHealth.ToString(CultureInfo.InvariantCulture) : "unknown"));
-
-        while (!_stop && unchecked(Environment.TickCount - started) < EngageTimeoutMs)
-        {
-            if (!Capture(out snap) || snap == null) break;
-            if (!snap.TryGetSelectedTarget(out target))
-                return "target gone (dead, despawned or out of range) after "
-                       + ((Environment.TickCount - started) / 1000).ToString(CultureInfo.InvariantCulture) + " s";
-
-            if (target.HasPlayerVtable)
-                return "the target turned out to be a player - disengaged";
-
-            int health = Health(target);
-            if (health >= 0 && lastHealth > 0 && health == 0)
-                return "killed" + (worked.Count == 0 ? "" : " with " + Describe(worked));
-
-            if (!snap.TryGetLocalPlayer(out WowBObservedUnit me)) break;
-            double d = ClickAimMath.Len(target.Location.X - me.Location.X, target.Location.Y - me.Location.Y);
-
-            if (d > ChaseYd)
-                return string.Format(CultureInfo.InvariantCulture,
-                    "target is {0:F0} yd away and moving; giving up on it", d);
-
-            /* Never fire into a cast. Singular's Spell.WaitForCast is at the top of every one
-             * of its combat behaviours for this reason: a second UseAction mid-cast interrupts
-             * the first, which on a caster means never landing anything at all. */
-            if (lua.IsCasting())
-            {
-                Thread.Sleep(150);
-                continue;
-            }
-
-            /* Close only when nothing on the bar reaches from here. A Lightning Bolt answered
-             * IsActionInRange at 30 yd, so a ranged character fights at 30 yd instead of
-             * walking into melee range because AttackRangeYd is a melee constant. */
-            if (d > AttackRangeYd && (bar == null || !lua.AnySlotInRange(bar)))
-            {
-                double rem;
-                ClickAimKeySteer.Steer(target.Location.X, target.Location.Y, hwnd, true, out rem);
-                Thread.Sleep(90);
-                continue;
-            }
-
-            double remaining;
-            ClickAimKeySteer.Steer(target.Location.X, target.Location.Y, hwnd, false, out remaining);
-
-            /* Read the bar on the first in-range tick: IsUsableAction and IsActionInRange
-             * are only meaningful once the target is selected and close. */
-            if (bar == null || !_barLogged)
-            {
-                List<GameLua.ActionSlot> read = lua.ReadActionBar();
-                if (read.Count == 0)
-                {
-                    string why = lua.Error ?? "every slot reported empty";
-                    return "the action bar reads empty (" + why + ") - nothing to cast";
-                }
-                LogBar(read);
-                bar = read;
-                _barLogged = true;
-            }
-            if (bar == null) return "the action bar could not be read";
-
-            // Refresh the state of the slots that could be next; the bar itself rarely changes.
-            int slot = -1;
-            for (int i = 0; i < bar.Count; i++)
-            {
-                int at = (next + i) % bar.Count;
-                GameLua.ActionSlot candidate = bar[at];
-                if (!candidate.Usable) continue;
-                if (candidate.InRange == false) continue;
-                if (candidate.Cooldown > 0.2) continue;
-                slot = candidate.Slot;
-                next = (at + 1) % bar.Count;
-                break;
-            }
-
-            /* One self-buff before the first cast, which is Singular's PreCombatBuffs in one
-             * line: a slot the client reports as usable but NOT range-limited is a buff or a
-             * stance, not an attack, and the routines always put those up before pulling. */
-            if (!buffed)
-            {
-                buffed = true;
-                for (int i = 0; i < bar.Count; i++)
-                {
-                    if (!bar[i].Usable || bar[i].InRange.HasValue || bar[i].Cooldown > 0.2) continue;
-                    lua.UseSlot(bar[i].Slot);
-                    _casts++;
-                    Thread.Sleep(AttackSettleMs);
-                    break;
-                }
-            }
-
-            if (slot < 0)
-            {
-                /* Everything is on cooldown or out of range. That is a legitimate state for
-                 * a second or two; ten seconds of it means the bar cannot reach this mob. */
-                if (++idleRounds >= 20)
-                    return "no usable ability for the selected target after "
-                           + ((Environment.TickCount - started) / 1000).ToString(CultureInfo.InvariantCulture)
-                           + " s - the bar has " + bar.Count + " slot(s): " + Describe(bar);
-                Thread.Sleep(400);
-                continue;
-            }
-
-            if (!lua.UseSlot(slot))
-            {
-                /* The call itself failed: report the client's own words once and stop, rather
-                 * than firing into an error a hundred times. */
-                return "UseAction(" + slot + ") failed: " + (lua.Error ?? "no reason given");
-            }
-
-            casts++;
-            _casts++;
-            Thread.Sleep(AttackSettleMs);
-
-            if (!Capture(out snap) || snap == null || !snap.TryGetSelectedTarget(out target))
-                return "target gone while casting after "
-                       + ((Environment.TickCount - started) / 1000).ToString(CultureInfo.InvariantCulture) + " s";
-
-            health = Health(target);
-            if (health >= 0 && lastHealth >= 0 && health < lastHealth)
-            {
-                string name = IconOf(bar, slot);
-                if (!worked.ContainsKey(slot))
-                {
-                    worked[slot] = name;
-                    Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                        "[Grind] slot {0} [{1}] does damage: health {2} -> {3}. Remembering it",
-                        slot, name, lastHealth, health));
-                }
-                lastHealth = health;
-                idleRounds = 0;
-                next = 0;      // priority order: the best ability first, every time
-            }
-
-            // Keep the cooldown picture current without re-reading icons and range.
-            lua.RefreshCooldowns(bar);
-        }
-
-        ClickAimKeySteer.Release(hwnd);
-        return "gave up on the target after " + casts + " action(s)"
-               + (worked.Count == 0 ? " and no damage at all - the bar answered, but nothing hurt it"
-                                       + (lua.Error == null ? "" : " (last error: " + lua.Error + ")")
-                                    : " using " + Describe(worked));
-    }
-
-    private static void LogBar(List<GameLua.ActionSlot> bar)
-    {
-        Logging.Write("[Grind] action bar (" + bar.Count + " slot(s)):");
-        for (int i = 0; i < bar.Count; i++)
-            Logging.Write("[Grind]   " + bar[i]);
-    }
-
-    private static string IconOf(List<GameLua.ActionSlot> bar, int slot)
-    {
-        for (int i = 0; i < bar.Count; i++)
-            if (bar[i].Slot == slot) return System.IO.Path.GetFileNameWithoutExtension(bar[i].Icon);
-        return "?";
-    }
-
-    private static string Describe(Dictionary<int, string> worked)
-    {
-        var parts = new List<string>();
-        foreach (KeyValuePair<int, string> pair in worked)
-            parts.Add("slot " + pair.Key.ToString(CultureInfo.InvariantCulture) + " [" + pair.Value + "]");
-        return string.Join(", ", parts.ToArray());
-    }
-
-    private static string Describe(List<GameLua.ActionSlot> bar)
-    {
-        var parts = new List<string>();
-        for (int i = 0; i < bar.Count; i++) parts.Add(bar[i].ToString());
-        return string.Join("; ", parts.ToArray());
-    }
-
-    /// <summary>
     /// Checks the parts of grinding that do not need a game: reading a levelling profile's
     /// bands, and choosing an area by level. Everything it touches is pure or file-only, so a
     /// failure here is a code problem rather than a client problem.
@@ -1149,9 +902,22 @@ internal static class GrindRunner
         return string.Format("Grind self-test {0}/{1} FAILED:{2}", passed, total, fails);
     }
 
-    /// <summary>The selected target's health, or -1 when the reader has no candidate.</summary>
+    /// <summary>
+    /// A unit's health straight out of its data block, or -1 when the block will not read.
+    ///
+    /// This used to come from the snapshot's diagnostic candidate words, which are only
+    /// sampled for the player and the selected target. Reading the block directly works for
+    /// any unit, which is what "is this mob dying" needs, and it is the same 0x1E30 word the
+    /// attach line has been printing as hp=95/95 all along.
+    /// </summary>
     private static int Health(WowBObservedUnit unit)
     {
+        Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
+        if (reader != null && reader.TryGetUnitFields(unit.UnitAddress, out Styx.WoWInternals.WowBReader.WowBUnitFields f))
+            return f.Health > int.MaxValue ? -1 : (int)f.Health;
+
+        /* Fall back to the snapshot's sample, which exists only for the player and the
+         * selected target - better than claiming -1 when the block read failed. */
         if (!unit.CandidateHealth.HasValue) return -1;
         uint current = unit.CandidateHealth.Value.CurrentLow32;
         return current > int.MaxValue ? -1 : (int)current;

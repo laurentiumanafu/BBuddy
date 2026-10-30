@@ -1,5 +1,16 @@
 # LuaBridge64 — calling Lua inside a native x64 WoW client
 
+> **RETIRED 2026-10-30.** Nothing in this file is used by the bot any more, and
+> `GameLua.TryOpen` refuses before it touches the client. The first *action* through
+> the bridge killed wowb.exe at 14:38 (the assert below), and the second attempt —
+> running the command on the client's own Lua thread so the assert could not fire —
+> killed it again at 15:34: `ASSERTALWAYSSAFE("Lua stack is unbalanced")` at
+> `Ui/GameUI.cpp:8250`, then `0xC0000028` in ntdll while unwinding out of our frame.
+> There is no shape of "call Lua from outside" that satisfies both checks without an
+> in-process hook into a game-owned thread, so combat now comes from memory reads and
+> the client's own input handling (see `CLICKAIM_PORT.md`). The measurements below
+> are kept because they are still true; the code path is not.
+
 The 64-bit client cannot be driven the way the 32-bit one was (no `d3d9!EndScene`
 to hook, no `pushad`, no in-process .NET injection on this branch). What it *can*
 do is call its own Lua API from a thread we start — this is the managed side of
@@ -628,3 +639,60 @@ and combat presses the bar, or
 
 and combat is the right-click attack (`the right-click attack does damage:
 health 86 -> 71`) until the takeover works. There is no third, silent case.
+
+## 2026-10-30, second run: running the command on the client's own thread also crashes
+
+The fix above worked as designed — the log says so:
+
+```
+[Grind] Lua: pid 7028, payload resident (641 bytes), execution LuaThreadHijack; the client's
+  own Lua thread can be taken over (SetThreadContext(flags 0x10000B)=ok; read-back RIP
+  0x7FF67BF445B0 RSP 0x3DFCAFEB98 RCX 0x0, 1 quiet moment(s)) - events may be raised
+[Grind]   events ALLOWED - commands run on the client's own Lua thread
+[Grind]   UnitName('player') -> Tena
+[Grind]   UnitLevel('player') -> 2
+[Grind]   UnitHealth('player') -> 95
+[Grind]   UnitHealthMax('player') -> 95
+[Grind]   UnitExists('target') -> True
+[Grind]   UnitIsDead('target') -> True
+[Grind]   GetZoneText() -> Mulgore
+[Grind]   GetNumPartyMembers() -> nil   (did not complete within 1000 ms ON the Lua thread,
+                                        payload stage 0x4004A)
+[Grind]   HasAction(1) -> nil   (the payload is wedged; nothing more will be sent)
+```
+
+Nine commands ran on the client's own Lua thread, and the tenth never came back.
+The crash report for the same instant (15:34:04.790):
+
+```
+Error: ASSERTALWAYSSAFE("Lua stack is unbalanced", ...)
+File:  ...\Mainline\Source\Ui\GameUI.cpp, Line: 8250
+ProcessID: 7028  ThreadID: 14444
+```
+
+and 265 ms later a second report, `0xC0000028` (invalid/unaligned stack during an
+unwind) at `ntdll.dll`. That is the client's frame code checking `L->top` against what
+it expects at the end of a UI callback and finding our leftovers.
+
+So both mechanisms fail, for different reasons:
+
+| mode | why it dies |
+|---|---|
+| `ServerThread` | `FrameScript_IsLuaThread()` — an event raised from our thread (14:38) |
+| `LuaThreadHijack` | the client's UI frame checks the Lua stack balance after the callback it thinks it just ran (15:34) |
+
+The bot never pressed Start again after that: the client was already dead, which is
+why the same log shows "neither arrow key turned the character" and "key steering was
+already tried on this mover and did not calibrate" — it was steering a corpse. Movement
+was not broken; the client was.
+
+### What replaced it
+
+* `Styx/WoWInternals/WowBReader.cs` — `TryGetUnitFields` (health/max/level/flags/
+  power for *any* unit, not just the sampled two), `ReadPlayerLevel`,
+  `ReadActionBar` (the stored array at `0x7DFF4E0`, printed with both plausible
+  packings), and `DumpWords` for the raw windows an offset hunt needs.
+* `GrindRunner` — no Lua anywhere: TAB, then a right-click on the nearest readable
+  unit, then the client's own auto-attack, with the verdict read from the mob's health.
+* The **Offsets** button in the window (`ClickAimDiagnostics.Offsets`) prints all of
+  the above in one go.

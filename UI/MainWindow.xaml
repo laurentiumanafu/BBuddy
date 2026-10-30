@@ -180,6 +180,20 @@
             </Viewbox>
         </Button>
 
+        <Button x:Name="btnAimOffsets"
+                Height="25"
+                Visibility="Hidden"
+                Margin="0,343,136,0"
+                VerticalAlignment="Top"
+                HorizontalAlignment="Right"
+                Width="120"
+                ToolTip="Print the memory offsets this client answers to: unit fields, the stored action bar, and what is around you"
+                Click="btnAimOffsets_Click">
+            <Viewbox Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center">
+                <TextBlock Text="Offsets"/>
+            </Viewbox>
+        </Button>
+
         <Button x:Name="btnAimClearHotspots"
                 Height="25"
                 Visibility="Hidden"

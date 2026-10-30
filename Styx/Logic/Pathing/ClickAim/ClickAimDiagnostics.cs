@@ -4,6 +4,7 @@ using System.Globalization;
 using System.IO;
 using System.Threading;
 using Styx.Helpers;
+using Styx.WoWInternals;
 
 namespace Styx.Logic.Pathing;
 
@@ -197,6 +198,143 @@ public static class ClickAimDiagnostics
         thread.IsBackground = true;
         thread.Name = "ClickAimPlanHotspots";
         thread.Start();
+    }
+
+
+    /// <summary>
+    /// What the memory side can say about units and the action bar, printed once.
+    ///
+    /// This exists because the Lua bridge is retired: taking the client's own Lua thread
+    /// over crashed wowb twice on 2026-10-30 (FrameScript_IsLuaThread at
+    /// FrameScriptEvents.cpp:208, then "Lua stack is unbalanced" at GameUI.cpp:8250 and a
+    /// 0xC0000028 unwind fault). Everything the grind loop needs - which unit is a mob, how
+    /// far it is, whether it is hurt, what is on the action bar - has to come from memory
+    /// this bot already reads or from the client's own input handling.
+    ///
+    /// Nothing here is interpreted on faith. The action bar is printed with both plausible
+    /// packings, health/max are printed next to the level word, and a raw word window is
+    /// dumped for the player and the nearest other unit so the fields that are still
+    /// unverified can be found by eye instead of by another build cycle.
+    /// </summary>
+    public static void Offsets()
+    {
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                OffsetsCore();
+            }
+            catch (Exception ex)
+            {
+                Logging.Write("[Offsets] threw: " + ex.Message);
+            }
+        });
+        thread.IsBackground = true;
+        thread.Name = "ClickAimOffsets";
+        thread.Start();
+    }
+
+    private static void OffsetsCore()
+    {
+        Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
+        if (reader == null)
+        {
+            Logging.Write("[Offsets] no WowB reader - attach to the client first");
+            return;
+        }
+
+        Logging.Write("[Offsets] reading the client's memory; nothing is written and no Lua is used");
+
+        /* ---- the player ---- */
+        WowBWorldSnapshot? snap;
+        if (!reader.TryCaptureWorldSnapshot(out snap) || snap == null)
+        {
+            Logging.Write("[Offsets] the world snapshot did not validate this time - try again in a second");
+            return;
+        }
+
+        WowBObservedUnit me;
+        if (!snap.TryGetLocalPlayer(out me))
+        {
+            Logging.Write("[Offsets] no local player in the snapshot");
+            return;
+        }
+
+        if (reader.TryGetUnitFields(me.UnitAddress, out Styx.WoWInternals.WowBReader.WowBUnitFields fields))
+            Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                "[Offsets] player {0} unit=0x{1:X} {2}", me.Guid, me.UnitAddress, fields));
+        else
+            Logging.Write("[Offsets] the player's unit fields did not read at 0x" + me.UnitAddress.ToString("X"));
+
+        Logging.Write("[Offsets] player data block +0x{0:X} = {1}", Styx.Offsets.WowBOffsets.UnitDataLevelOffset - 0x40,
+            reader.DumpWords(me.UnitAddress + Styx.Offsets.WowBOffsets.UnitDataLevelOffset - 0x40, 32));
+
+        /* ---- the action bar ---- */
+        List<Styx.WoWInternals.WowBReader.WowBActionSlot> bar = reader.ReadActionBar();
+        Logging.Write(string.Format(CultureInfo.InvariantCulture,
+            "[Offsets] stored action array 0x{0:X}: {1} filled slot(s) of {2}",
+            Styx.Offsets.WowBOffsets.StoredActionArray, bar.Count,
+            Styx.WoWInternals.WowBReader.ActionSlotCount));
+        for (int i = 0; i < bar.Count; i++) Logging.Write("[Offsets]   " + bar[i]);
+
+        /* ---- what is around, nearest first ---- */
+        var units = new List<WowBObservedUnit>();
+        for (int i = 0; i < snap.Units.Count; i++)
+        {
+            WowBObservedUnit unit = snap.Units[i];
+            if (unit.IsLocalPlayer) continue;
+            units.Add(unit);
+        }
+
+        Logging.Write(string.Format(CultureInfo.InvariantCulture,
+            "[Offsets] {0} other unit(s) in the pool; the nearest 8 follow", units.Count));
+
+        /* Insertion sort by distance: the list is tiny and this keeps the order stable. */
+        double px = me.Location.X, py = me.Location.Y;
+        var order = new List<KeyValuePair<double, int>>();
+        for (int i = 0; i < units.Count; i++)
+        {
+            double d = ClickAimMath.Len(units[i].Location.X - px, units[i].Location.Y - py);
+            int at = order.Count;
+            for (int j = 0; j < order.Count; j++)
+            {
+                if (d < order[j].Key) { at = j; break; }
+            }
+            order.Insert(at, new KeyValuePair<double, int>(d, i));
+        }
+
+        int shown = 0;
+        for (int i = 0; i < order.Count && shown < 8; i++, shown++)
+        {
+            WowBObservedUnit unit = units[order[i].Value];
+            string line = string.Format(CultureInfo.InvariantCulture,
+                "[Offsets]   {0:F1} yd {1} unit=0x{2:X}{3}", order[i].Key, unit.Guid, unit.UnitAddress,
+                unit.HasPlayerVtable ? " (player vtable)" : "");
+            if (reader.TryGetUnitFields(unit.UnitAddress, out Styx.WoWInternals.WowBReader.WowBUnitFields mf))
+                line += "  " + mf;
+            else
+                line += "  <fields unreadable>";
+            Logging.Write(line);
+        }
+
+        /* The nearest non-player unit's raw words: this is the window a level or reaction
+         * field would have to appear in, printed next to the player's for comparison. */
+        for (int i = 0; i < order.Count; i++)
+        {
+            WowBObservedUnit unit = units[order[i].Value];
+            if (unit.HasPlayerVtable) continue;
+            if (!reader.TryGetUnitFields(unit.UnitAddress, out Styx.WoWInternals.WowBReader.WowBUnitFields nf)) continue;
+
+            Logging.Write("[Offsets] nearest mob data block +0x1E00: " +
+                reader.DumpWords(unit.UnitAddress + Styx.Offsets.WowBOffsets.UnitDataLevelOffset - 0x40, 32));
+            Logging.Write("[Offsets] nearest mob data block +0x1B80: " +
+                reader.DumpWords(unit.UnitAddress + Styx.Offsets.WowBOffsets.UnitDataPowerOffset - 0x48, 32));
+            Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                "[Offsets] nearest mob at {0:F1} yd: {1}", order[i].Key, nf));
+            break;
+        }
+
+        Logging.Write("[Offsets] done. Paste this block and the offset table can be finished without another run.");
     }
 
     /// <summary>

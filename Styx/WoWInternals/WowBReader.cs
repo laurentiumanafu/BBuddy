@@ -701,6 +701,176 @@ namespace Styx.WoWInternals
             return true;
         }
 
+
+        // ------------------------------------------------------------------
+        // Unit fields read without Lua (2026-10-30)
+        // ------------------------------------------------------------------
+        //
+        // The Lua bridge is retired: taking the client's Lua thread over crashed wowb
+        // twice in one evening (FrameScript_IsLuaThread on 2026-10-30 14:38, "Lua stack
+        // is unbalanced" at Ui/GameUI.cpp:8250 and then a 0xC0000028 unwind fault at
+        // 15:34). Everything the grind loop needs from the client has to come from
+        // memory it already reads or from the client's own input handling.
+
+        /// <summary>
+        /// The fields of a unit's data block that a grind loop needs, all read as raw
+        /// 32-bit words. Health/max are the ones the snapshot already prints for the
+        /// player (95/95 on 2026-10-30); level is the [V-ish] 0x1E40 word; the rest are
+        /// candidates and are logged as raw values, never acted on as if verified.
+        /// </summary>
+        public readonly struct WowBUnitFields
+        {
+            public readonly uint Health;
+            public readonly uint MaxHealth;
+            public readonly uint Level;
+            public readonly uint UnitFlags;
+            public readonly uint Power;
+            public readonly uint MaxPower;
+            public readonly ulong DataPtr;
+
+            public WowBUnitFields(uint health, uint maxHealth, uint level, uint unitFlags,
+                                  uint power, uint maxPower, ulong dataPtr)
+            {
+                Health = health;
+                MaxHealth = maxHealth;
+                Level = level;
+                UnitFlags = unitFlags;
+                Power = power;
+                MaxPower = maxPower;
+                DataPtr = dataPtr;
+            }
+
+            public override string ToString()
+            {
+                return $"hp={Health}/{MaxHealth} lvl={Level} uflags=0x{UnitFlags:X} pow={Power}/{MaxPower}";
+            }
+        }
+
+        /// <summary>
+        /// Health/max/level/flags for one unit object, in one read. False when the data
+        /// block pointer is not a plausible user pointer or the block does not read.
+        /// </summary>
+        public bool TryGetUnitFields(ulong unitPtr, out WowBUnitFields fields)
+        {
+            fields = default;
+            // Not IsUserPointer: a monster unit object is legitimately 4-byte aligned on
+            // this build (TryGetFourByteUnitCandidate exists for exactly that), and the
+            // 8-byte rule would refuse to read the mobs the grind loop has to fight.
+            if (unitPtr <= 0x10000UL || unitPtr >= 0x00007FFFFFFFFFFFUL)
+                return false;
+
+            // The unit object's data block is the same pointer the health words come
+            // from: on 70291 the object at record+0xD8 is the block itself (hunt31).
+            ulong data = unitPtr;
+            byte[]? head = _memory.ReadBytes64(data, 0x08);
+            if (head == null || head.Length != 8)
+                return false;
+
+            byte[]? level = _memory.ReadBytes64(data + WowBOffsets.UnitDataLevelOffset, 4);
+            byte[]? hp = _memory.ReadBytes64(data + WowBOffsets.UnitDataHealthOffset, 8);
+            byte[]? flags = _memory.ReadBytes64(data + WowBOffsets.UnitDataUnitFlagsOffset, 4);
+            byte[]? pow = _memory.ReadBytes64(data + WowBOffsets.UnitDataPowerOffset, 8);
+            if (level == null || level.Length != 4 || hp == null || hp.Length != 8 ||
+                flags == null || flags.Length != 4 || pow == null || pow.Length != 8)
+                return false;
+
+            fields = new WowBUnitFields(
+                BitConverter.ToUInt32(hp, 0), BitConverter.ToUInt32(hp, 4),
+                BitConverter.ToUInt32(level, 0), BitConverter.ToUInt32(flags, 0),
+                BitConverter.ToUInt32(pow, 0), BitConverter.ToUInt32(pow, 4), data);
+            return true;
+        }
+
+        /// <summary>The local player's level from memory, or 0 when it cannot be read.</summary>
+        public int ReadPlayerLevel()
+        {
+            if (!TryCaptureWorldSnapshot(out WowBWorldSnapshot? snapshot) || snapshot == null)
+                return 0;
+            if (!snapshot.TryGetLocalPlayer(out WowBObservedUnit me))
+                return 0;
+            if (!TryGetUnitFields(me.UnitAddress, out WowBUnitFields fields))
+                return 0;
+            return fields.Level <= 100 ? (int)fields.Level : 0;
+        }
+
+        /// <summary>
+        /// A raw window of 32-bit words from a unit's data block, for the offset hunt.
+        /// Nothing here is interpreted: the caller prints it and a person decides.
+        /// </summary>
+        public string DumpWords(ulong address, int count)
+        {
+            if (!IsUserPointer(address) || count <= 0 || count > 128)
+                return "";
+            byte[]? bytes = _memory.ReadBytes64(address, count * 4);
+            if (bytes == null || bytes.Length != count * 4)
+                return "<unreadable>";
+            var sb = new System.Text.StringBuilder(count * 8);
+            for (int i = 0; i < count; i++)
+            {
+                if (i > 0 && (i % 8) == 0) sb.Append(Environment.NewLine).Append("      ");
+                else if (i > 0) sb.Append(' ');
+                sb.Append(BitConverter.ToUInt32(bytes, i * 4).ToString("X8", System.Globalization.CultureInfo.InvariantCulture));
+            }
+            return sb.ToString();
+        }
+
+        /// <summary>How many action-bar slots the stored array holds (0x198 / 8 = 51).</summary>
+        public const int ActionSlotCount = 0x198 / 8;
+
+        /// <summary>
+        /// One stored action-bar slot, exactly as the client keeps it.
+        ///
+        /// The array is [V] (hunt31 dumped it at 0x7DFF4E0, 0x198 bytes), but the packing
+        /// of a slot is a candidate: the modern client keeps a 64-bit value per slot and
+        /// GetActionInfo decodes it. Both readings a person would try are printed rather
+        /// than one being asserted.
+        /// </summary>
+        public readonly struct WowBActionSlot
+        {
+            public readonly int Index;        // 1-based, the number UseAction takes
+            public readonly ulong Raw;
+
+            public WowBActionSlot(int index, ulong raw)
+            {
+                Index = index;
+                Raw = raw;
+            }
+
+            public bool IsEmpty { get { return Raw == 0; } }
+
+            /// <summary>Candidate A: low 24 bits are the spell/item/macro id, bits 24-31 the type.</summary>
+            public int IdLow24 { get { return (int)(Raw & 0xFFFFFFUL); } }
+            public int TypeHigh8 { get { return (int)((Raw >> 24) & 0xFFUL); } }
+
+            /// <summary>Candidate B: low 32 bits are the id, the next 32 bits the type.</summary>
+            public int IdLow32 { get { return unchecked((int)(Raw & 0xFFFFFFFFUL)); } }
+            public int TypeHigh32 { get { return unchecked((int)(Raw >> 32)); } }
+
+            public override string ToString()
+            {
+                return $"slot {Index}: raw=0x{Raw:X16} (low24id={IdLow24} type8={TypeHigh8}; low32={IdLow32} high32={TypeHigh32})";
+            }
+        }
+
+        /// <summary>
+        /// The client's stored action bar. An empty slot is all zeros - which is what a
+        /// character at level 2 with two spells on the bar should mostly show.
+        /// </summary>
+        public List<WowBActionSlot> ReadActionBar()
+        {
+            var slots = new List<WowBActionSlot>();
+            byte[]? bytes = _memory.ReadBytes64(Abs(WowBOffsets.StoredActionArray), ActionSlotCount * 8);
+            if (bytes == null || bytes.Length != ActionSlotCount * 8)
+                return slots;
+            for (int i = 0; i < ActionSlotCount; i++)
+            {
+                ulong raw = BitConverter.ToUInt64(bytes, i * 8);
+                if (raw == 0) continue;
+                slots.Add(new WowBActionSlot(i + 1, raw));
+            }
+            return slots;
+        }
+
         private bool TryReadUInt32(ulong address, out uint value)
         {
             value = 0;
