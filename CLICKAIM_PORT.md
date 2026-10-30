@@ -940,3 +940,41 @@ Three things changed in the loop because of it:
   log counted 22 fights in 6 seconds, all of them the same 17-yd-away mob; that
   target is now left alone for 15 s and the loop walks to the next hotspot
   instead, which is what "no wandering on non-viable mobs" means in practice.
+
+## 2026-10-30, second run — the client died during attach, and what replaced Lua
+
+`Start` at 15:34:02, crash reports at 15:34:04.790 and 15:34:05: `Lua stack is
+unbalanced` (`Ui/GameUI.cpp:8250`) and then `0xC0000028` in ntdll. The bot kept going
+on a dead client, which is why the same log then says "neither arrow key turned the
+character" — **movement was not broken**; it was steering a frozen process.
+
+The Lua bridge is now retired (`GameLua.TryOpen` refuses), so pressing Start cannot
+touch Lua at all. What the loop does instead:
+
+| step | mechanism | where the answer comes from |
+|---|---|---|
+| who to fight | TAB; then a right-click on the nearest unit the snapshot lists | the client's own hostility filter for TAB, a corpse filter for the click |
+| how far / how hurt | `WowBReader.TryGetUnitFields(unit, …)` → `hp/max/lvl/uflags/pow` | the unit's data block (`+0x1E30`, `+0x1E40`, `+0x1E60`, `+0x1BC8`) |
+| the attack | a right-click on the mob: select + the client's auto-attack | the client's own input handling |
+| when to stop | the mob's health stops dropping, or it dies, or 20 yd | one 32-bit read per round |
+
+Two numbers changed because the last log earned it: `ChaseYd` is 20 yd (it was 12,
+and TAB selects the *nearest* enemy rather than a close one, so every engage began
+out of range and gave up before the first swing — 22 fights in six seconds), and a
+target a fight gives up on is left alone for 15 s.
+
+### The Offsets button
+
+`Offsets` (right-hand column, wowb only) runs `ClickAimDiagnostics.Offsets()` and
+logs, in one block:
+
+* the player's `hp/max lvl uflags pow` and a 32-word dump at `data+0x1DF0`;
+* the stored action array at `0x7DFF4E0` — every non-zero slot with **both** plausible
+  packings (`low24 id` + `type8`, and `low32 id` + `high32`), so which one is right is
+  decided from data rather than by another build cycle;
+* the nearest 8 other units with distance, GUID, address and their fields;
+* the nearest non-player unit's raw words at `data+0x1DF0` and `data+0x1B80`.
+
+Nothing is written and no Lua is used. Paste the block and the missing offsets
+(level/reaction on a mob, the action-slot packing, spell ids) can be pinned down
+without guessing.

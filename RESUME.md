@@ -1,5 +1,17 @@
 # RESUME — CopilotBuddy x64 port (read this first)
 
+> **State as of 2026-10-30 — read this before anything below.** The Lua bridge is
+> **retired**: both mechanisms crashed `wowb.exe` (70291) within a second of Start
+> (`FrameScript_IsLuaThread` at `FrameScriptEvents.cpp:208`; then
+> `"Lua stack is unbalanced"` at `Ui/GameUI.cpp:8250` plus a `0xC0000028` unwind fault).
+> `GameLua.TryOpen` now refuses before touching the client. The grind loop reads the
+> client's memory only (`Styx/WoWInternals/WowBReader.cs`) and fights by right-clicking
+> the mob — the client's own auto-attack — with the outcome measured from the mob's
+> health. The window drives everything: Load Profile → Grind → Start, plus an **Offsets**
+> button that prints unit fields, the stored action bar and the raw word windows that the
+> remaining offset work needs. Do not resurrect any of the Lua plans in the sections
+> below; the measurements in `LUA_BRIDGE_64.md` are still good, the code path is not.
+
 Written 2026-10-13, immediately before a ≥15-day break. The sandbox workspace that
 produced this will be gone; everything needed to continue is in the Google Drive
 folder below and inside the archives it lists.

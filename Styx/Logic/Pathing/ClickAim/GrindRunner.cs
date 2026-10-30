@@ -53,8 +53,15 @@ internal static class GrindRunner
     /// <summary>Walk this close before attacking. Melee reach plus a margin.</summary>
     private const double AttackRangeYd = 4.0;
 
-    /// <summary>Further than this while "in range" and the target is running away.</summary>
-    private const double ChaseYd = 12.0;
+    /// <summary>
+    /// Further than this and the target is abandoned instead of chased.
+    ///
+    /// It was 12 yd, and on 2026-10-30 that produced "engaged at 16.9 yd ... target is 17 yd
+    /// away and moving; giving up on it" 22 times in six seconds: TAB picks the nearest
+    /// enemy rather than a close one, so almost every engage started outside 12 yd and ended
+    /// before a single swing. A mob this side of 20 yd is a mob to walk to.
+    /// </summary>
+    private const double ChaseYd = 20.0;
 
     // ---- attacking ---------------------------------------------------------
     /// <summary>
@@ -568,11 +575,14 @@ internal static class GrindRunner
             double d = ClickAimMath.Len(unit.Location.X - px, unit.Location.Y - py);
             if (d <= 0.5 || d > SearchYd) continue;
 
+            /* One filter that is certain: a corpse has no health. The level word is printed
+             * by the Offsets button but is not used to exclude anything here - it is marked
+             * V-ish, and a wrong level offset would silently skip every mob in the world. */
             if (reader != null && reader.TryGetUnitFields(unit.UnitAddress,
-                    out Styx.WoWInternals.WowBReader.WowBUnitFields f))
+                    out Styx.WoWInternals.WowBReader.WowBUnitFields f) && f.Health == 0)
             {
-                if (f.Health == 0) { skipped++; continue; }        // a corpse
-                if (f.Level == 0) { skipped++; continue; }         // nothing readable as a level
+                skipped++;
+                continue;
             }
 
             if (d < bestYd) { bestYd = d; best = unit; found = true; }
@@ -581,8 +591,8 @@ internal static class GrindRunner
         if (!found)
         {
             note = string.Format(CultureInfo.InvariantCulture,
-                "nothing clickable within {0:F0} yd ({1} skipped as dead or levelless, or the only "
-                + "one is the target it just gave up on)", SearchYd, skipped);
+                "nothing clickable within {0:F0} yd ({1} corpse(s) skipped, or the only one is the "
+                + "target it just gave up on)", SearchYd, skipped);
             return false;
         }
 
