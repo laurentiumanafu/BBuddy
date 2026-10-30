@@ -829,6 +829,25 @@ namespace Styx.WoWInternals
             return sb.ToString();
         }
 
+        /// <summary>
+        /// Reads a window of 32-bit words as numbers. <see cref="DumpWords"/> is for pasting one
+        /// reading into a log; this is for comparing two readings of the same address, which is
+        /// how a word that flips when a corpse is looted gets found at all.
+        /// </summary>
+        public bool TryReadWords(ulong address, int count, out uint[] words)
+        {
+            words = new uint[0];
+            if (address <= 0x10000UL || address >= 0x00007FFFFFFFFFFFUL || count <= 0 || count > 128)
+                return false;
+            byte[]? bytes = _memory.ReadBytes64(address, count * 4);
+            if (bytes == null || bytes.Length != count * 4)
+                return false;
+            uint[] result = new uint[count];
+            for (int i = 0; i < count; i++) result[i] = BitConverter.ToUInt32(bytes, i * 4);
+            words = result;
+            return true;
+        }
+
         /// <summary>How many action-bar slots the stored array holds (0x198 / 8 = 51).</summary>
         public const int ActionSlotCount = 0x198 / 8;
 

@@ -111,13 +111,16 @@ internal static class GrindRunner
     private const int LootSettleMs = 900;
 
     /// <summary>Tries per corpse before giving up on it for this session.</summary>
-    private const int LootTries = 3;
+    private const int LootTries = 2;
 
     /// <summary>Corpses this run has already tried; a corpse that cannot be looted is not retried forever.</summary>
     private static readonly HashSet<WowBGuid> _looted = new HashSet<WowBGuid>();
 
     /// <summary>Corpses successfully looted this session, for the summary.</summary>
     private static int _loots;
+
+    /// <summary>Set once the corpse word-diff has been printed; it is a discovery aid, not a log line.</summary>
+    private static bool _lootProbed;
 
     /// <summary>
     /// A mob's level, from <c>data+0x1E40</c>, against mine. Above +3 is a corpse run and
@@ -261,6 +264,7 @@ internal static class GrindRunner
         _notViable.Clear();
         _looted.Clear();
         _loots = 0;
+        _lootProbed = false;
 
         /* What the client can be asked without Lua: level, health, the stored action bar
          * and what is standing around. It is printed once because it is the answer to
@@ -654,10 +658,13 @@ internal static class GrindRunner
 
                 _notViable.Add(target.Guid);
                 if (_notViable.Count > 256) _notViable.Clear();
-                ClickAimInput.TapKey(hwnd, 0x1B, 40);          // ESC: drop the corpse
-                Thread.Sleep(200);
-                report = "the only thing the client offered was a corpse (health 0) - cleared it and "
-                         + "walking on";
+                /* No ESC here. In the client ESC closes a window when one is open and OPENS THE
+                 * GAME MENU when none is - and the 18:08 run is that: after every kill the main
+                 * menu appeared over the game and swallowed every key. A corpse left selected is
+                 * harmless: the fight refuses it by health 0 and TAB steps off it when something
+                 * live is around. Leave the selection alone. */
+                report = "the only thing the client offered was a corpse (health 0) - walking on "
+                         + "without touching it";
                 return false;
             }
 
@@ -688,8 +695,9 @@ internal static class GrindRunner
 
         if (target.HasPlayerVtable)
         {
-            report = "the client selected a PLAYER; not attacking. Pressing ESC and walking on";
-            ClickAimInput.TapKey(hwnd, 0x1B, 40);      // ESC clears the target
+            _notViable.Add(target.Guid);
+            if (_notViable.Count > 256) _notViable.Clear();
+            report = "the client selected a PLAYER; not attacking, walking on";
             return false;
         }
 
@@ -703,11 +711,10 @@ internal static class GrindRunner
         {
             report = string.Format(CultureInfo.InvariantCulture,
                 "TAB selected a level-{0} unit and this character is level {1} (viable: {2}-{3}) - "
-                + "not attacking; ESC and walking on",
+                + "not attacking, walking on",
                 tf.Level, myLevel, Math.Max(1, myLevel - LevelBelowPlayer), myLevel + LevelAbovePlayer);
             _notViable.Add(target.Guid);
             if (_notViable.Count > 256) _notViable.Clear();   // a long session on a crowded map
-            ClickAimInput.TapKey(hwnd, 0x1B, 40);
             return false;
         }
 
@@ -716,15 +723,17 @@ internal static class GrindRunner
         if (d > SearchYd)
         {
             /* TAB keeps whatever was last targeted when nothing better is in front, so this
-             * is usually a stale pick rather than a distant enemy. Clear it, and say so at
-             * most every five seconds - the 17:45 log printed this six times in eight
-             * seconds and it drowned everything else. */
-            ClickAimInput.TapKey(hwnd, 0x1B, 40);
+             * is usually a stale pick rather than a distant enemy. It is not attacked, and it
+             * is NOT cleared with ESC either - ESC with no window open opens the game menu, and
+             * the 18:08 run came back with the main menu over the game after every kill. A
+             * selected mob 40 yd out does nothing; the walk continues under it. Log it at most
+             * every five seconds - the 17:45 log printed this six times in eight seconds and
+             * it drowned everything else. */
             if (unchecked(Environment.TickCount - _farQuietAt) > 5000)
             {
                 _farQuietAt = Environment.TickCount;
                 report = string.Format(CultureInfo.InvariantCulture,
-                    "TAB has a target {0:F0} yd away ({1:F0} yd is the search radius) - cleared it and "
+                    "TAB has a target {0:F0} yd away ({1:F0} yd is the search radius) - not chasing it, "
                     + "walking on", d, SearchYd);
             }
             return false;
@@ -1012,28 +1021,78 @@ internal static class GrindRunner
             if (!ClickAimPositions.TryRead(out lx, out ly)) return -1;
 
             ClickAimKeySteer.Face(corpse.Location.X, corpse.Location.Y, hwnd, 30.0, 4);
+
+            /* One probe per session: the words around the corpse's own fields, read before and
+             * after the click. A word that goes from 1 to 0 across the click is the client's
+             * "lootable" flag, and printing it is how we stop guessing whether the right-click
+             * actually took the body. */
+            uint[]? beforeA = null, beforeB = null;
+            bool probe = !_lootProbed;
+            Styx.WoWInternals.WowBReader? probeReader = probe ? ObjectManager.WowB : null;
+            if (probe && probeReader != null)
+            {
+                uint[] w;
+                if (probeReader.TryReadWords(corpse.UnitAddress + 0x1B00, 64, out w)) beforeA = w;
+                if (probeReader.TryReadWords(corpse.UnitAddress + 0x1E00, 64, out w)) beforeB = w;
+                _lootProbed = true;
+            }
+
             if (!TryClickUnit(hwnd, corpse, lx, ly)) return -1;
             _clicks++;
 
             /* The client opens, takes and closes the window in well under a second with
              * auto-loot on; a body that is going to leave the pool leaves soon after. */
-            for (int waited = 0; waited < 2400 && !_stop; waited += 300)
+            for (int waited = 0; waited < 1500 && !_stop; waited += 300)
             {
                 Thread.Sleep(300);
                 if (!BodyStillThere(corpse.Guid)) return 1;
             }
 
-            if (attempt + 1 < LootTries)
-            {
-                /* Something may have opened and stayed open. ESC closes a loot window (and
-                 * clears the target, which is what we want anyway) so the next click is not
-                 * fighting a modal frame for the mouse. */
-                ClickAimInput.TapKey(hwnd, 0x1B, 40);
-                Thread.Sleep(250);
-            }
+            /* A second click, and nothing else between them. ESC used to go here - it closes a
+             * loot window when one is open - but with auto-loot on no window is ever open, so
+             * ESC only opened the game menu. That is the "game menu after the monster dies"
+             * the user reported from the 18:08 run. */
+            if (probe && probeReader != null && attempt == 0)
+                DescribeWordDiff(probeReader, corpse, 0x1B00, beforeA, 0x1E00, beforeB);
+
+            if (attempt + 1 < LootTries) StopAndSettle(hwnd);
         }
 
         return 0;
+    }
+
+    /// <summary>
+    /// Prints the words of a corpse that changed while it was being looted, as
+    /// <c>+0x1E64: 1 -> 0</c>. Only the words that moved are printed: two 64-word windows are
+    /// 128 numbers and the interesting one is the flag that was 1 while the body had loot in it.
+    /// </summary>
+    private static void DescribeWordDiff(Styx.WoWInternals.WowBReader reader, WowBObservedUnit corpse,
+                                         int offA, uint[]? beforeA, int offB, uint[]? beforeB)
+    {
+        int changed = 0;
+        changed += WordDiff(reader, corpse.UnitAddress, offA, beforeA);
+        changed += WordDiff(reader, corpse.UnitAddress, offB, beforeB);
+        Logging.Write(string.Format(CultureInfo.InvariantCulture,
+            "[Loot] {0} word(s) changed on the body of {1} across the right-click{2}",
+            changed, corpse.Guid,
+            changed == 0 ? " - nothing readable moved, so this build does not expose its loot state here" : ""));
+    }
+
+    /// <summary>Prints one window's differences and returns how many words moved.</summary>
+    private static int WordDiff(Styx.WoWInternals.WowBReader reader, ulong unitAddress, int offset, uint[]? before)
+    {
+        if (before == null || before.Length == 0) return 0;
+        uint[] after;
+        if (!reader.TryReadWords(unitAddress + (ulong)offset, before.Length, out after)) return 0;
+        int changed = 0;
+        for (int i = 0; i < before.Length && i < after.Length; i++)
+        {
+            if (before[i] == after[i]) continue;
+            changed++;
+            Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                "[Loot] word +0x{0:X}: 0x{1:X8} -> 0x{2:X8}", offset + i * 4, before[i], after[i]));
+        }
+        return changed;
     }
 
     /// <summary>Whether a guid is still in the pool as a body (no health).</summary>

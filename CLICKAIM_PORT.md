@@ -1266,3 +1266,52 @@ Turning with the arrow keys is not movement and does not block an attack; only t
   times in eight seconds).
 - The kill counter now accepts `killed or fled` as a kill, in the main loop and in the hatch
   dwell (17:45 finished real kills and still reported 0).
+
+## 18:08 run — the game menu after every kill: ESC
+
+The user's report: **"opens game menu after monster dies"**. The 18:08 log
+(`2026-10-30_1808_9616.log`) walked, fought and killed properly — 4 fights, 4 kills, `Wrath does
+damage` four times per mob, a hotspot reached, 225 s — and the loot lines appear exactly where
+the kill was:
+
+```
+[18:11:11.898] [Grind] right-clicked the body of 0x…1A41 (2.8 yd away); it is still in the pool
+[18:11:11.898] [Grind] looting: 1 body(s) right-clicked (0 of them disappeared)
+[18:11:11.898] [Grind] killed or fled after 11 s; what landed: Wrath (slot 2)
+```
+
+**The cause was ESC, and it was mine.** In the client, ESC closes the topmost window when one is
+open and **opens the Game Menu when none is** — and with auto-loot on, no loot window is ever
+open. The loot retry pressed ESC between attempts, so every corpse ended with the main menu over
+the game, which then swallowed TAB and every rotation key. The same mistake was in three more
+places: clearing a corpse off the target, dropping a player target, and dropping a far TAB
+target.
+
+**ESC is gone from the action path entirely** (`grep 0x1B` in `Styx/` now finds only offset
+tables). What each of those places does instead:
+
+| was | now |
+| --- | --- |
+| corpse selected → ESC | nothing. `Fight` refuses health 0 at entry and the TAB loop skips it; a corpse left selected blocks nothing |
+| player selected → ESC | nothing, plus the guid goes into `_notViable` so TAB results are not re-examined every 300 ms |
+| TAB target out of `SearchYd` → ESC | nothing; the walk continues under the selection and the log line stays throttled to 5 s |
+| loot retry → ESC | `StopAndSettle` only, then a second right-click |
+
+Loot retries are down to **2 attempts with a 1.5 s wait** (auto-loot finishes in well under a
+second), so a corpse costs about 3 s instead of 7.
+
+### Proving the loot instead of assuming it
+
+A body that has been looted stays in the unit pool as bones, so `still in the pool` proves
+nothing either way. On the **first corpse of a session** the bot now reads two 64-word windows of
+the corpse object (`+0x1B00` and `+0x1E00`), right-clicks, reads them again and prints only the
+words that moved:
+
+```
+[Loot] word +0x1E64: 0x00000001 -> 0x00000000
+[Loot] 1 word(s) changed on the body of 0x… across the right-click
+```
+
+A word going `1 -> 0` across the click is the client's lootable flag — `UnitDynamicFlags`
+`LOOTABLE` is bit 0 — and once the log names it, "did that right-click actually take the body"
+stops being a guess. If nothing moved the log says so, which is equally useful.

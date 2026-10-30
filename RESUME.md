@@ -270,3 +270,16 @@ spell cast through the memory action bar. What the run exposed and what changed:
 - The in-combat flag no longer stops the walk unless a live unit within range is actually
   fighting; the stale far TAB target is ESC-cleared with a throttled log line; `killed or
   fled` counts as a kill.
+
+## Latest: 18:08 run — ESC opened the Game Menu after every kill (fixed)
+
+- **All ESC presses removed from the action path.** In the client ESC opens the Game Menu when
+  no window is open, and with auto-loot no loot window ever is. Four sites: loot retry, corpse
+  clear, player-target clear, far-TAB clear. Corpse/player/far selections are now simply left
+  alone (the fight refuses health 0 and the level/vtable checks refuse the rest).
+- Loot retries 3 -> 2 with a 1.5 s wait (a corpse costs ~3 s, not 7).
+- New `WowBReader.TryReadWords` + a **once-per-session corpse word diff** (`[Loot] word +0x…:
+  0x… -> 0x…`) so the next log shows whether the right-click really consumed the body (lootable
+  flag should be the word that goes 1 -> 0).
+- The 18:08 run otherwise behaved: 4 fights / 4 kills / 2 hotspots, Wrath landing four times per
+  mob, the in-combat-with-nothing-to-fight walk-on rule working, far-TAB log throttled.
