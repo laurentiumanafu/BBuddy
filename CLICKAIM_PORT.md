@@ -1734,3 +1734,39 @@ Fixed:
 
 The rotation banner also reads properly now: only the first log line in that run still carried the
 old broken string, from the build before `9ce9165`.
+## The 23:00→ next run: auto-attack flickering, and mobs walked past
+
+**"It activates and deactivates auto-attack."** Because that is exactly what the code was doing:
+the melee branch re-pressed the Attack key every `MeleePressMs` (1.2 s) on a timer, and the Attack
+action **toggles** auto-attack on this client — press it while the swing is running and the swing
+stops. So the character alternated start/stop/start while the user watched.
+
+Fixed: the swing is only (re)started when it is demonstrably NOT running — nothing has landed on
+the mob for `MeleeSwingQuietMs` (4 s) — and then exactly once, with the log line
+`pressing Attack to start the swing (it stays on until something stops it; pressing it again would
+turn it off)`. Anything that cancels a swing (a heal, a damage cast) sets `meleeSwinging = false`,
+so the key is pressed again afterwards, and only then. A melee ability key (Claw/Heroic Strike) does
+not disturb the swing and is still pressed on its own timer.
+
+**"When moving between hotspots it walks past attackable monsters."** `FightNeeded` — the route
+interrupt — only ever returned true for a unit that was *already in combat* (`UnitFlags & 0x800`),
+i.e. a mob that had attacked the character. A wolf standing ten yards off the path has that flag
+clear, so the walk ignored it; the only fights on a leg were ambushes, and everything else had to
+wait until a hotspot's dwell loop pressed TAB.
+
+Fixed with a *pull probe*:
+
+- between polyline points, at most once every `PullProbeMs` (1.5 s), the walk asks the client
+  whether there is anything attackable nearby: first the current selection (costs no key), then one
+  TAB — which is the client's own hostility filter, the only thing here that can tell a wolf from a
+  guard;
+- a candidate is taken when it is alive, not a player, not already given up on, inside the level
+  band and within `PullYd` (30 yd — the old interrupt radius was 18 and required the mob to be
+  hitting us);
+- `TryEngage` now accepts the selection the walk stopped for (`going with the target already
+  selected`) instead of pressing TAB again and cycling past it;
+- a target the walk would not take is explained at most every 15 s, so a field full of grey mobs is
+  one line, not one per probe.
+
+Self-tests: `pullInsideSearch` (18 yd interrupt < 30 yd pull ≤ 40 yd search, ≥ 28 yd cast range),
+`pullProbeIsThrottled`, `swingQuietWindow`.

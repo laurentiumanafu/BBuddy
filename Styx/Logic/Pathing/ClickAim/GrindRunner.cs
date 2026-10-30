@@ -111,6 +111,17 @@ internal static class GrindRunner
     private const int RestFullPercent = 90;
 
     /// <summary>
+    /// How far off the path a mob may be and still be worth stopping the walk for. Big enough
+    /// to catch what a walk passes (the interrupt radius was 18 yd and only fired for mobs
+    /// already fighting the character), small enough that the character does not cross a field
+    /// for every wolf it sees.
+    /// </summary>
+    private const double PullYd = 30.0;
+
+    /// <summary>How often the walk asks the client whether there is something to kill nearby.</summary>
+    private const int PullProbeMs = 1500;
+
+    /// <summary>
     /// How close the walk stops short of the mob: inside <see cref="AttackRangeYd"/> once the
     /// character's own momentum has been spent, instead of through it and out the other side.
     /// </summary>
@@ -121,6 +132,15 @@ internal static class GrindRunner
     /// ~2-3 s; pressing the key more often than that is a global cooldown spent for nothing.
     /// </summary>
     private const int MeleePressMs = 1200;
+
+    /// <summary>
+    /// How long without a landed swing before the swing is assumed to have stopped.
+    ///
+    /// The Attack action TOGGLES on this client, so pressing it "to be sure" turns the swing
+    /// off. Four seconds of silence is the signal that it really has stopped; until then the
+    /// key is left alone and only the melee ability is pressed.
+    /// </summary>
+    private const int MeleeSwingQuietMs = 4000;
 
     /// <summary>
     /// How long without a landing swing before the character turns onto the mob again. Facing is
@@ -227,6 +247,12 @@ internal static class GrindRunner
     /// </summary>
     private static int _interruptQuietUntil;
 
+    /// <summary>When the walk last asked the client (TAB) whether anything nearby is attackable.</summary>
+    private static int _lastPullProbeMs;
+
+    /// <summary>When a refused pull was last explained, so the log is not one line per probe.</summary>
+    private static int _pullQuietAt;
+
     /// <summary>Last time the "in combat with nothing to fight" note was printed.</summary>
     private static int _combatQuietAt;
 
@@ -316,6 +342,8 @@ internal static class GrindRunner
         _gaveUpAt = 0;
         _gaveUpGuid = default(WowBGuid);
         _interruptQuietUntil = 0;
+        _lastPullProbeMs = 0;
+        _pullQuietAt = 0;
         _combatQuietAt = 0;
         _farQuietAt = 0;
         _notViable.Clear();
@@ -427,7 +455,7 @@ internal static class GrindRunner
                 if (!ok && RouteRunner.LastRunInterrupted)
                 {
                     Logging.Write("[Grind] the walk was cut short on purpose: something worth fighting "
-                                  + "came within " + InterruptYd.ToString("F0", CultureInfo.InvariantCulture)
+                                  + "is within " + PullYd.ToString("F0", CultureInfo.InvariantCulture)
                                   + " yd. Fighting it instead of walking on");
 
                     /* If the next pass does not actually fight anything, do not interrupt
@@ -703,6 +731,19 @@ internal static class GrindRunner
         }
 
         Styx.WoWInternals.WowBReader? selReader = ObjectManager.WowB;
+
+        /* The walk may already have selected the mob it stopped for (TryPullOnTheWay presses
+         * TAB once to ask the client who is attackable). Take that selection when it passes the
+         * same tests, instead of pressing TAB again and cycling PAST the very mob the walk
+         * stopped for. */
+        if (TryCurrentSelection(snap, selReader, px, py, out target))
+        {
+            have = true;
+            Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                "[Grind] going with the target already selected: {0} ({1:F1} yd)", target.Guid,
+                ClickAimMath.Len(target.Location.X - px, target.Location.Y - py)));
+        }
+
         for (int i = 0; i < TabTries && !have; i++)
         {
             ClickAimInput.TapKey(hwnd, TabVk, 40);
@@ -861,6 +902,29 @@ internal static class GrindRunner
     }
 
     /// <summary>
+    /// Whether the client's current selection is a LIVE unit within reach - the cheapest
+    /// possible target, because selecting it costs no key at all. A corpse is not one (that is
+    /// what left the bot fighting the same dead mob three times), and neither is anything
+    /// further than <see cref="PullYd"/>: a stale selection from an earlier leg must not turn
+    /// into a walk across the field.
+    /// </summary>
+    private static bool TryCurrentSelection(WowBWorldSnapshot snap, Styx.WoWInternals.WowBReader? reader,
+                                            double px, double py, out WowBObservedUnit target)
+    {
+        target = default(WowBObservedUnit);
+        if (reader == null) return false;
+        if (!snap.TryGetSelectedTarget(out target)) return false;
+        if (target.IsLocalPlayer) return false;
+
+        Styx.WoWInternals.WowBReader.WowBUnitFields f;
+        if (!reader.TryGetUnitFields(target.UnitAddress, out f)) return false;
+        if (f.Health == 0) return false;
+
+        double d = ClickAimMath.Len(target.Location.X - px, target.Location.Y - py);
+        return d <= PullYd;
+    }
+
+    /// <summary>
     /// Whether a mob of <paramref name="mobLevel"/> is worth attacking at
     /// <paramref name="myLevel"/>. A level the client did not report (0) is allowed: the
     /// level word is read from <c>data+0x1E40</c>, which the 2026-10-30 dump confirmed for a
@@ -926,10 +990,125 @@ internal static class GrindRunner
             return false;
         }
 
-        if (!NearestFighting(snap, me.Location.X, me.Location.Y, radius, out unit, out d)) return false;
+        if (NearestFighting(snap, me.Location.X, me.Location.Y, radius, out unit, out d))
+        {
+            Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                "[Grind] {0} is {1:F1} yd away and in combat - stopping the walk to deal with it", unit.Guid, d));
+            return true;
+        }
+
+        /* Nothing is fighting us - but that is not the same as "nothing here worth killing",
+         * and treating the two as one is why the character walked past mobs on every leg and
+         * only fought at the hotspots (the user's report). Ask the client instead of guessing:
+         * TAB applies its own hostility filter, so whatever it selects is attackable by
+         * definition, and the level band and the distance are checked here. */
+        return TryPullOnTheWay(hwnd, me);
+    }
+
+    /// <summary>
+    /// While walking, looks for an attackable mob near the path and reports whether the walk
+    /// should stop for it.
+    ///
+    /// Why TAB and not the snapshot: the snapshot has positions, levels and flags but no
+    /// reaction word, so it cannot tell a wolf from a guard - the 17:22 run right-clicked a
+    /// friendly townsman on exactly that mistake. TAB is the client's own enemy filter, it costs
+    /// one key and one read, and if it selects nothing the walk simply continues.
+    ///
+    /// Throttled: one probe every <see cref="PullProbeMs"/>, so a leg is not a TAB machine gun,
+    /// and the probe is skipped while the interrupt quiet period is running (the caller sets it
+    /// after a pull that did not turn into a fight).
+    /// </summary>
+    private static bool TryPullOnTheWay(IntPtr hwnd, WowBObservedUnit me)
+    {
+        if (unchecked(Environment.TickCount - _lastPullProbeMs) < PullProbeMs) return false;
+        _lastPullProbeMs = Environment.TickCount;
+
+        /* What is already selected costs no key: if it is good enough, take it. TAB would move
+         * the selection to the NEXT enemy, which is how a probe can walk past the mob it was
+         * looking at. */
+        WowBWorldSnapshot? snap;
+        WowBObservedUnit current;
+        if (Capture(out snap) && snap != null && snap.TryGetSelectedTarget(out current))
+        {
+            string selectedWhy;
+            double selectedYd;
+            if (PullWorthTaking(current, me, out selectedWhy, out selectedYd))
+            {
+                Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                    "[Grind] {0} is {1:F1} yd off the path and attackable - stopping the walk to pull it",
+                    current.Guid, selectedYd));
+                return true;
+            }
+        }
+
+        ClickAimInput.TapKey(hwnd, TabVk, 40);
+        Thread.Sleep(TabSettleMs);
+
+        WowBWorldSnapshot? after;
+        if (!Capture(out after) || after == null) return false;
+
+        /* The local player moved while the probe was in flight: read the distance from the
+         * fresh snapshot rather than from the one that started the probe. */
+        WowBObservedUnit now;
+        if (!after.TryGetLocalPlayer(out now)) return false;
+
+        WowBObservedUnit candidate;
+        if (!after.TryGetSelectedTarget(out candidate)) return false;
+
+        string why;
+        double d;
+        if (!PullWorthTaking(candidate, now, out why, out d))
+        {
+            /* Say why only when the client DID offer something - a probe that found nothing is
+             * the normal case on a quiet stretch and does not deserve a log line. */
+            if (why.Length > 0 && unchecked(Environment.TickCount - _pullQuietAt) > 15000)
+            {
+                _pullQuietAt = Environment.TickCount;
+                Logging.Write("[Grind] TAB offered a target while walking, not taking it: " + why);
+            }
+            return false;
+        }
 
         Logging.Write(string.Format(CultureInfo.InvariantCulture,
-            "[Grind] {0} is {1:F1} yd away and in combat - stopping the walk to deal with it", unit.Guid, d));
+            "[Grind] {0} is {1:F1} yd off the path and attackable - stopping the walk to pull it",
+            candidate.Guid, d));
+        return true;
+    }
+
+    /// <summary>
+    /// Whether a unit the client just offered is worth interrupting a walk for: alive, not a
+    /// player, not one that has already been given up on, inside the level band, and within
+    /// <see cref="PullYd"/>.
+    /// </summary>
+    private static bool PullWorthTaking(WowBObservedUnit candidate, WowBObservedUnit me,
+                                        out string why, out double yards)
+    {
+        why = "";
+        yards = double.MaxValue;
+
+        if (candidate.IsLocalPlayer) return false;
+        if (candidate.HasPlayerVtable) { why = "the client offered a PLAYER"; return false; }
+        if (Refused(candidate.Guid) || _notViable.Contains(candidate.Guid)) return false;
+
+        Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
+        if (reader == null) return false;
+
+        Styx.WoWInternals.WowBReader.WowBUnitFields f;
+        if (!reader.TryGetUnitFields(candidate.UnitAddress, out f)) return false;
+        if (f.Health == 0) return false;                       // a corpse: never worth a walk
+
+        yards = ClickAimMath.Len(candidate.Location.X - me.Location.X,
+                                 candidate.Location.Y - me.Location.Y);
+        if (yards > PullYd) return false;
+
+        int myLevel = PlayerLevel();
+        if (!LevelViable(f.Level, myLevel))
+        {
+            why = string.Format(CultureInfo.InvariantCulture,
+                "it is level {0} and this character is level {1}", f.Level, myLevel);
+            return false;
+        }
+
         return true;
     }
 
@@ -2143,6 +2322,7 @@ internal static class GrindRunner
                 && unchecked(Environment.TickCount - lastHealMs) >= ClickAimCombat.HealRetryMs)
             {
                 lastHealMs = Environment.TickCount;
+                meleeSwinging = false;          // a cast stops auto-attack; it must be restarted
                 uint powerBeforeHeal = myMana;
                 ClickAimInput.TapKey(hwnd, 0x70, 40);                  // F1 = target self (Blizzard default)
                 Thread.Sleep(120);
@@ -2329,6 +2509,7 @@ internal static class GrindRunner
                 }
 
                 lastCastMs = Environment.TickCount;
+                meleeSwinging = false;          // a cast stops auto-attack; it must be restarted
                 uint manaBefore = myMana;
                 int mobBeforeHealth = lastHealth;
                 _pendingCastId = damage.Id;
@@ -2468,11 +2649,16 @@ internal static class GrindRunner
 
             int sinceDamageMs = unchecked(Environment.TickCount - lastMeleeDamageMs);
 
+            /* Is the client's swing still running? It is only known from the result: a swing
+             * that has landed the mob's health in the last few seconds is running, and silence
+             * for MeleeSwingQuietMs means it has stopped. Everything below keys off this. */
+            bool swinging = meleeSwinging && sinceDamageMs < MeleeSwingQuietMs;
+
             /* Nothing has landed for a few seconds and the mob is still a couple of yards off:
              * the character stopped a shade too early. One short step forward, aimed by the same
              * facing call the walk uses, and no click - a click here is a walk order with no
              * aim and no stop. */
-            if (!meleeSwinging && sinceDamageMs > MeleeRefaceAfterMs && d > 2.5)
+            if (!swinging && sinceDamageMs > MeleeRefaceAfterMs && d > 2.5)
             {
                 double nudged;
                 ClickAimKeySteer.Steer(target.Location.X, target.Location.Y, hwnd, true, out nudged);
@@ -2480,7 +2666,7 @@ internal static class GrindRunner
                 ClickAimKeySteer.ReleaseHeld();
             }
 
-            if (!meleeSwinging || sinceDamageMs > MeleeRefaceAfterMs)
+            if (!swinging || sinceDamageMs > MeleeRefaceAfterMs)
             {
                 /* Wide tolerance at arm's length: the client's own melee arc is generous and a
                  * precise turn from 3 yd is what produced ninety-degree arrow taps. */
@@ -2496,23 +2682,31 @@ internal static class GrindRunner
                 }
             }
 
-            /* Start the swing. The Attack key is a keyboard press: it cannot be mistaken for a
-             * walk order, so it is always preferred. A click is only used when the bar has no
-             * Attack - and then once per MeleeClickMs, never every pass. */
+            /* Start the swing - ONCE. The Attack action is a TOGGLE on this client: pressing it
+             * while auto-attack is already running turns it OFF. The 23:00 run pressed it every
+             * 1.2 s on a timer, so the character alternated between starting and stopping its
+             * own swing, which is exactly what the user saw.
+             *
+             * So the rule is now: press it only when the swing is NOT running - i.e. nothing
+             * has landed for MeleeSwingQuietMs - and then once, not in a loop. A swing at level
+             * 1 lands every two or three seconds, so four seconds of silence means the swing
+             * has stopped. The key is preferred to a click because a click at arm's length can
+             * be a walk order. */
             bool attacked = false;
             if (auto != null)
             {
-                if (!meleeSwinging || unchecked(Environment.TickCount - lastAttackPressMs) >= MeleePressMs)
+                if (!swinging && unchecked(Environment.TickCount - lastAttackPressMs) >= MeleeClickMs)
                 {
                     ClickAimInput.TapKey(hwnd, auto.KeyVk, 40);
                     lastAttackPressMs = Environment.TickCount;
                     presses++;
                     _presses++;
                     attacked = true;
+                    Logging.Write("[Grind] pressing Attack to start the swing (it stays on until "
+                                + "something stops it; pressing it again would turn it off)");
                 }
             }
-            else if (!meleeSwinging
-                     && unchecked(Environment.TickCount - lastMeleeClickMs) >= MeleeClickMs)
+            else if (!swinging && unchecked(Environment.TickCount - lastMeleeClickMs) >= MeleeClickMs)
             {
                 lastMeleeClickMs = Environment.TickCount;
                 if (TryClickUnit(hwnd, target, me.Location.X, me.Location.Y))
@@ -2528,7 +2722,7 @@ internal static class GrindRunner
              * have stood at 28 yd pressing a key the client refuses. Rage and energy are not
              * readable apart from mana here, so the press goes out, and a refusal costs the
              * client's own error line rather than a global cooldown spent twice. */
-            if (meleeHit != null && (!meleeSwinging || sinceDamageMs >= MeleePressMs))
+            if (meleeHit != null && (!swinging || sinceDamageMs >= MeleePressMs))
             {
                 ClickAimInput.TapKey(hwnd, meleeHit.KeyVk, 40);
                 presses++;
@@ -2774,6 +2968,17 @@ internal static class GrindRunner
                                     && MeleeClickMs > MeleePressMs
                                     && MeleeWaitMs < AttackSettleMs);
             check("interruptInsideSearch", InterruptYd < SearchYd && InterruptYd > AttackRangeYd);
+
+            /* The walk stops for an attackable mob further out than the old 18 yd interrupt:
+             * that radius only fired for something already fighting the character, which is
+             * why mobs beside the path were walked past. It still sits inside the search. */
+            check("pullInsideSearch", PullYd > InterruptYd && PullYd <= SearchYd
+                                     && PullYd >= ClickAimCombat.CasterRangeYd);
+            check("pullProbeIsThrottled", PullProbeMs > 0 && PullProbeMs < 5000);
+
+            /* Auto-attack is a toggle on this client: it is only pressed again after this much
+             * silence, and the silence window has to be longer than a swing. */
+            check("swingQuietWindow", MeleeSwingQuietMs > MeleePressMs && MeleeSwingQuietMs >= 3000);
 
             /* The choice itself: with the level inside a band, the area picked must be one
              * whose band contains it - never merely the closest one. */
