@@ -70,6 +70,9 @@ internal static class GrindRunner
     /// <summary>Stop after this many hotspots with no reachable path.</summary>
     private const int MaxDeadHotspots = 4;
 
+    /// <summary>How often to re-read the player's level and consider another grind area.</summary>
+    private const int LevelCheckMs = 120000;
+
     private static volatile bool _stop;
     private static bool _running;
     private static int _presses;    // action-bar presses this session, for the summary
@@ -113,35 +116,22 @@ internal static class GrindRunner
             return false;
         }
 
-        int nearest = 0;
-        double best = double.MaxValue;
-        for (int i = 0; i < areas.Count; i++)
-        {
-            double cx, cy;
-            areas[i].Centre(out cx, out cy);
-            double d = ClickAimMath.Len(cx - px, cy - py);
-            if (d < best) { best = d; nearest = i; }
-        }
-
-        ProfileGrindArea area = areas[nearest];
         Logging.Write(string.Format(CultureInfo.InvariantCulture,
-            "[Grind] {0}: {1} grind area(s) in the file; using \"{2}\" - {3} hotspot(s), {4:F0} yd "
-            + "from the player. Target level {5}-{6}, factions '{7}' (read, not enforced: the "
-            + "client's own TAB targeting decides what is an enemy on this build).",
-            System.IO.Path.GetFileName(profilePath), areas.Count, area.Name, area.Hotspots.Count,
-            best, area.TargetMinLevel, area.TargetMaxLevel, area.Factions));
+            "[Grind] {0}: {1} grind area(s) in the file, levels {2}. Picking one needs the player's "
+            + "level, so the choice is made on the grind thread once the client answers.",
+            System.IO.Path.GetFileName(profilePath), areas.Count, LevelSpan(areas)));
 
         _stop = false;
         _running = true;
 
-        var thread = new Thread(() => Run(area, minutes));
+        var thread = new Thread(() => Run(areas, minutes));
         thread.IsBackground = true;
         thread.Name = "ClickAimGrind";
         thread.Start();
         return true;
     }
 
-    private static void Run(ProfileGrindArea area, int minutes)
+    private static void Run(List<ProfileGrindArea> areas, int minutes)
     {
         int started = Environment.TickCount;
         int budgetMs = minutes <= 0 ? int.MaxValue : minutes * 60000;
@@ -153,6 +143,9 @@ internal static class GrindRunner
         int index = 0;
         int dead = 0;
         int kills = 0, fights = 0, hotspots = 0;
+        int switches = 0;
+        int lastLevelCheck = Environment.TickCount;
+        int level = 0;
         _presses = 0;
         _casts = 0;
         _barLogged = false;
@@ -181,10 +174,43 @@ internal static class GrindRunner
             Logging.Write("[Grind] Lua setup threw: " + ex.Message + " - keyboard only");
         }
 
+        /* The profile's own level bands decide which area to grind, not proximity alone: a
+         * 19-SubProfile levelling file is a ladder, and grinding the step below your level is
+         * exactly the "wandering on non-viable mobs" this is supposed to avoid. */
+        level = PlayerLevel(_lua);
+        int chosen = SelectArea(areas, level, out string choice);
+        Logging.Write("[Grind] " + choice);
+        ProfileGrindArea area = areas[chosen];
+
         try
         {
             while (!_stop && unchecked(Environment.TickCount - started) < budgetMs)
             {
+                /* Every LevelCheckMs, ask the level again: a grind profile is a ladder, and the
+                 * rung below the one you are on stops being worth fighting. One Lua call, and
+                 * it is the only way this loop can ever climb. Timed rather than counted,
+                 * because a loop iteration is a whole hotspot leg, not a tick. */
+                if (unchecked(Environment.TickCount - lastLevelCheck) >= LevelCheckMs)
+                {
+                    lastLevelCheck = Environment.TickCount;
+                    int now = PlayerLevel(_lua);
+                    if (now > 0 && now != level)
+                    {
+                        string climbed;
+                        int next = SelectArea(areas, now, out climbed);
+                        if (next != chosen)
+                        {
+                            switches++;
+                            Logging.Write("[Grind] level " + level + " -> " + now + ". " + climbed);
+                            chosen = next;
+                            area = areas[chosen];
+                            index = 0;
+                            dead = 0;
+                        }
+                        level = now;
+                    }
+                }
+
                 /* Fight first, walk second. A grind area is a ring of points with mobs
                  * between them, so checking before each hop is checking every few
                  * seconds - close enough to catch an add without stopping mid-stride,
@@ -247,8 +273,103 @@ internal static class GrindRunner
 
         Logging.Write(string.Format(CultureInfo.InvariantCulture,
             "[Grind] done: {0} hotspot(s) reached, {1} fight(s), {2} kill(s) confirmed, "
-            + "{3} action-bar key press(es), {4} Lua action(s), {5:F0} s", hotspots, fights, kills,
-            _presses, _casts, (Environment.TickCount - started) / 1000.0));
+            + "{3} action-bar key press(es), {4} Lua action(s), {5} area switch(es), {6:F0} s",
+            hotspots, fights, kills, _presses, _casts, switches,
+            (Environment.TickCount - started) / 1000.0));
+    }
+
+    /// <summary>
+    /// The character's level, or 0 when nothing can say.
+    ///
+    /// Asked of the client's Lua when the bridge is up (<c>UnitLevel("player")</c>), because
+    /// that is a real answer from the running client. There is deliberately no fallback to
+    /// the level offset here: <c>WowBOffsets.LevelOffset</c> is marked V-ish, and a wrong
+    /// level would move the loop to the wrong rung of a levelling profile - worse than
+    /// admitting it does not know and grinding the nearest area.
+    /// </summary>
+    private static int PlayerLevel(GameLua? lua)
+    {
+        if (lua != null && lua.Live)
+        {
+            double? level = lua.Number("UnitLevel", "player");
+            if (level.HasValue && level.Value >= 1 && level.Value <= 100) return (int)level.Value;
+        }
+        return 0;
+    }
+
+    /// <summary>
+    /// The nearest area whose TargetMinLevel/TargetMaxLevel contains the player's level.
+    /// With no level, or no band that matches, it falls back to the nearest area and says so.
+    /// </summary>
+    private static int SelectArea(List<ProfileGrindArea> areas, int level, out string why)
+    {
+        double px = 0, py = 0;
+        ClickAimPositions.TryRead(out px, out py);
+
+        int nearest = 0, inBand = -1;
+        double nearestD = double.MaxValue, bandD = double.MaxValue;
+        for (int i = 0; i < areas.Count; i++)
+        {
+            ProfileGrindArea candidate = areas[i];
+            double cx, cy;
+            candidate.Centre(out cx, out cy);
+            double d = ClickAimMath.Len(cx - px, cy - py);
+            if (d < nearestD) { nearestD = d; nearest = i; }
+            if (level > 0 && InBand(candidate, level) && d < bandD) { bandD = d; inBand = i; }
+        }
+
+        int pick = inBand >= 0 ? inBand : nearest;
+        ProfileGrindArea chosen = areas[pick];
+        double distance = inBand >= 0 ? bandD : nearestD;
+
+        string because;
+        if (level <= 0)
+            because = "The player level is unknown (no Lua), so this is the NEAREST area, not "
+                      + "necessarily the right one.";
+        else if (inBand >= 0)
+            because = "Chosen because level " + level.ToString(CultureInfo.InvariantCulture)
+                      + " is inside its band (" + CountInBand(areas, level).ToString(CultureInfo.InvariantCulture)
+                      + " of " + areas.Count.ToString(CultureInfo.InvariantCulture) + " areas match).";
+        else
+            because = "No area's band contains level " + level.ToString(CultureInfo.InvariantCulture)
+                      + "; using the nearest. Bands in this file: " + LevelSpan(areas) + ".";
+
+        why = string.Format(CultureInfo.InvariantCulture,
+            "using \"{0}\" - {1} hotspot(s), {2:F0} yd away, target level {3}-{4}, factions "
+            + "'{5}'. {6}", chosen.Name, chosen.Hotspots.Count, distance,
+            chosen.TargetMinLevel, chosen.TargetMaxLevel, chosen.Factions, because);
+        return pick;
+    }
+
+    private static bool InBand(ProfileGrindArea area, int level)
+    {
+        if (area.TargetMinLevel <= 0 || level < area.TargetMinLevel) return false;
+        return area.TargetMaxLevel <= 0 || level <= area.TargetMaxLevel;
+    }
+
+    private static int CountInBand(List<ProfileGrindArea> areas, int level)
+    {
+        int count = 0;
+        for (int i = 0; i < areas.Count; i++) if (InBand(areas[i], level)) count++;
+        return count;
+    }
+
+    /// <summary>The distinct level bands a profile wrote, e.g. "1-6, 7-12, 13-18".</summary>
+    private static string LevelSpan(List<ProfileGrindArea> areas)
+    {
+        var parts = new List<string>();
+        for (int i = 0; i < areas.Count && parts.Count < 24; i++)
+        {
+            ProfileGrindArea area = areas[i];
+            string band = area.TargetMinLevel <= 0
+                ? "unstated"
+                : area.TargetMinLevel.ToString(CultureInfo.InvariantCulture) + "-"
+                  + (area.TargetMaxLevel > 0
+                        ? area.TargetMaxLevel.ToString(CultureInfo.InvariantCulture)
+                        : "?");
+            if (parts.IndexOf(band) < 0) parts.Add(band);
+        }
+        return parts.Count == 0 ? "none" : string.Join(", ", parts.ToArray());
     }
 
     /// <summary>
@@ -321,7 +442,8 @@ internal static class GrindRunner
             return false;
         }
 
-        report = _lua != null && _lua.Live ? FightWithActions(hwnd, _lua, px, py) : Fight(hwnd, px, py);
+        GameLua? lua = _lua;
+        report = lua != null && lua.Live ? FightWithActions(hwnd, lua, px, py) : Fight(hwnd, px, py);
         return true;
     }
 
@@ -520,6 +642,7 @@ internal static class GrindRunner
                 bar = read;
                 _barLogged = true;
             }
+            if (bar == null) return "the action bar could not be read";
 
             // Refresh the state of the slots that could be next; the bar itself rarely changes.
             int slot = -1;

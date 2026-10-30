@@ -254,11 +254,28 @@ derived from the action bar instead of from a spell list. If a routine turns up,
 seam is `GameLua.CastSpell(name)` plus a spell order per class - the transport already
 works.
 
+**Which area, though.** A levelling profile is a ladder - the 19-SubProfile
+`Horde12-60_cloth` file is one - so the area is not simply the nearest one. The loop asks
+the client for the player's level (`UnitLevel("player")`, only ever through Lua: the
+`LevelOffset` in `WowBOffsets` is marked V-ish and a wrong level would pick the wrong rung)
+and chooses the nearest area whose `TargetMinLevel`/`TargetMaxLevel` contains it. Every two
+minutes it asks again, and moves if the answer now belongs to a different band:
+
+```
+[Grind] using "Stonetalon 18-22" - 6 hotspot(s), 412 yd away, target level 18-22,
+        factions '16 109 189'. Chosen because level 19 is inside its band (3 of 19 areas match).
+[Grind] level 22 -> 23. using "Ashenvale 23-27" - 5 hotspot(s), 1180 yd away, ...
+```
+
+With no Lua there is no level, and the loop says so rather than guessing: it grinds the
+nearest area and prints `The player level is unknown (no Lua), so this is the NEAREST area,
+not necessarily the right one.`
+
 Known gaps, stated rather than hidden: **combat is only checked between hotspots**, not
 mid-leg (`WalkTo` has no interrupt hook yet), so an add that aggros during a long leg is
-fought at the next point; the profile's `<Blackspots>` are not applied to the mesh; and
-level filtering is logged, not enforced - a wrong level filter that silently refuses
-everything is worse than fighting one mob two levels too low.
+fought at the next point; the profile's `<Blackspots>` are not applied to the mesh; and a
+mob's own level is not checked against the band - the band selects the area, and the
+client's TAB selection still decides which individual mob is an enemy.
 
 ### The mesh is live now
 
