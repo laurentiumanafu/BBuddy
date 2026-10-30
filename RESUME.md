@@ -283,3 +283,17 @@ spell cast through the memory action bar. What the run exposed and what changed:
   flag should be the word that goes 1 -> 0).
 - The 18:08 run otherwise behaved: 4 fights / 4 kills / 2 hotspots, Wrath landing four times per
   mob, the in-combat-with-nothing-to-fight walk-on rule working, far-TAB log throttled.
+
+## Latest: 18:35 run — the loot click landed on the character, not the body
+
+- Nothing in the 18:35 log shows a right-click ever selecting or damaging anything: a unit 2–4 yd
+  in front of the character projects onto the character's own back (camera behind, looking
+  through it). This was always the case; loot just made it visible.
+- `TryClickUnit(..., mustSelect, out how)`: click, then require the client's target guid to become
+  that unit; on a miss climb an 18-point pixel ladder (`0,±40,±80,±120` x `0,+30,+60,-25,+90,-50,+120`),
+  cancelling the click-walk with `W` and re-facing between candidates; cache the winning offset in
+  `_clickBiasX/_clickBiasY` for the session.
+- Loot counts only when confirmed (`LootNoClick` otherwise, with the exact number of points tried
+  in the log). Melee also presses the `Attack` hotkey on every swing.
+- The 5-window loot word diff now only runs across a confirmed click, so it can finally catch the
+  lootable flag flipping `1 -> 0`.

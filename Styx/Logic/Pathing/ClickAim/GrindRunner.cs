@@ -159,6 +159,14 @@ internal static class GrindRunner
     private static int _clicks;     // right-clicks that selected or attacked something
 
     /// <summary>
+    /// Where the projection lands relative to a body, in client pixels, learned from a click the
+    /// client confirmed by selecting the unit. See <see cref="TryClickUnit"/>.
+    /// </summary>
+    private static int _clickBiasX;
+    private static int _clickBiasY;
+    private static bool _clickBiasKnown;
+
+    /// <summary>
     /// The target a fight gave up on, and when. Without this the loop answers "that mob is
     /// 17 yd away and moving" by selecting it again immediately: the 2026-10-30 log counted
     /// 22 fights in 6 seconds that way, 0.29 s apart, and then went nowhere because every
@@ -256,6 +264,9 @@ internal static class GrindRunner
         int level = 0;
         _presses = 0;
         _clicks = 0;
+        _clickBiasX = 0;
+        _clickBiasY = 0;
+        _clickBiasKnown = false;
         _gaveUpAt = 0;
         _gaveUpGuid = default(WowBGuid);
         _interruptQuietUntil = 0;
@@ -946,20 +957,26 @@ internal static class GrindRunner
 
         if (corpses.Count == 0) return "";
 
-        int clicked = 0, gone = 0, failed = 0;
-        for (int i = 0; i < corpses.Count && clicked + failed < maxCorpses && !_stop; i++)
+        int clicked = 0, gone = 0, unreached = 0;
+        for (int i = 0; i < corpses.Count && clicked + unreached < maxCorpses && !_stop; i++)
         {
             WowBObservedUnit corpse = corpses[i].Value;
             _looted.Add(corpse.Guid);          // one visit per body, whatever happens
 
             int result = TryLootOne(hwnd, corpse);
-            if (result < 0)
+            if (result == LootUnderAttack)
             {
-                failed++;
+                /* Something started fighting while the body was being reached. Nothing is
+                 * recorded against the corpse beyond the one visit: a fight outranks loot. */
                 Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                    "[Grind] no click could be placed on the body of {0} at {1:F1} yd - leaving it",
+                    "[Grind] gave up on the body of {0} ({1:F1} yd away) - something started fighting",
                     corpse.Guid, corpses[i].Key));
-                continue;
+                break;
+            }
+            if (result == LootNoClick)
+            {
+                unreached++;
+                continue;                      // TryLootOne already said exactly what failed
             }
 
             clicked++;
@@ -973,26 +990,29 @@ internal static class GrindRunner
             }
             else
             {
-                /* Bones stay in the pool, so a body that is still there is not proof of failure.
-                 * Say what was done and what was observed, not more. */
+                /* Bones stay in the pool, so a body that is still there is not proof of failure -
+                 * but the click itself WAS confirmed by the client selecting the body, which is
+                 * the part that used to be taken on faith. */
                 Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                    "[Grind] right-clicked the body of {0} ({1:F1} yd away); it is still in the pool - "
-                    + "normal for bones after a loot, and only a loot window that stayed open would mean "
-                    + "auto-loot is off", corpse.Guid, corpses[i].Key));
+                    "[Grind] looted the body of {0} ({1:F1} yd away); the bones are still in the pool, "
+                    + "which is normal", corpse.Guid, corpses[i].Key));
             }
         }
 
-        if (clicked == 0 && failed == 0) return "";
+        if (clicked == 0 && unreached == 0) return "";
         return string.Format(CultureInfo.InvariantCulture,
-            "looting: {0} body(s) right-clicked ({1} of them disappeared){2}", clicked, gone,
-            failed == 0 ? "" : ", " + failed + " unreachable");
+            "looting: {0} body(s) taken{1}{2}", clicked,
+            gone == 0 ? "" : ", " + gone + " gone from the pool",
+            unreached == 0 ? "" : ", " + unreached + " the mouse could not reach");
     }
 
     /// <summary>
-    /// Walks to one corpse, right-clicks it, and reports what happened: 1 when the body left
-    /// the pool (it was taken), 0 when the click landed but the body is still there, -1 when
-    /// no click could be placed at all. Walks only while nothing is attacking and only within
-    /// <see cref="LootYd"/>, because a loot trip is not worth a fight with something else.
+    /// Walks to one corpse and right-clicks it, and reports what happened: 1 when the body left
+    /// the pool, 0 when the client confirmed the click by selecting the body and the body is
+    /// still there (bones), <see cref="LootNoClick"/> when no point around the projected one
+    /// made the client select it, and <see cref="LootUnderAttack"/> when something started
+    /// fighting. Walks only within <see cref="LootYd"/>, because a loot trip is not worth a
+    /// fight with something else.
     /// </summary>
     private static int TryLootOne(IntPtr hwnd, WowBObservedUnit corpse)
     {
@@ -1000,7 +1020,7 @@ internal static class GrindRunner
 
         for (int attempt = 0; attempt < LootTries && !_stop; attempt++)
         {
-            /* Get within reach first. Right-clicking a body from 15 yd starts a walk, not a
+            /* Get within reach first. A right-click on a body further away starts a walk, not a
              * loot, and the walk is what the mover is for. */
             while (unchecked(Environment.TickCount - started) < 12000 && !_stop)
             {
@@ -1008,7 +1028,7 @@ internal static class GrindRunner
                 if (!ClickAimPositions.TryRead(out px, out py)) break;
                 double d = ClickAimMath.Len(corpse.Location.X - px, corpse.Location.Y - py);
                 if (d <= 4.5) break;
-                if (UnderAttack()) return -1;
+                if (UnderAttack()) return LootUnderAttack;
                 double remaining;
                 ClickAimKeySteer.Steer(corpse.Location.X, corpse.Location.Y, hwnd, true, out remaining);
                 Thread.Sleep(90);
@@ -1018,27 +1038,31 @@ internal static class GrindRunner
             StopAndSettle(hwnd);
 
             double lx, ly;
-            if (!ClickAimPositions.TryRead(out lx, out ly)) return -1;
+            if (!ClickAimPositions.TryRead(out lx, out ly)) return LootNoClick;
 
             ClickAimKeySteer.Face(corpse.Location.X, corpse.Location.Y, hwnd, 30.0, 4);
 
-            /* One probe per session: the words around the corpse's own fields, read before and
-             * after the click. A word that goes from 1 to 0 across the click is the client's
-             * "lootable" flag, and printing it is how we stop guessing whether the right-click
-             * actually took the body. */
-            uint[]? beforeA = null, beforeB = null;
-            bool probe = !_lootProbed;
-            Styx.WoWInternals.WowBReader? probeReader = probe ? ObjectManager.WowB : null;
-            if (probe && probeReader != null)
+            /* One probe per session: five windows of the corpse's own object, read before and
+             * after a click the client CONFIRMED selected the body. A word that moves across
+             * that click is the loot flag, and finding it finally makes "was it looted" a
+             * reading instead of an assumption. */
+            bool probe = !_lootProbed && !_clickBiasKnown;
+            uint[][]? before = probe ? CaptureWords(corpse) : null;
+
+            /* mustSelect: the click only counts once the client says this body is the target.
+             * A right-click aimed at a point that lands on the character's own back (which is
+             * where a unit 3 yd in front projects to) selects nothing and loots nothing, and
+             * "I clicked" was being reported as "I looted" all through the 18:35 run. */
+            string how;
+            if (!TryClickUnit(hwnd, corpse, lx, ly, true, out how))
             {
-                uint[] w;
-                if (probeReader.TryReadWords(corpse.UnitAddress + 0x1B00, 64, out w)) beforeA = w;
-                if (probeReader.TryReadWords(corpse.UnitAddress + 0x1E00, 64, out w)) beforeB = w;
-                _lootProbed = true;
+                Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                    "[Loot] could not reach the body of {0} with the mouse: {1}", corpse.Guid, how));
+                return LootNoClick;
             }
 
-            if (!TryClickUnit(hwnd, corpse, lx, ly)) return -1;
             _clicks++;
+            _lootProbed = true;
 
             /* The client opens, takes and closes the window in well under a second with
              * auto-loot on; a body that is going to leave the pool leaves soon after. */
@@ -1048,12 +1072,14 @@ internal static class GrindRunner
                 if (!BodyStillThere(corpse.Guid)) return 1;
             }
 
-            /* A second click, and nothing else between them. ESC used to go here - it closes a
-             * loot window when one is open - but with auto-loot on no window is ever open, so
-             * ESC only opened the game menu. That is the "game menu after the monster dies"
-             * the user reported from the 18:08 run. */
-            if (probe && probeReader != null && attempt == 0)
-                DescribeWordDiff(probeReader, corpse, 0x1B00, beforeA, 0x1E00, beforeB);
+            if (before != null)
+            {
+                Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
+                if (reader != null) DescribeWordDiff(reader, corpse, before);
+            }
+
+            Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                "[Loot] the right-click on {0} landed ({1}); the body is still in the pool", corpse.Guid, how));
 
             if (attempt + 1 < LootTries) StopAndSettle(hwnd);
         }
@@ -1061,25 +1087,66 @@ internal static class GrindRunner
         return 0;
     }
 
+    /// <summary>The click found no point on the body at all.</summary>
+    private const int LootNoClick = -2;
+
+    /// <summary>Something started hitting the character while the loot was being reached.</summary>
+    private const int LootUnderAttack = -1;
+
     /// <summary>
-    /// Prints the words of a corpse that changed while it was being looted, as
-    /// <c>+0x1E64: 1 -> 0</c>. Only the words that moved are printed: two 64-word windows are
-    /// 128 numbers and the interesting one is the flag that was 1 while the body had loot in it.
+    /// The windows of a unit object that the loot probe reads. They bracket the fields this
+    /// build already uses (health +0x1E30, level +0x1E40, flags +0x1E60) with enough room on
+    /// both sides for a dynamic-flags word to sit among them.
+    /// </summary>
+    private static readonly int[] LootProbeWindows = { 0x1900, 0x1B00, 0x1D00, 0x1F00, 0x2100 };
+
+    /// <summary>Reads <see cref="LootProbeWindows"/> of a unit, or null when none is readable.</summary>
+    private static uint[][]? CaptureWords(WowBObservedUnit unit)
+    {
+        Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
+        if (reader == null) return null;
+        var windows = new uint[LootProbeWindows.Length][];
+        bool any = false;
+        for (int i = 0; i < LootProbeWindows.Length; i++)
+        {
+            uint[] words;
+            if (reader.TryReadWords(unit.UnitAddress + (ulong)LootProbeWindows[i], 64, out words))
+            {
+                windows[i] = words;
+                any = true;
+            }
+            else
+            {
+                windows[i] = new uint[0];
+            }
+        }
+        return any ? windows : null;
+    }
+
+    /// <summary>
+    /// Prints the words of a corpse that moved while it was being looted, as
+    /// <c>+0x1E64: 1 -> 0</c>. Only the words that moved are printed - five 64-word windows are
+    /// 320 numbers and the interesting one is the flag that was 1 while the body had loot in it.
     /// </summary>
     private static void DescribeWordDiff(Styx.WoWInternals.WowBReader reader, WowBObservedUnit corpse,
-                                         int offA, uint[]? beforeA, int offB, uint[]? beforeB)
+                                         uint[][] before)
     {
         int changed = 0;
-        changed += WordDiff(reader, corpse.UnitAddress, offA, beforeA);
-        changed += WordDiff(reader, corpse.UnitAddress, offB, beforeB);
+        for (int i = 0; i < LootProbeWindows.Length && i < before.Length; i++)
+            changed += WordDiff(reader, corpse.UnitAddress, LootProbeWindows[i], before[i]);
+
         Logging.Write(string.Format(CultureInfo.InvariantCulture,
-            "[Loot] {0} word(s) changed on the body of {1} across the right-click{2}",
-            changed, corpse.Guid,
-            changed == 0 ? " - nothing readable moved, so this build does not expose its loot state here" : ""));
+            "[Loot] {0} word(s) of the body's own object moved across the loot click{1}",
+            changed,
+            changed == 0
+                ? " - this build keeps its loot state somewhere these windows do not reach, so the "
+                  + "only signal left is the body leaving the pool"
+                : ""));
     }
 
     /// <summary>Prints one window's differences and returns how many words moved.</summary>
-    private static int WordDiff(Styx.WoWInternals.WowBReader reader, ulong unitAddress, int offset, uint[]? before)
+    private static int WordDiff(Styx.WoWInternals.WowBReader reader, ulong unitAddress, int offset,
+                                uint[]? before)
     {
         if (before == null || before.Length == 0) return 0;
         uint[] after;
@@ -1264,12 +1331,96 @@ internal static class GrindRunner
     /// <summary>Right-clicks one unit where it stands: select and attack, done by the client.</summary>
     private static bool TryClickUnit(IntPtr hwnd, WowBObservedUnit unit, double px, double py)
     {
+        string how;
+        return TryClickUnit(hwnd, unit, px, py, false, out how);
+    }
+
+    /// <summary>
+    /// Right-clicks a unit, and - when <paramref name="mustSelect"/> - does not call it a
+    /// success until the client says that unit is now the target.
+    ///
+    /// This exists because the projection cannot be trusted to land on a body by itself. The
+    /// 18:35 run right-clicked a corpse at a projected point that was 2.8 yd away and the body
+    /// did not move a word: a unit standing in front of the character is very close to the
+    /// camera's own axis, which puts the projected point on the character's BACK, and a click
+    /// there is a click on nothing. The same reason explains why no right-click auto-attack has
+    /// ever done damage in a log.
+    ///
+    /// So: click the projected point, then a small ladder of points around it, and stop at the
+    /// first one the client actually selects something with. The pixel offset that worked is
+    /// kept for the rest of the session (<see cref="_clickBiasX"/>), which turns every later
+    /// unit click back into a single click.
+    /// </summary>
+    private static bool TryClickUnit(IntPtr hwnd, WowBObservedUnit unit, double px, double py,
+                                     bool mustSelect, out string how)
+    {
+        how = "";
         int dx, dy;
-        if (!TryProject(hwnd, px, py, unit.Location.X, unit.Location.Y, unit.Location.Z,
-                        out dx, out dy))
+        if (!TryProject(hwnd, px, py, unit.Location.X, unit.Location.Y, unit.Location.Z, out dx, out dy))
+        {
+            how = "the projected point is behind the camera or off the screen";
             return false;
-        ClickAimInput.Click(hwnd, dx, dy);
-        return true;
+        }
+
+        Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
+        bool canVerify = mustSelect && reader != null && reader.ReadTargetGuid() != unit.Guid;
+
+        /* The offset that worked last time. If it stops working (the camera moved, the
+         * character turned) the sweep below relearns it. */
+        if (_clickBiasKnown)
+        {
+            ClickAimInput.Click(hwnd, dx + _clickBiasX, dy + _clickBiasY);
+            if (!canVerify) return true;
+            Thread.Sleep(150);
+            if (reader != null && reader.ReadTargetGuid() == unit.Guid)
+            {
+                how = string.Format(CultureInfo.InvariantCulture,
+                    "the click landed on the learned offset {0},{1} px", _clickBiasX, _clickBiasY);
+                return true;
+            }
+            _clickBiasKnown = false;
+            ClickAimKeySteer.ReleaseHeld();
+            ClickAimInput.TapKey(hwnd, 0x57, 40);          // W: cancel a click-walk the miss started
+        }
+
+        int[] xs = { 0, -40, 40, -80, 80, -120, 120 };
+        int[] ys = { 0, 30, 60, -25, 90, -50, 120 };
+
+        int tried = 0;
+        for (int yi = 0; yi < ys.Length && tried < 18 && !_stop; yi++)
+        {
+            for (int xi = 0; xi < xs.Length && tried < 18 && !_stop; xi++)
+            {
+                ClickAimInput.Click(hwnd, dx + xs[xi], dy + ys[yi]);
+                tried++;
+                if (!canVerify) return true;
+
+                Thread.Sleep(150);
+                if (reader == null) return true;
+                if (reader.ReadTargetGuid() != unit.Guid)
+                {
+                    /* A click that missed the body landed on the ground, and a right-click on
+                     * the ground walks there. Stop the walk and turn back before the next try,
+                     * or the ladder is climbed from the wrong place. */
+                    ClickAimKeySteer.ReleaseHeld();
+                    ClickAimInput.TapKey(hwnd, 0x57, 40);
+                    ClickAimKeySteer.Face(unit.Location.X, unit.Location.Y, hwnd, 40.0, 2);
+                    continue;
+                }
+
+                _clickBiasX = xs[xi];
+                _clickBiasY = ys[yi];
+                _clickBiasKnown = true;
+                how = string.Format(CultureInfo.InvariantCulture,
+                    "the projected point missed the body; {0},{1} px from it selected it, and that offset "
+                    + "is now used for every unit click", xs[xi], ys[yi]);
+                return true;
+            }
+        }
+
+        how = string.Format(CultureInfo.InvariantCulture,
+            "none of {0} click points around the projected one selected it", tried);
+        return false;
     }
 
     /// <summary>
@@ -1657,10 +1808,11 @@ internal static class GrindRunner
             {
                 _clicks++;
             }
-            else if (auto != null)
-            {
-                ClickAimInput.TapKey(hwnd, auto.KeyVk, 40);       // slot 1 = Attack
-            }
+            /* The Attack hotkey goes out whether the click landed or not. The click is what a
+             * player would do and it also selects the mob, but a click aimed at a body 1 yd
+             * ahead can land on the character's own model - the key cannot miss, and the
+             * target is already selected by TAB. */
+            if (auto != null) ClickAimInput.TapKey(hwnd, auto.KeyVk, 40);
             presses++;
             Thread.Sleep(AttackSettleMs);
 

@@ -1315,3 +1315,57 @@ words that moved:
 A word going `1 -> 0` across the click is the client's lootable flag — `UnitDynamicFlags`
 `LOOTABLE` is bit 0 — and once the log names it, "did that right-click actually take the body"
 stops being a guess. If nothing moved the log says so, which is equally useful.
+
+## 18:35 run — the loot right-click never landed on the body
+
+User: **"still won't work, you can right click on the monster after it is dead (once) to loot it"**.
+The log shows the click being sent and nothing happening:
+
+```
+[18:35:13.263] [Loot] 0 word(s) changed on the body of 0x…12E6 across the right-click
+[18:35:20.288] [Grind] right-clicked the body of 0x…12E6 (2.8 yd away); it is still in the pool
+```
+
+The ESC/game-menu bug is fixed (no menu in this run, the corpse line no longer presses a key),
+so this is a **new, older bug that the loot code merely exposed**: the projected screen point is
+not where the body is.
+
+**Why.** `TryProject` puts the unit exactly where the maths says, and for a unit 2–4 yd in
+front of the character that vector is almost parallel to the camera axis — the camera sits
+behind the character and looks *through* it at the character. So the projected point lands on
+the character's own back, and a right-click there clicks the character, not the mob. This also
+explains the older logs: **no right-click auto-attack has ever done damage**, `what landed:` is
+always `Wrath (slot 2)`, and the one `right-click auto-attack landed` in the 17:36 log was a
+false credit at a corpse.
+
+### The fix: a click the client confirms
+
+`TryClickUnit(hwnd, unit, px, py, mustSelect, out how)` now clicks, then **asks the client**:
+is the target guid now this unit? A right-click on a body both selects and loots it, so a target
+guid that becomes the corpse *is* the proof that the click landed.
+
+1. Click the projected point (plus any offset already learned).
+2. If the target did not change, click a small ladder of points around it — `0, ±40, ±80, ±120`
+   px across and `0, +30, +60, -25, +90, -50, +120` px down, 18 candidates at most. A body 3 yd
+   ahead sits low and partly behind the character's own model, which is why the ladder is
+   wider than it is tall and why the horizontal steps come first.
+3. Every miss that hit the ground starts a click-walk: release, tap `W` to cancel it, turn back
+   onto the body, then try the next candidate.
+4. The offset that worked is kept for the session in `_clickBiasX/_clickBiasY`, so every later
+   unit click is a single click again. If the stored offset ever stops being confirmed it is
+   dropped and relearned.
+5. Loot only counts as loot when step 2 confirmed it. `TryLootOne` returns
+   `LootNoClick` when no point reached the body and the log says so in full:
+   `[Loot] could not reach the body of 0x… with the mouse: none of 18 click points around the projected one selected it`.
+
+Melee gets the same treatment from the other side: the `Attack` hotkey (slot 1) is now pressed
+on **every** swing, not only when the projection fails, because the key cannot miss and the mob
+is already selected by TAB. The right-click is the human-looking path; the key is the one that
+works.
+
+### The loot probe is now trustworthy
+
+The five-window word diff (`+0x1900 … +0x2100`, 320 words) used to run across a click that had
+done nothing, so "0 words changed" meant nothing. It now runs **only across a click the client
+confirmed selected the corpse**, which is the first time the diff can actually see a loot flag go
+`1 -> 0`. It stays once per session and prints only the words that moved.
