@@ -1110,3 +1110,42 @@ Verified the only way that counts: `step` was reintroduced and the check reporte
 then the fix was restored and it reported zero. Scoped to the tree under work like the
 undeclared-call check - over the whole repository it reports 508 legacy findings
 (`TreeSharp`, `Tripper`, discards and generated fields), none of them ours.
+
+## 2026-10-30 17:22 — it attacked the town
+
+From the log: `using "Grind" … 684 yd away`, then 0.3 s later
+`[Keys] the turn keys were the wrong way round (a 220 ms tap moved the facing +42 deg …)`,
+then `right-clicked the mob 3.6 yd away - the client selected it and starts the attack
+itself`, then a fight that landed nothing. The "mob" 3.6 yd away in the middle of town was
+a **friendly NPC**, and the character never walked the 684 yd because every friendly unit
+in the square kept re-triggering the walk interrupt.
+
+Two wrong assumptions, both now gone:
+
+1. **A right-click can choose a target.** It cannot tell a mob from a guard - the snapshot
+   has positions, levels and flags, and no reaction word - so it clicked a townsman. The
+   untargeted click fallback (`TryClickAttack`, 5.5 kB of it) is **deleted**. TAB is now the
+   only way a target is chosen, because the client's own filter is the only thing here that
+   knows who is an enemy. When TAB selects nothing the loop logs
+   `N unit(s) within 40 yd, none of them selected by TAB … nothing here is attackable` and
+   keeps walking - a correct answer in a town.
+2. **"A level-appropriate unit is nearby" means "there is a fight here".** It does not: 27
+   friendly units within 40 yd in the square. The interrupt now needs either the player's own
+   `UnitFlags & 0x800` (in combat) or a unit within 18 yd that carries it.
+
+`0x800` finally has a settled meaning, and it is not reaction - it is **in combat**:
+
+| dump | player | mobs |
+|---|---|---|
+| 15:57 | `0x80808` fighting | `0x80800` the mob being fought, `0x800`/`0x0` idle ones |
+| 16:42 | `0x808` fighting | `0x80800` |
+| 17:22 | `0x8` standing in town, fighting nothing | - |
+
+A friendly NPC standing in a square never sets it, so it is the one hostility-adjacent
+signal this build actually offers. Also new: a target that a whole fight could not touch
+(`nothing landed …`) is remembered for the session as not viable, instead of being selected
+and fought again every three seconds.
+
+The turn-key swap firing on the first tap of the run is the intended behaviour of the
+measure-don't-assume `Face()`: the walk calibration had not run yet, so the first guess (220
+ms for 57 deg) was 40% short, and the code swapped the pair once and went on.

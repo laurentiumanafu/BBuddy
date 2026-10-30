@@ -223,3 +223,14 @@ spell cast through the memory action bar. What the run exposed and what changed:
 * cast-first rotation: approach to 28 yd, stop, face, Wrath; the right-click melee path
   runs only when casting is unavailable, so the character no longer walks into melee
   while it has mana.
+
+
+## 2026-10-30, 17:22 run — it attacked a friendly NPC in town
+
+* `TryClickAttack` is deleted: a right-click cannot distinguish a mob from a guard and it
+  clicked a townsman 3.6 yd away. TAB (the client's own enemy filter) is now the only way a
+  target is chosen; nothing selected means nothing attackable, and the walk continues.
+* `UnitFlags & 0x800` is settled as IN COMBAT (player 0x80808/0x808 fighting, 0x8 standing in
+  town). The walk interrupt needs it - on the player, or on a unit within 18 yd - instead of
+  "a level-appropriate unit is nearby", which every NPC in a town satisfies.
+* a target nothing could touch is added to `_notViable` for the session.

@@ -72,13 +72,18 @@ internal static class GrindRunner
 
     // ---- attacking ---------------------------------------------------------
     /// <summary>
-    /// What <c>UnitFlags</c> is NOT: a reaction bit. The 16:06 run printed the player as
-    /// <c>uflags=0x808</c> - the same 0x800 that looked like "hostile" on the mobs - so 0x800
-    /// cannot be hostility, and it is no longer used to rank targets. It overlaps what
-    /// 3.3.5a calls the transient combat/PvP bits; hostility stays with the client's own
-    /// filter (TAB) and with "something here is close enough to hit us".
+    /// <c>UnitFlags</c> bit 0x800, which the three 2026-10-30 dumps agree means IN COMBAT:
+    ///
+    ///   15:57  player 0x80808 while fighting     mob being fought 0x80800   idle mobs 0x800 / 0x0
+    ///   16:42  player 0x808  while fighting      the mob it fought 0x80800
+    ///   17:22  player 0x8    standing in town, fighting nothing
+    ///
+    /// It is NOT reaction: the player carries it too. But as "this unit is fighting right now"
+    /// it is exactly what a grind loop needs, and it is what replaces the untargeted
+    /// right-click: on 2026-10-30 17:22 that clicked a friendly townsman at 3.6 yd and the
+    /// "fight" was against the town.
     /// </summary>
-    private const uint ReactionUnknownMask = 0x800;
+    private const uint InCombatFlag = 0x800;
 
     /// <summary>
     /// Something worth fighting this close cuts a hotspot leg short. The 16:07 run walked
@@ -535,28 +540,27 @@ internal static class GrindRunner
 
         double px = player.Location.X, py = player.Location.Y;
         int near = CountNear(snap, px, py, SearchYd);
-        if (near == 0) return false;
 
-        /* Three ways to make the client select something, and the order matters.
+        /* ONE way to choose a target: TAB.
          *
-         * 1. TAB. No memory and no Lua, and the client applies its own hostility filter, so
-         *    a guard or a quest NPC is never picked. It is also how we find out whether the
-         *    window still takes keyboard input at all.
-         * 2. A right-click on the nearest unit. No hostility filter - the snapshot says
-         *    where units are, not who they are - so it is tried when TAB found nothing,
-         *    which is exactly the 2026-10-30 case ("11 unit(s) within 40 yd but nothing
-         *    selected them"). A unit that turns out to be friendly is remembered and never
-         *    clicked again, so the list of what NOT to attack is learned instead of assumed. */
+         * The right-click fallback is gone. It cannot tell a mob from a guard - the snapshot
+         * carries positions, levels and flags, and no reaction word - so on 2026-10-30 17:22
+         * it walked up to a friendly townsman 3.6 yd away and right-clicked him, which is a
+         * "fight" against the town and nothing else. TAB is the client's own enemy filter
+         * and it is the only thing here that knows who is an enemy. If TAB selects nothing,
+         * the answer is "nothing here to fight", which is a correct answer in a town.
+         *
+         * The cost of being wrong is asymmetric: a missed mob is a wasted walk, an allied
+         * NPC is a broken run and a reputation. Hence the strict version. */
         WowBObservedUnit target = default(WowBObservedUnit);
         bool have = false;
 
-        /* Turn before asking. TAB only considers enemies in FRONT of the character and a
-         * right-click can only select what is on screen, so with the mob behind us both
-         * paths answer "nothing here" - which is precisely what the 16:07 run logged for
-         * two and a half minutes while mobs were attacking. */
+        /* Turn toward whatever is actually fighting before asking: TAB only considers
+         * enemies in FRONT of the character (the 16:07 run logged "behind the camera" for
+         * two and a half minutes because of that). */
         WowBObservedUnit aim;
         double aimYd;
-        if (NearestViable(snap, px, py, SearchYd, out aim, out aimYd))
+        if (NearestFighting(snap, px, py, SearchYd, out aim, out aimYd))
         {
             ClickAimKeySteer.Face(aim.Location.X, aim.Location.Y, hwnd, 20.0, 6);
             if (!Capture(out snap) || snap == null) return false;
@@ -573,16 +577,15 @@ internal static class GrindRunner
             if (snap.TryGetSelectedTarget(out target)) have = true;
         }
 
-        string clickNote = "";
-        if (!have && snap != null && TryClickAttack(hwnd, snap, px, py, out target, out clickNote))
-            have = true;
-
         if (!have)
         {
-            report = string.Format(CultureInfo.InvariantCulture,
-                "{0} unit(s) within {1:F0} yd but nothing selected them - treating the area as "
-                + "empty and walking on", near, SearchYd)
-                + (clickNote.Length == 0 ? "" : " (the right-click attempt: " + clickNote + ")");
+            /* Nothing selected means nothing hostile in front. In a town that is the whole
+             * population: 27 friendly units within 40 yd at 17:22, none of them an enemy. */
+            if (near > 0)
+                report = string.Format(CultureInfo.InvariantCulture,
+                    "{0} unit(s) within {1:F0} yd, none of them selected by TAB - the client only "
+                    + "targets enemies, so nothing here is attackable and the walk continues",
+                    near, SearchYd);
             return false;
         }
 
@@ -630,8 +633,8 @@ internal static class GrindRunner
             return false;
         }
 
-        /* The fight is a right-click plus the client's own auto-attack, and the verdict comes
-         * from the mob's health in memory. No Lua is involved at any point. */
+        /* The fight presses the action bar and right-clicks the SELECTED target, and the
+         * verdict comes from the mob's health and my own mana in memory. No Lua anywhere. */
         int fightStarted = Environment.TickCount;
         report = Fight(hwnd, px, py);
 
@@ -646,130 +649,18 @@ internal static class GrindRunner
             Thread.Sleep(GiveUpBackoffMs);
         }
 
-        return true;
-    }
-
-    /// <summary>
-    /// Right-clicks the nearest viable mob, which is how a player starts a fight: the client
-    /// selects it, turns into it and starts auto-attack by itself.
-    ///
-    /// Nothing is written to memory and no Lua is called, so this is the one engage path that
-    /// cannot kill the client with an assert. False means "no clickable mob"; the reason
-    /// (when there is a useful one) comes back in <paramref name="note"/>.
-    /// </summary>
-    private static bool TryClickAttack(IntPtr hwnd, WowBWorldSnapshot snap, double px, double py,
-                                      out WowBObservedUnit target, out string note)
-    {
-        target = default(WowBObservedUnit);
-        note = "";
-
-        int w, h;
-        if (!ClickAimInput.ClientSize(hwnd, out w, out h)) return false;
-
-        /* Nearest viable unit: never the player, never anything with a player vtable, never
-         * the mob the last fight gave up on, and - from memory, not a guess - never a corpse
-         * or a unit with no level. Those two words are the only "is this a monster" test this
-         * client has offered so far; the hostility filter that actually works is TAB, which
-         * is why this is the fallback. */
-        Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
-        var units = snap.Units;
-        int myLevel = PlayerLevel();
-
-        WowBObservedUnit best = default(WowBObservedUnit);
-        double bestYd = double.MaxValue;
-        bool found = false;
-
-        WowBObservedUnit nearAny = default(WowBObservedUnit);
-        double nearAnyYd = double.MaxValue;
-        bool haveAny = false;
-
-        int skipped = 0, unviable = 0, lower = 0;
-        for (int i = 0; i < units.Count; i++)
+        /* Nothing landed at all - not a point of health, not one mana. Either the target
+         * cannot be attacked by us (a friendly unit the client let through, an immune NPC) or
+         * it is out of reach. Never select it again this session instead of repeating the
+         * same nothing every three seconds. */
+        if (report.StartsWith("nothing landed", StringComparison.Ordinal))
         {
-            WowBObservedUnit unit = units[i];
-            if (unit.IsLocalPlayer) continue;
-            if (unit.HasPlayerVtable) continue;
-            if (Refused(unit.Guid)) continue;
-            if (_notViable.Contains(unit.Guid)) continue;
-            double d = ClickAimMath.Len(unit.Location.X - px, unit.Location.Y - py);
-            if (d <= 0.5 || d > SearchYd) continue;
-
-            /* What the client says about it, if it says anything: a corpse has no health and
-             * the level word decides whether the fight is worth the walk. UnitFlags is NOT
-             * used - see ReactionUnknownMask. */
-            if (reader != null && reader.TryGetUnitFields(unit.UnitAddress,
-                    out Styx.WoWInternals.WowBReader.WowBUnitFields f))
-            {
-                if (f.Health == 0) { skipped++; continue; }
-                if (!LevelViable(f.Level, myLevel)) { unviable++; continue; }
-            }
-            else lower++;
-
-            if (d < nearAnyYd) { nearAnyYd = d; nearAny = unit; haveAny = true; }
-
-            if (d < bestYd)
-            {
-                bestYd = d;
-                best = unit;
-                found = true;
-            }
+            _notViable.Add(target.Guid);
+            if (_notViable.Count > 256) _notViable.Clear();
+            Logging.Write("[Grind] giving up on " + target.Guid
+                          + " for this session: nothing this rotation has could touch it");
         }
 
-        if (!found && haveAny)
-        {
-            best = nearAny;
-            bestYd = nearAnyYd;
-            found = true;
-        }
-
-        if (!found)
-        {
-            note = string.Format(CultureInfo.InvariantCulture,
-                "nothing clickable within {0:F0} yd of a level-{1} character: {2} corpse(s), "
-                + "{3} outside the {4}-{5} band, {6} with unreadable fields"
-                + ", and the rest is the target it just gave up on",
-                SearchYd, myLevel, skipped, unviable,
-                Math.Max(1, myLevel - LevelBelowPlayer), myLevel + LevelAbovePlayer, lower);
-            return false;
-        }
-
-        /* Face it first: a right-click can only select what is on screen, and "the nearest
-         * mob is behind the camera or off the screen" was the answer on every single engage
-         * of the 16:07 run. Turn, then project; if the first projection still fails, turn
-         * again and retry instead of giving up with a mob in range. */
-        int dx, dy;
-        if (!TryProject(hwnd, px, py, best.Location.X, best.Location.Y, best.Location.Z, out dx, out dy))
-        {
-            ClickAimKeySteer.Face(best.Location.X, best.Location.Y, hwnd, 15.0, 8);
-            if (!TryProject(hwnd, px, py, best.Location.X, best.Location.Y, best.Location.Z, out dx, out dy))
-            {
-                note = string.Format(CultureInfo.InvariantCulture,
-                    "the nearest mob ({0:F1} yd) would not come on screen even after turning to it",
-                    bestYd);
-                return false;
-            }
-        }
-
-        ClickAimInput.Click(hwnd, dx, dy);       // right-click: select + attack
-        _clicks++;
-        Thread.Sleep(TabSettleMs);
-
-        WowBWorldSnapshot? after;
-        if (!Capture(out after) || after == null) return false;
-        if (!after.TryGetSelectedTarget(out target))
-        {
-            note = string.Format(CultureInfo.InvariantCulture,
-                "a right-click at ({0}, {1}) on the mob {2:F1} yd away selected nothing - the client "
-                + "may have the mob under something else, or the click did not land", dx, dy, bestYd);
-            return false;
-        }
-
-        if (target.Guid != best.Guid)
-            return true;      // it selected SOMETHING; whether it is the one we aimed at is the client's call
-
-        Logging.Write(string.Format(CultureInfo.InvariantCulture,
-            "[Grind] right-clicked the mob {0:F1} yd away - the client selected it and starts the attack itself",
-            bestYd));
         return true;
     }
 
@@ -800,12 +691,23 @@ internal static class GrindRunner
         if (!Capture(out snap) || snap == null) return false;
         if (!snap.TryGetLocalPlayer(out WowBObservedUnit me)) return false;
 
+        /* Being attacked is the strongest reason to stop walking, and it needs no hostility
+         * guess: our own flags say so. */
+        Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
+        Styx.WoWInternals.WowBReader.WowBUnitFields mine;
+        if (reader != null && reader.TryGetUnitFields(me.UnitAddress, out mine)
+            && (mine.UnitFlags & InCombatFlag) != 0)
+        {
+            Logging.Write("[Grind] the character is in combat - stopping the walk");
+            return true;
+        }
+
         WowBObservedUnit unit;
         double d;
-        if (!NearestViable(snap, me.Location.X, me.Location.Y, radius, out unit, out d)) return false;
+        if (!NearestFighting(snap, me.Location.X, me.Location.Y, radius, out unit, out d)) return false;
 
         Logging.Write(string.Format(CultureInfo.InvariantCulture,
-            "[Grind] {0} is {1:F1} yd away - stopping the walk to deal with it", unit.Guid, d));
+            "[Grind] {0} is {1:F1} yd away and in combat - stopping the walk to deal with it", unit.Guid, d));
         return true;
     }
 
@@ -840,16 +742,16 @@ internal static class GrindRunner
     }
 
     /// <summary>
-    /// The nearest unit worth walking into a fight with, or false when there is none.
+    /// The nearest unit that is IN COMBAT right now - the only hostility signal this build
+    /// offers (<see cref="InCombatFlag"/>) - or false when there is none.
     ///
-    /// Used for two things: turning the character toward the nearest plausible mob before
-    /// TAB (which only looks in front), and deciding whether a hotspot leg should be cut
-    /// short. It deliberately does not judge hostility - the flags cannot (see
-    /// <see cref="ReactionUnknownMask"/>) - so it only applies the three things the client
-    /// is certain about: not the player, not a corpse, inside the level band.
+    /// Used for two things: turning toward the thing attacking us before TAB (which only
+    /// looks in front), and deciding whether a hotspot leg should be cut short. A friendly
+    /// NPC standing in a town is not in combat, which is exactly why it is not used as a
+    /// target any more.
     /// </summary>
-    private static bool NearestViable(WowBWorldSnapshot snap, double px, double py, double radius,
-                                      out WowBObservedUnit unit, out double yards)
+    private static bool NearestFighting(WowBWorldSnapshot snap, double px, double py, double radius,
+                                        out WowBObservedUnit unit, out double yards)
     {
         Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
         int myLevel = PlayerLevel();
@@ -869,18 +771,43 @@ internal static class GrindRunner
             double d = ClickAimMath.Len(candidate.Location.X - px, candidate.Location.Y - py);
             if (d <= 0.5 || d > radius || d >= yards) continue;
 
+            bool fighting = false;
             if (reader != null && reader.TryGetUnitFields(candidate.UnitAddress,
                     out Styx.WoWInternals.WowBReader.WowBUnitFields f))
             {
                 if (f.Health == 0) continue;
                 if (!LevelViable(f.Level, myLevel)) continue;
+                fighting = (f.UnitFlags & InCombatFlag) != 0;
             }
+            if (!fighting) continue;
 
             unit = candidate;
             yards = d;
             found = true;
         }
         return found;
+    }
+
+    /// <summary>
+    /// Whether the local player's own <c>UnitFlags</c> say "in combat". This is the one read
+    /// that answers "are we being attacked" without guessing at hostility: it was 0x808 at
+    /// 16:42 while a mob was on the character and 0x8 at 17:22 while standing in town.
+    /// </summary>
+    private static bool PlayerInCombat()
+    {
+        Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
+        if (reader == null) return false;
+        try
+        {
+            WowBWorldSnapshot? snap;
+            if (!reader.TryCaptureWorldSnapshot(out snap) || snap == null) return false;
+            WowBObservedUnit me;
+            if (!snap.TryGetLocalPlayer(out me)) return false;
+            Styx.WoWInternals.WowBReader.WowBUnitFields f;
+            if (!reader.TryGetUnitFields(me.UnitAddress, out f)) return false;
+            return (f.UnitFlags & InCombatFlag) != 0;
+        }
+        catch { return false; }
     }
 
     /// <summary>True while the target a fight gave up on is still off limits.</summary>
