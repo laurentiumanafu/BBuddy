@@ -100,6 +100,25 @@ internal static class GrindRunner
     /// <summary>Stand at a hotspot this long looking for a mob before walking to the next.</summary>
     private const int HotspotDwellMs = 9000;
 
+    // ---- looting ----------------------------------------------------------
+    /// <summary>
+    /// How far a corpse will be walked to for looting. A kill leaves the body where the mob
+    /// was, which for a caster is up to a cast away.
+    /// </summary>
+    private const double LootYd = 18.0;
+
+    /// <summary>How long to let the client open (and auto-loot) the window before looking again.</summary>
+    private const int LootSettleMs = 900;
+
+    /// <summary>Tries per corpse before giving up on it for this session.</summary>
+    private const int LootTries = 3;
+
+    /// <summary>Corpses this run has already tried; a corpse that cannot be looted is not retried forever.</summary>
+    private static readonly HashSet<WowBGuid> _looted = new HashSet<WowBGuid>();
+
+    /// <summary>Corpses successfully looted this session, for the summary.</summary>
+    private static int _loots;
+
     /// <summary>
     /// A mob's level, from <c>data+0x1E40</c>, against mine. Above +3 is a corpse run and
     /// more than 4 below is grey (no experience, no loot worth the walk). Outside that band
@@ -150,6 +169,12 @@ internal static class GrindRunner
     /// interrupt found nothing it could actually fight.
     /// </summary>
     private static int _interruptQuietUntil;
+
+    /// <summary>Last time the "in combat with nothing to fight" note was printed.</summary>
+    private static int _combatQuietAt;
+
+    /// <summary>Last time the "TAB has a target out of range" note was printed.</summary>
+    private static int _farQuietAt;
 
     /// <summary>Leave a target it gave up on alone for this long.</summary>
     private const int GiveUpMs = 15000;
@@ -231,7 +256,11 @@ internal static class GrindRunner
         _gaveUpAt = 0;
         _gaveUpGuid = default(WowBGuid);
         _interruptQuietUntil = 0;
+        _combatQuietAt = 0;
+        _farQuietAt = 0;
         _notViable.Clear();
+        _looted.Clear();
+        _loots = 0;
 
         /* What the client can be asked without Lua: level, health, the stored action bar
          * and what is standing around. It is printed once because it is the answer to
@@ -298,7 +327,9 @@ internal static class GrindRunner
                     fights++;
                     /* The Lua fight reports which slots did the killing, so the word is a
                      * prefix, not the whole line. */
-                    if (combatReport.StartsWith("killed", StringComparison.Ordinal)) kills++;
+                    if (combatReport.StartsWith("killed", StringComparison.Ordinal)
+                        || combatReport.IndexOf("killed or fled", StringComparison.Ordinal) >= 0)
+                        kills++;
                     Logging.Write("[Grind] " + combatReport);
                     if (combatReport.StartsWith("the character died", StringComparison.Ordinal)) break;
                     continue;
@@ -374,8 +405,8 @@ internal static class GrindRunner
 
         Logging.Write(string.Format(CultureInfo.InvariantCulture,
             "[Grind] done: {0} hotspot(s) reached, {1} fight(s), {2} kill(s) confirmed, "
-            + "{3} key press(es), {4} click(s) that landed, {5} area switch(es), {6:F0} s",
-            hotspots, fights, kills, _presses, _clicks, switches,
+            + "{3} corpse(s) looted, {4} key press(es), {5} click(s) that landed, {6} area switch(es), {7:F0} s",
+            hotspots, fights, kills, _loots, _presses, _clicks, switches,
             (Environment.TickCount - started) / 1000.0));
     }
 
@@ -616,6 +647,11 @@ internal static class GrindRunner
                 && corpseReader.TryGetUnitFields(target.UnitAddress, out corpseFields)
                 && corpseFields.Health == 0)
             {
+                /* A body we can see is a body we can take, and this is the moment we are
+                 * standing on it: loot first, then clear the target. */
+                string loot = LootNearby(hwnd, 2);
+                if (loot.Length > 0) Logging.Write("[Grind] " + loot);
+
                 _notViable.Add(target.Guid);
                 if (_notViable.Count > 256) _notViable.Clear();
                 ClickAimInput.TapKey(hwnd, 0x1B, 40);          // ESC: drop the corpse
@@ -679,8 +715,18 @@ internal static class GrindRunner
         double d = ClickAimMath.Len(target.Location.X - px, target.Location.Y - py);
         if (d > SearchYd)
         {
-            report = string.Format(CultureInfo.InvariantCulture,
-                "it selected something {0:F0} yd away - out of the search radius, walking on", d);
+            /* TAB keeps whatever was last targeted when nothing better is in front, so this
+             * is usually a stale pick rather than a distant enemy. Clear it, and say so at
+             * most every five seconds - the 17:45 log printed this six times in eight
+             * seconds and it drowned everything else. */
+            ClickAimInput.TapKey(hwnd, 0x1B, 40);
+            if (unchecked(Environment.TickCount - _farQuietAt) > 5000)
+            {
+                _farQuietAt = Environment.TickCount;
+                report = string.Format(CultureInfo.InvariantCulture,
+                    "TAB has a target {0:F0} yd away ({1:F0} yd is the search radius) - cleared it and "
+                    + "walking on", d, SearchYd);
+            }
             return false;
         }
 
@@ -710,6 +756,15 @@ internal static class GrindRunner
             if (_notViable.Count > 256) _notViable.Clear();
             Logging.Write("[Grind] giving up on " + target.Guid
                           + " for this session: nothing this rotation has could touch it");
+        }
+
+        /* A kill leaves a body, and the character is already standing next to it. Take it
+         * before deciding where to walk: this is the cheapest loot there is. */
+        if (report.StartsWith("killed", StringComparison.Ordinal)
+            || report.IndexOf("killed or fled", StringComparison.Ordinal) >= 0)
+        {
+            string loot = LootNearby(hwnd, 3);
+            if (loot.Length > 0) Logging.Write("[Grind] " + loot);
         }
 
         return true;
@@ -748,19 +803,39 @@ internal static class GrindRunner
         if (!Capture(out snap) || snap == null) return false;
         if (!snap.TryGetLocalPlayer(out WowBObservedUnit me)) return false;
 
-        /* Being attacked is the strongest reason to stop walking, and it needs no hostility
-         * guess: our own flags say so. */
-        Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
-        Styx.WoWInternals.WowBReader.WowBUnitFields mine;
-        if (reader != null && reader.TryGetUnitFields(me.UnitAddress, out mine)
-            && (mine.UnitFlags & InCombatFlag) != 0)
-        {
-            Logging.Write("[Grind] the character is in combat - stopping the walk");
-            return true;
-        }
-
         WowBObservedUnit unit;
         double d;
+
+        /* Being attacked is the strongest reason to stop walking, and it needs no hostility
+         * guess: our own flags say so. But the flag alone is NOT enough to stop for - the
+         * 17:45 run had the player at 0x808 for minutes while TAB considered the whole area
+         * empty (3 nearby units, all corpses), so every leg was interrupted after two points
+         * and the character never left the first field. Stop only when there is something to
+         * stop FOR. */
+        Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
+        Styx.WoWInternals.WowBReader.WowBUnitFields mine;
+        bool inCombat = reader != null && reader.TryGetUnitFields(me.UnitAddress, out mine)
+                        && (mine.UnitFlags & InCombatFlag) != 0;
+
+        if (inCombat)
+        {
+            if (NearestFighting(snap, me.Location.X, me.Location.Y, radius, out unit, out d))
+            {
+                Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                    "[Grind] {0} is {1:F1} yd away and in combat - stopping the walk to deal with it",
+                    unit.Guid, d));
+                return true;
+            }
+
+            if (unchecked(Environment.TickCount - _combatQuietAt) > 15000)
+            {
+                _combatQuietAt = Environment.TickCount;
+                Logging.Write("[Grind] the character reads as in combat but nothing nearby is fighting - "
+                              + "walking on (the flag alone is not a reason to stop)");
+            }
+            return false;
+        }
+
         if (!NearestFighting(snap, me.Location.X, me.Location.Y, radius, out unit, out d)) return false;
 
         Logging.Write(string.Format(CultureInfo.InvariantCulture,
@@ -786,6 +861,7 @@ internal static class GrindRunner
                 fights++;
                 fought++;
                 if (report.StartsWith("killed", StringComparison.Ordinal)) { kills++; killed++; }
+                else if (report.IndexOf("killed or fled", StringComparison.Ordinal) >= 0) { kills++; killed++; }
                 Logging.Write("[Grind] " + report);
                 continue;
             }
@@ -793,9 +869,184 @@ internal static class GrindRunner
             Thread.Sleep(400);
         }
 
-        if (fought == 0) return "";
+        /* Anything left lying around while standing here is worth the walk. */
+        string loot = LootNearby(hwnd, 3);
+
+        if (fought == 0 && loot.Length == 0) return "";
+        if (fought == 0) return loot;
         return string.Format(CultureInfo.InvariantCulture,
-            "stood at the hotspot and fought {0} time(s), {1} of them ending as kills", fought, killed);
+            "stood at the hotspot and fought {0} time(s), {1} of them ending as kills{2}",
+            fought, killed, loot.Length == 0 ? "" : "; " + loot);
+    }
+
+    // ------------------------------------------------------------------ looting
+    /// <summary>
+    /// Right-clicks corpses so the client loots them.
+    ///
+    /// How a player loots with auto-loot on: a right-click on the body, and the client opens
+    /// the window, takes everything and closes it. So that is all this does - no Lua, no
+    /// memory write, no reading of the loot itself. The user has auto-loot on, so there is
+    /// nothing here that reads a loot window, and nothing that presses a key to take an item.
+    ///
+    /// The only thing that can be observed from outside is whether the body left the pool.
+    /// A body that leaves was looted. A body that stays might still have been looted (bones
+    /// linger), so a second attempt is made with an ESC between them to close a window that
+    /// stayed open, and then the body is left alone for the session - one visit per corpse,
+    /// never a loop. If auto-loot were off, the windows would stay open and every corpse would
+    /// report that it is still there, which is the symptom the log would show.
+    ///
+    /// Nothing happens while something is attacking: a fight outranks loot, and the corpse
+    /// is not going anywhere.
+    /// </summary>
+    private static string LootNearby(IntPtr hwnd, int maxCorpses)
+    {
+        if (_stop || maxCorpses <= 0) return "";
+        if (UnderAttack()) return "";      // a fight outranks the loot, and the body keeps
+
+        Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
+        if (reader == null) return "";
+
+        WowBWorldSnapshot? snap;
+        if (!Capture(out snap) || snap == null) return "";
+        WowBObservedUnit me;
+        if (!snap.TryGetLocalPlayer(out me)) return "";
+
+        /* Corpses, nearest first. A unit with no health is a body; the pool keeps it for a
+         * while after the kill (the 17:36 log engaged one at 2.8 yd with health 0). */
+        var corpses = new List<KeyValuePair<double, WowBObservedUnit>>();
+        for (int i = 0; i < snap.Units.Count; i++)
+        {
+            WowBObservedUnit unit = snap.Units[i];
+            if (unit.IsLocalPlayer) continue;
+            if (unit.HasPlayerVtable) continue;
+            if (_looted.Contains(unit.Guid)) continue;
+
+            double d = ClickAimMath.Len(unit.Location.X - me.Location.X, unit.Location.Y - me.Location.Y);
+            if (d <= 0.5 || d > LootYd) continue;
+
+            Styx.WoWInternals.WowBReader.WowBUnitFields f;
+            if (!reader.TryGetUnitFields(unit.UnitAddress, out f) || f.Health != 0) continue;
+
+            int at = corpses.Count;
+            for (int j = 0; j < corpses.Count; j++)
+            {
+                if (d < corpses[j].Key) { at = j; break; }
+            }
+            corpses.Insert(at, new KeyValuePair<double, WowBObservedUnit>(d, unit));
+        }
+
+        if (corpses.Count == 0) return "";
+
+        int clicked = 0, gone = 0, failed = 0;
+        for (int i = 0; i < corpses.Count && clicked + failed < maxCorpses && !_stop; i++)
+        {
+            WowBObservedUnit corpse = corpses[i].Value;
+            _looted.Add(corpse.Guid);          // one visit per body, whatever happens
+
+            int result = TryLootOne(hwnd, corpse);
+            if (result < 0)
+            {
+                failed++;
+                Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                    "[Grind] no click could be placed on the body of {0} at {1:F1} yd - leaving it",
+                    corpse.Guid, corpses[i].Key));
+                continue;
+            }
+
+            clicked++;
+            _loots++;
+            if (result > 0)
+            {
+                gone++;
+                Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                    "[Grind] looted the body of {0} ({1:F1} yd away) - the corpse is gone, so the client "
+                    + "took it", corpse.Guid, corpses[i].Key));
+            }
+            else
+            {
+                /* Bones stay in the pool, so a body that is still there is not proof of failure.
+                 * Say what was done and what was observed, not more. */
+                Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                    "[Grind] right-clicked the body of {0} ({1:F1} yd away); it is still in the pool - "
+                    + "normal for bones after a loot, and only a loot window that stayed open would mean "
+                    + "auto-loot is off", corpse.Guid, corpses[i].Key));
+            }
+        }
+
+        if (clicked == 0 && failed == 0) return "";
+        return string.Format(CultureInfo.InvariantCulture,
+            "looting: {0} body(s) right-clicked ({1} of them disappeared){2}", clicked, gone,
+            failed == 0 ? "" : ", " + failed + " unreachable");
+    }
+
+    /// <summary>
+    /// Walks to one corpse, right-clicks it, and reports what happened: 1 when the body left
+    /// the pool (it was taken), 0 when the click landed but the body is still there, -1 when
+    /// no click could be placed at all. Walks only while nothing is attacking and only within
+    /// <see cref="LootYd"/>, because a loot trip is not worth a fight with something else.
+    /// </summary>
+    private static int TryLootOne(IntPtr hwnd, WowBObservedUnit corpse)
+    {
+        int started = Environment.TickCount;
+
+        for (int attempt = 0; attempt < LootTries && !_stop; attempt++)
+        {
+            /* Get within reach first. Right-clicking a body from 15 yd starts a walk, not a
+             * loot, and the walk is what the mover is for. */
+            while (unchecked(Environment.TickCount - started) < 12000 && !_stop)
+            {
+                double px, py;
+                if (!ClickAimPositions.TryRead(out px, out py)) break;
+                double d = ClickAimMath.Len(corpse.Location.X - px, corpse.Location.Y - py);
+                if (d <= 4.5) break;
+                if (UnderAttack()) return -1;
+                double remaining;
+                ClickAimKeySteer.Steer(corpse.Location.X, corpse.Location.Y, hwnd, true, out remaining);
+                Thread.Sleep(90);
+            }
+
+            ClickAimKeySteer.ReleaseHeld();
+            StopAndSettle(hwnd);
+
+            double lx, ly;
+            if (!ClickAimPositions.TryRead(out lx, out ly)) return -1;
+
+            ClickAimKeySteer.Face(corpse.Location.X, corpse.Location.Y, hwnd, 30.0, 4);
+            if (!TryClickUnit(hwnd, corpse, lx, ly)) return -1;
+            _clicks++;
+
+            /* The client opens, takes and closes the window in well under a second with
+             * auto-loot on; a body that is going to leave the pool leaves soon after. */
+            for (int waited = 0; waited < 2400 && !_stop; waited += 300)
+            {
+                Thread.Sleep(300);
+                if (!BodyStillThere(corpse.Guid)) return 1;
+            }
+
+            if (attempt + 1 < LootTries)
+            {
+                /* Something may have opened and stayed open. ESC closes a loot window (and
+                 * clears the target, which is what we want anyway) so the next click is not
+                 * fighting a modal frame for the mouse. */
+                ClickAimInput.TapKey(hwnd, 0x1B, 40);
+                Thread.Sleep(250);
+            }
+        }
+
+        return 0;
+    }
+
+    /// <summary>Whether a guid is still in the pool as a body (no health).</summary>
+    private static bool BodyStillThere(WowBGuid guid)
+    {
+        if (guid.IsEmpty) return false;
+        WowBWorldSnapshot? snap;
+        if (!Capture(out snap) || snap == null) return false;
+        for (int i = 0; i < snap.Units.Count; i++)
+        {
+            if (snap.Units[i].Guid == guid) return true;
+        }
+        return false;
     }
 
     /// <summary>
@@ -843,6 +1094,22 @@ internal static class GrindRunner
             found = true;
         }
         return found;
+    }
+
+    /// <summary>
+    /// Whether something is actually on the character: the in-combat flag AND a unit that is
+    /// fighting within 25 yd. The flag alone lags for seconds after a kill, which would have
+    /// made every loot trip wait for a combat state that is already over.
+    /// </summary>
+    private static bool UnderAttack()
+    {
+        if (!PlayerInCombat()) return false;
+        WowBWorldSnapshot? snap;
+        if (!Capture(out snap) || snap == null) return false;
+        if (!snap.TryGetLocalPlayer(out WowBObservedUnit me)) return false;
+        WowBObservedUnit unit;
+        double d;
+        return NearestFighting(snap, me.Location.X, me.Location.Y, 25.0, out unit, out d);
     }
 
     /// <summary>
@@ -913,6 +1180,28 @@ internal static class GrindRunner
                                             out dx, out dy);
     }
 
+    /// <summary>
+    /// Lets go of forward and waits until the character has actually stopped. A cast pressed
+    /// while the client still considers the character in motion is refused with "cannot do
+    /// that while moving" and costs the whole cast window, so this is worth two position
+    /// reads: the same point twice means stopped.
+    /// </summary>
+    private static void StopAndSettle(IntPtr hwnd)
+    {
+        ClickAimKeySteer.ReleaseHeld();
+
+        double lastX = double.NaN, lastY = double.NaN;
+        for (int i = 0; i < 6; i++)
+        {
+            Thread.Sleep(120);
+            double x, y;
+            if (!ClickAimPositions.TryRead(out x, out y)) return;
+            if (!double.IsNaN(lastX) && ClickAimMath.Len(x - lastX, y - lastY) < 0.15) return;
+            lastX = x;
+            lastY = y;
+        }
+    }
+
     /// <summary>Right-clicks one unit where it stands: select and attack, done by the client.</summary>
     private static bool TryClickUnit(IntPtr hwnd, WowBObservedUnit unit, double px, double py)
     {
@@ -979,6 +1268,12 @@ internal static class GrindRunner
         ClickAimAction? damage = ClickAimCombat.FirstDamage(bar);      // Wrath
         ClickAimAction? heal = ClickAimCombat.FirstHeal(bar);          // Healing Touch
         ClickAimAction? auto = ClickAimCombat.AutoAttack(bar);         // Attack (6603)
+
+        /* Whatever the walk was doing, it is over: the first thing this fight does is press a
+         * key, and a cast begun while the character is still moving is refused by the client
+         * with "cannot do that while moving" and does nothing. Let go and let the character
+         * come to a stop first - that is the message the user kept seeing in chat. */
+        StopAndSettle(hwnd);
 
         Logging.Write(string.Format(CultureInfo.InvariantCulture,
             "[Grind] engaged at {0:F1} yd (mob health {1}); bar: {2}",
@@ -1141,6 +1436,11 @@ internal static class GrindRunner
 
             if (canCast)
             {
+                /* Stop moving before the key. The client answers a cast begun while walking
+                 * with "cannot do that while moving" and does nothing, which is what the
+                 * user saw in this run's chat. */
+                StopAndSettle(hwnd);
+
                 /* Turn and CHECK before spending the key. A cast begun while the mob is not
                  * in front is refused by the client, and the previous version paid 3.2 s for
                  * that refusal every time - which the 16:42 log shows as nine "changed
@@ -1291,6 +1591,9 @@ internal static class GrindRunner
             /* A click that lands is not a click that damages: the 17:36 log kept reporting
              * "right-click auto-attack landed" for swings at a corpse. Credit it only when
              * the mob's health actually moved, below. */
+            /* Same rule for the swing: no click while the forward key is still down. Turning
+             * is fine, walking is not. */
+            ClickAimKeySteer.ReleaseHeld();
             if (TryClickUnit(hwnd, target, me.Location.X, me.Location.Y))
             {
                 _clicks++;

@@ -1212,3 +1212,57 @@ Also: `right-click auto-attack landed` is credited only when the mob's health ac
 moved - the click alone used to count as a hit, which is why 15 presses at a corpse still
 reported success, and why the "nothing landed" path (which bans a target for the session)
 never triggered.
+
+## 17:45 run — looting, and the chat message "cannot do that while moving"
+
+The 17:45 log (`2026-10-30_1745_9688.log`) shows the corpse fix holding: one kill, then
+`the only thing the client offered was a corpse (health 0) - cleared it and walking on`, and
+the walk continues. Two things from the user's message: the chat kept saying **"cannot do
+that while moving"**, and **the mobs are not being looted** (auto-loot is already on in the
+client, so a right-click on the body is all that is needed).
+
+### 1. Loot
+
+`LootNearby` + `TryLootOne` in `GrindRunner.cs`. A corpse is any unit that is not the player,
+not a player character, and reads **health 0**, inside `LootYd` (18 yd). The bot walks to it
+with the normal key steering, stops, faces it, right-clicks it once and waits up to 2.4 s for
+the body to leave the unit pool.
+
+- **Auto-loot needs no help.** Nothing reads a loot window, nothing presses a key to take an
+  item, no memory is written. The client opens, empties and closes the window on its own.
+- **Bones linger**, so "still in the pool" is not proof of failure. The log says what was
+  done, not what it cannot know: *"right-clicked the body … it is still in the pool — normal
+  for bones after a loot"*. Three attempts with an ESC between them (ESC closes a window that
+  stayed open, and clears the target anyway), then the body gets one slot in `_looted` and is
+  never visited again this session. If auto-loot were off, every corpse would report that,
+  which is the symptom to look for in the next log.
+- **A fight outranks looting.** `UnderAttack()` is the in-combat flag *plus* a live unit
+  fighting within 25 yd — the flag alone lags for seconds after a kill and would have blocked
+  every loot trip.
+- **When it runs**: after a confirmed kill (`killed` / `killed or fled`), when the client
+  offers nothing but a corpse, and once more at the end of a hotspot dwell. Up to 3 bodies per
+  call. The run summary gained a `corpse(s) looted` count.
+
+### 2. "cannot do that while moving"
+
+| where | before | now |
+| --- | --- | --- |
+| first press of a fight | `Fight` started casting with the forward key possibly still held from the interrupted walk | `StopAndSettle(hwnd)` at the top of `Fight` — release, then read the position until two reads agree within 0.15 yd |
+| melee swing | right-click issued while `Steer` had the forward key down | `ClickAimKeySteer.ReleaseHeld()` immediately before the click |
+| spell cast | `StopAndSettle(hwnd)` before every cast key | same |
+
+Turning with the arrow keys is not movement and does not block an attack; only the walk does.
+
+### 3. Two smaller things the same log showed
+
+- **In combat with nothing to fight.** `[Grind] the character is in combat - stopping the
+  walk` fired every second for minutes while TAB saw three units, all corpses
+  (`0x808` on the player, nothing live nearby). The in-combat flag now only stops the walk
+  when `NearestFighting` actually returns a live unit in range; otherwise the bot notes it at
+  most every 15 s and **walks on**. That was the cause of `Detour returned 2 points … Refusing
+  to walk it` on a 137 yd leg — the leg never got far enough to have a path worth following.
+- **TAB holding a stale target.** When TAB keeps a selection more than `SearchYd` away the bot
+  now presses ESC to clear it and throttles the log line to once every 5 s (it printed six
+  times in eight seconds).
+- The kill counter now accepts `killed or fled` as a kill, in the main loop and in the hatch
+  dwell (17:45 finished real kills and still reported 0).

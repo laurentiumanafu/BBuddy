@@ -258,3 +258,15 @@ spell cast through the memory action bar. What the run exposed and what changed:
   arrow taps at a body. Inside 2 yd it faces with a 60 deg tolerance and swings.
 * `right-click auto-attack` counts only when health actually moved, so the summary and the
   "nothing landed -> banned" rule are truthful.
+
+## Latest: 17:45 run — loot + "cannot do that while moving" (on top of f8a14b3)
+
+- `GrindRunner.LootNearby`/`TryLootOne`: right-click corpses within 18 yd, relying entirely on
+  the client's auto-loot; one visit per corpse per session, ESC between retries, skipped while
+  a live unit is fighting (`UnderAttack()`), called after a kill, when only a corpse is
+  offered, and at the end of a hotspot dwell; `corpse(s) looted` in the summary.
+- `StopAndSettle` at the top of `Fight` and before every cast, plus `ReleaseHeld` before the
+  melee click — the client's "cannot do that while moving" answer.
+- The in-combat flag no longer stops the walk unless a live unit within range is actually
+  fighting; the stale far TAB target is ESC-cleared with a throttled log line; `killed or
+  fled` counts as a kill.
