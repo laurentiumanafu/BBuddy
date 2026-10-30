@@ -54,14 +54,21 @@ internal static class GrindRunner
     private const double AttackRangeYd = 4.0;
 
     /// <summary>
-    /// Further than this and the target is abandoned instead of chased.
+    /// The distance from which a fight will WALK to its target. It used to be the distance
+    /// at which the fight gave up, and the 16:46 run gave up on 18 mobs in 20 seconds for
+    /// standing 21-39 yd away - "it selects monsters but will not attack them".
     ///
-    /// It was 12 yd, and on 2026-10-30 that produced "engaged at 16.9 yd ... target is 17 yd
-    /// away and moving; giving up on it" 22 times in six seconds: TAB picks the nearest
-    /// enemy rather than a close one, so almost every engage started outside 12 yd and ended
-    /// before a single swing. A mob this side of 20 yd is a mob to walk to.
+    /// Singular's own numbing for the same idea is
+    /// <c>Movement.CreateMoveToTargetBehavior(true, 20f)</c> in the lowbie druid pull and
+    /// combat routines, so 20 yd is the number it moves in to.
     /// </summary>
     private const double ChaseYd = 20.0;
+
+    /// <summary>
+    /// Past this the fight really does give up: the target walked away further than the
+    /// search radius, and chasing it leaves the hotspot ring.
+    /// </summary>
+    private const double GiveUpYd = 45.0;
 
     // ---- attacking ---------------------------------------------------------
     /// <summary>
@@ -947,6 +954,7 @@ internal static class GrindRunner
         int lastHealMs = 0;
         int lastCastMs = 0;
         int quietRounds = 0;
+        int faceFailures = 0;
         bool castEverLanded = false;        // a Wrath has demonstrably cast this fight
         bool melee = false;                 // set when casting is shown not to work
         bool announced = false;
@@ -996,15 +1004,15 @@ internal static class GrindRunner
             if (!snap.TryGetLocalPlayer(out me)) break;
             double d = ClickAimMath.Len(target.Location.X - me.Location.X, target.Location.Y - me.Location.Y);
 
-            if (d > ChaseYd)
+            /* ChaseYd is how far the fight will WALK to a target, never the distance at
+             * which it gives up. The 16:46 run gave up 18 times in 20 s on mobs 21-39 yd
+             * away, which is exactly "it selects monsters and won't attack them": TAB had
+             * picked a mob inside the search radius and the fight refused it for being
+             * outside the chase radius. Give-up is now the search radius plus a margin. */
+            if (d > GiveUpYd)
                 return string.Format(CultureInfo.InvariantCulture,
-                    "target is {0:F0} yd away and moving; giving up on it", d);
-
-            /* Face it before doing anything. A cast begun with the mob behind the character
-             * is refused by the client ("you are not facing your target"), and a
-             * right-click can only select what is on screen: the 16:09 run stood 3.3 yd
-             * from its target and could not touch it for exactly this reason. */
-            ClickAimKeySteer.Face(target.Location.X, target.Location.Y, hwnd, 25.0, 4);
+                    "target is {0:F0} yd away - beyond the {1:F0} yd the fight will walk; giving up on it",
+                    d, GiveUpYd);
 
             /* My own vitals, from the same block the mob's health comes from. */
             uint myHealth = 0, myMaxHealth = 0, myMana = 0;
@@ -1093,8 +1101,14 @@ internal static class GrindRunner
                 continue;
             }
 
-            /* ---- 2. how to reach it: from range if casting works, else close in ---- */
-            if (!melee && d > ClickAimCombat.CasterRangeYd)
+            /* ---- 2. reach it: walk to casting range, do not walk PAST it ----
+             *
+             * The 16:46 run had the character casting and then closing into melee, which is
+             * the one thing a caster should not do while it has mana. So: approach only
+             * while out of casting range, and stop the moment the target is inside it. */
+            bool canCast = !melee && damage != null && myMana >= 10;
+
+            if (canCast && d > ClickAimCombat.CasterRangeYd)
             {
                 double approach;
                 ClickAimKeySteer.Steer(target.Location.X, target.Location.Y, hwnd, true, out approach);
@@ -1102,10 +1116,29 @@ internal static class GrindRunner
                 continue;
             }
 
+            if (canCast && d > ClickAimCombat.CasterRangeYd - 2.0)
+                ClickAimKeySteer.ReleaseHeld();      // arrived: stop walking before casting
+
             /* ---- 3. Wrath, on the global cooldown timer ---- */
-            if (!melee && damage != null && myMana >= 10
+            if (canCast
                 && unchecked(Environment.TickCount - lastCastMs) >= ClickAimCombat.CastSettleMs)
             {
+                /* Turn and CHECK before spending the key. A cast begun while the mob is not
+                 * in front is refused by the client, and the previous version paid 3.2 s for
+                 * that refusal every time - which the 16:42 log shows as nine "changed
+                 * nothing in 3200 ms" lines for one mob. */
+                if (!ClickAimKeySteer.Face(target.Location.X, target.Location.Y, hwnd, 30.0, 8))
+                {
+                    faceFailures++;
+                    if (faceFailures == 1 || faceFailures % 5 == 0)
+                        Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                            "[Grind] cannot turn onto the target ({0:F0} yd away) - the arrow keys are not "
+                            + "moving the facing field. Held the cast {1} time(s)",
+                            d, faceFailures));
+                    Thread.Sleep(150);
+                    continue;
+                }
+
                 lastCastMs = Environment.TickCount;
                 uint manaBefore = myMana;
                 int mobBeforeHealth = lastHealth;
@@ -1164,29 +1197,55 @@ internal static class GrindRunner
                     mobAfter >= 0 ? mobAfter.ToString(CultureInfo.InvariantCulture) : "unreadable",
                     castFailures, castEverLanded ? " (but it has cast before)" : ""));
 
-                /* Only give up on casting when it has NEVER worked in this fight. A cast
-                 * that fails while the mob is out of range or behind us is a temporary
-                 * condition, and one good Wrath earlier proves the key and the key map. */
-                if (!castEverLanded && castFailures >= 3)
+                /* Casting has already been faced for, so a failure now is range, line of
+                 * sight or a moving target. Three in a row without landing: melee, rather
+                 * than standing at 20 yd pressing a key that does nothing. */
+                if (castFailures >= 3)
                 {
                     melee = true;
-                    Logging.Write("[Grind] this key has not cast once this fight - switching to "
-                                  + "auto-attack rather than standing still");
+                    Logging.Write(castEverLanded
+                        ? "[Grind] the last 3 casts landed nothing even while facing the target - "
+                          + "closing to melee for the rest of this fight"
+                        : "[Grind] this key has not cast once this fight - switching to auto-attack "
+                          + "rather than standing still");
                 }
                 continue;
             }
 
-            /* ---- 4. melee: close, right-click, let the client swing ---- */
+            /* ---- 4. melee: close, right-click, let the client swing ----
+             *
+             * This is the fallback, not a habit: it runs only when casting is off the table
+             * (no damage spell, no mana, or the key demonstrably does not cast), because a
+             * right-click both starts auto-attack AND walks the character into the mob. */
             if (d > AttackRangeYd)
             {
+                /* Walk in, but no further than ChaseYd of running: melee is a decision, and
+                 * a mob that keeps backing off is not worth chasing across the ring. */
+                if (d > ChaseYd)
+                    return string.Format(CultureInfo.InvariantCulture,
+                        "cannot cast at it and it is {0:F0} yd away (melee chase is {1:F0} yd); "
+                        + "giving up on it", d, ChaseYd);
                 double closer;
                 ClickAimKeySteer.Steer(target.Location.X, target.Location.Y, hwnd, true, out closer);
                 Thread.Sleep(90);
                 continue;
             }
 
+            /* In melee the character has to face the mob for its swings to land and for the
+             * right-click to select it (it selects what is on screen, and the mob is at our
+             * feet). Turn, and only swing once the turn has actually happened. */
             double facingLeft;
             ClickAimKeySteer.Steer(target.Location.X, target.Location.Y, hwnd, false, out facingLeft);
+            if (!ClickAimKeySteer.Face(target.Location.X, target.Location.Y, hwnd, 20.0, 6))
+            {
+                faceFailures++;
+                if (faceFailures == 1 || faceFailures % 5 == 0)
+                    Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                        "[Grind] cannot turn onto the mob at arm's length ({0:F1} yd) - the arrow keys are "
+                        + "not moving the facing field ({1} time(s))", d, faceFailures));
+                Thread.Sleep(120);
+                continue;
+            }
 
             if (TryClickUnit(hwnd, target, me.Location.X, me.Location.Y))
             {
@@ -1357,6 +1416,15 @@ internal static class GrindRunner
             check("viableTooHigh", !LevelViable(9, 2));
             check("viableGrey", !LevelViable(1, 9));
             check("viableUnknownLevel", LevelViable(0, 2) && LevelViable(4, 0));
+
+            /* The distances have to nest: melee reach &lt; the melee chase &lt; casting range &lt;
+             * the point at which a fight gives up &lt; the radius units are searched in. Getting
+             * this order wrong is what produced "selects monsters but will not attack them". */
+            check("rangesNest", AttackRangeYd < ChaseYd
+                              && ChaseYd < ClickAimCombat.CasterRangeYd
+                              && ClickAimCombat.CasterRangeYd < SearchYd
+                              && SearchYd < GiveUpYd);
+            check("interruptInsideSearch", InterruptYd < SearchYd && InterruptYd > AttackRangeYd);
 
             /* The choice itself: with the level inside a band, the area picked must be one
              * whose band contains it - never merely the closest one. */

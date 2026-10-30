@@ -552,14 +552,25 @@ internal static class ClickAimKeySteer
     /// Turns in place until the character faces (tx, ty), without taking a step.
     ///
     /// This exists because "the target is behind the camera or off the screen" killed every
-    /// engage in the 16:07 run: a right-click can only select what is on screen, and the
-    /// client's TAB only considers enemies in front. Turning first fixes both. The turn is
-    /// the calibrated one (arrow keys, degrees per millisecond learned by
-    /// <see cref="Calibrate"/>), so it converges instead of spinning.
+    /// engage in the 16:07 run, and "you are not facing your target" killed every cast after
+    /// the first one in the 16:42 run: a right-click can only select what is on screen and a
+    /// spell can only be cast at something in front.
     ///
-    /// Returns true when the facing is within <paramref name="toleranceDeg"/> of the
-    /// bearing to the point - or when the facing cannot be read at all, because in that
-    /// case the caller has nothing better to try.
+    /// The 16:42 log also showed that the calibrated rate cannot be trusted inside a fight:
+    /// a 21 ms arrow tap moved the facing 23 deg, six times what the walk calibration says
+    /// (0.18 deg/ms), and between two taps the facing drifted another 58 deg with nothing
+    /// pressed. So this does not compute a tap length from the table and hope. It:
+    ///
+    ///   1. measures the rate from ITS OWN LAST TAP (deg moved / ms held), clamped to a
+    ///      sane range, and re-measures every tick;
+    ///   2. releases BOTH arrow keys after every tap, so a key that the client treats as
+    ///      still held cannot keep spinning the character while a 3.2 s cast is waited out;
+    ///   3. if a tap moves the facing the wrong way, swaps the two keys and carries on -
+    ///      that is the failure that ends with the character's back to the mob.
+    ///
+    /// Returns true when the facing is within <paramref name="toleranceDeg"/> of the bearing
+    /// to the point, or when the facing cannot be read at all (the caller has nothing better
+    /// to try in that case).
     /// </summary>
     public static bool Face(double tx, double ty, IntPtr hwnd, double toleranceDeg, int maxTicks)
     {
@@ -571,41 +582,93 @@ internal static class ClickAimKeySteer
         if (!TryReadFacing(out facingRad)) return true;                // nothing to steer on
 
         double wanted = ClickAimMath.HeadingDeg(tx - px, ty - py);
+        double rate = Math.Max(0.05, Math.Min(_turnPosRate, _turnNegRate));
+        int lastTapMs = 0;
+        double lastDelta = 0;
+        bool swapped = false;      // swap the key pair at most once per call
 
-        for (int tick = 0; tick < maxTicks; tick++)
+        for (int tick = 0; tick <= maxTicks; tick++)
         {
+            /* The bearing is recomputed every tick: the character may be walking while it
+             * turns, and the mob it is aiming at is usually moving toward it. */
+            double cx, cy;
+            if (ClickAimPositions.TryRead(out cx, out cy) && ClickAimMath.Len(tx - cx, ty - cy) > 0.5)
+            {
+                px = cx;
+                py = cy;
+                wanted = ClickAimMath.HeadingDeg(tx - px, ty - py);
+            }
+
             double error = ClickAimMath.WrapDeg(wanted - facingRad * 180.0 / Math.PI);
             if (Math.Abs(error) <= toleranceDeg)
             {
-                _lastTurnError = double.NaN;
+                ReleaseArrows(hwnd);
                 return true;
             }
 
-            /* Stale facing from the previous tick makes the step too long, so the step is
-             * scaled by how fast the field was seen to move, not by the full error. */
+            if (lastTapMs > 0 && Math.Abs(lastDelta) > 0.5)
+            {
+                /* What the last tap actually did, not what the table says it should do. */
+                double measured = Math.Abs(lastDelta) / lastTapMs;
+                if (measured > 0.02 && measured < 5.0)
+                    rate = 0.6 * measured + 0.4 * rate;
+            }
+
+            double ms = Math.Abs(error) / Math.Max(0.05, rate);
+            if (ms < 25) ms = 25;                     // a shorter tap is not a turn
+            if (ms > 220) ms = 220;                   // overshoot costs a whole tick to undo
+
             bool up = error > 0;
             int vk = up ? _turnPosVk : _turnNegVk;
-            double rate = up ? _turnPosRate : _turnNegRate;
 
-            int ms = (int)Math.Round(Math.Abs(error) / Math.Max(0.02, rate) * _turnStepScale);
-            if (ms < 10) ms = 10;
-            if (ms > MaxTurnTapMs) ms = MaxTurnTapMs;
+            ReleaseArrows(hwnd);
+            ClickAimInput.TapKey(hwnd, vk, (int)Math.Round(ms));
+            ReleaseArrows(hwnd);                      // never leave a turn key down
+            Thread.Sleep(70);
 
-            ClickAimInput.TapKey(hwnd, vk, ms);
-            Thread.Sleep(90);
+            double nextFacing;
+            if (!TryReadFacing(out nextFacing)) return true;
 
-            double next;
-            if (!TryReadFacing(out next)) return true;
-            double nextError = ClickAimMath.WrapDeg(wanted - next * 180.0 / Math.PI);
+            double delta = ClickAimMath.WrapDeg((nextFacing - facingRad) * 180.0 / Math.PI);
+            if (!swapped && Math.Abs(delta) > 2.0 && Math.Sign(delta) != Math.Sign(error))
+            {
+                swapped = true;
+                {
+                    /* The key turned it the wrong way: swap the pair, permanently, and say
+                     * so. This is the difference between turning onto a mob and turning
+                     * one's back on it. */
+                    int swap = _turnPosVk;
+                    _turnPosVk = _turnNegVk;
+                    _turnNegVk = swap;
+                    double swapRate = _turnPosRate;
+                    _turnPosRate = -_turnNegRate;
+                    _turnNegRate = -swapRate;
+                    Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                        "[Keys] the turn keys were the wrong way round (a {0:F0} ms tap moved the facing "
+                        + "{1:+0;-0} deg while {2:+0;-0} was wanted) - swapped them", ms, step, error));
+                }
+            }
 
-            if (Math.Sign(nextError) != Math.Sign(error) || Math.Abs(nextError) > Math.Abs(error) + 0.5)
-                _turnStepScale = Math.Max(0.03, _turnStepScale * 0.5);
-            else
-                _turnStepScale = Math.Min(1.0, _turnStepScale * 1.15);
-
-            facingRad = next;
+            lastTapMs = (int)Math.Round(ms);
+            lastDelta = delta;
+            facingRad = nextFacing;
         }
+
+        ReleaseArrows(hwnd);
         return false;
+    }
+
+    /// <summary>
+    /// Lets both arrow keys up. Cheap, and the alternative - one of them staying logically
+    /// down while the bot waits three seconds for a cast - is a character spinning on the
+    /// spot, which is what "it turned its back on the monster" looked like.
+    /// </summary>
+    public static void ReleaseArrows(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero) hwnd = _lastHwnd;
+        if (hwnd == IntPtr.Zero) return;
+        ClickAimInput.HoldKey(hwnd, TurnLeftVk, false);
+        ClickAimInput.HoldKey(hwnd, TurnRightVk, false);
     }
 
     /// <summary>Degrees of error that still counts as facing the point.</summary>

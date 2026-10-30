@@ -209,3 +209,17 @@ spell cast through the memory action bar. What the run exposed and what changed:
   is detected (`PlayerDead`) instead of pressing keys at a corpse.
 * `UnitFlags & 0x800` is *not* reaction (the player carries it too, `uflags=0x808`) and
   is no longer used for targeting; hostility stays with TAB.
+
+
+## 2026-10-30, 16:42 run — facing, distance, and auto-attack
+
+* `ClickAimKeySteer.Face()` rewritten: measures its own tap rate, releases both arrow
+  keys around every tap, and swaps the turn keys once if a tap goes the wrong way. This
+  is the "turned its back on the monster" bug.
+* `Face()` is now a gate before every cast keypress and before every melee right-click,
+  so a refused cast no longer costs 3.2 s of "changed nothing".
+* `GiveUpYd = 45` replaces `ChaseYd` as the give-up distance (18 instant give-ups in 20 s
+  at 21-39 yd in that run); `ChaseYd` is only the melee chase limit now.
+* cast-first rotation: approach to 28 yd, stop, face, Wrath; the right-click melee path
+  runs only when casting is unavailable, so the character no longer walks into melee
+  while it has mana.

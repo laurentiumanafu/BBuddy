@@ -1061,3 +1061,23 @@ transient combat/PvP bit, not reaction, and it is no longer used to rank or filt
 Hostility stays with the client's own filter (TAB) and with "something live and
 level-appropriate is this close". Target choice is now: corpse filter, level band
 `player-4 … player+3`, nearest first.
+
+## 2026-10-30 16:42 — casting works, but the character turned its back on the mob
+
+The run opened with a landed Wrath (`71 -> 56`), then nine `changed nothing in 3200 ms`
+lines for the same mob and the character ended up facing away from it. Then, after a
+restart, a mob died properly (`auto-attack 56 -> 42 -> 27`, `Wrath 27 -> 14`) — but the
+user's own description of the second fight pins down the rest: *it walked into melee,
+auto-attacked, cast again.* Three separate faults, none of them offsets:
+
+| what the log shows | why | fix |
+|---|---|---|
+| `[Keys] facing 175, want -81: +104 -> right arrow for 21 ms`, then `facing 152`, then `94` — the facing drifts 20-60 deg between taps | the calibrated rate (0.18 deg/ms) is a *walking* rate; inside a fight a 21 ms tap moved 23 deg, six times as much. And a turn key that is logically still down (its keyup lost among the other presses) keeps spinning the character while the 3.2 s cast is waited out | `Face()` now measures its **own** last tap (deg moved / ms held) and re-sizes every tick; it releases **both** arrow keys before and after every tap (`ReleaseArrows`); and if a tap moves the facing the wrong way it swaps the key pair once and says so |
+| every cast after the first `changed nothing in 3200 ms`, mana unchanged, three times, at a target 17.8 yd away | the cast was pressed without checking that the mob was in front — the client refuses a cast at your back, silently, and each refusal cost 3.2 s | the cast key is only pressed after `Face(...)` returns true (30 deg, 8 ticks); when it cannot face, it logs `cannot turn onto the target … Held the cast N time(s)` and turns again instead of casting into a refusal |
+| `engaged at 30.3 yd … target is 30 yd away and moving; giving up on it`, eighteen times in 20 s, `0 hotspot(s)` | `ChaseYd` (20) was used as the give-up distance | `GiveUpYd = 45` (the search radius plus margin) is the give-up; `ChaseYd` is now only how far a *melee* fallback will walk. Casting range (28 yd) is reached by walking, then the walk stops |
+| `auto-attacking while casting wrath`, character running into melee | the right-click that starts auto-attack also walks the character to the mob, and the melee branch was reachable at any time | the rotation is cast-first: heal, then approach only while outside 28 yd, then `Wrath`; the melee block (right-click + auto-attack) runs only when casting is off the table — no damage spell, under 10 mana, or three casts in a row that landed nothing |
+
+Two follow-ups the same log makes obvious, both done: the `<Grind> … is 17.8 yd away -
+stopping the walk` interrupt fired correctly on the second run (the first run's
+`0 hotspot(s)` was the stand-and-give-up loop), and the action-bar keys print as `-`
+and `=` now, so slot 11/12 no longer read as `½`/`»`.
