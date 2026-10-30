@@ -210,8 +210,18 @@ public static class RouteRunner
             }
             else
             {
-                Logging.Write("[Route] not steering by facing: " + keyReport
-                              + " - falling back to clicks for this leg");
+                /* Do NOT fall back to clicking. On 2026-10-30 the click fallback produced
+                 * two 120-yard walks that would not stop - "the click will not stop;
+                 * giving up on this leg" - because a click lands wherever the camera ray
+                 * meets the ground (8 yd looking steeply down, 120 yd looking level) and
+                 * the stop key did not cancel it. A mover that walks 120 yd in a random
+                 * direction is worse than one that stands still and says why. */
+                Logging.Write("[Route] not steering: " + keyReport);
+                Logging.Write("[Route] stopping here. The click fallback is disabled: on 2026-10-30 it "
+                              + "walked 120 yd that could not be stopped, twice, because a click's "
+                              + "distance depends on the camera pitch. Nothing moves until there is a "
+                              + "way to steer.");
+                return false;
             }
         }
 

@@ -143,6 +143,10 @@ public sealed class ClickAimMover : IPlayerMover
     /// </summary>
     private const int MaxAimDrags = 0;
 
+    /// <summary>Beyond this much aim error a centre click is refused rather than taken:
+    /// its length is decided by the camera pitch and it cannot be stopped.</summary>
+    private const double AimRefuseDeg = 25.0;
+
     private int _probeAttempts;
     private int _stuck;
     private int _detourAttempt;
@@ -877,12 +881,19 @@ public sealed class ClickAimMover : IPlayerMover
 
         // Facing it (or out of drags): a middle click walks along the camera axis.
         // No offset, no scale.
-        if (Math.Abs(error) > AimToleranceDeg && MaxAimDrags == 0)
+        if (Math.Abs(error) > AimRefuseDeg)
         {
+            /* A centre click with the camera off the target is not a short hop in the
+             * right general direction - it is a walk of unknown length in a wrong one.
+             * 2026-10-30: `click (0, -140)` walked 8, 12, 16 and then 120.4 yd, and the
+             * 120.4 yd one would not stop ("the click will not stop; giving up on this
+             * leg"), twice, stranding the character 138 yd from the goal. So an aim this
+             * far off is refused outright. */
             Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                "[Aim] {0:F0} deg off and no drags are allowed (each drag walked the character 4-5 yd "
-                + "in the wrong direction on 2026-10-30); clicking down the camera axis instead",
-                error));
+                "[Aim] {0:F0} deg off; refusing to click - a click this far off the camera axis "
+                + "walked 120 yd and would not stop on 2026-10-30", error));
+            AimGaveUp = true;
+            return false;
         }
         else if (Math.Abs(error) > AimToleranceDeg)
         {

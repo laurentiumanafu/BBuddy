@@ -46,13 +46,14 @@ internal static class ClickAimKeySteer
     /// <summary>Forward key. BloogBot's ControlBits.Front, posted as the key the client
     /// binds it to.</summary>
     private const int ForwardVk = 0x57;      // W
+    private const int TurnLeftVk = 0x25;     // arrow left
+    private const int TurnRightVk = 0x27;    // arrow right
 
     /// <summary>The key that cancels a client-side walk. Same key as forward on this
     /// client, which is why holding it also stops a click.</summary>
     private const int StopKeyVk = 0x57;
 
     /// <summary>Headings this far apart are used for the calibration pair.</summary>
-    private const double ProbeSeparationDeg = 70.0;
 
     /// <summary>A probe walk shorter than this measured nothing.</summary>
     private const double MinProbeYd = 2.5;
@@ -73,7 +74,12 @@ internal static class ClickAimKeySteer
 
     // ---- learned convention -------------------------------------------------
     private static bool _calibrated;
-    private static bool _useOutgoing;
+    private static int _turnKey = TurnRightVk;
+    private static double _turnKeyStepDeg = 30.0;   // signed, per 200 ms of _turnKey
+    private static double _degPerTurnMs = 0.15;
+    private static double _turnStepScale = 1.0;
+    private static double _lastTurnError = double.NaN;
+    private static bool _facingIsBearing = true;
     private static double _slope = 1.0;       // d(bearing deg) / d(facing-input)
     private static double _offsetDeg = double.NaN; // bearing = slope*input + offset
 
@@ -193,228 +199,138 @@ internal static class ClickAimKeySteer
     // -------------------------------------------------------------- calibration
 
     /// <summary>
-    /// Measures what a written heading does to the direction the character walks.
+    /// Measures how the character turns, using the turn KEYS - and whether its facing is
+    /// the direction it walks.
     ///
-    /// Two probes, far enough apart to separate a slope from an offset:
+    /// Why not the facing write: on 2026-10-30 two runs wrote 51 and 81 degrees and the
+    /// character walked bearing 51 and 81 - identity, i.e. it kept its OWN facing - and
+    /// then ignored the next write completely (121 -> still 51, 151 -> still 81). Both
+    /// the readable and the outgoing field behaved the same way, so the record field is
+    /// not what the client moves by. It is, however, READABLE and it equals the walked
+    /// bearing, so it is the feedback for a loop that turns with the keys instead:
     ///
-    ///     write f0, hold forward 1.5 s, measure bearing b0
-    ///     write f1 = f0 + 70 deg (in input units), hold forward, measure b1
+    ///     read facing -> tap arrow-left/right until facing == wanted -> hold W
     ///
-    ///     slope = (b1 - b0) / 70        (1.0, -1.0, or something in between)
-    ///     offset = b0 - slope * f0      (the client's zero relative to the world)
-    ///
-    /// A slope near +-1 means the field is the heading. A slope near 0 means the field is
-    /// ignored, and the caller must not walk on it.
+    /// Nothing is written to memory. The calibration only has to learn three things:
+    /// which key increases the facing, how many degrees per millisecond, and whether the
+    /// walked bearing really is the facing (the check that makes the rest valid).
     /// </summary>
     public static bool Calibrate(IntPtr hwnd, out string report)
     {
         report = "";
-        double f0, b0, f1, b1;
 
-        if (!TryReadFacing(out f0)) { report = "cannot read the facing field"; return false; }
-        if (!Probe(hwnd, f0, out b0, out report)) return false;
-
-        double step = ProbeSeparationDeg * Math.PI / 180.0;
-        f1 = f0 + step;
-        if (!Probe(hwnd, f1, out b1, out report)) return false;
-
-        /* Both probes walked the same bearing: the field that is being written is the
-         * readable (server) one, and this client ignores it for movement. BloogBot's
-         * chapter 18 says the OUTGOING field is the one that steers - so try that before
-         * blaming the mechanism. */
-        if (Math.Abs(ClickAimMath.WrapDeg(b1 - b0)) < 8.0)
-        {
-            Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                "[Keys] writing the readable facing field moved nothing ({0:F0} deg then {1:F0} deg "
-                + "bearing). Trying the OUTGOING field BloogBot writes (readable - 0x1C), which is the "
-                + "value the client sends to the server.", b0, b1));
-            _useOutgoing = true;
-            if (!Probe(hwnd, f0, out b0, out report)) return false;
-            if (!Probe(hwnd, f1, out b1, out report)) return false;
-        }
-
-        double dInput = step * 180.0 / Math.PI;
-        double dBearing = ClickAimMath.WrapDeg(b1 - b0);
-        double slope = dBearing / dInput;
-
-        if (Math.Abs(slope) < 0.35)
-        {
-            report = string.Format(CultureInfo.InvariantCulture,
-                "wrote {0:F0} deg then {1:F0} deg and the character walked bearing {2:F0} then "
-                + "{3:F0} deg - it ignored the field (slope {4:F2}). The facing write does not "
-                + "steer this client.", f0 * 180 / Math.PI, f1 * 180 / Math.PI, b0, b1, slope);
-            return false;
-        }
-
-        _slope = slope;
-        _offsetDeg = ClickAimMath.WrapDeg(b0 - slope * (f0 * 180.0 / Math.PI));
-        _calibrated = true;
-
-        report = string.Format(CultureInfo.InvariantCulture,
-            "facing {0:F0} deg walked bearing {1:F0} deg; facing {2:F0} deg walked bearing "
-            + "{3:F0} deg. So bearing = {4:F2} x facing + {5:F1} deg, and the client's "
-            + "facing is {6} (writing the {7} field)",
-            f0 * 180 / Math.PI, b0, f1 * 180 / Math.PI, b1, slope, _offsetDeg,
-            Math.Abs(Math.Abs(slope) - 1.0) < 0.2
-                ? "the player's heading, as BloogBot assumes"
-                : "a heading scaled by " + slope.ToString("F2", CultureInfo.InvariantCulture),
-            _useOutgoing ? "outgoing" : "readable");
-        return true;
-    }
-
-    /// <summary>
-    /// Writes a heading, walks forward for a moment, reports the bearing walked.
-    ///
-    /// The 12:04 run proved the ordering matters, and this is the fix for it. It wrote
-    /// 51 deg and the character walked bearing 51 deg - the write steering EXACTLY, as
-    /// BloogBot's convention predicts - then wrote 121 deg and the character walked 51
-    /// again. The second write landed while the character was still moving from the first
-    /// probe, and a client that is mid-move owns its own facing: the write is simply
-    /// overwritten. So every probe now:
-    ///
-    ///   1. stops the character and WAITS until it is genuinely still;
-    ///   2. writes the heading and READS IT BACK, reporting a revert separately from a
-    ///      failed write - they mean different things;
-    ///   3. holds forward while re-writing the heading, in case the client resets it
-    ///      every frame;
-    ///   4. stops again before measuring, so the displacement is the walk and not drift.
-    /// </summary>
-    private static bool Probe(IntPtr hwnd, double facing, out double bearingDeg, out string report)
-    {
-        bearingDeg = 0;
-        report = "";
-
-        // ---- 1. a probe is worthless if the character is already walking ----------
         string restReport;
         if (!StopAndRest(hwnd, out restReport))
         {
-            report = "could not get the character to stand still before the probe: " + restReport;
+            report = "could not get the character to stand still: " + restReport;
             return false;
         }
+
+        double f0;
+        if (!TryReadFacing(out f0)) { report = "cannot read the facing field"; return false; }
+
+        // ---- which way do the turn keys go ------------------------------------
+        double right = TurnFor(hwnd, TurnRightVk, 200, out report);
+        if (double.IsNaN(right)) return false;
+
+        double left = TurnFor(hwnd, TurnLeftVk, 200, out report);
+        if (double.IsNaN(left)) return false;
+
+        if (Math.Abs(right) < 1.0 && Math.Abs(left) < 1.0)
+        {
+            report = string.Format(CultureInfo.InvariantCulture,
+                "neither arrow key turned the character (right {0:F1} deg, left {1:F1} deg in 200 ms). "
+                + "The facing field is readable but nothing here can change it - not a write, not the "
+                + "turn keys - so the movement has to come from a client function "
+                + "(BloogBot calls the game's own SetFacing + SendMovementUpdate).", right, left);
+            return false;
+        }
+
+        // Keep the key that moved the facing MORE, and remember which WAY it moved it.
+        // A boolean "right arrow is clockwise" is a guess; the signed step is measured,
+        // and it is what Steer compares the error's sign against.
+        _turnKey = Math.Abs(right) >= Math.Abs(left) ? TurnRightVk : TurnLeftVk;
+        _turnKeyStepDeg = _turnKey == TurnRightVk ? right : left;
+
+        double perMs = Math.Abs(_turnKeyStepDeg) / 200.0;
+        if (perMs < 0.002 || perMs > 1.0)
+        {
+            report = string.Format(CultureInfo.InvariantCulture,
+                "the turn keys moved the facing {0:F2} deg/ms, which is not a plausible rate; "
+                + "right {1:F1} deg, left {2:F1} deg in 200 ms", perMs, right, left);
+            return false;
+        }
+        _degPerTurnMs = perMs;
+
+        // ---- is the walked bearing the facing? --------------------------------
+        double before;
+        if (!TryReadFacing(out before)) { report = "lost the facing field"; return false; }
 
         double sx, sy;
         if (!ClickAimPositions.TryRead(out sx, out sy)) { report = "cannot read the position"; return false; }
 
-        // ---- 2. write, then check it stuck ---------------------------------------
-        if (!TryWriteFacing(facing, _useOutgoing)) { report = "cannot write the facing field"; return false; }
-        Thread.Sleep(150);
-
-        double after;
-        if (!TryReadFacing(out after))
-        {
-            report = "lost the facing field after writing it";
-            return false;
-        }
-
-        double reverted = Math.Abs(ClickAimMath.WrapDeg(
-            ClickAimMath.HeadingDeg(Math.Cos(facing), Math.Sin(facing))
-            - ClickAimMath.HeadingDeg(Math.Cos(after), Math.Sin(after))));
-        if (reverted > 10.0)
-        {
-            report = string.Format(CultureInfo.InvariantCulture,
-                "wrote facing {0:F0} deg and the client put it back to {1:F0} deg within 150 ms. "
-                + "The field is reverted, not ignored - that is the client's own facing update "
-                + "winning, so nothing written here reaches movement.",
-                facing * 180.0 / Math.PI, after * 180.0 / Math.PI);
-            return false;
-        }
-
-        // ---- 3. walk, re-writing the heading as we go ----------------------------
         SetForward(hwnd, true);
-        int waited = 0;
-        int rewriteAt = 0;
-        while (waited < MaxProbeMs)
-        {
-            Thread.Sleep(PollMs);
-            waited += PollMs;
-
-            if (waited - rewriteAt >= 100)
-            {
-                TryWriteFacing(facing, _useOutgoing);
-                rewriteAt = waited;
-            }
-
-            double nx, ny;
-            if (!ClickAimPositions.TryRead(out nx, out ny)) continue;
-            if (ClickAimMath.Len(nx - sx, ny - sy) >= MinProbeYd) break;
-        }
-
-        // ---- 4. stop before measuring --------------------------------------------
+        Thread.Sleep(1200);
         SetForward(hwnd, false);
-        StopAndRest(hwnd, out restReport);
-        Thread.Sleep(120);
+        Thread.Sleep(250);
 
         double fx, fy;
         if (!ClickAimPositions.TryRead(out fx, out fy)) { report = "lost the position"; return false; }
 
         double walked = ClickAimMath.Len(fx - sx, fy - sy);
-        if (walked < MinProbeYd)
+        if (walked < 1.5)
         {
             report = string.Format(CultureInfo.InvariantCulture,
-                "wrote facing {0:F0} deg but the character moved {1:F1} yd with the forward key "
-                + "held for {2} ms. Either the key does not reach the client or the character is "
-                + "against something - this is not a facing problem.",
-                facing * 180.0 / Math.PI, walked, waited);
+                "the turn keys work ({0:F1} deg in 200 ms) but the forward key moved the character "
+                + "{1:F1} yd in 1.2 s. Something is in the way, or the key is not reaching the "
+                + "client.", Math.Max(Math.Abs(right), Math.Abs(left)), walked);
             return false;
         }
 
-        bearingDeg = ClickAimMath.HeadingDeg(fx - sx, fy - sy);
+        double bearing = ClickAimMath.HeadingDeg(fx - sx, fy - sy);
+        double facingDeg = before * 180.0 / Math.PI;
+        double gap = Math.Abs(ClickAimMath.WrapDeg(bearing - facingDeg));
+
+        _facingIsBearing = gap < 25.0;
+        _calibrated = true;
+        _slope = 1.0;
+        _offsetDeg = 0.0;
+
         report = string.Format(CultureInfo.InvariantCulture,
-            "facing written {0:F0} deg (read back {1:F0}), walked {2:F1} yd on bearing {3:F0} deg",
-            facing * 180.0 / Math.PI, after * 180.0 / Math.PI, walked, bearingDeg);
+            "turn keys: right arrow {0:+0.0;-0.0} deg, left arrow {1:+0.0;-0.0} deg per 200 ms "
+            + "({2:F3} deg/ms). Facing read {3:F0} deg, walked bearing {4:F0} deg - {5}. "
+            + "Steering by turning the keys and holding forward; nothing is written to memory.",
+            right, left, _degPerTurnMs, facingDeg, bearing,
+            _facingIsBearing
+                ? "the facing IS the walked direction, so the loop closes on it"
+                : "THE FACING IS NOT THE WALKED DIRECTION (" + gap.ToString("F0", CultureInfo.InvariantCulture)
+                  + " deg apart), so the loop closes on measured bearings instead");
         return true;
     }
 
-    /// <summary>
-    /// Releases everything and waits until two position reads agree to 5 cm.
-    ///
-    /// A click-walk or a held key both take a moment to actually stop, and a probe
-    /// started in that moment measures the OLD walk - which is exactly the 51/51 result
-    /// in the 12:04 log.
-    /// </summary>
-    public static bool StopAndRest(IntPtr hwnd, out string report)
+    /// <summary>Turns for <paramref name="ms"/> and returns the change in facing, in degrees.</summary>
+    private static double TurnFor(IntPtr hwnd, int vk, int ms, out string report)
     {
         report = "";
-        Release(hwnd);
-
-        if (hwnd != IntPtr.Zero)
-        {
-            ClickAimInput.TapKey(hwnd, StopKeyVk, 80);
-            ClickAimInput.ReleaseAll(hwnd, StopKeyVk, 80);
-        }
-
-        double lx = 0, ly = 0;
-        bool have = false;
-        int still = 0;
-
-        for (int waited = 0; waited < RestTimeoutMs; waited += PollMs)
-        {
-            Thread.Sleep(PollMs);
-            double nx, ny;
-            if (!ClickAimPositions.TryRead(out nx, out ny)) continue;
-
-            if (!have) { lx = nx; ly = ny; have = true; continue; }
-
-            if (ClickAimMath.Len(nx - lx, ny - ly) < 0.05) still += PollMs;
-            else still = 0;
-
-            lx = nx;
-            ly = ny;
-
-            if (still >= RestMs) return true;
-        }
-
-        report = string.Format(CultureInfo.InvariantCulture,
-            "still moving {0} ms after the stop key (last two reads never agreed to 5 cm)",
-            RestTimeoutMs);
-        return false;
+        double a, b;
+        if (!TryReadFacing(out a)) { report = "cannot read the facing field"; return double.NaN; }
+        ClickAimInput.TapKey(hwnd, vk, ms);
+        Thread.Sleep(180);
+        if (!TryReadFacing(out b)) { report = "lost the facing field"; return double.NaN; }
+        return ClickAimMath.WrapDeg((b - a) * 180.0 / Math.PI);
     }
 
-    // ----------------------------------------------------------------- steering
-
     /// <summary>
-    /// One steering tick toward (tx, ty): sets the heading so the character walks at the
-    /// point, and holds the forward key. Returns the distance still to go.
+    /// One steering tick toward (tx, ty). Turns with the keys when the facing is off, and
+    /// holds the forward key when it is not. Returns the distance still to go.
+    ///
+    /// This is a closed loop on the READABLE facing field: each tick reads the facing,
+    /// turns for a duration proportional to the remaining error, and reads again.
+    ///
+    /// A proportional tap alone does NOT guarantee convergence - with the real turn rate
+    /// 20x the assumed one it overshoots, and every overshoot costs a tick to undo (that
+    /// combination oscillated for 60 ticks in a model of it). So the step size is adapted:
+    /// if the error grew or changed sign, the tap was too long and is halved.
     /// </summary>
     public static bool Steer(double tx, double ty, IntPtr hwnd, bool forward, out double remaining)
     {
@@ -424,41 +340,85 @@ internal static class ClickAimKeySteer
         if (!ClickAimPositions.TryRead(out px, out py)) return false;
 
         remaining = ClickAimMath.Len(tx - px, ty - py);
-
         double wantedBearing = ClickAimMath.HeadingDeg(tx - px, ty - py);
-        double facing = FacingForBearing(wantedBearing);
 
-        int now = Environment.TickCount & int.MaxValue;
-
-        double writtenDeg = facing * 180.0 / Math.PI;
-        bool bigTurn = !double.IsNaN(_lastFacing)
-                       && Math.Abs(ClickAimMath.WrapDeg(writtenDeg - _lastFacing)) > RepressDeg;
-
-        /* The client fixes its movement DIRECTION when the key goes down, not while it is
-         * held. That is what the 12:04 calibration showed: writing 51 deg steered the
-         * character exactly, then writing 121 deg while it was still walking changed
-         * nothing at all. So a real change of heading has to be: let the key up, write the
-         * new facing, press it again. Small corrections just rewrite the field. */
-        if (bigTurn && _keyDown)
+        double facingRad;
+        if (!TryReadFacing(out facingRad))
         {
+            // No facing: walk anyway. Wrong direction is still information, and the
+            // caller measures the result from positions.
+            SetForward(hwnd, forward);
+            return true;
+        }
+
+        double facingDeg = facingRad * 180.0 / Math.PI;
+
+        /* The error is measured against the facing, which is only the direction of travel
+         * when the calibration said so. If it did not, the facing is still the thing the
+         * client turns, so steering on it is the best available aim - but the caller is
+         * told (in the calibration report) that the walk may differ from it, and the
+         * caller's progress check is what decides whether the leg is working. */
+        double error = ClickAimMath.WrapDeg(wantedBearing - facingDeg);
+
+        if (Math.Abs(error) > TurnToleranceDeg)
+        {
+            /* Turn in place. One tap per tick, sized to the error but capped: a tap that
+             * is too long overshoots, and overshoot on a turn costs a whole tick to undo.
+             * The key pressed is whichever one moves the facing the way the error needs. */
             SetForward(hwnd, false);
-            Thread.Sleep(40);
-            TryWriteFacing(facing, _useOutgoing);
-            Thread.Sleep(40);
-            _lastFacing = writtenDeg;
-            _lastWriteMs = now;
-        }
-        else if (double.IsNaN(_lastFacing) || Math.Abs(writtenDeg - _lastFacing) > 0.01
-                 || unchecked(now - _lastWriteMs) > 100)
-        {
-            TryWriteFacing(facing, _useOutgoing);
-            _lastFacing = writtenDeg;
-            _lastWriteMs = now;
+
+            /* Learn the turn rate instead of trusting the calibration.
+             *
+             * A tap sized as `error / degPerMs` overshoots if the real rate is higher than
+             * the measured one, and an overshoot costs a whole tick to undo - modelled with
+             * the true rate 3x the assumed one it oscillated for 60 ticks without settling.
+             * So if this tick's error is bigger than last tick's, or has changed sign, the
+             * step was too long: halve it. It grows back slowly, so a first tick that was
+             * too cautious does not stay that way. */
+            if (!double.IsNaN(_lastTurnError))
+            {
+                bool overshot = Math.Sign(error) != Math.Sign(_lastTurnError)
+                                || Math.Abs(error) > Math.Abs(_lastTurnError) + 0.5;
+                if (overshot) _turnStepScale = Math.Max(0.03, _turnStepScale * 0.5);
+                else _turnStepScale = Math.Min(1.0, _turnStepScale * 1.15);
+            }
+            _lastTurnError = error;
+
+            int ms = (int)Math.Round(Math.Abs(error) / Math.Max(0.02, _degPerTurnMs) * _turnStepScale);
+            if (ms < 10) ms = 10;   // the shortest tap that still registers
+            if (ms > MaxTurnTapMs) ms = MaxTurnTapMs;
+
+            // Turn with the measured key when its measured direction matches the error's
+            // sign; otherwise the other arrow. Derived from the sign of the step, so it
+            // works even if both arrows turn the same way (the usual client behaviour is
+            // +-equal, but this does not assume it).
+            bool sameWay = Math.Sign(error) == Math.Sign(_turnKeyStepDeg);
+            int vk = sameWay ? _turnKey : _turnKey == TurnRightVk ? TurnLeftVk : TurnRightVk;
+
+            ClickAimInput.TapKey(hwnd, vk, ms);
+            Thread.Sleep(60);
+
+            if (Math.Abs(error) > 45.0)
+            {
+                Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                    "[Keys] facing {0:F0} deg, want {1:F0} deg: {2:+0;-0} deg -> {3} for {4} ms",
+                    facingDeg, wantedBearing, error,
+                    vk == TurnRightVk ? "right arrow" : "left arrow", ms));
+            }
+
+            return true;
         }
 
+        _lastTurnError = double.NaN;
         SetForward(hwnd, forward);
         return true;
     }
+
+    /// <summary>Degrees of error that still counts as facing the point.</summary>
+    private const double TurnToleranceDeg = 6.0;
+
+    /// <summary>Longest single turn tap. A 180 deg turn is several taps, re-measured each.</summary>
+    private const int MaxTurnTapMs = 400;
 
     /// <summary>The value to write so the character walks on <paramref name="bearingDeg"/>.</summary>
     public static double FacingForBearing(double bearingDeg)

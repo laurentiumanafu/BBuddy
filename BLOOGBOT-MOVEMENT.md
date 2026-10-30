@@ -159,6 +159,57 @@ the write, and the run says so instead of walking in circles. The map is checked
 (identity, slope 1, slope −1, a +90 deg offset, and a ×2 scale all invert exactly) and at
 attach (`KeySteer self-test`), so a failure in the field is the client, not the arithmetic.
 
+## The 12:57 run: the write does not steer, and the click cannot be stopped
+
+Two findings, both decisive.
+
+**1. The facing write is not what the client moves by.** With the probe fixed, and then
+again against the outgoing field at -0x1C:
+
+```
+[Keys] writing the readable facing field moved nothing (81 deg then 81 deg bearing).
+       Trying the OUTGOING field BloogBot writes (readable - 0x1C)
+[Route] wrote 81 deg then 151 deg and the character walked bearing 81 then 81 deg
+```
+
+81 written, 81 walked; 151 written, 81 walked. The character keeps its own facing and
+the write is discarded. So the record field is not the lever - **but it is readable, and
+it equals the direction the character walks.** That equality is the loop.
+
+**2. A click whose aim is off is a runaway that cannot be stopped.**
+
+```
+[ClickAim] leg ended: 120.4 yd in 17.4 s on a click, it ran out of time
+[ClickAim] the click will not stop; giving up on this leg
+```
+
+Twice, leaving the character 138 yd from the goal. The reason: a centre click walks to
+wherever the camera ray meets the ground - 8 yd looking steeply down, 120 yd looking
+level - so its LENGTH is not controllable, only its direction, and we cannot set the
+direction. Worse, the stop key did not cancel it, because `TapKey` was posting
+`lParam = 0x00010001`: repeat 1, **scan code 0**. A keystroke with no scan code is one a
+client can legitimately ignore. `TapKey` now sends the real scan code.
+
+## So: turn keys, and a closed loop on the facing
+
+The remaining lever is the turn keys (arrow left/right). They change the facing the
+client obeys, and the facing is readable, so:
+
+```
+read facing -> tap the arrow key until facing == wanted -> hold W
+```
+
+No memory writes, no camera, no pixels, and no model of the turn rate: the tap duration
+is proportional to the remaining error and the result is re-measured every tick. The
+step also *learns* - if the error grew or changed sign since the last tick, the tap was
+too long, so it halves (and grows back slowly). Modelled across 21 combinations of true
+turn rate (0.02-1.0 deg/ms) and assumed rate (0.05-0.5), with the true rate up to 20x
+the assumption: **21/21 converge**.
+
+And the click fallback is gone. `RouteRunner` stops and says why rather than falling back
+to a mover that walks 120 yd in a random direction and will not stop, and the mover
+refuses any click whose aim is more than 25 deg off.
+
 ## The 12:04 run: the facing write works, the probe was measuring the previous walk
 
 ```

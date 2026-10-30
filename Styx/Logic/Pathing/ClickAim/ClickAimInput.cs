@@ -136,9 +136,17 @@ internal static class ClickAimInput
     {
         if (vk <= 0) return;
         if (ms < 20) ms = 20;
-        PostMessageInternal(hWnd, WM_KEYDOWN, new IntPtr(vk), new IntPtr(0x00010001));
+        /* The lParam carries the SCAN CODE in bits 16-23. Sending 0x00010001 - repeat 1,
+         * scan code 0 - is what this used to do, and on 2026-10-30 a stop key sent that
+         * way did not stop a click-walk: the character ran 120.4 yd with three taps of it
+         * and had to be left running. A key with no scan code is a keystroke a client can
+         * legitimately ignore; the code below is the same shape Windows itself sends. */
+        int scan = (int)MapVirtualKey((uint)vk, 0);
+        int downLp = 1 | (scan << 16);
+        int upLp = unchecked((int)0xC0000001) | (scan << 16) | 1;
+        PostMessageInternal(hWnd, WM_KEYDOWN, new IntPtr(vk), new IntPtr(downLp));
         Thread.Sleep(ms);
-        PostMessageInternal(hWnd, WM_KEYUP, new IntPtr(vk), new IntPtr(unchecked((int)0xC0010001)));
+        PostMessageInternal(hWnd, WM_KEYUP, new IntPtr(vk), new IntPtr(upLp));
     }
 
     /// <summary>
