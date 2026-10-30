@@ -92,6 +92,11 @@ internal static class GrindRunner
     /// </summary>
     private const double InterruptYd = 18.0;
 
+    /// <summary>
+    /// How long the walk is left alone after an interrupt that did not turn into a fight.
+    /// </summary>
+    private const int InterruptRetryMs = 4000;
+
     /// <summary>Stand at a hotspot this long looking for a mob before walking to the next.</summary>
     private const int HotspotDwellMs = 9000;
 
@@ -139,6 +144,12 @@ internal static class GrindRunner
     /// </summary>
     private static WowBGuid _gaveUpGuid;
     private static int _gaveUpAt;
+
+    /// <summary>
+    /// TickCount before which the walk is not to be interrupted again, because the last
+    /// interrupt found nothing it could actually fight.
+    /// </summary>
+    private static int _interruptQuietUntil;
 
     /// <summary>Leave a target it gave up on alone for this long.</summary>
     private const int GiveUpMs = 15000;
@@ -219,6 +230,7 @@ internal static class GrindRunner
         _clicks = 0;
         _gaveUpAt = 0;
         _gaveUpGuid = default(WowBGuid);
+        _interruptQuietUntil = 0;
         _notViable.Clear();
 
         /* What the client can be asked without Lua: level, health, the stored action bar
@@ -313,6 +325,11 @@ internal static class GrindRunner
                     Logging.Write("[Grind] the walk was cut short on purpose: something worth fighting "
                                   + "came within " + InterruptYd.ToString("F0", CultureInfo.InvariantCulture)
                                   + " yd. Fighting it instead of walking on");
+
+                    /* If the next pass does not actually fight anything, do not interrupt
+                     * again for a moment - otherwise a target that can be neither engaged
+                     * nor ignored pins the character in place indefinitely. */
+                    _interruptQuietUntil = Environment.TickCount + InterruptRetryMs;
                     continue;
                 }
 
@@ -590,8 +607,13 @@ internal static class GrindRunner
         }
 
         /* It is the mob the last fight gave up on: selecting it again would repeat that
-         * decision every third of a second. Walk to the next hotspot instead. */
-        if (Refused(target.Guid))
+         * decision every third of a second. Walk to the next hotspot instead.
+         *
+         * UNLESS it is still on us. "Gave up" means "do not chase", not "stand still while
+         * something eats you" - and the 17:26 run turned it into exactly that: the fight
+         * gave up at 22 yd, the mob kept hitting, and every 0.3 s the loop interrupted the
+         * walk for a target it then refused to fight. The character stood rooted for 40 s. */
+        if (Refused(target.Guid) && !(PlayerInCombat() && TargetIsFighting(target)))
         {
             report = string.Format(CultureInfo.InvariantCulture,
                 "the only target in reach is the one given up on {0:F0} s ago - walking on to the next hotspot",
@@ -686,6 +708,12 @@ internal static class GrindRunner
     private static bool FightNeeded(IntPtr hwnd, double radius)
     {
         if (_stop) return false;
+
+        /* An interrupt that produced no fight is not worth repeating four times a second.
+         * The 17:26 run logged 130 interrupt/refuse pairs in 40 s and the character never
+         * took a step; this is the brake. */
+        if (_interruptQuietUntil != 0 && unchecked(Environment.TickCount - _interruptQuietUntil) < 0)
+            return false;
 
         WowBWorldSnapshot? snap;
         if (!Capture(out snap) || snap == null) return false;
@@ -810,6 +838,19 @@ internal static class GrindRunner
         catch { return false; }
     }
 
+    /// <summary>
+    /// Whether the unit is fighting right now, from its own <c>UnitFlags</c> bit. Used to
+    /// decide that a target the last fight gave up on is nevertheless the thing attacking
+    /// us, in which case not fighting it is not an option.
+    /// </summary>
+    private static bool TargetIsFighting(WowBObservedUnit unit)
+    {
+        Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
+        if (reader == null) return false;
+        Styx.WoWInternals.WowBReader.WowBUnitFields f;
+        return reader.TryGetUnitFields(unit.UnitAddress, out f) && (f.UnitFlags & InCombatFlag) != 0;
+    }
+
     /// <summary>True while the target a fight gave up on is still off limits.</summary>
     private static bool Refused(WowBGuid guid)
     {
@@ -882,6 +923,8 @@ internal static class GrindRunner
         int lastCastMs = 0;
         int quietRounds = 0;
         int faceFailures = 0;
+        bool meleeOnce = false;
+
         bool castEverLanded = false;        // a Wrath has demonstrably cast this fight
         bool melee = false;                 // set when casting is shown not to work
         bool announced = false;
@@ -1046,9 +1089,20 @@ internal static class GrindRunner
             if (canCast && d > ClickAimCombat.CasterRangeYd - 2.0)
                 ClickAimKeySteer.ReleaseHeld();      // arrived: stop walking before casting
 
-            /* ---- 3. Wrath, on the global cooldown timer ---- */
-            if (canCast
-                && unchecked(Environment.TickCount - lastCastMs) >= ClickAimCombat.CastSettleMs)
+            /* ---- 3. Wrath, on the global cooldown timer ----
+             *
+             * Everything below this point assumes casting is NOT viable, so when it is, the
+             * loop leaves here - it either approached, cast, or waits for the cooldown. The
+             * 17:26 run fell through on the cooldown tick into the melee branch and logged
+             * "cannot cast at it and it is 22 yd away" with 139 mana, then gave up on a mob
+             * it had hit with Wrath one second earlier. */
+            if (canCast && unchecked(Environment.TickCount - lastCastMs) < ClickAimCombat.CastSettleMs)
+            {
+                Thread.Sleep(120);
+                continue;
+            }
+
+            if (canCast)
             {
                 /* Turn and CHECK before spending the key. A cast begun while the mob is not
                  * in front is refused by the client, and the previous version paid 3.2 s for
@@ -1142,16 +1196,30 @@ internal static class GrindRunner
             /* ---- 4. melee: close, right-click, let the client swing ----
              *
              * This is the fallback, not a habit: it runs only when casting is off the table
-             * (no damage spell, no mana, or the key demonstrably does not cast), because a
-             * right-click both starts auto-attack AND walks the character into the mob. */
+             * (no damage spell, under 10 mana, or three casts that landed nothing), because
+             * a right-click both starts auto-attack AND walks the character into the mob.
+             * If it ever runs while the character still has mana, that is the bug the user
+             * reported twice - "auto-attacking while casting wrath" - so it says so. */
+            if (!meleeOnce)
+            {
+                meleeOnce = true;
+                Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                    "[Grind] melee from here: casting is {0} (damage spell {1}, mana {2}, {3} failed cast(s))",
+                    melee ? "switched off for this fight" : "not available",
+                    damage == null ? "none on the bar" : damage.Name, myMana, castFailures));
+            }
+
             if (d > AttackRangeYd)
             {
-                /* Walk in, but no further than ChaseYd of running: melee is a decision, and
-                 * a mob that keeps backing off is not worth chasing across the ring. */
-                if (d > ChaseYd)
+                /* Walk in, but not across the whole ring: melee is a decision, and a mob that
+                 * keeps backing off is not worth chasing. If it is on US, the limit is the
+                 * give-up distance instead - a mob hitting the character has to be answered,
+                 * which is the other half of the 17:26 stall. */
+                double chase = PlayerInCombat() ? GiveUpYd : ChaseYd;
+                if (d > chase)
                     return string.Format(CultureInfo.InvariantCulture,
-                        "cannot cast at it and it is {0:F0} yd away (melee chase is {1:F0} yd); "
-                        + "giving up on it", d, ChaseYd);
+                        "cannot cast at it and it is {0:F0} yd away (the melee chase is {1:F0} yd); "
+                        + "giving up on it", d, chase);
                 double closer;
                 ClickAimKeySteer.Steer(target.Location.X, target.Location.Y, hwnd, true, out closer);
                 Thread.Sleep(90);

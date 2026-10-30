@@ -138,7 +138,8 @@ internal static class ClickAimUi
 
             return "grinding \"" + name + "\" (" + areas.ToString(System.Globalization.CultureInfo.InvariantCulture)
                    + " area(s)) - hotspots from its <GrindArea>, area chosen by level band, "
-                   + "combat by right-clicking the mob (the client's own auto-attack) - no Lua";
+                   + "combat from the action bar in memory, pressed as keys, targets only from the "
+                   + "client's own TAB filter - no Lua";
         }
 
         if (!ClickAimDiagnostics.StartProfile(path, 0, 0, false, false))

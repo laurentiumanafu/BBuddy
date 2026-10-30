@@ -234,3 +234,15 @@ spell cast through the memory action bar. What the run exposed and what changed:
   town). The walk interrupt needs it - on the player, or on a unit within 18 yd - instead of
   "a level-appropriate unit is nearby", which every NPC in a town satisfies.
 * a target nothing could touch is added to `_notViable` for the session.
+
+
+## 2026-10-30, 17:26 run — first kill, then a 40 s freeze
+
+* `Wrath 71 -> 56`, auto-attack `56 -> 41 -> 26 -> 11`, `Wrath 11 -> 0`: the rotation works.
+* bug 1: the cast branch fell through to melee when the global cooldown had not elapsed, so
+  the tick after a landed Wrath ended the fight with "cannot cast at it and it is 22 yd
+  away" at 139 mana. A viable cast now always continues (approach / cast / wait).
+* bug 2: a refused (given-up) target was also refused while it was eating the character,
+  so interrupt -> refuse -> walk -> interrupt spun 40x/s with the character rooted. A refused
+  target is now fought when the player is in combat and the unit carries the in-combat bit,
+  and a fruitless interrupt silences the next for `InterruptRetryMs` (4 s).

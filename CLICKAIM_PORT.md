@@ -1149,3 +1149,39 @@ and fought again every three seconds.
 The turn-key swap firing on the first tap of the run is the intended behaviour of the
 measure-don't-assume `Face()`: the walk calibration had not run yet, so the first guess (220
 ms for 57 deg) was 40% short, and the code swapped the pair once and went on.
+
+## 2026-10-30 17:26 — the run that killed a mob and then froze
+
+Good news first: the whole loop worked for two minutes. It walked 700 yd of mesh, was
+interrupted by a mob at 17:27:56, cast `Wrath 71 -> 56`, auto-attacked `56 -> 41 -> 26 ->
+11`, and finished with `Wrath 11 -> 0`. First confirmed kill by a rotation.
+
+Then it stopped moving and the log filled with the same three lines, 40 times a second:
+
+```
+[Grind] the only target in reach is the one given up on 1 s ago - walking on to the next hotspot
+[Route] navmesh available: every leg is routed on the mmaps ...
+[Grind] the character is in combat - stopping the walk
+[Route] the walk was cut short on purpose: something worth fighting came within 18 yd
+```
+
+Two bugs, both about the same edge:
+
+1. **`cannot cast at it and it is 22 yd away` with 139 mana.** The cast branch was gated on
+   the global cooldown (`lastCastMs + CastSettleMs`), and when the cooldown had not elapsed
+   the loop fell straight through into the melee block - which then decided the mob was too
+   far to chase and gave up. So the very tick after a landed Wrath, the fight ended. Now a
+   viable cast either approaches, casts, or waits (`Thread.Sleep(120)`) - it can never reach
+   the melee branch, and melee announces itself once per fight with the reason
+   (`casting is not available (damage spell Wrath, mana 4, 2 failed cast(s))`).
+2. **The mob was still hitting the character while being "given up on".** The give-up exists
+   so a hopeless target is not re-selected every 0.3 s, but it was also refusing the thing
+   that was eating us: interrupt → refresh target → refused → walk → interrupt, forever, with
+   the character rooted. Now a refused target is fought anyway when the player is in combat
+   and that unit carries the in-combat bit - "gave up" means do not chase, not stand still
+   and die - and an interrupt that produces no fight silences the next one for 4 s
+   (`InterruptRetryMs`), so a target that can be neither engaged nor ignored costs 4 s
+   instead of pinning the character.
+
+Also: out of mana with a mob on the character, the melee chase limit is `GiveUpYd` rather
+than `ChaseYd`, so it walks to the thing hitting it instead of refusing at 21 yd.
