@@ -912,6 +912,7 @@ public static class ClickAimDiagnostics
             int profileLegs = 0;
             bool startNearest = false;
             bool wholeProfile = false;
+            int grindMinutes = 0;              // 0 = until stopped
             for (int i = 0; i < args.Length; i++)
             {
                 string a = args[i] ?? "";
@@ -923,6 +924,8 @@ public static class ClickAimDiagnostics
                     startNearest = true;
                 else if (a.Equals("--profile-all", StringComparison.OrdinalIgnoreCase))
                     wholeProfile = true;
+                else if (a.Equals("--grind-minutes", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+                    int.TryParse(args[i + 1], out grindMinutes);
                 else if (a.Equals("--navtiles", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
                     NavGridStore.Root = args[i + 1];
                 else if (a.Equals("--navmap", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
@@ -975,6 +978,26 @@ public static class ClickAimDiagnostics
                     hunt.IsBackground = true;
                     hunt.Name = "ClickAimDestHunt";
                     hunt.Start();
+                    continue;
+                }
+                else if (arg.Equals("--grind", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Circle a grind profile's hotspots and fight what TAB finds. See
+                    // ClickAimGrind for what is measured and what is still guesswork.
+                    string gpath = i + 1 < args.Length ? args[i + 1] : null;
+                    if (gpath != null && gpath.StartsWith("--", StringComparison.Ordinal))
+                        gpath = null;
+                    if (gpath == null)
+                    {
+                        Logging.Write("[Grind] --grind wants a profile path: --grind \"C:\\p\\a.xml\"");
+                        continue;
+                    }
+                    GrindRunner.Start(gpath, grindMinutes);
+                    continue;
+                }
+                else if (arg.StartsWith("--grind=", StringComparison.OrdinalIgnoreCase))
+                {
+                    GrindRunner.Start(arg.Substring("--grind=".Length), grindMinutes);
                     continue;
                 }
                 else if (arg.Equals("--clickstop", StringComparison.OrdinalIgnoreCase))
@@ -1069,6 +1092,28 @@ public static class ClickAimDiagnostics
             }
             Logging.Write("[Route] " + origin + " request: profile " + path);
             return StartProfile(path, 0, 0, false, false);
+        }
+
+        /* "grind:<path>" in clickaim-walk.txt grinds that profile, and a bare "stop"
+         * ends it - both go through the request file so the buttons, the .cmd scripts and
+         * a hand-typed line all behave the same. */
+        if (trimmed.Equals("stop", StringComparison.OrdinalIgnoreCase))
+        {
+            Logging.Write("[ClickAim] " + origin + " request: stop");
+            GrindRunner.Stop();
+            return true;
+        }
+
+        if (trimmed.StartsWith("grind:", StringComparison.OrdinalIgnoreCase))
+        {
+            string gpath = trimmed.Substring("grind:".Length).Trim();
+            if (gpath.Length >= 2 && gpath.StartsWith("\"", StringComparison.Ordinal) &&
+                gpath.EndsWith("\"", StringComparison.Ordinal))
+            {
+                gpath = gpath.Substring(1, gpath.Length - 2);
+            }
+            Logging.Write("[Route] " + origin + " request: grind " + gpath);
+            return GrindRunner.Start(gpath, 0);
         }
 
         // "route:x,y[,z]" in clickaim-walk.txt plans and prints without walking,

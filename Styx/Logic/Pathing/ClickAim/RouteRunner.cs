@@ -67,6 +67,20 @@ public static class RouteRunner
     /// <summary>Runs the route in order. Blocks; call from a background thread.</summary>
     public static bool Run(IList<RoutePoint> route, int maxLegs)
     {
+        return Run(new ClickAimMover(), route, maxLegs);
+    }
+
+    /// <summary>
+    /// The same, with a mover the caller owns.
+    ///
+    /// A grind loop walks one hotspot at a time and keeps coming back, and creating a
+    /// mover per leg would re-run the key calibration (four turn taps and a probe walk)
+    /// before every hotspot - four seconds of turning on the spot at each point, which
+    /// looks like a bot having a fit. One mover keeps its calibration.
+    /// </summary>
+    public static bool Run(ClickAimMover mover, IList<RoutePoint> route, int maxLegs)
+    {
+        if (mover == null) throw new ArgumentNullException(nameof(mover));
         if (route == null || route.Count == 0)
         {
             Logging.Write("[Route] nothing to walk: the route is empty");
@@ -90,7 +104,6 @@ public static class RouteRunner
                           + "; each leg is routed on the grid when a tile is available");
         }
 
-        var mover = new ClickAimMover();
         int walked = 0;
 
         for (int i = 0; i < route.Count; i++)

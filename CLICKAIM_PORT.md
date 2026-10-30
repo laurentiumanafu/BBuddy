@@ -181,6 +181,45 @@ Two things that are deliberate:
   silently stops loading, and that failure is indistinguishable from "the bot ignored
   the profile".
 
+### Grinding: circling hotspots and fighting what you meet
+
+```
+Tools\Grind.cmd "F:\Profiles\Horde12-60_cloth.xml"      grind until stopped
+Tools\Grind.cmd "F:\..." -Seconds 300                    for five minutes
+Tools\Walk.cmd stop                                       stop the loop
+```
+
+`ProfileRoute.LoadGrindAreas` reads `<GrindArea>` blocks - the hotspots to circle plus the
+`TargetMinLevel` / `TargetMaxLevel` / `Factions` the profile authored - and
+`GrindRunner` uses the area nearest the player. Walking a grind area with `profile:`
+instead would visit its hotspots once and stop, which looks like a working bot until it
+quietly does nothing.
+
+Each tick the loop does one of two things:
+
+1. **Fight** if something is near. Targeting is the client's own TAB selection, checked
+   against `WowBWorldSnapshot.TargetGuid` and refusing players by vtable. That matters:
+   a grind profile's `<Factions>16 109 189</Factions>` cannot be evaluated here, because
+   no faction id is readable on this build - but the client already knows who is hostile,
+   and TAB only selects enemies.
+2. Otherwise **walk to the next hotspot** in the ring, one leg at a time, through the
+   same mesh route the walking tests use.
+
+Attacking is action-bar keys (`1`-`5`, `T`, `F`), and **a key is believed only when the
+selected target's health actually drops** - the one per-unit number the reader samples.
+The loop learns which keys work and logs it (`key '2' does damage: health 100 -> 87`); if
+none of them removes health it says so once and stops pressing, because the keyboard can
+walk on this client and may not be able to attack:
+
+> no key on the action bar removed health (health read 100). The keyboard can walk on
+> this client but it cannot attack - combat needs the routine, or a working Lua call
+
+Known gaps, stated rather than hidden: **combat is only checked between hotspots**, not
+mid-leg (`WalkTo` has no interrupt hook yet), so an add that aggros during a long leg is
+fought at the next point; the profile's `<Blackspots>` are not applied to the mesh; and
+level filtering is logged, not enforced - a wrong level filter that silently refuses
+everything is worse than fighting one mob two levels too low.
+
 ### The mesh is live now
 
 This section used to say there was no mesh on 70291. Both blockers are gone:

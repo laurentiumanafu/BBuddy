@@ -33,6 +33,52 @@ public sealed class RoutePoint
 }
 
 /// <summary>
+/// One <c>&lt;GrindArea&gt;</c> from a levelling profile: the hotspots to circle and the
+/// level band the profile wants killed there.
+///
+/// A grind profile is not a route: the hotspots are a LOOP you walk around forever,
+/// killing whatever you meet. That is why the level band matters - the profile's own
+/// author encoded "these mobs are worth killing at level 14" as TargetMinLevel /
+/// TargetMaxLevel, and the factions as the mobs' faction ids.
+/// </summary>
+public sealed class GrindArea
+{
+    /// <summary>The SubProfile's name, which is how these appear in the profile.</summary>
+    public string Name { get; set; } = "";
+
+    /// <summary>Kill things at least this level (0 = unstated).</summary>
+    public int TargetMinLevel { get; set; }
+
+    /// <summary>Kill things at most this level (0 = unstated).</summary>
+    public int TargetMaxLevel { get; set; }
+
+    /// <summary>The profile's faction ids, space separated, as written.</summary>
+    public string Factions { get; set; } = "";
+
+    public List<RoutePoint> Hotspots { get; set; } = new List<RoutePoint>();
+
+    /// <summary>Centre of the hotspot ring, used to pick the area nearest the player.</summary>
+    public void Centre(out double x, out double y)
+    {
+        double sx = 0, sy = 0;
+        for (int i = 0; i < Hotspots.Count; i++) { sx += Hotspots[i].X; sy += Hotspots[i].Y; }
+        int n = Hotspots.Count == 0 ? 1 : Hotspots.Count;
+        x = sx / n;
+        y = sy / n;
+    }
+
+    public override string ToString()
+    {
+        double cx, cy;
+        Centre(out cx, out cy);
+        return string.Format(CultureInfo.InvariantCulture,
+            "{0}: {1} hotspot(s) around ({2:F0}, {3:F0}), target level {4}-{5}",
+            string.IsNullOrEmpty(Name) ? "area" : Name, Hotspots.Count, cx, cy,
+            TargetMinLevel, TargetMaxLevel);
+    }
+}
+
+/// <summary>
 /// Reads the movement part of a CopilotBuddy / HonorBuddy profile.
 ///
 /// A profile is not a path. What it contains is a set of point lists: each quest
@@ -56,6 +102,58 @@ public static class ProfileRoute
     /// Parses a profile into an ordered waypoint list (document order).
     /// <paramref name="questId"/> 0 means "every quest in the file".
     /// </summary>
+    /// <summary>
+    /// The profile's grind areas, in document order. Empty for a quest profile.
+    ///
+    /// Read separately from <see cref="Load"/> because the two mean different things: a
+    /// quest profile's hotspots are visited once in order, a grind area's hotspots are
+    /// circled forever. Mixing them would turn a grind profile into a single lap of the
+    /// best area - walk 13 hotspots and stop, which looks exactly like a bot that
+    /// "worked" and quietly did nothing after 2 minutes.
+    /// </summary>
+    public static List<GrindArea> LoadGrindAreas(string path)
+    {
+        var areas = new List<GrindArea>();
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return areas;
+
+        XDocument doc;
+        try { doc = XDocument.Load(path); }
+        catch { return areas; }
+
+        foreach (XElement grind in doc.Descendants())
+        {
+            if (grind.Name.LocalName != "GrindArea") continue;
+
+            var area = new GrindArea();
+
+            XElement? sub = null;
+            foreach (XElement ancestor in grind.Ancestors())
+            {
+                if (ancestor.Name.LocalName == "SubProfile") { sub = ancestor; break; }
+            }
+
+            XElement? nameElement = sub != null ? sub.Element("Name") : grind.Element("Name");
+            area.Name = (string?)nameElement ?? "";
+
+            int level;
+            if (TryReadLevel(grind.Element("TargetMinLevel"), out level)) area.TargetMinLevel = level;
+            if (TryReadLevel(grind.Element("TargetMaxLevel"), out level)) area.TargetMaxLevel = level;
+            area.Factions = ((string?)grind.Element("Factions") ?? "").Trim();
+
+            foreach (XElement hotspot in grind.Descendants())
+            {
+                if (hotspot.Name.LocalName != "Hotspot") continue;
+                double x, y, z;
+                if (!TryReadXyz(hotspot, out x, out y, out z)) continue;
+                area.Hotspots.Add(new RoutePoint { X = x, Y = y, Z = z, Kind = "Hotspot", Label = area.Name });
+            }
+
+            if (area.Hotspots.Count > 0) areas.Add(area);
+        }
+
+        return areas;
+    }
+
     public static List<RoutePoint> Load(string path, int questId = 0, bool includeRunTo = true,
                                         bool includeServices = false)
     {
@@ -117,6 +215,18 @@ public static class ProfileRoute
             if (ancestor.Name.LocalName == "Quest") return ancestor;
         }
         return null;
+    }
+
+    /// <summary>
+    /// A level element: HB profiles write <c>&lt;TargetMinLevel&gt;10&lt;/TargetMinLevel&gt;</c>
+    /// as element text, not as an attribute, so this is a different reader from
+    /// <see cref="TryReadAttribute(XElement, string, out double)"/>.
+    /// </summary>
+    private static bool TryReadLevel(XElement? element, out int level)
+    {
+        level = 0;
+        if (element == null) return false;
+        return int.TryParse(element.Value.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out level);
     }
 
     private static bool TryReadXyz(XElement element, out double x, out double y, out double z)
