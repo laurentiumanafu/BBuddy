@@ -2632,6 +2632,8 @@ internal static class GrindRunner
             /* The 22:47 run: the max-power word read 0, the old code called that "no opinion"
              * and healed anyway, and a shaman pressed Healing Wave at 13 power twice while a
              * mob killed it. An unreadable maximum must never mean yes. */
+            _healCostGuess = 0;
+            ClickAimSettings.HealMinManaPercent = 25;
             check("healPowerNoMaxRefusesZero", !HealPowerOk(0, 0));
             check("healPowerNoMaxKeepsPositive", HealPowerOk(20, 0));
 
