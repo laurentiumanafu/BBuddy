@@ -60,6 +60,17 @@ internal static class ClickAimKeySteer
     private const int MaxProbeMs = 2500;
     private const int PollMs = 60;
 
+    /// <summary>
+    /// How long two position reads must agree before the character counts as standing
+    /// still. ClickAimDestHunt has a constant of the same name, which is how this one
+    /// came to be used here without being declared: a name that exists elsewhere in the
+    /// same assembly is not an error until the compiler looks at it.
+    /// </summary>
+    private const int RestMs = 400;
+
+    /// <summary>Longest wait for the character to come to rest before a probe.</summary>
+    private const int RestTimeoutMs = 4000;
+
     // ---- learned convention -------------------------------------------------
     private static bool _calibrated;
     private static bool _useOutgoing;
@@ -376,7 +387,7 @@ internal static class ClickAimKeySteer
         bool have = false;
         int still = 0;
 
-        for (int waited = 0; waited < 4000; waited += PollMs)
+        for (int waited = 0; waited < RestTimeoutMs; waited += PollMs)
         {
             Thread.Sleep(PollMs);
             double nx, ny;
@@ -394,7 +405,8 @@ internal static class ClickAimKeySteer
         }
 
         report = string.Format(CultureInfo.InvariantCulture,
-            "still moving {0} ms after the stop key (last two reads differed)", 4000);
+            "still moving {0} ms after the stop key (last two reads never agreed to 5 cm)",
+            RestTimeoutMs);
         return false;
     }
 
