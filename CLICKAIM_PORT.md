@@ -1369,3 +1369,48 @@ The five-window word diff (`+0x1900 … +0x2100`, 320 words) used to run across 
 done nothing, so "0 words changed" meant nothing. It now runs **only across a click the client
 confirmed selected the corpse**, which is the first time the diff can actually see a loot flag go
 `1 -> 0`. It stays once per session and prints only the words that moved.
+
+## 18:41 run — one corpse looted, and the two things that still break it
+
+User: **"managed to loot one monster (after clicking a lot near it) then tried to do the same for
+the other monster and failed (at least it knows when the loot happened)"**. The confirmation
+machinery works — that is the important part of this run:
+
+```
+[18:43:52.560] [Loot] the right-click on 0x…1E47 landed (the projected point missed the body; 40,60 px
+                       from it selected it, and that offset is now used for every unit click)
+[18:43:54.759] [Loot] the right-click on 0x…1E47 landed (the click landed on the learned offset 40,60 px)
+[18:43:54.759] [Grind] looted the body of 0x…1E47 (2.8 yd away); the bones are still in the pool
+```
+
+The learned offset was reused and re-confirmed one second later, and the 0-word diff across a
+**confirmed** click settles a question the earlier runs could not: this build does not keep a
+readable loot flag in the windows `+0x1900 … +0x2100`, so a body leaving the pool is the only
+external signal there is, and the confirmation that the client selected the body is the real proof.
+
+### Why the second corpse failed
+
+```
+[18:43:56.157] [Grind] engaged at 18.3 yd (mob health 86)     <- killed at range with Wrath
+[18:44:24.940] [Loot] could not reach the body of 0x…1F32 with the mouse:
+                      none of 18 click points around the projected one selected it
+```
+
+**Nothing was wrong with the clicks.** A right-click on a body more than ~5 yd away is not a loot
+at all — the client reads it as "walk there". The walk budget (12 s, started 17 s earlier) ran out
+with the body still 18 yd away, and the sweep then swept a corpse that could not be clicked from
+where it stood. The sweep was measuring the wrong thing and said so honestly.
+
+Fixed:
+
+- **`LootReachYd = 4`** — the walk loop runs until the character is inside 4 yd, with a 20 s
+  budget, and if it is not there afterwards **no click is sent at all**. The log now says
+  `could not get to the body of 0x… - still 12.4 yd away and the reach is 4 yd, so no click was
+  sent (a right-click from here is a walk order)`.
+- **The sweep turns the character.** A unit 2–3 yd in front sits almost on the camera's own axis,
+  so its projected point can be squarely on the character's own model, and no pixel offset of a
+  hundred gets off that model. Candidates are now `(yaw, dx, dy)` pairs: the plain point, the
+  offsets that have worked (`0,30` `0,60` `±40,60` `±40,30`), and then **±35° and ±55°** turns
+  with the projection recomputed from the moved camera — the body is then well to the side of the
+  character's silhouette and the click lands. Turning is only used when the cheap offsets fail, and
+  the log names which one worked.

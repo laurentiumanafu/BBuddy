@@ -297,3 +297,14 @@ spell cast through the memory action bar. What the run exposed and what changed:
   in the log). Melee also presses the `Attack` hotkey on every swing.
 - The 5-window loot word diff now only runs across a confirmed click, so it can finally catch the
   lootable flag flipping `1 -> 0`.
+
+## Latest: 18:41 run — loot confirmation works; reach and occlusion fixed
+
+- First corpse: sweep found `40,60 px`, offset cached, second attempt confirmed it again — the
+  client-confirmed click is now a working primitive (and 0 words move across a *confirmed* click,
+  so this build exposes no readable loot flag in `+0x1900..+0x2100`).
+- Second corpse failed because it was killed at 18 yd: a right-click beyond ~5 yd is a walk order,
+  not a loot. `LootReachYd = 4` + a 20 s walk + **no click at all when out of reach** (with a log
+  line naming the distance).
+- Sweep now includes yaw turns (±35°, ±55°) with the projection recomputed from the moved camera,
+  for bodies hidden behind the character's own model; cheap pixel offsets are still tried first.

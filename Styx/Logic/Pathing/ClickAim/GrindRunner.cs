@@ -107,8 +107,18 @@ internal static class GrindRunner
     /// </summary>
     private const double LootYd = 18.0;
 
-    /// <summary>How long to let the client open (and auto-loot) the window before looking again.</summary>
-    private const int LootSettleMs = 900;
+    /// <summary>How long to wait for the client to take the body before deciding it is bones.</summary>
+    private const int LootSettleMs = 1500;
+
+    /// <summary>
+    /// How close the character has to be before the loot click is worth sending. A right-click
+    /// on a body further away is not a loot at all: the client reads it as "walk there", which
+    /// is exactly what the 18:44 run did for 17 s and then blamed on the projection.
+    /// </summary>
+    private const double LootReachYd = 4.0;
+
+    /// <summary>How long the walk to a corpse may take before the loot is given up.</summary>
+    private const int LootWalkMs = 20000;
 
     /// <summary>Tries per corpse before giving up on it for this session.</summary>
     private const int LootTries = 2;
@@ -1016,18 +1026,20 @@ internal static class GrindRunner
     /// </summary>
     private static int TryLootOne(IntPtr hwnd, WowBObservedUnit corpse)
     {
-        int started = Environment.TickCount;
-
         for (int attempt = 0; attempt < LootTries && !_stop; attempt++)
         {
-            /* Get within reach first. A right-click on a body further away starts a walk, not a
-             * loot, and the walk is what the mover is for. */
-            while (unchecked(Environment.TickCount - started) < 12000 && !_stop)
+            /* Get within reach first, and mean it. A right-click on a body further away is a
+             * walk order, and the 18:44 run spent a whole loot window on that: the mob was
+             * killed at 18 yd, the walk budget ran out before the body was reachable, and the
+             * click sweep then reported "none of 18 points selected it" - which was true and
+             * entirely the wrong thing to be measuring. */
+            int walkStart = Environment.TickCount;
+            while (unchecked(Environment.TickCount - walkStart) < LootWalkMs && !_stop)
             {
                 double px, py;
                 if (!ClickAimPositions.TryRead(out px, out py)) break;
                 double d = ClickAimMath.Len(corpse.Location.X - px, corpse.Location.Y - py);
-                if (d <= 4.5) break;
+                if (d <= LootReachYd) break;
                 if (UnderAttack()) return LootUnderAttack;
                 double remaining;
                 ClickAimKeySteer.Steer(corpse.Location.X, corpse.Location.Y, hwnd, true, out remaining);
@@ -1039,6 +1051,16 @@ internal static class GrindRunner
 
             double lx, ly;
             if (!ClickAimPositions.TryRead(out lx, out ly)) return LootNoClick;
+
+            double reach = ClickAimMath.Len(corpse.Location.X - lx, corpse.Location.Y - ly);
+            if (reach > LootReachYd + 1.0)
+            {
+                Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                    "[Loot] could not get to the body of {0} - still {1:F1} yd away and the reach is "
+                    + "{2:F0} yd, so no click was sent (a right-click from here is a walk order)",
+                    corpse.Guid, reach, LootReachYd));
+                return LootNoClick;
+            }
 
             ClickAimKeySteer.Face(corpse.Location.X, corpse.Location.Y, hwnd, 30.0, 4);
 
@@ -1066,7 +1088,7 @@ internal static class GrindRunner
 
             /* The client opens, takes and closes the window in well under a second with
              * auto-loot on; a body that is going to leave the pool leaves soon after. */
-            for (int waited = 0; waited < 1500 && !_stop; waited += 300)
+            for (int waited = 0; waited < LootSettleMs && !_stop; waited += 300)
             {
                 Thread.Sleep(300);
                 if (!BodyStillThere(corpse.Guid)) return 1;
@@ -1355,13 +1377,6 @@ internal static class GrindRunner
                                      bool mustSelect, out string how)
     {
         how = "";
-        int dx, dy;
-        if (!TryProject(hwnd, px, py, unit.Location.X, unit.Location.Y, unit.Location.Z, out dx, out dy))
-        {
-            how = "the projected point is behind the camera or off the screen";
-            return false;
-        }
-
         Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
         bool canVerify = mustSelect && reader != null && reader.ReadTargetGuid() != unit.Guid;
 
@@ -1369,53 +1384,98 @@ internal static class GrindRunner
          * character turned) the sweep below relearns it. */
         if (_clickBiasKnown)
         {
-            ClickAimInput.Click(hwnd, dx + _clickBiasX, dy + _clickBiasY);
-            if (!canVerify) return true;
-            Thread.Sleep(150);
-            if (reader != null && reader.ReadTargetGuid() == unit.Guid)
+            int bx, by;
+            if (TryProject(hwnd, px, py, unit.Location.X, unit.Location.Y, unit.Location.Z, out bx, out by))
             {
-                how = string.Format(CultureInfo.InvariantCulture,
-                    "the click landed on the learned offset {0},{1} px", _clickBiasX, _clickBiasY);
-                return true;
+                ClickAimInput.Click(hwnd, bx + _clickBiasX, by + _clickBiasY);
+                if (!canVerify) return true;
+                Thread.Sleep(150);
+                if (reader != null && reader.ReadTargetGuid() == unit.Guid)
+                {
+                    how = string.Format(CultureInfo.InvariantCulture,
+                        "the click landed on the learned offset {0},{1} px", _clickBiasX, _clickBiasY);
+                    return true;
+                }
+                _clickBiasKnown = false;
+                ClickAimKeySteer.ReleaseHeld();
+                ClickAimInput.TapKey(hwnd, 0x57, 40);      // W: cancel a click-walk the miss started
             }
-            _clickBiasKnown = false;
-            ClickAimKeySteer.ReleaseHeld();
-            ClickAimInput.TapKey(hwnd, 0x57, 40);          // W: cancel a click-walk the miss started
         }
 
-        int[] xs = { 0, -40, 40, -80, 80, -120, 120 };
-        int[] ys = { 0, 30, 60, -25, 90, -50, 120 };
+        /* Candidates: a yaw to turn the character by, then a pixel offset from wherever the
+         * projection puts the body after that turn.
+         *
+         * The pixel ladder alone was not enough. A unit a few yards in front of the character
+         * sits almost on the camera's own axis - the camera looks THROUGH the character at it -
+         * so its projected point can be squarely on the character's own model, and no offset of
+         * a hundred pixels gets off it. Turning by 35 or 55 degrees does: the projection is
+         * recomputed from the moved camera, so the body is now well to the side of the
+         * character's silhouette and the click lands on it. The first entry is the plain
+         * projected point, then the offsets that have actually worked in the field. */
+        double[] yaws = { 0, 0, 0, 0, 0, 0, 0, 35, -35, 55, -55 };
+        int[] offsetsX = { 0, 0, 0, 40, -40, 40, -40, 0, 0, 0, 0 };
+        int[] offsetsY = { 0, 30, 60, 60, 60, 30, 30, 20, 20, 20, 20 };
 
         int tried = 0;
-        for (int yi = 0; yi < ys.Length && tried < 18 && !_stop; yi++)
+        double turned = 0;
+        for (int i = 0; i < yaws.Length && !_stop; i++)
         {
-            for (int xi = 0; xi < xs.Length && tried < 18 && !_stop; xi++)
+            double yaw = yaws[i];
+            if (yaw != turned)
             {
-                ClickAimInput.Click(hwnd, dx + xs[xi], dy + ys[yi]);
-                tried++;
-                if (!canVerify) return true;
+                /* Face a point at that bearing so the camera swings with the character; the
+                 * projection follows the camera, so it is re-read afterwards. */
+                double vx = unit.Location.X - px, vy = unit.Location.Y - py;
+                double len = ClickAimMath.Len(vx, vy);
+                if (len < 0.3) return false;
+                double rad = yaw * Math.PI / 180.0;
+                double cos = Math.Cos(rad), sin = Math.Sin(rad);
+                double tx = px + (vx * cos - vy * sin) / len * 10.0;
+                double ty = py + (vx * sin + vy * cos) / len * 10.0;
+                ClickAimKeySteer.Face(tx, ty, hwnd, 25.0, 4);
+                Thread.Sleep(250);            // the camera has to settle behind the new facing
+                turned = yaw;
+            }
 
-                Thread.Sleep(150);
-                if (reader == null) return true;
-                if (reader.ReadTargetGuid() != unit.Guid)
-                {
-                    /* A click that missed the body landed on the ground, and a right-click on
-                     * the ground walks there. Stop the walk and turn back before the next try,
-                     * or the ladder is climbed from the wrong place. */
-                    ClickAimKeySteer.ReleaseHeld();
-                    ClickAimInput.TapKey(hwnd, 0x57, 40);
-                    ClickAimKeySteer.Face(unit.Location.X, unit.Location.Y, hwnd, 40.0, 2);
-                    continue;
-                }
+            int dx, dy;
+            if (!TryProject(hwnd, px, py, unit.Location.X, unit.Location.Y, unit.Location.Z, out dx, out dy))
+            {
+                how = "the projected point is behind the camera or off the screen";
+                continue;
+            }
 
-                _clickBiasX = xs[xi];
-                _clickBiasY = ys[yi];
+            ClickAimInput.Click(hwnd, dx + offsetsX[i], dy + offsetsY[i]);
+            tried++;
+            if (!canVerify) return true;
+
+            Thread.Sleep(150);
+            if (reader == null) return true;
+            if (reader.ReadTargetGuid() != unit.Guid)
+            {
+                /* A click that missed the body landed on the ground, and a right-click on the
+                 * ground walks there. Stop the walk before the next try, or the whole ladder is
+                 * climbed from somewhere else. */
+                ClickAimKeySteer.ReleaseHeld();
+                ClickAimInput.TapKey(hwnd, 0x57, 40);
+                continue;
+            }
+
+            if (yaw == 0)
+            {
+                _clickBiasX = offsetsX[i];
+                _clickBiasY = offsetsY[i];
                 _clickBiasKnown = true;
                 how = string.Format(CultureInfo.InvariantCulture,
                     "the projected point missed the body; {0},{1} px from it selected it, and that offset "
-                    + "is now used for every unit click", xs[xi], ys[yi]);
-                return true;
+                    + "is now used for every unit click", offsetsX[i], offsetsY[i]);
             }
+            else
+            {
+                how = string.Format(CultureInfo.InvariantCulture,
+                    "the body was hidden behind the character from straight ahead; turning {0:F0} deg "
+                    + "brought it out and the click landed", yaw);
+            }
+            return true;
         }
 
         how = string.Format(CultureInfo.InvariantCulture,
