@@ -1,45 +1,36 @@
 #!/usr/bin/env python3
-"""Report a call to something that is called WITHOUT an object and declared NOWHERE.
+"""Report a call to something that is called WITHOUT an object and declared NOWHERE near it.
 
 Every build break reported from the user's machine in this port has been one of two
-things, and both are invisible to a parser:
+things, and both are invisible to a parse check:
 
     CS0103  'RestMs' does not exist in the current context
     CS0103  'AimGaveUp' does not exist in the current context
 
-Both were a name written into a method body that no class ever declared - code that reads
-perfectly, parses perfectly, and cannot compile. A parse check passes it, and the other
-lints here only compare against what IS declared, so a name that was never declared has
-nothing to fail against.
+Both were a name written into a method body that no reachable class declares - code that
+reads perfectly, parses perfectly, and cannot compile. The other lints here compare against
+what IS declared, so a name that was never declared has nothing to fail against.
 
-So: index every declared member name in the repository, then check every bare call
-(`Foo(...)` with no receiver). A bare call must resolve to something - the enclosing
-type, any type in the repository, a local, a parameter - and when it resolves to nothing
-at all, it is either a mistake in this repository or an unqualified call into a namespace
-nobody here declares. Both are worth a look before the user's compiler finds them.
+The rule has to be FILE-local, and the first draft got this wrong: a bare call resolves
+against the enclosing type (and its base classes), never against a sibling type in the same
+namespace. Indexing the whole repository, that first version cleared `RestMs` because
+`ClickAimMover` has a method by that name - and the real bug it was written for was exactly
+that call living in `ClickAimKeySteer`, which cannot reach it.
 
-Deliberately one-directional. It does not check receivers (`x.Foo()`), because it has no
-type system and would be guessing; it does not check fields against types. It answers one
-question honestly: is this name declared anywhere at all?
+Base classes are the one thing this cannot judge: `class X : Window` inherits
+`InitializeComponent`, `Close`, `ContainsKey`, `SuspendLayout` and a thousand more names
+that exist only in the framework. So a type whose base list names something this repository
+does not declare is left alone - honest, and free, because the classes this check exists
+for (ClickAim's static helpers) have no base list at all.
 
-The rule has to be FILE-local, and the first draft got this wrong: a bare call is
-resolved against the enclosing type (and its base classes), never against a sibling type
-in the same namespace. So the index is built per file. Indexing the whole repository, the
-first version declared `RestMs` "declared" because `ClickAimMover` has a method of that
-name - and the real bug it was written for was exactly that call living in
-`ClickAimKeySteer`, where it does not exist.
-
-Scope is the tree under work, for one more reason: a bare call can also be a legitimate
-implicit-`this` call into a base class that is not in this repository (`InitializeComponent`
-on a WPF window, `SuspendLayout` on a Form, `ContainsKey` on a Dictionary), and no
-receiver-less check can tell those from a mistake. In ClickAim that noise does not arise -
-those classes are static and call helpers with explicit receivers - so a bare name that is
-not declared in the file is a real CS0103 waiting for the user's compiler. `--all` runs
-the whole repository and is for reading, not for a gate.
+Two findings remain on a run over the whole repository, both delegate locals invoked as
+`action(...)`: a field of delegate type and a method look identical here, and telling them
+apart needs types this check does not have. That is why the gate runs it on the tree under
+work, where it reports zero and where both historical breaks are caught.
 
 Usage:
-    python3 Tools/lint_cs_undeclared.py [path ...]    (default: ClickAim and UI)
-    python3 Tools/lint_cs_undeclared.py --all         (whole repository; expect base-class noise)
+    python3 Tools/lint_cs_undeclared.py [path ...]    (default: the tree under work)
+    python3 Tools/lint_cs_undeclared.py --all         (whole repository)
 
 Exit code 1 when anything is reported.
 """
@@ -58,11 +49,17 @@ PARSER = Parser(Language(tree_sitter_c_sharp.language()))
 
 SKIP_DIRS = {".git", "obj", "bin", "node_modules", "packages", ".vs"}
 
-# Members that declare a name usable without a receiver inside the same file.
-MEMBER_NODES = {
+DEFAULT_ROOTS = [os.path.join("Styx", "Logic", "Pathing", "ClickAim")]
+
+TYPE_NODES = {
+    "class_declaration", "struct_declaration", "record_declaration",
+    "interface_declaration", "enum_declaration",
+}
+
+# Nodes that introduce a name usable without a receiver in this file.
+DECLARES = {
     "method_declaration",
     "local_function_statement",
-    "declaration_expression",      # out var x / is var x
     "property_declaration",
     "event_declaration",
     "constructor_declaration",
@@ -70,23 +67,24 @@ MEMBER_NODES = {
     "operator_declaration",
     "conversion_operator_declaration",
     "enum_member_declaration",
+    "variable_declaration",
     "variable_declarator",
+    "declaration_expression",      # out var x / is var x
     "parameter",
     "type_parameter",
+    "delegate_declaration",
     "class_declaration",
     "struct_declaration",
     "interface_declaration",
     "record_declaration",
     "enum_declaration",
-    "delegate_declaration",
 }
 
-# Names that are not declared here and are not mistakes: C# aliases and the handful of
-# unqualified statics that are imported rather than written.
+# Names that are not declared anywhere here and are not mistakes: object's own members and
+# the language's contextual keywords.
 ALLOWED = {
     "nameof", "typeof", "sizeof", "default", "checked", "unchecked", "base", "this",
-    "value", "add", "remove", "get", "set", "init",
-    # object's own members, callable with no receiver and declared by no file here
+    "value", "add", "remove", "get", "set", "init", "when", "with",
     "ReferenceEquals", "GetType", "ToString", "Equals", "GetHashCode", "MemberwiseClone",
 }
 
@@ -118,25 +116,65 @@ def name_of(node):
 
 
 def declared_names(root):
-    """Every name this file declares, usable unqualified inside it."""
-    out = set()
+    names = set()
     for n in walk(root):
-        if n.type in MEMBER_NODES:
+        if n.type in DECLARES:
             name = name_of(n)
             if name:
-                out.add(name)
+                names.add(name)
         elif n.type == "variable_declaration":
-            # int a, b, c;  - the declarators are separate nodes but be explicit
             for c in n.children:
                 if c.type == "variable_declarator":
                     name = name_of(c)
                     if name:
-                        out.add(name)
+                        names.add(name)
+    return names
+
+
+def type_bases(node):
+    for child in node.children:
+        if child.type == "base_list":
+            out = []
+            for b in child.children:
+                if b.type in {"identifier", "qualified_name", "generic_name"}:
+                    out.append(b.text.decode("utf-8", "replace").split("<")[0].split(".")[-1])
+            return out
+    return []
+
+
+def opaque_types(root, file_names):
+    """Types here that inherit from something declared OUTSIDE this file.
+
+    Inherited members are invisible to a file-local check - and to delegate invocations of
+    them, which is why `Runner(...)` in a TreeSharp composite looked undeclared until this
+    rule: `Runner` is a property of a base class in another file, and `Runner(x)` is calling
+    a delegate, not a method. Anything with a base it cannot see is left alone.
+    """
+    out = set()
+    for n in walk(root):
+        if n.type not in TYPE_NODES:
+            continue
+        name = name_of(n)
+        if not name:
+            continue
+        for base in type_bases(n):
+            if base not in file_names and base != "object":
+                out.add(name)
+                break
     return out
 
 
+def enclosing_type(node):
+    n = node.parent
+    while n is not None:
+        if n.type in TYPE_NODES:
+            return name_of(n)
+        n = n.parent
+    return None
+
+
 def bare_calls(root):
-    """(line, name) for every call written without a receiver."""
+    """(line, name, enclosing type) for every call written without a receiver."""
     out = []
     for n in walk(root):
         if n.type != "invocation_expression":
@@ -144,35 +182,32 @@ def bare_calls(root):
         fn = n.child_by_field_name("function")
         if fn is None:
             continue
+        name = None
         if fn.type == "identifier":
-            out.append((n.start_point[0] + 1, fn.text.decode("utf-8", "replace")))
+            name = fn.text.decode("utf-8", "replace")
         elif fn.type == "generic_name":
             ident = fn.child_by_field_name("name")
             if ident is not None:
-                out.append((n.start_point[0] + 1, ident.text.decode("utf-8", "replace")))
+                name = ident.text.decode("utf-8", "replace")
+        if name:
+            out.append((n.start_point[0] + 1, name, enclosing_type(n)))
     return out
-
-
-DEFAULT_ROOTS = [os.path.join("Styx", "Logic", "Pathing", "ClickAim")]
-
-
-def other_file(name, per_file, exclude):
-    for path, _root, names, _calls in per_file:
-        if path != exclude and name in names:
-            return path
-    return "another file"
 
 
 def main(argv):
     args = argv[1:]
     report_all = "--all" in args
     roots = [a for a in args if not a.startswith("--")] or (["."] if report_all else DEFAULT_ROOTS)
+
     files = []
     for r in roots:
         files.extend(sorted(cs_files(r)))
+    if not files:
+        print("lint_cs_undeclared: nothing to scan in " + " ".join(roots))
+        return 0
 
+    parsed = []
     repo_names = set()
-    per_file = []
     for path in files:
         try:
             src = open(path, "rb").read()
@@ -180,17 +215,24 @@ def main(argv):
             continue
         root = PARSER.parse(src).root_node
         names = declared_names(root)
+        parsed.append((path, root, names))
         repo_names |= names
-        per_file.append((path, root, names, bare_calls(root)))
 
     findings = 0
-    for path, _root, local_names, calls in per_file:
-        for line, name in calls:
-            if name in local_names or name in ALLOWED:
+    for path, root, names in parsed:
+        skip = opaque_types(root, names)
+        for line, name, owner in bare_calls(root):
+            if name in names or name in ALLOWED:
+                continue
+            if owner is not None and owner in skip:
                 continue
             findings += 1
-            where = (" - the name exists in " + other_file(name, per_file, path) + ", which an "
-                     "unqualified call cannot reach") if name in repo_names else ""
+            where = ""
+            for other, _r, other_names in parsed:
+                if other != path and name in other_names:
+                    where = (" - the name exists in " + other
+                             + ", which an unqualified call from here cannot reach")
+                    break
             print("%s:%d: '%s(...)' - called without a receiver and not declared in this file%s"
                   % (path, line, name, where))
 

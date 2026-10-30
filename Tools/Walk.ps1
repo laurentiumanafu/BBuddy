@@ -15,6 +15,9 @@
         Tools\Walk.cmd 1977.5,232,3       ... with a 3 yd tolerance
         Tools\Walk.cmd hotspots          walk the list the "Add hotspot" button builds
         Tools\Walk.cmd profile:C:\p\a.xml   walk any HonorBuddy profile's hotspots
+        Tools\Walk.cmd grind:C:\p\a.xml     circle its grind areas and fight what it meets
+        Tools\Walk.cmd lua               ask the client what its Lua answers to
+        Tools\Walk.cmd stop              stop the grind loop
         Tools\Walk.cmd 20 -Seconds 120    watch for two minutes instead of 60
         Tools\Walk.cmd 20 -Root "F:\World of Warcraft\patch33\BBuddy-clickaim\bin\x64\Release\net10.0-windows7.0"
 
@@ -90,7 +93,7 @@ if (-not $log) { throw "no log in $logDir - is the bot running?" }
 Write-Host "tailing $($log.Name) for $Seconds s"
 Write-Host ("-" * 78)
 
-$filter = 'ClickAim|Route|Blackspot|MeshProbe|MeshQuery|Calibrate|NavGrid self-test'
+$filter = 'ClickAim|Route|Blackspot|MeshProbe|MeshQuery|Calibrate|NavGrid self-test|\[Grind\]|\[Lua\]'
 $position = $log.Length
 $deadline = (Get-Date).AddSeconds($Seconds)
 $seen = 0
@@ -116,7 +119,7 @@ while ((Get-Date) -lt $deadline) {
         if ($line -match $filter) {
             Write-Host $line
             $seen++
-            if ($line -match "arrived|BLOCKED|gave up|no progress|out of re-plans") { $deadline = (Get-Date) }
+            if ($line -match "arrived|BLOCKED|gave up|no progress|out of re-plans|call\(s\) answered|payload released") { $deadline = (Get-Date) }
         }
     }
 }

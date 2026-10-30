@@ -229,7 +229,8 @@ once it has taken health off a target. `--lua-probe` does all of this once and s
 without walking, if the user wants the surface of the build without a fight:
 
 ```
-BBuddy.exe --lua-probe
+CopilotBuddy.exe --lua-probe     at startup: probe, print, exit the probe
+Tools\Walk.cmd lua               on the running bot, through the request file
 ```
 
 What the bridge cannot do, and therefore what is still not solved: **two-argument calls

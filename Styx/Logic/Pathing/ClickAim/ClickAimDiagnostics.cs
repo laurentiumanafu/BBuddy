@@ -1146,6 +1146,19 @@ public static class ClickAimDiagnostics
         /* "grind:<path>" in clickaim-walk.txt grinds that profile, and a bare "stop"
          * ends it - both go through the request file so the buttons, the .cmd scripts and
          * a hand-typed line all behave the same. */
+        /* A bare "lua" in clickaim-walk.txt asks the client what its Lua answers to, on the
+         * bot that is already running - the same thing --lua-probe does at startup, without
+         * restarting anything. */
+        if (trimmed.Equals("lua", StringComparison.OrdinalIgnoreCase))
+        {
+            Logging.Write("[Lua] " + origin + " request: probe");
+            var probe = new Thread(LuaProbe);
+            probe.IsBackground = true;
+            probe.Name = "LuaProbe";
+            probe.Start();
+            return true;
+        }
+
         if (trimmed.Equals("stop", StringComparison.OrdinalIgnoreCase))
         {
             Logging.Write("[ClickAim] " + origin + " request: stop");

@@ -84,6 +84,8 @@ exit /b %errorlevel%
 echo usage: Walk.cmd ^<yards^|x,y^|route:x,y^> [-Seconds N] [-Root "exe folder"]
 echo    Walk.cmd hotspots   walk the list the "Add hotspot" button builds
 echo    Walk.cmd profile:C:\path\to\profile.xml   walk a profile's hotspots
+echo    Walk.cmd grind:C:\path\to\profile.xml   circle its grind areas and fight
+echo    Walk.cmd lua                                 what the client's Lua answers to
 echo    Walk.cmd route:-495.3,-4221.1
 echo    Walk.cmd 20
 echo    Walk.cmd 1977.5,232 -Seconds 180
