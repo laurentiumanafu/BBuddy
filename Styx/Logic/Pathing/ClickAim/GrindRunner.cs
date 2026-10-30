@@ -65,14 +65,23 @@ internal static class GrindRunner
 
     // ---- attacking ---------------------------------------------------------
     /// <summary>
-    /// The word in <c>UnitFlags</c> every mob the client let us hit carried on 2026-10-30:
-    /// 0x80800 for the one that was being fought, 0x800 for the ones standing around in
-    /// Mulgore, and 0x80808 for the player. 0x0 units were the ones TAB refused to select.
-    /// It is used as a PREFERENCE, not a gate: the nearest flagged unit wins over a nearer
-    /// unflagged one, and when nothing in range carries the flag the unflagged ones are used
-    /// anyway - a wrong bit must not empty the world.
+    /// What <c>UnitFlags</c> is NOT: a reaction bit. The 16:06 run printed the player as
+    /// <c>uflags=0x808</c> - the same 0x800 that looked like "hostile" on the mobs - so 0x800
+    /// cannot be hostility, and it is no longer used to rank targets. It overlaps what
+    /// 3.3.5a calls the transient combat/PvP bits; hostility stays with the client's own
+    /// filter (TAB) and with "something here is close enough to hit us".
     /// </summary>
-    private const uint HostileUnitFlag = 0x800;
+    private const uint ReactionUnknownMask = 0x800;
+
+    /// <summary>
+    /// Something worth fighting this close cuts a hotspot leg short. The 16:07 run walked
+    /// 25-40 s legs while mobs were hitting it, because the loop could only look between
+    /// legs; 18 yd is inside a caster's 28 yd range and close enough that the mob is coming.
+    /// </summary>
+    private const double InterruptYd = 18.0;
+
+    /// <summary>Stand at a hotspot this long looking for a mob before walking to the next.</summary>
+    private const int HotspotDwellMs = 9000;
 
     /// <summary>
     /// A mob's level, from <c>data+0x1E40</c>, against mine. Above +3 is a corpse run and
@@ -252,6 +261,13 @@ internal static class GrindRunner
                  * between them, so checking before each hop is checking every few
                  * seconds - close enough to catch an add without stopping mid-stride,
                  * which the mover cannot do yet (WalkTo has no interrupt hook). */
+                if (PlayerDead())
+                {
+                    Logging.Write("[Grind] the local player reads 0 health - the character is dead or "
+                                  + "being resurrected. Stopping instead of walking a corpse round the ring.");
+                    break;
+                }
+
                 string combatReport;
                 if (TryEngage(hwnd, out combatReport))
                 {
@@ -260,6 +276,7 @@ internal static class GrindRunner
                      * prefix, not the whole line. */
                     if (combatReport.StartsWith("killed", StringComparison.Ordinal)) kills++;
                     Logging.Write("[Grind] " + combatReport);
+                    if (combatReport.StartsWith("the character died", StringComparison.Ordinal)) break;
                     continue;
                 }
 
@@ -269,11 +286,34 @@ internal static class GrindRunner
                 index++;
 
                 var one = new List<RoutePoint> { next };
-                bool ok = RouteRunner.Run(mover, one, 1);
+
+                /* While walking, look for a fight every few seconds instead of only at the
+                 * end of the leg. The 16:07 run walked 25-40 s at a time with mobs on it and
+                 * never turned round; a leg is a whole hotspot, so "check between legs" was
+                 * checking every 40 s. */
+                RouteRunner.ShouldInterrupt = () => FightNeeded(hwnd, InterruptYd);
+                bool ok;
+                try { ok = RouteRunner.Run(mover, one, 1); }
+                finally { RouteRunner.ShouldInterrupt = null; }
+
+                if (!ok && RouteRunner.LastRunInterrupted)
+                {
+                    Logging.Write("[Grind] the walk was cut short on purpose: something worth fighting "
+                                  + "came within " + InterruptYd.ToString("F0", CultureInfo.InvariantCulture)
+                                  + " yd. Fighting it instead of walking on");
+                    continue;
+                }
+
                 if (ok)
                 {
                     hotspots++;
                     dead = 0;
+
+                    /* Stand here for a moment. A hotspot is a place mobs walk past, and
+                     * arriving and immediately leaving is how a grind loop spends an hour
+                     * walking a ring without ever fighting. */
+                    string dwell = DwellAtHotspot(hwnd, ref fights, ref kills);
+                    if (dwell.Length > 0) Logging.Write("[Grind] " + dwell);
                 }
                 else
                 {
@@ -365,6 +405,23 @@ internal static class GrindRunner
     /// health from), or 0 when it cannot be read. This used to come from Lua
     /// <c>UnitLevel("player")</c>; the Lua bridge is retired.
     /// </summary>
+    private static bool PlayerDead()
+    {
+        Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
+        if (reader == null) return false;
+        try
+        {
+            WowBWorldSnapshot? snap;
+            if (!reader.TryCaptureWorldSnapshot(out snap) || snap == null) return false;
+            WowBObservedUnit me;
+            if (!snap.TryGetLocalPlayer(out me)) return false;
+            Styx.WoWInternals.WowBReader.WowBUnitFields f;
+            if (!reader.TryGetUnitFields(me.UnitAddress, out f)) return false;
+            return f.MaxHealth > 0 && f.Health == 0;
+        }
+        catch { return false; }
+    }
+
     private static int PlayerLevel()
     {
         Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
@@ -486,6 +543,21 @@ internal static class GrindRunner
         WowBObservedUnit target = default(WowBObservedUnit);
         bool have = false;
 
+        /* Turn before asking. TAB only considers enemies in FRONT of the character and a
+         * right-click can only select what is on screen, so with the mob behind us both
+         * paths answer "nothing here" - which is precisely what the 16:07 run logged for
+         * two and a half minutes while mobs were attacking. */
+        WowBObservedUnit aim;
+        double aimYd;
+        if (NearestViable(snap, px, py, SearchYd, out aim, out aimYd))
+        {
+            ClickAimKeySteer.Face(aim.Location.X, aim.Location.Y, hwnd, 20.0, 6);
+            if (!Capture(out snap) || snap == null) return false;
+            if (!snap.TryGetLocalPlayer(out player)) return false;
+            px = player.Location.X;
+            py = player.Location.Y;
+        }
+
         for (int i = 0; i < TabTries && !have; i++)
         {
             ClickAimInput.TapKey(hwnd, TabVk, 40);
@@ -599,7 +671,6 @@ internal static class GrindRunner
         WowBObservedUnit best = default(WowBObservedUnit);
         double bestYd = double.MaxValue;
         bool found = false;
-        bool bestHostile = false;
 
         WowBObservedUnit nearAny = default(WowBObservedUnit);
         double nearAnyYd = double.MaxValue;
@@ -616,30 +687,24 @@ internal static class GrindRunner
             double d = ClickAimMath.Len(unit.Location.X - px, unit.Location.Y - py);
             if (d <= 0.5 || d > SearchYd) continue;
 
-            /* What the client says about it, if it says anything: a corpse has no health, the
-             * flags carry the reaction, and the level word decides whether the fight is worth
-             * the walk. Each of these is only applied when the word is actually readable. */
-            bool hostile = false;
+            /* What the client says about it, if it says anything: a corpse has no health and
+             * the level word decides whether the fight is worth the walk. UnitFlags is NOT
+             * used - see ReactionUnknownMask. */
             if (reader != null && reader.TryGetUnitFields(unit.UnitAddress,
                     out Styx.WoWInternals.WowBReader.WowBUnitFields f))
             {
                 if (f.Health == 0) { skipped++; continue; }
-                hostile = (f.UnitFlags & HostileUnitFlag) != 0;
                 if (!LevelViable(f.Level, myLevel)) { unviable++; continue; }
             }
             else lower++;
 
             if (d < nearAnyYd) { nearAnyYd = d; nearAny = unit; haveAny = true; }
 
-            /* A flagged unit wins over a nearer unflagged one; at equal standing the nearer
-             * one wins. This is the ordering, not a filter - see HostileUnitFlag. */
-            bool better = d < bestYd || (hostile && !bestHostile);
-            if (!found || better)
+            if (d < bestYd)
             {
                 bestYd = d;
                 best = unit;
                 found = true;
-                bestHostile = hostile;
             }
         }
 
@@ -661,11 +726,21 @@ internal static class GrindRunner
             return false;
         }
 
+        /* Face it first: a right-click can only select what is on screen, and "the nearest
+         * mob is behind the camera or off the screen" was the answer on every single engage
+         * of the 16:07 run. Turn, then project; if the first projection still fails, turn
+         * again and retry instead of giving up with a mob in range. */
         int dx, dy;
         if (!TryProject(hwnd, px, py, best.Location.X, best.Location.Y, best.Location.Z, out dx, out dy))
         {
-            note = "the nearest mob is behind the camera or off the screen";
-            return false;
+            ClickAimKeySteer.Face(best.Location.X, best.Location.Y, hwnd, 15.0, 8);
+            if (!TryProject(hwnd, px, py, best.Location.X, best.Location.Y, best.Location.Z, out dx, out dy))
+            {
+                note = string.Format(CultureInfo.InvariantCulture,
+                    "the nearest mob ({0:F1} yd) would not come on screen even after turning to it",
+                    bestYd);
+                return false;
+            }
         }
 
         ClickAimInput.Click(hwnd, dx, dy);       // right-click: select + attack
@@ -703,6 +778,102 @@ internal static class GrindRunner
         if (mobLevel == 0 || myLevel <= 0) return true;
         if ((int)mobLevel > myLevel + LevelAbovePlayer) return false;
         return (int)mobLevel >= myLevel - LevelBelowPlayer;
+    }
+
+    /// <summary>
+    /// Whether the walk should stop here. This runs on the route thread between polyline
+    /// points, so it costs one snapshot: no clicks, no keys, no decisions beyond "is there
+    /// something alive and level-appropriate this close".
+    /// </summary>
+    private static bool FightNeeded(IntPtr hwnd, double radius)
+    {
+        if (_stop) return false;
+
+        WowBWorldSnapshot? snap;
+        if (!Capture(out snap) || snap == null) return false;
+        if (!snap.TryGetLocalPlayer(out WowBObservedUnit me)) return false;
+
+        WowBObservedUnit unit;
+        double d;
+        if (!NearestViable(snap, me.Location.X, me.Location.Y, radius, out unit, out d)) return false;
+
+        Logging.Write(string.Format(CultureInfo.InvariantCulture,
+            "[Grind] {0} is {1:F1} yd away - stopping the walk to deal with it", unit.Guid, d));
+        return true;
+    }
+
+    /// <summary>
+    /// Stands at a hotspot for <see cref="HotspotDwellMs"/>, fighting anything that turns
+    /// up, then says what happened. Returns "" when nothing did.
+    /// </summary>
+    private static string DwellAtHotspot(IntPtr hwnd, ref int fights, ref int kills)
+    {
+        int dwellStart = Environment.TickCount;
+        int fought = 0;
+        int killed = 0;
+
+        while (!_stop && unchecked(Environment.TickCount - dwellStart) < HotspotDwellMs)
+        {
+            string report;
+            if (TryEngage(hwnd, out report))
+            {
+                fights++;
+                fought++;
+                if (report.StartsWith("killed", StringComparison.Ordinal)) { kills++; killed++; }
+                Logging.Write("[Grind] " + report);
+                continue;
+            }
+            if (report.Length > 0) Logging.Write("[Grind] " + report);
+            Thread.Sleep(400);
+        }
+
+        if (fought == 0) return "";
+        return string.Format(CultureInfo.InvariantCulture,
+            "stood at the hotspot and fought {0} time(s), {1} of them ending as kills", fought, killed);
+    }
+
+    /// <summary>
+    /// The nearest unit worth walking into a fight with, or false when there is none.
+    ///
+    /// Used for two things: turning the character toward the nearest plausible mob before
+    /// TAB (which only looks in front), and deciding whether a hotspot leg should be cut
+    /// short. It deliberately does not judge hostility - the flags cannot (see
+    /// <see cref="ReactionUnknownMask"/>) - so it only applies the three things the client
+    /// is certain about: not the player, not a corpse, inside the level band.
+    /// </summary>
+    private static bool NearestViable(WowBWorldSnapshot snap, double px, double py, double radius,
+                                      out WowBObservedUnit unit, out double yards)
+    {
+        Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
+        int myLevel = PlayerLevel();
+
+        unit = default(WowBObservedUnit);
+        yards = double.MaxValue;
+        bool found = false;
+
+        for (int i = 0; i < snap.Units.Count; i++)
+        {
+            WowBObservedUnit candidate = snap.Units[i];
+            if (candidate.IsLocalPlayer) continue;
+            if (candidate.HasPlayerVtable) continue;
+            if (Refused(candidate.Guid)) continue;
+            if (_notViable.Contains(candidate.Guid)) continue;
+
+            double d = ClickAimMath.Len(candidate.Location.X - px, candidate.Location.Y - py);
+            if (d <= 0.5 || d > radius || d >= yards) continue;
+
+            if (reader != null && reader.TryGetUnitFields(candidate.UnitAddress,
+                    out Styx.WoWInternals.WowBReader.WowBUnitFields f))
+            {
+                if (f.Health == 0) continue;
+                if (!LevelViable(f.Level, myLevel)) continue;
+            }
+
+            unit = candidate;
+            yards = d;
+            found = true;
+        }
+        return found;
     }
 
     /// <summary>True while the target a fight gave up on is still off limits.</summary>
@@ -776,6 +947,7 @@ internal static class GrindRunner
         int lastHealMs = 0;
         int lastCastMs = 0;
         int quietRounds = 0;
+        bool castEverLanded = false;        // a Wrath has demonstrably cast this fight
         bool melee = false;                 // set when casting is shown not to work
         bool announced = false;
         var worked = new List<string>();
@@ -828,6 +1000,12 @@ internal static class GrindRunner
                 return string.Format(CultureInfo.InvariantCulture,
                     "target is {0:F0} yd away and moving; giving up on it", d);
 
+            /* Face it before doing anything. A cast begun with the mob behind the character
+             * is refused by the client ("you are not facing your target"), and a
+             * right-click can only select what is on screen: the 16:09 run stood 3.3 yd
+             * from its target and could not touch it for exactly this reason. */
+            ClickAimKeySteer.Face(target.Location.X, target.Location.Y, hwnd, 25.0, 4);
+
             /* My own vitals, from the same block the mob's health comes from. */
             uint myHealth = 0, myMaxHealth = 0, myMana = 0;
             Styx.WoWInternals.WowBReader.WowBUnitFields mine;
@@ -839,15 +1017,21 @@ internal static class GrindRunner
             }
             double myPercent = myMaxHealth > 0 ? myHealth * 100.0 / myMaxHealth : 100.0;
 
+            /* A heal that lands too late is a corpse. Saying so beats pressing keys at a
+             * dead character, which is what the 16:09 run did for its last four seconds
+             * ("health 0% and Healing Touch did not lift it"). */
+            if (myMaxHealth > 0 && myHealth == 0)
+                return "the character died at " + presses + " press(es) into the fight; stopping the grind";
+
             if (!announced)
             {
                 announced = true;
                 Logging.Write(string.Format(CultureInfo.InvariantCulture,
                     "[Grind] rotation: heal at {0:F0}% health ({1}), damage {2}, auto-attack {3}",
                     ClickAimCombat.HealBelowPercent,
-                    heal == null ? "none on the bar" : "slot " + heal.Slot + " '" + (char)heal.KeyVk + "' " + heal.Name,
-                    damage == null ? "none on the bar" : "slot " + damage.Slot + " '" + (char)damage.KeyVk + "' " + damage.Name,
-                    auto == null ? "right-click only" : "slot " + auto.Slot + " '" + (char)auto.KeyVk + "'"));
+                    heal == null ? "none on the bar" : "slot " + heal.Slot + " '" + ClickAimCombat.KeyLabel(heal.KeyVk) + "' " + heal.Name,
+                    damage == null ? "none on the bar" : "slot " + damage.Slot + " '" + ClickAimCombat.KeyLabel(damage.KeyVk) + "' " + damage.Name,
+                    auto == null ? "right-click only" : "slot " + auto.Slot + " '" + ClickAimCombat.KeyLabel(auto.KeyVk) + "'"));
             }
 
             /* ---- 1. heal, where Singular puts it: before everything else ---- */
@@ -858,14 +1042,22 @@ internal static class GrindRunner
                 ClickAimInput.TapKey(hwnd, 0x70, 40);                  // F1 = target self (Blizzard default)
                 Thread.Sleep(120);
                 ClickAimInput.TapKey(hwnd, heal.KeyVk, 40);
-                Thread.Sleep(ClickAimCombat.CastSettleMs);
 
+                /* Wait for the heal to actually land. Healing Touch is a 1.5 s cast on top
+                 * of the retarget, and the previous version read my health once at 1.8 s and
+                 * reported "did not lift it (still 12/113)" for heals that were still being
+                 * cast - four times in one fight. Poll instead. */
                 uint afterHealth = 0;
-                WowBWorldSnapshot? healed;
-                if (reader != null && Capture(out healed) && healed != null
-                    && healed.TryGetLocalPlayer(out WowBObservedUnit me2)
-                    && reader.TryGetUnitFields(me2.UnitAddress, out mine))
-                    afterHealth = mine.Health;
+                for (int waited = 0; waited < ClickAimCombat.HealVerifyMs && !_stop; waited += 300)
+                {
+                    Thread.Sleep(300);
+                    WowBWorldSnapshot? healed;
+                    if (reader == null || !Capture(out healed) || healed == null) continue;
+                    if (healed.TryGetLocalPlayer(out WowBObservedUnit me2)
+                        && reader.TryGetUnitFields(me2.UnitAddress, out mine))
+                        afterHealth = mine.Health;
+                    if (afterHealth > myHealth) break;
+                }
 
                 if (afterHealth > myHealth)
                 {
@@ -883,10 +1075,21 @@ internal static class GrindRunner
                         myPercent, heal.Name, afterHealth, myMaxHealth));
                 }
 
-                /* The heal took the target away; TAB gives it back - the client's own
-                 * nearest enemy, which is the mob that is hitting us. */
-                ClickAimInput.TapKey(hwnd, TabVk, 40);
-                Thread.Sleep(TabSettleMs);
+                /* Retarget the SAME mob. A single TAB is not enough: if F1 did move the
+                 * target to me, one TAB picks whatever the client considers nearest, which
+                 * is not necessarily the thing that is hitting us. Cycle until the guid
+                 * matches, and give up after four tries rather than churning the target. */
+                WowBGuid wanted = target.Guid;
+                for (int tries = 0; tries < 4; tries++)
+                {
+                    WowBWorldSnapshot? back;
+                    WowBObservedUnit selected;
+                    if (Capture(out back) && back != null && back.TryGetSelectedTarget(out selected)
+                        && selected.Guid == wanted)
+                        break;
+                    ClickAimInput.TapKey(hwnd, TabVk, 40);
+                    Thread.Sleep(TabSettleMs);
+                }
                 continue;
             }
 
@@ -905,29 +1108,40 @@ internal static class GrindRunner
             {
                 lastCastMs = Environment.TickCount;
                 uint manaBefore = myMana;
+                int mobBeforeHealth = lastHealth;
                 ClickAimInput.TapKey(hwnd, damage.KeyVk, 40);
                 presses++;
                 _presses++;
-                Thread.Sleep(ClickAimCombat.CastSettleMs);
 
+                /* Wait for the cast instead of timing it. One read 1.8 s after the keypress
+                 * called a Wrath that was still in flight a failure, and two of those put
+                 * the whole fight into melee. Poll mana and the mob's health for up to
+                 * CastVerifyMs and stop as soon as either moves. */
                 uint manaAfter = 0;
-                int mobAfter = -1;
-                WowBWorldSnapshot? afterCast;
-                if (Capture(out afterCast) && afterCast != null)
+                int mobAfter = mobBeforeHealth;
+                bool spentMana = false;
+                bool hurtMob = false;
+                for (int waited = 0; waited < ClickAimCombat.CastVerifyMs && !_stop; waited += 250)
                 {
+                    Thread.Sleep(250);
+                    WowBWorldSnapshot? afterCast;
+                    if (!Capture(out afterCast) || afterCast == null) continue;
+
                     WowBObservedUnit me3;
                     if (reader != null && afterCast.TryGetLocalPlayer(out me3)
                         && reader.TryGetUnitFields(me3.UnitAddress, out mine))
                         manaAfter = mine.Power;
                     WowBObservedUnit t3;
                     if (afterCast.TryGetSelectedTarget(out t3)) mobAfter = Health(t3);
-                }
 
-                bool spentMana = manaAfter > 0 && manaAfter < manaBefore;
-                bool hurtMob = mobAfter >= 0 && lastHealth >= 0 && mobAfter < lastHealth;
+                    spentMana = manaAfter > 0 && manaAfter < manaBefore;
+                    hurtMob = mobAfter >= 0 && mobBeforeHealth >= 0 && mobAfter < mobBeforeHealth;
+                    if (spentMana || hurtMob) break;
+                }
 
                 if (spentMana || hurtMob)
                 {
+                    castEverLanded = true;
                     string label = damage.Name + " (slot " + damage.Slot.ToString(CultureInfo.InvariantCulture) + ")";
                     if (!worked.Contains(label)) worked.Add(label);
                     if (hurtMob)
@@ -943,17 +1157,21 @@ internal static class GrindRunner
 
                 castFailures++;
                 Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                    "[Grind] {0} (slot {1}, key '{2}') changed nothing: mana {3} -> {4}, mob health {5}"
-                    + " - {6} of 2 before falling back to melee",
-                    damage.Name, damage.Slot, (char)damage.KeyVk, manaBefore, manaAfter,
+                    "[Grind] {0} (slot {1}, key '{2}') changed nothing in {3} ms: mana {4} -> {5}, "
+                    + "mob health {6} - {7} failure(s) this fight{8}",
+                    damage.Name, damage.Slot, ClickAimCombat.KeyLabel(damage.KeyVk), ClickAimCombat.CastVerifyMs,
+                    manaBefore, manaAfter,
                     mobAfter >= 0 ? mobAfter.ToString(CultureInfo.InvariantCulture) : "unreadable",
-                    castFailures));
+                    castFailures, castEverLanded ? " (but it has cast before)" : ""));
 
-                if (castFailures >= 2)
+                /* Only give up on casting when it has NEVER worked in this fight. A cast
+                 * that fails while the mob is out of range or behind us is a temporary
+                 * condition, and one good Wrath earlier proves the key and the key map. */
+                if (!castEverLanded && castFailures >= 3)
                 {
                     melee = true;
-                    Logging.Write("[Grind] the spell keys do not cast on this client (or a different key is "
-                                  + "bound to that slot); switching to auto-attack for this mob");
+                    Logging.Write("[Grind] this key has not cast once this fight - switching to "
+                                  + "auto-attack rather than standing still");
                 }
                 continue;
             }

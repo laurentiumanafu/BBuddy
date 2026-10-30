@@ -85,9 +85,24 @@ public static class RouteRunner
     /// </summary>
     public static volatile bool StopRequested;
 
+    /// <summary>
+    /// Asked between polyline points, by the grind loop: "is there something here worth
+    /// stopping for?". True abandons the leg where it stands.
+    ///
+    /// This is the answer to the 16:07 run, which walked 25-40 s at a time while mobs were
+    /// hitting the character: the loop could only look for a fight between legs, and a leg
+    /// is a whole hotspot. Once per follow point (every few seconds, 5-20 yd) is often
+    /// enough to catch an add without turning every step into a decision.
+    /// </summary>
+    public static Func<bool>? ShouldInterrupt;
+
+    /// <summary>True when the last <see cref="Run"/> was cut short by <see cref="ShouldInterrupt"/>.</summary>
+    public static bool LastRunInterrupted;
+
     public static bool Run(ClickAimMover mover, IList<RoutePoint> route, int maxLegs)
     {
         StopRequested = false;
+        LastRunInterrupted = false;
         if (mover == null) throw new ArgumentNullException(nameof(mover));
         if (route == null || route.Count == 0)
         {
@@ -120,6 +135,12 @@ public static class RouteRunner
             {
                 Logging.Write(string.Format(CultureInfo.InvariantCulture,
                     "[Route] stopped on request after {0} of {1} waypoint(s)", walked, route.Count));
+                return walked > 0;
+            }
+
+            if (ShouldInterrupt != null && ShouldInterrupt())
+            {
+                LastRunInterrupted = true;
                 return walked > 0;
             }
 
@@ -379,6 +400,20 @@ public static class RouteRunner
                 /* keepMoving: the next point of the polyline is already known, so the
                  * character should not come to a stop to be told about it. Only the last
                  * point of the path ends with a stop. */
+                /* Something to fight: stop here rather than finishing the leg. The
+                 * character is mid-walk, so the forward key has to be released first -
+                 * leaving it held turns "stop and fight" into "run past it". */
+                if (ShouldInterrupt != null && ShouldInterrupt())
+                {
+                    LastRunInterrupted = true;
+                    ClickAimKeySteer.ReleaseHeld();
+                    try { mover.MoveStop(); } catch { }
+                    Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                        "[Route] interrupting the leg at point {0}/{1} - something worth fighting is here",
+                        p, follow.Length - 1));
+                    return false;
+                }
+
                 bool lastPoint = p == follow.Length - 1;
                 if (ClickAimPilot.WalkTo(mover, follow[p], StepTolerance, MeshPointTimeoutMs,
                                          false, true, !lastPoint))

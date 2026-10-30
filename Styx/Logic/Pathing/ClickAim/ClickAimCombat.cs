@@ -64,7 +64,7 @@ internal sealed class ClickAimAction
     public override string ToString()
     {
         return string.Format(CultureInfo.InvariantCulture,
-            "slot {0} key '{1}': {2} {3} ({4})", Slot, (char)KeyVk, Kind, Id, Name);
+            "slot {0} key '{1}': {2} {3} ({4})", Slot, ClickAimCombat.KeyLabel(KeyVk), Kind, Id, Name);
     }
 }
 
@@ -86,6 +86,17 @@ internal static class ClickAimCombat
 
     /// <summary>Do not self-heal again this soon: Healing Touch has a 1.5 s cast and mana cost.</summary>
     public const int HealRetryMs = 4000;
+
+    /// <summary>
+    /// How long a cast may take before it counts as "did not cast". Wrath is a 1.5 s cast
+    /// plus the 1.5 s global cooldown, and the 16:09 run proved the point the hard way: a
+    /// single read 1.8 s after the keypress said "changed nothing" for a Wrath that was
+    /// still in flight, and two of those switched the rotation to melee for the fight.
+    /// </summary>
+    public const int CastVerifyMs = 3200;
+
+    /// <summary>The same for a heal, which has to land and then show up in the health word.</summary>
+    public const int HealVerifyMs = 3600;
 
     /// <summary>Range for the opening cast, which is Singular's <c>MoveToTarget(true, 30f)</c>.</summary>
     public const double CasterRangeYd = 28.0;
@@ -192,6 +203,19 @@ internal static class ClickAimCombat
         return result;
     }
 
+    /// <summary>
+    /// What to call a binding in the log. <c>(char)0xBD</c> prints as '½' and 0xBB as '»',
+    /// which is how the 16:08 run described its own action bar - the keys are '-' and '=',
+    /// and a log that says otherwise is a log nobody can check against the client.
+    /// </summary>
+    public static string KeyLabel(int vk)
+    {
+        if (vk == 0xBD) return "-";
+        if (vk == 0xBB) return "=";
+        if (vk >= 0x30 && vk <= 0x39) return ((char)vk).ToString();
+        return "VK 0x" + vk.ToString("X2", CultureInfo.InvariantCulture);
+    }
+
     /// <summary>The first damage spell on the bar, or null.</summary>
     public static ClickAimAction? FirstDamage(List<ClickAimAction> bar)
     {
@@ -221,7 +245,7 @@ internal static class ClickAimCombat
         for (int i = 0; i < bar.Count; i++)
         {
             parts.Add(string.Format(CultureInfo.InvariantCulture, "slot {0} '{1}' {2} {3} ({4})",
-                bar[i].Slot, (char)bar[i].KeyVk, bar[i].Kind, bar[i].Id, bar[i].Name));
+                bar[i].Slot, KeyLabel(bar[i].KeyVk), bar[i].Kind, bar[i].Id, bar[i].Name));
         }
         return string.Join("; ", parts.ToArray());
     }

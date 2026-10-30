@@ -1033,3 +1033,31 @@ The Offsets button now dumps the **unit object** at `+0x1E00`/`+0x1B80` (the two
 empty windows in the 15:57 block were the wrong base — `DumpWords` also no longer
 requires 8-byte alignment, which monster unit objects do not have) and prints the
 decoded bar as the rotation reads it.
+
+## 2026-10-30 16:06 — the first run that cast a spell, and the three things it exposed
+
+Wrath landed on the first try: `mob health 102 -> 86 (mana 115 -> 90)`. So the key map,
+the slot decoding and the attack-key path are all correct — the client's own action bar
+responds to `2`. Everything that failed after that was about *when* to fight and *how the
+result is measured*, not about the offsets:
+
+| symptom in the log | cause | fix |
+|---|---|---|
+| `3 unit(s) within 40 yd ... walking on` while mobs were hitting the character | the loop only looked for a fight **between** hotspot legs, and a leg is 25-40 s | `RouteRunner.ShouldInterrupt` — asked every follow point (5-20 yd); true releases forward and abandons the leg |
+| fights starting only after 30+ s of walking, then the next hotspot immediately | no dwell at the hotspot | `DwellAtHotspot` — stand up to 9 s, fighting anything that turns up |
+| `the nearest mob is behind the camera or off the screen` on **every** engage | TAB only looks in front of the character and a right-click only selects what is on screen | `ClickAimKeySteer.Face()` — turn (calibrated arrow keys) toward the nearest viable unit before TAB, and toward the chosen mob before projecting the click |
+| `couldn't attack the current target, not facing it` mid-fight | nothing re-faced after the mob moved | `Face()` at the top of every fight round, before heal/cast/click |
+| `Wrath changed nothing: mana 40 -> 40` on casts that had just worked | one read 1.8 s after the keypress, while a 1.5 s cast + 1.5 s GCD was still running | poll mana and mob health for up to `CastVerifyMs` (3.2 s), and stop as soon as either moves |
+| two of those switched the fight to melee for good | `castFailures >= 2` regardless of whether casting had ever worked | only fall back when the key has **never** cast this fight, and after three failures |
+| `Healing Touch did not lift it (still 12/113)` four times in one fight | same single-read bug, plus F1 retarget latency | poll health for up to `HealVerifyMs` (3.6 s); then cycle TAB until the original guid is selected again |
+| `health 0% and Healing Touch did not lift it` | the character was already dead | `PlayerDead()` stops the grind; `Fight` returns "the character died" |
+| `slot 11 '½'`, `slot 12 '»'` | `(char)0xBD` / `0xBB` | `ClickAimCombat.KeyLabel` prints `-` and `=` |
+
+### UnitFlags is not a reaction field after all
+
+The 15:57 dump suggested `0x800` was hostility (hostile mob `0x80800`, idle mobs `0x800`).
+The 16:06 run printed the **player** as `uflags=0x808` — carrying the same bit — so it is a
+transient combat/PvP bit, not reaction, and it is no longer used to rank or filter targets.
+Hostility stays with the client's own filter (TAB) and with "something live and
+level-appropriate is this close". Target choice is now: corpse filter, level band
+`player-4 … player+3`, nearest first.

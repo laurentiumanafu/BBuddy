@@ -317,7 +317,12 @@ namespace Styx.Offsets
 		public const ulong UnitDataMaxHealthOffset = 0x1E38; // [V] u32 max health
 		public const ulong UnitDataPowerOffset = 0x1BC8;     // [V] u32 power (mana/rage/...)
 		public const ulong UnitDataMaxPowerOffset = 0x1BD0;  // [V] u32 max power (100 on the same character)
-		public const ulong UnitDataUnitFlagsOffset = 0x1E60; // [V] u32 unit flags
+		/// <summary>[V] u32 unit flags - but NOT a reaction field, which is what it looked like
+		/// at 15:57 (hostile mob 0x80800, idle mobs 0x800/0x0). The 16:06 run printed the
+		/// PLAYER as 0x808, i.e. carrying the same 0x800, so 0x800 is a transient combat/PvP
+		/// bit and hostility has to come from the client's own target filter (TAB) instead.
+		/// The word is still read and printed, because it may yet identify in-combat state.</summary>
+		public const ulong UnitDataUnitFlagsOffset = 0x1E60; // [V] u32 unit flags (not reaction)
 		/// <summary>[V-ish] hunt31 §6: level. Player 2 / NPC 5 in the live
 		/// sample, and the two neighbouring qwords (+0x1E48/+0x1E50) carry
 		/// the same value on the NPC (effective level / scaling level).

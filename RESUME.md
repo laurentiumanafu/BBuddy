@@ -192,3 +192,20 @@ the tree:
   (`+0x1E38`/`+0x1BD0`); `DumpWords` no longer rejects 4-byte-aligned units.
 * `ClickAimDiagnostics.OffsetsCore` — dumps the unit object at `+0x1E00`/`+0x1B80`,
   the data block, and the decoded bar.
+
+
+## 2026-10-30, 16:06 run — casting works; the loop now fights instead of walking past
+
+`Wrath does damage: mob health 102 -> 86 (mana 115 -> 90)` is the first confirmed
+spell cast through the memory action bar. What the run exposed and what changed:
+
+* `RouteRunner.ShouldInterrupt` / `LastRunInterrupted` — a walk is abandoned as soon as
+  something fightable is within 18 yd, with forward released first.
+* `ClickAimKeySteer.Face()` — turn in place toward a point with the calibrated arrows;
+  used before TAB (it only sees what is in front) and before every right-click/cast.
+* `DwellAtHotspot` — 9 s of looking for a fight on arrival, instead of leaving at once.
+* `Fight` — polls mana/mob health for up to 3.2 s per cast and my health for 3.6 s per
+  heal instead of reading once; melee fallback only if the key has never cast; death
+  is detected (`PlayerDead`) instead of pressing keys at a corpse.
+* `UnitFlags & 0x800` is *not* reaction (the player carries it too, `uflags=0x808`) and
+  is no longer used for targeting; hostility stays with TAB.

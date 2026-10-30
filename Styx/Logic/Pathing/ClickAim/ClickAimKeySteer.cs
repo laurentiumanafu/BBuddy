@@ -66,6 +66,7 @@ internal static class ClickAimKeySteer
     private static bool _calibrated;
     // Measured per key, because the two arrows are not interchangeable: one turns the
     // facing up and one down, and they need not turn at the same rate.
+    private static IntPtr _lastHwnd = IntPtr.Zero;  // the window the keys went to
     private static int _turnPosVk = TurnRightVk;    // increases the facing
     private static int _turnNegVk = TurnLeftVk;     // decreases it
     private static double _turnPosRate = 0.15;      // deg per ms, per key
@@ -172,6 +173,7 @@ internal static class ClickAimKeySteer
     public static void SetForward(IntPtr hwnd, bool down)
     {
         if (hwnd == IntPtr.Zero) return;
+        _lastHwnd = hwnd;                       // so a caller without one can still stop us
         if (down == _keyDown) return;
 
         ClickAimInput.HoldKey(hwnd, ForwardVk, down);
@@ -181,6 +183,16 @@ internal static class ClickAimKeySteer
     public static void Release(IntPtr hwnd)
     {
         SetForward(hwnd, false);
+    }
+
+    /// <summary>
+    /// Lets the forward key up without being told which window. The route runner has no
+    /// window handle, and leaving forward held turns "stop here and fight" into "run past
+    /// the mob" - which is exactly what the 16:07 run did for two and a half minutes.
+    /// </summary>
+    public static void ReleaseHeld()
+    {
+        if (_lastHwnd != IntPtr.Zero) SetForward(_lastHwnd, false);
     }
 
     // -------------------------------------------------------------- calibration
@@ -534,6 +546,66 @@ internal static class ClickAimKeySteer
         _lastTurnError = double.NaN;
         SetForward(hwnd, forward);
         return true;
+    }
+
+    /// <summary>
+    /// Turns in place until the character faces (tx, ty), without taking a step.
+    ///
+    /// This exists because "the target is behind the camera or off the screen" killed every
+    /// engage in the 16:07 run: a right-click can only select what is on screen, and the
+    /// client's TAB only considers enemies in front. Turning first fixes both. The turn is
+    /// the calibrated one (arrow keys, degrees per millisecond learned by
+    /// <see cref="Calibrate"/>), so it converges instead of spinning.
+    ///
+    /// Returns true when the facing is within <paramref name="toleranceDeg"/> of the
+    /// bearing to the point - or when the facing cannot be read at all, because in that
+    /// case the caller has nothing better to try.
+    /// </summary>
+    public static bool Face(double tx, double ty, IntPtr hwnd, double toleranceDeg, int maxTicks)
+    {
+        double px, py;
+        if (!ClickAimPositions.TryRead(out px, out py)) return false;
+        if (ClickAimMath.Len(tx - px, ty - py) < 0.5) return true;      // standing on it
+
+        double facingRad;
+        if (!TryReadFacing(out facingRad)) return true;                // nothing to steer on
+
+        double wanted = ClickAimMath.HeadingDeg(tx - px, ty - py);
+
+        for (int tick = 0; tick < maxTicks; tick++)
+        {
+            double error = ClickAimMath.WrapDeg(wanted - facingRad * 180.0 / Math.PI);
+            if (Math.Abs(error) <= toleranceDeg)
+            {
+                _lastTurnError = double.NaN;
+                return true;
+            }
+
+            /* Stale facing from the previous tick makes the step too long, so the step is
+             * scaled by how fast the field was seen to move, not by the full error. */
+            bool up = error > 0;
+            int vk = up ? _turnPosVk : _turnNegVk;
+            double rate = up ? _turnPosRate : _turnNegRate;
+
+            int ms = (int)Math.Round(Math.Abs(error) / Math.Max(0.02, rate) * _turnStepScale);
+            if (ms < 10) ms = 10;
+            if (ms > MaxTurnTapMs) ms = MaxTurnTapMs;
+
+            ClickAimInput.TapKey(hwnd, vk, ms);
+            Thread.Sleep(90);
+
+            double next;
+            if (!TryReadFacing(out next)) return true;
+            double nextError = ClickAimMath.WrapDeg(wanted - next * 180.0 / Math.PI);
+
+            if (Math.Sign(nextError) != Math.Sign(error) || Math.Abs(nextError) > Math.Abs(error) + 0.5)
+                _turnStepScale = Math.Max(0.03, _turnStepScale * 0.5);
+            else
+                _turnStepScale = Math.Min(1.0, _turnStepScale * 1.15);
+
+            facingRad = next;
+        }
+        return false;
     }
 
     /// <summary>Degrees of error that still counts as facing the point.</summary>
