@@ -309,6 +309,19 @@ internal sealed class GameLua : IDisposable
     }
 
     /// <summary>
+    /// The player's health as a percentage, or null when the client will not say. Two calls,
+    /// so it is done once per loop iteration, not per cast.
+    /// </summary>
+    public double? HealthPercent()
+    {
+        double? max = Number("UnitHealthMax", "player");
+        if (max == null || max.Value <= 0) return null;
+        double? now = Number("UnitHealth", "player");
+        if (now == null) return null;
+        return now.Value * 100.0 / max.Value;
+    }
+
+    /// <summary>
     /// True while the player is casting or channelling.
     ///
     /// This is Singular's <c>Spell.WaitForCast(true)</c>, and it matters more here than it

@@ -261,10 +261,13 @@ cast is running (`Spell.WaitForCast(true)`), put self-buffs up before pulling
 | `Movement.CreateMoveToTargetBehavior(true, 20f)` | close only when `IsActionInRange` is false for every usable slot, so a ranged character fights at 30 yd instead of walking into melee's 4 |
 | `PreCombatBuffs` | one slot the client calls usable but NOT range-limited (a buff or a stance) before the first cast |
 | priority order | back to the top of the bar after every hit that lands, instead of round-robin |
+| `Spell.Heal(..., Me.HealthPercent < 60)` | below 60% health, fire one ability the client calls usable and does **not** range-check - that is a self-cast, and a self-cast below 60% is Singular's heal slot in everything but name |
 
-Not ported, because they need a spellbook and this build does not expose one: heals by
-health percentage, interrupts, and anything that has to know a spell's name, school or
-cooldown rather than a slot's. `GameLua.CastSpell(name)` is there for the day that changes.
+Not ported, because they need a spellbook and this build does not expose one: interrupts,
+and anything that has to know a spell's name, school or cooldown rather than a slot's.
+`GameLua.CastSpell(name)` is there for the day that changes - the routines also give the
+seam: a priority list of `(spell name, condition)` per class is all Singular's
+`ClassSpecific/*/Lowbie.cs` files really are.
 
 **Which area, though.** A levelling profile is a ladder - the 19-SubProfile
 `Horde12-60_cloth` file is one - so the area is not simply the nearest one. The loop asks

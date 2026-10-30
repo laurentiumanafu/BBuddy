@@ -73,12 +73,24 @@ internal static class GrindRunner
     /// <summary>How often to re-read the player's level and consider another grind area.</summary>
     private const int LevelCheckMs = 120000;
 
+    /// <summary>
+    /// Recover below this much health before pulling the next mob. Singular heals at 60%
+    /// (<c>Spell.Heal("Healing Wave", ret => Me.HealthPercent &lt; 60)</c>); the number is
+    /// theirs.
+    /// </summary>
+    private const double RecoverBelowPercent = 60.0;
+
+    /// <summary>Do not try to recover more often than this: it costs two Lua calls a tick.</summary>
+    private const int RecoverRetryMs = 5000;
+
     private static volatile bool _stop;
     private static bool _running;
     private static int _presses;    // action-bar presses this session, for the summary
     private static int _casts;      // Lua UseAction() calls this session, for the summary
     private static GameLua? _lua;   // the client's own Lua, when the bridge came up
     private static bool _barLogged;
+    private static List<GameLua.ActionSlot>? _bar;   // the bar as last read, reused for recovery
+    private static int _lastRecoverMs;
 
     /// <summary>Set by the "stop" request. The loop ends after the current tick.</summary>
     public static void Stop()
@@ -149,6 +161,8 @@ internal static class GrindRunner
         _presses = 0;
         _casts = 0;
         _barLogged = false;
+        _bar = null;
+        _lastRecoverMs = 0;
 
         /* Combat runs on the client's own Lua when it can be reached at all: the action bar
          * ignores key messages on this build, so UseAction(slot) is the only way to make a
@@ -209,6 +223,18 @@ internal static class GrindRunner
                         }
                         level = now;
                     }
+                }
+
+                /* Recover first. A grind loop that never heals dies on the third mob, and
+                 * this is Singular's Heal behaviour reduced to what a bar without spell
+                 * names can express: below 60% health, fire one ability the client calls
+                 * usable and does NOT range-check - a self-buff or a self-heal, since an
+                 * attack that needed a target would be range-checked. */
+                string recovery;
+                if (TryRecover(_lua, out recovery))
+                {
+                    Logging.Write("[Grind] " + recovery);
+                    continue;
                 }
 
                 /* Fight first, walk second. A grind area is a ring of points with mobs
@@ -278,6 +304,45 @@ internal static class GrindRunner
             + "{3} action-bar key press(es), {4} Lua action(s), {5} area switch(es), {6:F0} s",
             hotspots, fights, kills, _presses, _casts, switches,
             (Environment.TickCount - started) / 1000.0));
+    }
+
+    /// <summary>
+    /// One attempt to get health back before pulling, or false with an empty report.
+    ///
+    /// It cannot know which slot is a heal: the build exposes slot state, not a spellbook.
+    /// What it can know is that an ability which does not need a target to be in range is a
+    /// self-cast, and that a character below 60% health with mana left should use one before
+    /// the next mob rather than after it dies. If the slot turns out to be a buff, the cost
+    /// is a wasted cooldown, which is the cheapest way to be wrong here.
+    /// </summary>
+    private static bool TryRecover(GameLua? lua, out string report)
+    {
+        report = "";
+        if (lua == null || !lua.Live) return false;
+        if (unchecked(Environment.TickCount - _lastRecoverMs) < RecoverRetryMs) return false;
+
+        double? percent = lua.HealthPercent();
+        if (percent == null || percent.Value >= RecoverBelowPercent) return false;
+
+        _lastRecoverMs = Environment.TickCount;
+        List<GameLua.ActionSlot> bar = _bar ?? lua.ReadActionBar();
+        _bar = bar;
+        for (int i = 0; i < bar.Count; i++)
+        {
+            GameLua.ActionSlot slot = bar[i];
+            if (!slot.Usable || slot.InRange.HasValue || slot.Cooldown > 0.2) continue;
+            if (!lua.UseSlot(slot.Slot)) return false;
+            _casts++;
+            Thread.Sleep(AttackSettleMs);
+            report = string.Format(CultureInfo.InvariantCulture,
+                "health {0:F0}% - used slot {1} [{2}] before the next mob",
+                percent.Value, slot.Slot, IconOf(bar, slot.Slot));
+            return true;
+        }
+        report = string.Format(CultureInfo.InvariantCulture,
+            "health {0:F0}% and no self-cast ability ready - pulling anyway, badly",
+            percent.Value);
+        return true;
     }
 
     /// <summary>
