@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Threading;
@@ -92,6 +92,24 @@ internal static class GrindRunner
     private static List<GameLua.ActionSlot>? _bar;   // the bar as last read, reused for recovery
     private static int _lastRecoverMs;
 
+    /// <summary>
+    /// The target a fight gave up on, and when. Without this the loop answers "that mob is
+    /// 17 yd away and moving" by selecting it again immediately: the 2026-10-30 log counted
+    /// 22 fights in 6 seconds that way, 0.29 s apart, and then went nowhere because every
+    /// iteration was spent re-deciding to give up on the same mob.
+    /// </summary>
+    private static WowBGuid _gaveUpGuid;
+    private static int _gaveUpAt;
+
+    /// <summary>Leave a target it gave up on alone for this long.</summary>
+    private const int GiveUpMs = 15000;
+
+    /// <summary>A fight that ended this fast never fired anything; pause before the next one.</summary>
+    private const int GiveUpBackoffMs = 600;
+
+    /// <summary>The camera's field of view: the mover's own default, and what its log prints.</summary>
+    private const double CameraFovDeg = 90.0;
+
     /// <summary>Set by the "stop" request. The loop ends after the current tick.</summary>
     public static void Stop()
     {
@@ -180,6 +198,18 @@ internal static class GrindRunner
             {
                 Logging.Write("[Grind] Lua: " + report);
                 foreach (string line in _lua.Probe()) Logging.Write("[Grind]   " + line);
+
+                /* Still worth reading the bar even when nothing may be fired through it: the
+                 * slot list is the first honest answer this bot has ever had to "what can
+                 * this character actually do", and it goes in the log either way. */
+                if (!_lua.EventsAllowed)
+                {
+                    List<GameLua.ActionSlot> bar = _lua.ReadActionBar();
+                    if (bar.Count > 0) LogBar(bar);
+                    Logging.Write("[Grind] the bar is read-only here, so combat is clicks and keys only: a "
+                                  + "right-click on the mob selects it and starts auto-attack, which the "
+                                  + "client runs itself");
+                }
             }
         }
         catch (Exception ex)
@@ -318,7 +348,9 @@ internal static class GrindRunner
     private static bool TryRecover(GameLua? lua, out string report)
     {
         report = "";
-        if (lua == null || !lua.Live) return false;
+        /* EventsAllowed, not Live: a self-cast is a UseAction, and a UseAction sent from a
+         * thread the client does not consider its Lua thread kills it. */
+        if (lua == null || !lua.EventsAllowed) return false;
         if (unchecked(Environment.TickCount - _lastRecoverMs) < RecoverRetryMs) return false;
 
         double? percent = lua.HealthPercent();
@@ -464,16 +496,23 @@ internal static class GrindRunner
         int near = CountNear(snap, px, py, SearchYd);
         if (near == 0) return false;
 
-        /* Tab until the client has selected something. TAB is the client's own "nearest
-         * enemy" - the one hostility test this build lets us use - and it refuses
-         * friendlies for us. */
+        /* Three ways to make the client select something, and the order matters.
+         *
+         * 1. TargetNearestEnemy() through Lua, but only when the bridge runs commands on
+         *    the client's own Lua thread (GameLua.EventsAllowed). On 2026-10-30 the same
+         *    call from the resident thread killed the client at the first hotspot, which is
+         *    why nothing else here may assume Lua can act.
+         * 2. TAB. No memory, no Lua, and the client applies its own hostility filter, so a
+         *    guard or a quest NPC is never picked. It is also how we find out whether the
+         *    window still takes keyboard input at all.
+         * 3. A right-click on the nearest unit. Last because it has no hostility filter -
+         *    the snapshot says where units are, not who they are - so it is only used when
+         *    the two filtered ways found nothing, which is exactly the 2026-10-30 case
+         *    ("11 unit(s) within 40 yd but nothing selected them"). */
         WowBObservedUnit target = default(WowBObservedUnit);
         bool have = false;
 
-        /* The same selection TAB makes, asked for directly. Worth trying first even though
-         * the keys are known to reach the client for movement: a Lua target costs one call
-         * and cannot be eaten by window focus. */
-        if (_lua != null && _lua.Live && _lua.TargetNearestEnemy())
+        if (_lua != null && _lua.EventsAllowed && _lua.TargetNearestEnemy())
         {
             Thread.Sleep(TabSettleMs);
             if (Capture(out snap) && snap != null && snap.TryGetSelectedTarget(out target)) have = true;
@@ -487,17 +526,32 @@ internal static class GrindRunner
             if (snap.TryGetSelectedTarget(out target)) have = true;
         }
 
+        string clickNote = "";
+        if (!have && snap != null && TryClickAttack(hwnd, snap, px, py, out target, out clickNote))
+            have = true;
+
         if (!have)
         {
             report = string.Format(CultureInfo.InvariantCulture,
-                "{0} unit(s) within {1:F0} yd but TAB selected nothing - treating the area as "
-                + "empty and walking on", near, SearchYd);
+                "{0} unit(s) within {1:F0} yd but nothing selected them - treating the area as "
+                + "empty and walking on", near, SearchYd)
+                + (clickNote.Length == 0 ? "" : " (the right-click attempt: " + clickNote + ")");
+            return false;
+        }
+
+        /* It is the mob the last fight gave up on: selecting it again would repeat that
+         * decision every third of a second. Walk to the next hotspot instead. */
+        if (Refused(target.Guid))
+        {
+            report = string.Format(CultureInfo.InvariantCulture,
+                "the only target in reach is the one given up on {0:F0} s ago - walking on to the next hotspot",
+                unchecked(Environment.TickCount - _gaveUpAt) / 1000.0);
             return false;
         }
 
         if (target.HasPlayerVtable)
         {
-            report = "TAB selected a PLAYER; not attacking. Pressing ESC and walking on";
+            report = "the client selected a PLAYER; not attacking. Pressing ESC and walking on";
             ClickAimInput.TapKey(hwnd, 0x1B, 40);      // ESC clears the target
             return false;
         }
@@ -506,12 +560,143 @@ internal static class GrindRunner
         if (d > SearchYd)
         {
             report = string.Format(CultureInfo.InvariantCulture,
-                "TAB selected something {0:F0} yd away - out of the search radius, walking on", d);
+                "it selected something {0:F0} yd away - out of the search radius, walking on", d);
             return false;
         }
 
+        /* The action bar is the attack, so FightWithActions is only entered when the bridge
+         * may actually fire a slot. Otherwise the fight is the right-click attack: select
+         * the mob, let the client swing, and watch its health - which needs no Lua at all. */
         GameLua? lua = _lua;
-        report = lua != null && lua.Live ? FightWithActions(hwnd, lua, px, py) : Fight(hwnd, px, py);
+        int fightStarted = Environment.TickCount;
+        report = lua != null && lua.EventsAllowed ? FightWithActions(hwnd, lua, px, py) : Fight(hwnd, px, py);
+
+        /* A fight that ended inside a second and a half never pressed anything: it gave up
+         * (or lost) immediately. Remember the target so the next iteration walks instead of
+         * selecting the same mob again. */
+        if (unchecked(Environment.TickCount - fightStarted) < 1500
+            && report.IndexOf("killed", StringComparison.Ordinal) < 0)
+        {
+            _gaveUpGuid = target.Guid;
+            _gaveUpAt = Environment.TickCount;
+            Thread.Sleep(GiveUpBackoffMs);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Right-clicks the nearest viable mob, which is how a player starts a fight: the client
+    /// selects it, turns into it and starts auto-attack by itself.
+    ///
+    /// Nothing is written to memory and no Lua is called, so this is the one engage path that
+    /// cannot kill the client with an assert. False means "no clickable mob"; the reason
+    /// (when there is a useful one) comes back in <paramref name="note"/>.
+    /// </summary>
+    private static bool TryClickAttack(IntPtr hwnd, WowBWorldSnapshot snap, double px, double py,
+                                      out WowBObservedUnit target, out string note)
+    {
+        target = default(WowBObservedUnit);
+        note = "";
+
+        int w, h;
+        if (!ClickAimInput.ClientSize(hwnd, out w, out h)) return false;
+
+        /* Nearest viable unit: never the player, never anything with a player vtable
+         * (another player's pet class vtable is not worth finding out by clicking), and
+         * never the mob the last fight gave up on. */
+        var units = snap.Units;
+        WowBObservedUnit best = default(WowBObservedUnit);
+        double bestYd = double.MaxValue;
+        bool found = false;
+        for (int i = 0; i < units.Count; i++)
+        {
+            WowBObservedUnit unit = units[i];
+            if (unit.IsLocalPlayer) continue;
+            if (unit.HasPlayerVtable) continue;
+            if (Refused(unit.Guid)) continue;
+            double d = ClickAimMath.Len(unit.Location.X - px, unit.Location.Y - py);
+            if (d <= 0.5 || d > SearchYd) continue;
+            if (d < bestYd) { bestYd = d; best = unit; found = true; }
+        }
+
+        if (!found)
+        {
+            note = string.Format(CultureInfo.InvariantCulture,
+                "nothing clickable within {0:F0} yd (or only the target it just gave up on)", SearchYd);
+            return false;
+        }
+
+        int dx, dy;
+        if (!TryProject(hwnd, px, py, best.Location.X, best.Location.Y, best.Location.Z, out dx, out dy))
+        {
+            note = "the nearest mob is behind the camera or off the screen";
+            return false;
+        }
+
+        ClickAimInput.Click(hwnd, dx, dy);       // right-click: select + attack
+        Thread.Sleep(TabSettleMs);
+
+        WowBWorldSnapshot? after;
+        if (!Capture(out after) || after == null) return false;
+        if (!after.TryGetSelectedTarget(out target))
+        {
+            note = string.Format(CultureInfo.InvariantCulture,
+                "a right-click at ({0}, {1}) on the mob {2:F1} yd away selected nothing - the client "
+                + "may have the mob under something else, or the click did not land", dx, dy, bestYd);
+            return false;
+        }
+
+        if (target.Guid != best.Guid)
+            return true;      // it selected SOMETHING; whether it is the one we aimed at is the client's call
+
+        Logging.Write(string.Format(CultureInfo.InvariantCulture,
+            "[Grind] right-clicked the mob {0:F1} yd away - the client selected it and starts the attack itself",
+            bestYd));
+        return true;
+    }
+
+    /// <summary>True while the target a fight gave up on is still off limits.</summary>
+    private static bool Refused(WowBGuid guid)
+    {
+        if (guid.IsEmpty || _gaveUpAt == 0) return false;
+        if (guid != _gaveUpGuid) return false;
+        return unchecked(Environment.TickCount - _gaveUpAt) < GiveUpMs;
+    }
+
+    /// <summary>
+    /// Where a world point sits on the client's screen, in pixels from the middle. The same
+    /// projection the mover aims its walk clicks with: the camera's position is readable, it
+    /// looks at the player, and geometry needs no calibration.
+    /// </summary>
+    private static bool TryProject(IntPtr hwnd, double px, double py,
+                                   double tx, double ty, double tz, out int dx, out int dy)
+    {
+        dx = 0;
+        dy = 0;
+
+        double camX, camY, camZ;
+        if (!ClickAimPositions.TryReadCamera(out camX, out camY, out camZ)) return false;
+
+        double pz = ClickAimPositions.Z();
+        if (double.IsNaN(pz)) pz = camZ;
+
+        int w, h;
+        if (!ClickAimInput.ClientSize(hwnd, out w, out h)) return false;
+
+        return ClickAimMath.ProjectToScreen(camX, camY, camZ, px, py, pz,
+                                            tx, ty, tz, w / 2.0, h / 2.0, CameraFovDeg,
+                                            out dx, out dy);
+    }
+
+    /// <summary>Right-clicks one unit where it stands: select and attack, done by the client.</summary>
+    private static bool TryClickUnit(IntPtr hwnd, WowBObservedUnit unit, double px, double py)
+    {
+        int dx, dy;
+        if (!TryProject(hwnd, px, py, unit.Location.X, unit.Location.Y, unit.Location.Z,
+                        out dx, out dy))
+            return false;
+        ClickAimInput.Click(hwnd, dx, dy);
         return true;
     }
 
@@ -526,6 +711,7 @@ internal static class GrindRunner
         int strikes = 0;
         int presses = 0;
         int lastHealth = -1;
+        bool attacking = false;
         var worked = new List<int>();
 
         WowBWorldSnapshot? snap;
@@ -535,10 +721,16 @@ internal static class GrindRunner
 
         lastHealth = Health(target);
 
+        /* Start the swing before closing: a right-click on the mob IS the attack, and the
+         * client will swing as soon as the character is close enough. */
+        attacking = TryClickUnit(hwnd, target, px, py);
+
         Logging.Write(string.Format(CultureInfo.InvariantCulture,
-            "[Grind] engaged at {0:F1} yd (health {1}); pressing the action bar",
+            "[Grind] engaged at {0:F1} yd (health {1}); {2}",
             ClickAimMath.Len(target.Location.X - px, target.Location.Y - py),
-            lastHealth >= 0 ? lastHealth.ToString(CultureInfo.InvariantCulture) : "unknown"));
+            lastHealth >= 0 ? lastHealth.ToString(CultureInfo.InvariantCulture) : "unknown",
+            attacking ? "right-clicked it, so the client's own auto-attack is running"
+                      : "no click could be placed, so the keys are being tried"));
 
         while (!_stop && unchecked(Environment.TickCount - started) < EngageTimeoutMs)
         {
@@ -577,10 +769,23 @@ internal static class GrindRunner
             double remaining;
             ClickAimKeySteer.Steer(target.Location.X, target.Location.Y, hwnd, false, out remaining);
 
+            /* Right-clicking the mob is the client's own attack: whatever auto-attack the
+             * character has starts swinging, on the client's thread, with no Lua and no
+             * guessed key. It is repeated only when health has stopped moving for three
+             * attempts, because a click on an already-attacking target is pointless and this
+             * loop runs at 1.4 Hz. The key is tried while no click can be placed. */
             int vk = AttackKeys[keyIndex];
-            ClickAimInput.TapKey(hwnd, vk, 40);
+            if (!attacking && strikes >= 2)
+            {
+                attacking = TryClickUnit(hwnd, target, px2, py2);
+                if (attacking) strikes = 0;
+            }
             presses++;
-            _presses++;
+            if (!attacking)
+            {
+                ClickAimInput.TapKey(hwnd, vk, 40);
+                _presses++;
+            }
             Thread.Sleep(AttackSettleMs);
 
             if (!Capture(out snap) || !snap.TryGetSelectedTarget(out target))
@@ -589,15 +794,20 @@ internal static class GrindRunner
 
             health = Health(target);
             bool damaged = health >= 0 && lastHealth >= 0 && health < lastHealth;
+            int token = attacking ? 0 : vk;    // 0 means "the right-click attack", not a key
 
             if (damaged)
             {
-                if (worked.IndexOf(vk) < 0)
+                if (worked.IndexOf(token) < 0)
                 {
-                    worked.Add(vk);
-                    Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                        "[Grind] key {0} does damage: health {1} -> {2}. Remembering it",
-                        KeyName(vk), lastHealth, health));
+                    worked.Add(token);
+                    Logging.Write(attacking
+                        ? string.Format(CultureInfo.InvariantCulture,
+                            "[Grind] the right-click attack does damage: health {0} -> {1}. Remembering it",
+                            lastHealth, health)
+                        : string.Format(CultureInfo.InvariantCulture,
+                            "[Grind] key {0} does damage: health {1} -> {2}. Remembering it",
+                            KeyName(vk), lastHealth, health));
                 }
                 lastHealth = health;
                 strikes = 0;
@@ -605,6 +815,12 @@ internal static class GrindRunner
             }
 
             strikes++;
+
+            /* Attacking, but nothing has come off the mob's health for two rounds: the swing
+             * stopped (out of melee, a miss streak, a dead auto-attack). Let the next round
+             * click it again, and the keys take over if the click cannot be placed. */
+            if (attacking && strikes >= 2) attacking = false;
+
             if (strikes >= SwapKeyAfter)
             {
                 strikes = 0;
@@ -615,11 +831,11 @@ internal static class GrindRunner
                      * once and stop, rather than pressing them all again for a minute. */
                     ClickAimKeySteer.Release(hwnd);
                     return worked.Count == 0
-                        ? "no key on the action bar removed health (health read "
+                        ? "neither the right-click attack nor any key removed health (health read "
                           + (health >= 0 ? health.ToString(CultureInfo.InvariantCulture) : "unavailable")
-                          + "). The keyboard can walk on this client but it cannot attack - combat "
-                          + "needs the routine, or a working Lua call"
-                        : "target survived " + presses + " presses of the keys that do damage - "
+                          + "). The keyboard can walk on this client but it cannot attack; a fight "
+                          + "needs the action bar through Lua"
+                        : "target survived " + presses + " presses of what does damage - "
                           + "it may be out of melee, immune, or need a different ability";
                 }
                 Logging.Write("[Grind] key " + KeyName(AttackKeys[keyIndex]) + " next ("

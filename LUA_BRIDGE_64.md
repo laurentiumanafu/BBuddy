@@ -540,3 +540,91 @@ bearing and both were established by hunt42–hunt45:
   sentinel exit code `0x4200CAFE`; a commanded exit is immediate
 * 11/11 read-only APIs validated: `GetTime`, `UnitHealth`, `UnitLevel`, `UnitExists`,
   `UnitGUID`, `UnitName`, `UnitClass` (two results), `GetMoney`, `IsLoggedIn`
+
+## 2026-10-30 — the first *action* killed the client, and what changed
+
+The grind loop reached its first hotspot and the client died. The crash report
+(`2026-10-30_14.38.14_Error_16036.txt`, 134 840 bytes) says:
+
+```
+Error: ASSERT(FrameScript_IsLuaThread())
+File:  d:\BuildServer2\...\Engine\Source\FrameScript\FrameScriptEvents.cpp
+Line:  208
+ProcessID: 16036   ThreadID: 11228
+DBG-ADDR<00007ff67d9c4b86>("WowB.exe")
+...
+```
+
+The bot log lines up to the millisecond:
+
+```
+[14:38:14.762] [Route] waypoint 1/1 reached
+[14:38:14.762] [Route] route complete: 1 waypoints walked
+        (client crash report timestamp: 14:38:14.993)
+```
+
+Nothing was being walked, nothing was being written. The next thing `TryEngage`
+did was call `TargetNearestEnemy()` — and for the first time in the session there
+was a mob for it to select. Every earlier call had been a *question*
+(`UnitName`, `UnitLevel`, `UnitHealth`, `UnitExists`, `UnitIsDead`, `HasAction`,
+`IsUsableAction`, `GetTime`) and every one of them answered; they raise no event.
+Selecting a target raises `PLAYER_TARGET_CHANGED`, the client tried to dispatch it,
+found itself on the payload's thread instead of its Lua thread, and terminated.
+
+So the earlier conclusion in this file — "reads are safe, a mutation is the next
+thing to prove" — was right, and the thing that made the mutation unsafe is not
+the mutation's *content* but the *thread*. `ExecutionMode.ServerThread` cannot
+ever send `UseAction`, `CastSpellByName` or `TargetNearestEnemy`.
+
+### What the bot does now
+
+`Styx/Logic/Pathing/ClickAim/GameLua.cs`:
+
+1. **Tries `LuaExecutionMode.LuaThreadHijack` first** — the command runs on the
+   client's own Lua thread, which is exactly what `FrameScript_IsLuaThread()`
+   tests. The first command (`GetTime`) is the proof of the takeover, and the
+   report line says which way it went, e.g.
+   `execution LuaThreadHijack; the client's own Lua thread can be taken over
+   (SetThreadContext(flags 0x10001F)=ok, 1 quiet moment(s)) - events may be raised`.
+2. If the takeover **setup** fails (thread handle, CONTEXT round-trip), it falls
+   back to the resident thread in a **read-only** state and says so:
+   `READ-ONLY: questions only, because the client asserts FrameScript_IsLuaThread() and dies
+   when an event is raised from our thread`.
+3. If the setup is green but the first takeover cannot run a command, it keeps the
+   bridge for reads and refuses every action. It never falls back to sending the
+   action through the other thread.
+4. Independently of the mode, `GameLua.Call` refuses `UseAction`, `CastSpell`,
+   `CastSpellByName`, `TargetNearestEnemy`, `TargetUnit`, `AttackTarget`,
+   `RunMacroText`, `StartAttack` and `StopAttack` unless `EventsAllowed` is true,
+   and returns the reason instead of sending the command. That check is what makes
+   a repeat of this crash impossible even if the mode logic is wrong.
+
+`Styx/Logic/Pathing/ClickAim/GrindRunner.cs` follows the same rule at its call
+sites (`EventsAllowed`, not `Live`), and gained a targeting order that can engage
+without Lua at all:
+
+1. `TargetNearestEnemy()` — only when `EventsAllowed`.
+2. TAB ×3 — the client's own hostility filter, no memory, no Lua.
+3. Right-click the nearest unit — no hostility filter, so it is last; the client
+   selects it and starts auto-attack itself, which is a click-to-move mechanic
+   applied to a unit and cannot trip the assert.
+
+### What the next log will say
+
+Either
+
+```
+[Grind] Lua: pid …, payload resident (641 bytes), execution LuaThreadHijack; the client's
+  own Lua thread can be taken over (…, N quiet moment(s)) - events may be raised
+[Grind]   events ALLOWED - commands run on the client's own Lua thread
+```
+
+and combat presses the bar, or
+
+```
+[Grind] Lua: … READ-ONLY: questions only, …
+[Grind]   events BLOCKED - …
+```
+
+and combat is the right-click attack (`the right-click attack does damage:
+health 86 -> 71`) until the takeover works. There is no third, silent case.

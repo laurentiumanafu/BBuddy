@@ -38,16 +38,57 @@ internal sealed class GameLua : IDisposable
     private const int CallTimeoutMs = 2000;
 
     private readonly LuaBridge64 _bridge;
+    private readonly bool _eventsAllowed;
     private int _calls;
     private bool _dead;
+    private int _takeoverFailures;   // takeovers that could not be placed, in a row
 
-    private GameLua(LuaBridge64 bridge)
+    private GameLua(LuaBridge64 bridge, bool eventsAllowed)
     {
         _bridge = bridge;
+        _eventsAllowed = eventsAllowed;
     }
 
     /// <summary>True while the payload is resident and has not wedged.</summary>
     public bool Live { get { return !_dead && _bridge.IsStarted; } }
+
+    /// <summary>
+    /// True when a command runs on the client's OWN Lua thread, so the ones that raise a
+    /// FrameScript event - <c>UseAction</c>, <c>CastSpellByName</c>,
+    /// <c>TargetNearestEnemy</c> - may be sent at all.
+    ///
+    /// This is not politeness. On 2026-10-30 the grind reached its first hotspot, called
+    /// <c>TargetNearestEnemy()</c> and the client died with
+    ///
+    ///     Error: ASSERT(FrameScript_IsLuaThread())
+    ///     File: Engine/Source/FrameScript/FrameScriptEvents.cpp, Line 208
+    ///
+    /// Every call before that one had been a question (<c>UnitHealth</c>,
+    /// <c>UnitExists</c>, <c>GetTime</c>) and answered fine, because a question raises no
+    /// event. The first call that actually did something selected a mob, the client tried
+    /// to dispatch PLAYER_TARGET_CHANGED, found itself on our injected thread and
+    /// terminated. So: questions through the resident thread are fine, actions are only
+    /// sent when the command runs on the thread the assert is asking about.
+    /// </summary>
+    public bool EventsAllowed { get { return _eventsAllowed && Live; } }
+
+    /// <summary>
+    /// The globals that raise a FrameScript event. Sending one of these from any other
+    /// thread is a crash, not a refusal, so the bridge refuses it locally instead.
+    /// </summary>
+    private static bool RaisesEvent(string function)
+    {
+        return string.Equals(function, "UseAction", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(function, "CastSpell", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(function, "CastSpellByName", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(function, "TargetNearestEnemy", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(function, "TargetNearestPartyMember", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(function, "TargetUnit", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(function, "AttackTarget", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(function, "RunMacroText", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(function, "StartAttack", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(function, "StopAttack", StringComparison.OrdinalIgnoreCase);
+    }
 
     /// <summary>Commands actually sent to the client - one log line per fight is enough.</summary>
     public int Calls { get { return _calls; } }
@@ -79,7 +120,70 @@ internal sealed class GameLua : IDisposable
             return null;
         }
 
-        var bridge = new LuaBridge64();
+        /* Two ways to run a command, and only one of them may raise an event.
+         *
+         * ServerThread is the resident injected thread. It answers questions about the
+         * client's Lua perfectly well - 1600+ answers before 2026-10-30 - and it cannot
+         * make the client DO anything: the assert above is about which thread the command
+         * runs on, not about what it is.
+         *
+         * LuaThreadHijack runs the command on the client's own Lua thread, which is exactly
+         * the condition FrameScript_IsLuaThread() tests. That is the only mode allowed to
+         * send UseAction, and it is tried first.
+         */
+        var hijack = new LuaBridge64();
+        string hijackFailure;
+        bool opened = TryStart(hijack, pid, LuaExecutionMode.LuaThreadHijack, false, serveSeconds, out hijackFailure);
+        if (opened)
+        {
+            /* The setup (thread handle, CONTEXT round-trip) is green. The first command is
+             * what proves a takeover, so run the cheapest real one now, while there is a
+             * line to put it in. */
+            string firstCall;
+            try
+            {
+                hijack.Call("GetTime", string.Empty, 1, 2000);
+                report = Describe(hijack, pid) + "; the client's own Lua thread can be taken over ("
+                         + (string.IsNullOrEmpty(hijack.HijackHow) ? "no detail" : hijack.HijackHow) + ", "
+                         + hijack.HijackAttempts.ToString(CultureInfo.InvariantCulture)
+                         + " quiet moment(s)) - events may be raised";
+                return new GameLua(hijack, true);
+            }
+            catch (Exception ex)
+            {
+                firstCall = ex.Message;
+            }
+
+            /* Setup was green but the takeover could not run a command. Do NOT fall back to
+             * the resident thread for anything that raises an event: that is the crash. Keep
+             * the bridge - questions still work and a later moment may be quiet enough - but
+             * refuse every action locally. */
+            report = Describe(hijack, pid) + "; but the first takeover failed: " + firstCall
+                     + ". Questions still work; nothing that raises an event will be sent"
+                     + " (the client asserts FrameScript_IsLuaThread() and dies)";
+            return new GameLua(hijack, false);
+        }
+
+        var resident = new LuaBridge64();
+        string residentFailure;
+        if (!TryStart(resident, pid, LuaExecutionMode.ServerThread, true, serveSeconds, out residentFailure))
+        {
+            report = "Lua is not usable on pid " + pid.ToString(CultureInfo.InvariantCulture)
+                     + ": no takeover (" + hijackFailure + ") and no resident thread (" + residentFailure + ")";
+            return null;
+        }
+
+        report = Describe(resident, pid) + "; the Lua-thread takeover could not be set up ("
+                 + hijackFailure + ") - READ-ONLY: questions only, because the client asserts "
+                 + "FrameScript_IsLuaThread() and dies when an event is raised from our thread";
+        return new GameLua(resident, false);
+    }
+
+    /// <summary>Attach, choose the execution mode, start. False (with the reason) on any gate.</summary>
+    private static bool TryStart(LuaBridge64 bridge, int pid, LuaExecutionMode mode, bool guard,
+                                 int serveSeconds, out string failure)
+    {
+        failure = "";
         try
         {
             bridge.Attach(pid);
@@ -88,24 +192,30 @@ internal sealed class GameLua : IDisposable
         {
             /* The four gates all throw here, each with a sentence that says which one. */
             try { bridge.Dispose(); } catch { }
-            report = "attach to pid " + pid.ToString(CultureInfo.InvariantCulture) + " failed: " + ex.Message;
-            return null;
+            failure = "attach to pid " + pid.ToString(CultureInfo.InvariantCulture) + " failed: " + ex.Message;
+            return false;
         }
 
+        bridge.ExecutionMode = mode;
+        bridge.GuardEnabled = guard;      // the guard is a cross-thread safety net; a takeover needs no freeze
         try
         {
             bridge.Start(Math.Max(120, serveSeconds), 1);
+            return true;
         }
         catch (Exception ex)
         {
             try { bridge.Dispose(); } catch { }
-            report = "pid " + pid.ToString(CultureInfo.InvariantCulture) + " attached, but the payload did not start: " + ex.Message;
-            return null;
+            failure = "the payload did not start: " + ex.Message;
+            return false;
         }
+    }
 
-        report = "pid " + pid.ToString(CultureInfo.InvariantCulture) + ", payload resident (" + LuaBridge64.PayloadSize + " bytes)"
-                 + ", execution " + bridge.ExecutionMode.ToString();
-        return new GameLua(bridge);
+    private static string Describe(LuaBridge64 bridge, int pid)
+    {
+        return "pid " + pid.ToString(CultureInfo.InvariantCulture) + ", payload resident ("
+               + LuaBridge64.PayloadSize.ToString(CultureInfo.InvariantCulture) + " bytes), execution "
+               + bridge.ExecutionMode.ToString();
     }
 
     /// <summary>
@@ -116,6 +226,14 @@ internal sealed class GameLua : IDisposable
     public LuaValue[]? Call(string function, string? arg, int results)
     {
         if (_dead) { Error = "the payload is wedged; nothing more will be sent"; return null; }
+
+        if (!_eventsAllowed && RaisesEvent(function))
+        {
+            Error = function + " raises a FrameScript event, and this bridge is not running commands "
+                    + "on the client's own Lua thread; sending it would kill the client "
+                    + "(ASSERT(FrameScript_IsLuaThread()), 2026-10-30). Nothing was sent.";
+            return null;
+        }
 
         try
         {
@@ -130,6 +248,20 @@ internal sealed class GameLua : IDisposable
              * throw the same way and eventually hang. Stop touching the client. */
             _dead = true;
             Error = function + ": " + ex.Message;
+            return null;
+        }
+        catch (LuaTakeoverException ex)
+        {
+            /* No quiet moment to take the Lua thread over in. Nothing was written into the
+             * client, but a command that cannot be placed is a command that cannot be sent:
+             * give the moment a couple more tries, then stop spending the client's time. */
+            _takeoverFailures++;
+            Error = function + ": " + ex.Message;
+            if (_takeoverFailures >= 3)
+            {
+                _dead = true;
+                Error += " - three takeovers in a row could not be placed; this bridge is done";
+            }
             return null;
         }
         catch (Exception ex)
@@ -364,14 +496,22 @@ internal sealed class GameLua : IDisposable
     public List<string> Probe()
     {
         var lines = new List<string>();
+        lines.Add("events " + (EventsAllowed ? "ALLOWED - commands run on the client's own Lua thread"
+                                             : "BLOCKED - questions only (an event raised from our thread kills the client)"));
         lines.Add(Line("UnitName('player')", () => Text("UnitName", "player") ?? "nil"));
         lines.Add(Line("UnitLevel('player')", () => Num(Number("UnitLevel", "player"))));
         lines.Add(Line("UnitHealth('player')", () => Num(Number("UnitHealth", "player"))));
         lines.Add(Line("UnitHealthMax('player')", () => Num(Number("UnitHealthMax", "player"))));
         lines.Add(Line("UnitExists('target')", () => Flag("UnitExists", "target")?.ToString() ?? "nil"));
         lines.Add(Line("UnitIsDead('target')", () => Flag("UnitIsDead", "target")?.ToString() ?? "nil"));
+        lines.Add(Line("GetZoneText()", () => Text("GetZoneText") ?? "nil"));
+        lines.Add(Line("GetNumPartyMembers()", () => Num(Number("GetNumPartyMembers"))));
         lines.Add(Line("HasAction(1)", () => Flag("HasAction", "1")?.ToString() ?? "nil"));
         lines.Add(Line("IsUsableAction(1)", () => Flag("IsUsableAction", "1")?.ToString() ?? "nil"));
+        lines.Add(Line("GetActionTexture(1)", () => Text("GetActionTexture", "1") ?? "nil"));
+        lines.Add(Line("IsActionInRange(1)", () => Num(Number("IsActionInRange", "1"))));
+        lines.Add(Line("GetActionCooldown(1)", () => Num(Number("GetActionCooldown", "1"))));
+        lines.Add(Line("UnitCastingInfo('player')", () => Text("UnitCastingInfo", "player") ?? "nil"));
         lines.Add(Line("GetTime()", () => Num(Number("GetTime"))));
         return lines;
     }

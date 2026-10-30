@@ -914,3 +914,29 @@ for is named, so a failure points at one thing instead of "movement is broken".
 
 If step 2 fails but step 1's probe passed, the problem is the mover, not the mesh.
 If the probe fails, nothing downstream can work - send that log.
+
+## 2026-10-30 — the grind reached the first hotspot and the client died
+
+The window worked: Load Profile → Grind → Start, one waypoint walked 789.7 yd in
+2 min 1 s, `[Route] waypoint 1/1 reached`. 230 ms later the client terminated
+with `ASSERT(FrameScript_IsLuaThread())` (`FrameScriptEvents.cpp:208`).
+
+The trigger was `TargetNearestEnemy()` through the Lua bridge. Every call before
+it had been a question that answers without raising an event; that one selected a
+mob, the client tried to dispatch `PLAYER_TARGET_CHANGED` on the payload's thread
+and killed itself. Details and the fix: **`LUA_BRIDGE_64.md`, section
+"2026-10-30 — the first *action* killed the client"**.
+
+Three things changed in the loop because of it:
+
+* `GameLua` now runs commands on the client's own Lua thread (`LuaThreadHijack`)
+  and refuses every event-raising global when it cannot — the crash is not
+  reachable any more, whatever else goes wrong.
+* Targeting has an order that works without Lua: `TargetNearestEnemy()` (only
+  when events are allowed) → TAB → right-click the nearest unit. The right-click
+  is the client's own attack: it selects the target and starts auto-attack on the
+  client's thread.
+* A fight that gives up immediately is not retried every 0.29 s. The 2026-10-30
+  log counted 22 fights in 6 seconds, all of them the same 17-yd-away mob; that
+  target is now left alone for 15 s and the loop walks to the next hotspot
+  instead, which is what "no wandering on non-viable mobs" means in practice.
