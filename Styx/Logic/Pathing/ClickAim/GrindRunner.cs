@@ -219,7 +219,9 @@ internal static class GrindRunner
                 if (TryEngage(hwnd, out combatReport))
                 {
                     fights++;
-                    if (combatReport == "killed") kills++;
+                    /* The Lua fight reports which slots did the killing, so the word is a
+                     * prefix, not the whole line. */
+                    if (combatReport.StartsWith("killed", StringComparison.Ordinal)) kills++;
                     Logging.Write("[Grind] " + combatReport);
                     continue;
                 }
