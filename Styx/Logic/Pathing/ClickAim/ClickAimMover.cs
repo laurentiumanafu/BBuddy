@@ -129,7 +129,19 @@ public sealed class ClickAimMover : IPlayerMover
     private const int AimHopDy = -140;
 
     /// <summary>Drags to try before clicking regardless. A click is progress; a drag is not.</summary>
-    private const int MaxAimDrags = 3;
+    /// <summary>
+    /// Drags per click attempt. ZERO, and the 12:04 run is why: every cycle spent one
+    /// click (8-15 yd of movement in roughly the right place) and then three drag legs of
+    /// 4-5 yd each, taken in whatever direction the camera happened to be pointing while
+    /// the drag ran. The result was a character walking steadily AWAY from the goal -
+    /// 52.8, 63.6, 84.5, 108.5, 149.4, 250 yd - which is worse than not moving at all.
+    ///
+    /// The drag channel also measured 0.03-0.17 deg/px over eight samples with one in
+    /// three moving the camera by exactly 0.0, so it cannot close a 100 deg error anyway.
+    /// Turning is the key steered path's job now (<see cref="ClickAimKeySteer"/>); the
+    /// click fallback should only ever click.
+    /// </summary>
+    private const int MaxAimDrags = 0;
 
     private int _probeAttempts;
     private int _stuck;
@@ -865,11 +877,17 @@ public sealed class ClickAimMover : IPlayerMover
 
         // Facing it (or out of drags): a middle click walks along the camera axis.
         // No offset, no scale.
-        if (Math.Abs(error) > AimToleranceDeg)
+        if (Math.Abs(error) > AimToleranceDeg && MaxAimDrags == 0)
         {
             Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                "[Aim] still {0:F0} deg off after {1} drag(s); clicking anyway - a click moves the "
-                + "character even when the camera heading is drifting, and a drag on its own never will",
+                "[Aim] {0:F0} deg off and no drags are allowed (each drag walked the character 4-5 yd "
+                + "in the wrong direction on 2026-10-30); clicking down the camera axis instead",
+                error));
+        }
+        else if (Math.Abs(error) > AimToleranceDeg)
+        {
+            Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                "[Aim] still {0:F0} deg off after {1} drag(s); clicking anyway",
                 error, _aimDragsSinceClick));
         }
         _aimDragsSinceClick = 0;

@@ -159,6 +159,46 @@ the write, and the run says so instead of walking in circles. The map is checked
 (identity, slope 1, slope −1, a +90 deg offset, and a ×2 scale all invert exactly) and at
 attach (`KeySteer self-test`), so a failure in the field is the client, not the arithmetic.
 
+## The 12:04 run: the facing write works, the probe was measuring the previous walk
+
+```
+[Route] not steering by facing: wrote 51 deg then 121 deg and the character walked
+        bearing 51 then 51 deg - it ignored the field (slope 0.00)
+```
+
+Read that again: **51 deg written, 51 deg walked.** The write steered *exactly*, on the
+first attempt, with no calibration at all - which is what BloogBot's convention predicts
+(`Atan2(dY, dX)`, so bearing == facing). The second write was simply lost because the
+character was **still walking from the first probe**, and a client that is mid-move owns
+its own facing: writing the field while it walks is overwritten.
+
+So the mechanism was never broken. The probe was. Two changes:
+
+* `Probe` now stops the character and **waits until it is genuinely still** before
+  writing, **reads the heading back** and reports a revert as a *different* failure from
+  an ignored write, re-writes the heading during the walk, and stops again before
+  measuring. A probe that starts on a moving character measures the old walk - that is
+  the 51/51 result, exactly.
+* `Steer` now **releases and re-presses the forward key** when the heading changes by
+  more than 12 deg. If the client reads the facing when a movement key goes *down* -
+  which is what the lost second write implies - then a turn has to be: let the key up,
+  write the facing, press it again. Small corrections just rewrite the field.
+
+## The other half of 12:04: the drags were walking it backwards
+
+Every click cycle that run spent one click (8-15 yd) and then **three drag legs of 4-5 yd
+each**, taken in whatever direction the camera happened to point while the drag ran:
+
+```
+52.8 -> 63.6 -> 84.5 -> 108.5 -> 149.4 -> 250 yd from a goal 52.8 yd away
+```
+
+That is not a failed walk, it is a walk in the wrong direction - worse than standing
+still. `MaxAimDrags` is now **0**: the drags measured 0.03-0.17 deg/px over eight samples
+with one in three moving the camera by exactly 0.0, so they could not close a 100 deg
+error anyway, and turning is the key-steered path's job now. The click fallback only
+clicks, and the pilot's 25 s no-progress watchdog ends a walk that goes nowhere.
+
 ## Where it is wired in
 
 Not a side experiment any more. `ClickAimMover.MoveTowards` is the one call the pilot

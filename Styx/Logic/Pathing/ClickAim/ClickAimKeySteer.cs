@@ -47,6 +47,10 @@ internal static class ClickAimKeySteer
     /// binds it to.</summary>
     private const int ForwardVk = 0x57;      // W
 
+    /// <summary>The key that cancels a client-side walk. Same key as forward on this
+    /// client, which is why holding it also stops a click.</summary>
+    private const int StopKeyVk = 0x57;
+
     /// <summary>Headings this far apart are used for the calibration pair.</summary>
     private const double ProbeSeparationDeg = 70.0;
 
@@ -65,6 +69,10 @@ internal static class ClickAimKeySteer
     private static bool _keyDown;
     private static int _lastWriteMs = -100000;
     private static double _lastFacing = double.NaN;
+
+    /// <summary>A heading change bigger than this needs the key released and pressed again,
+    /// because the client only reads the facing when a movement key goes down.</summary>
+    private const double RepressDeg = 12.0;
 
     public static bool Calibrated { get { return _calibrated; } }
     public static bool KeyDown { get { return _keyDown; } }
@@ -243,19 +251,43 @@ internal static class ClickAimKeySteer
         return true;
     }
 
-    /// <summary>Writes a heading, walks forward for a moment, reports the bearing walked.</summary>
+    /// <summary>
+    /// Writes a heading, walks forward for a moment, reports the bearing walked.
+    ///
+    /// The 12:04 run proved the ordering matters, and this is the fix for it. It wrote
+    /// 51 deg and the character walked bearing 51 deg - the write steering EXACTLY, as
+    /// BloogBot's convention predicts - then wrote 121 deg and the character walked 51
+    /// again. The second write landed while the character was still moving from the first
+    /// probe, and a client that is mid-move owns its own facing: the write is simply
+    /// overwritten. So every probe now:
+    ///
+    ///   1. stops the character and WAITS until it is genuinely still;
+    ///   2. writes the heading and READS IT BACK, reporting a revert separately from a
+    ///      failed write - they mean different things;
+    ///   3. holds forward while re-writing the heading, in case the client resets it
+    ///      every frame;
+    ///   4. stops again before measuring, so the displacement is the walk and not drift.
+    /// </summary>
     private static bool Probe(IntPtr hwnd, double facing, out double bearingDeg, out string report)
     {
         bearingDeg = 0;
         report = "";
 
+        // ---- 1. a probe is worthless if the character is already walking ----------
+        string restReport;
+        if (!StopAndRest(hwnd, out restReport))
+        {
+            report = "could not get the character to stand still before the probe: " + restReport;
+            return false;
+        }
+
         double sx, sy;
         if (!ClickAimPositions.TryRead(out sx, out sy)) { report = "cannot read the position"; return false; }
 
+        // ---- 2. write, then check it stuck ---------------------------------------
         if (!TryWriteFacing(facing, _useOutgoing)) { report = "cannot write the facing field"; return false; }
-        Thread.Sleep(120);
+        Thread.Sleep(150);
 
-        // Did the write survive the client's own update?
         double after;
         if (!TryReadFacing(out after))
         {
@@ -263,19 +295,43 @@ internal static class ClickAimKeySteer
             return false;
         }
 
+        double reverted = Math.Abs(ClickAimMath.WrapDeg(
+            ClickAimMath.HeadingDeg(Math.Cos(facing), Math.Sin(facing))
+            - ClickAimMath.HeadingDeg(Math.Cos(after), Math.Sin(after))));
+        if (reverted > 10.0)
+        {
+            report = string.Format(CultureInfo.InvariantCulture,
+                "wrote facing {0:F0} deg and the client put it back to {1:F0} deg within 150 ms. "
+                + "The field is reverted, not ignored - that is the client's own facing update "
+                + "winning, so nothing written here reaches movement.",
+                facing * 180.0 / Math.PI, after * 180.0 / Math.PI);
+            return false;
+        }
+
+        // ---- 3. walk, re-writing the heading as we go ----------------------------
         SetForward(hwnd, true);
         int waited = 0;
+        int rewriteAt = 0;
         while (waited < MaxProbeMs)
         {
             Thread.Sleep(PollMs);
             waited += PollMs;
+
+            if (waited - rewriteAt >= 100)
+            {
+                TryWriteFacing(facing, _useOutgoing);
+                rewriteAt = waited;
+            }
+
             double nx, ny;
             if (!ClickAimPositions.TryRead(out nx, out ny)) continue;
             if (ClickAimMath.Len(nx - sx, ny - sy) >= MinProbeYd) break;
         }
 
+        // ---- 4. stop before measuring --------------------------------------------
         SetForward(hwnd, false);
-        Thread.Sleep(200);
+        StopAndRest(hwnd, out restReport);
+        Thread.Sleep(120);
 
         double fx, fy;
         if (!ClickAimPositions.TryRead(out fx, out fy)) { report = "lost the position"; return false; }
@@ -284,17 +340,62 @@ internal static class ClickAimKeySteer
         if (walked < MinProbeYd)
         {
             report = string.Format(CultureInfo.InvariantCulture,
-                "wrote facing {0:F2} rad but the character moved {1:F1} yd with the forward key "
+                "wrote facing {0:F0} deg but the character moved {1:F1} yd with the forward key "
                 + "held for {2} ms. Either the key does not reach the client or the character is "
-                + "against something - this is not a facing problem.", facing, walked, waited);
+                + "against something - this is not a facing problem.",
+                facing * 180.0 / Math.PI, walked, waited);
             return false;
         }
 
         bearingDeg = ClickAimMath.HeadingDeg(fx - sx, fy - sy);
         report = string.Format(CultureInfo.InvariantCulture,
-            "facing written {0:F2} rad (read back {1:F2}), walked {2:F1} yd on bearing {3:F0} deg",
-            facing, after, walked, bearingDeg);
+            "facing written {0:F0} deg (read back {1:F0}), walked {2:F1} yd on bearing {3:F0} deg",
+            facing * 180.0 / Math.PI, after * 180.0 / Math.PI, walked, bearingDeg);
         return true;
+    }
+
+    /// <summary>
+    /// Releases everything and waits until two position reads agree to 5 cm.
+    ///
+    /// A click-walk or a held key both take a moment to actually stop, and a probe
+    /// started in that moment measures the OLD walk - which is exactly the 51/51 result
+    /// in the 12:04 log.
+    /// </summary>
+    public static bool StopAndRest(IntPtr hwnd, out string report)
+    {
+        report = "";
+        Release(hwnd);
+
+        if (hwnd != IntPtr.Zero)
+        {
+            ClickAimInput.TapKey(hwnd, StopKeyVk, 80);
+            ClickAimInput.ReleaseAll(hwnd, StopKeyVk, 80);
+        }
+
+        double lx = 0, ly = 0;
+        bool have = false;
+        int still = 0;
+
+        for (int waited = 0; waited < 4000; waited += PollMs)
+        {
+            Thread.Sleep(PollMs);
+            double nx, ny;
+            if (!ClickAimPositions.TryRead(out nx, out ny)) continue;
+
+            if (!have) { lx = nx; ly = ny; have = true; continue; }
+
+            if (ClickAimMath.Len(nx - lx, ny - ly) < 0.05) still += PollMs;
+            else still = 0;
+
+            lx = nx;
+            ly = ny;
+
+            if (still >= RestMs) return true;
+        }
+
+        report = string.Format(CultureInfo.InvariantCulture,
+            "still moving {0} ms after the stop key (last two reads differed)", 4000);
+        return false;
     }
 
     // ----------------------------------------------------------------- steering
@@ -315,14 +416,31 @@ internal static class ClickAimKeySteer
         double wantedBearing = ClickAimMath.HeadingDeg(tx - px, ty - py);
         double facing = FacingForBearing(wantedBearing);
 
-        // Rewrite the heading often enough that the client cannot drift off it, but not
-        // so often that its own update fights every write.
         int now = Environment.TickCount & int.MaxValue;
-        if (double.IsNaN(_lastFacing) || Math.Abs(facing - _lastFacing) > 1e-4
-            || unchecked(now - _lastWriteMs) > 120)
+
+        double writtenDeg = facing * 180.0 / Math.PI;
+        bool bigTurn = !double.IsNaN(_lastFacing)
+                       && Math.Abs(ClickAimMath.WrapDeg(writtenDeg - _lastFacing)) > RepressDeg;
+
+        /* The client fixes its movement DIRECTION when the key goes down, not while it is
+         * held. That is what the 12:04 calibration showed: writing 51 deg steered the
+         * character exactly, then writing 121 deg while it was still walking changed
+         * nothing at all. So a real change of heading has to be: let the key up, write the
+         * new facing, press it again. Small corrections just rewrite the field. */
+        if (bigTurn && _keyDown)
+        {
+            SetForward(hwnd, false);
+            Thread.Sleep(40);
+            TryWriteFacing(facing, _useOutgoing);
+            Thread.Sleep(40);
+            _lastFacing = writtenDeg;
+            _lastWriteMs = now;
+        }
+        else if (double.IsNaN(_lastFacing) || Math.Abs(writtenDeg - _lastFacing) > 0.01
+                 || unchecked(now - _lastWriteMs) > 100)
         {
             TryWriteFacing(facing, _useOutgoing);
-            _lastFacing = facing;
+            _lastFacing = writtenDeg;
             _lastWriteMs = now;
         }
 
