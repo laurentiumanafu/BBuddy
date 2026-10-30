@@ -189,6 +189,50 @@ the write, and the run says so instead of walking in circles. The map is checked
 (identity, slope 1, slope −1, a +90 deg offset, and a ×2 scale all invert exactly) and at
 attach (`KeySteer self-test`), so a failure in the field is the client, not the arithmetic.
 
+## The 13:11 run: it walks the route
+
+The first time on this client that a requested point was reached by following the mesh,
+and the mechanism is the one in the section below: turn keys + a readable facing.
+
+```
+[13:11:11] [ClickAim] file request: point (-623.6, -4286.8), tolerance 2.0 yd
+[13:11:16] [Route] navmesh available: every leg is routed on the mmaps
+[13:11:16] [Route] waypoint 1/1 WalkTo (-623.6, -4286.8, 51.5) - 262.0 yd
+[13:11:19] [Route] steering by facing + forward key: turn keys: right arrow -18.0 deg,
+           left arrow +36.7 deg per 200 ms (0.184 deg/ms). Facing read 204 deg, walked
+           bearing -156 deg - the facing IS the walked direction
+[13:11:19] [Route] mesh path: 8 points, 255.9 yd for a 253.8 yd leg (detours around terrain)
+[13:12:02] [Route] waypoint 1/1 reached
+[13:12:02] [Route] route complete: 1 waypoints walked
+```
+
+262 yd, 255.9 yd of it on a Detour path with 8 points, in 43 s. The two halves of the
+loop are both confirmed by the run itself: the arrow keys turn the facing, and the facing
+is the direction the character walks (204 vs -156 is the same bearing from the other side
+of the circle).
+
+Three things in that line are worth keeping, because each one is a mistake that would
+have been invisible:
+
+* **the rates are asymmetric -18.0 / +36.7, and that is not a property of the keys.**
+  The first keystroke after the calibration's `ReleaseAll` is partly swallowed by the
+  client, the same gate that makes the first click after a pause do nothing. Believing
+  the halved number makes every turn tap twice as long as it should be. Each key is now
+  measured twice and the bigger step kept.
+* **the rate is per key.** One arrow turns the facing up, the other down, and they need
+  not be equal, so the tap length is computed from the rate of the key actually pressed.
+* **the walk was choppy** (the user's word for it, and correct). Two causes, both now
+  fixed: `Steer` released the forward key to turn, so every correction stopped the
+  character and started it again; and the pilot called `MoveStop` on arriving at every
+  intermediate mesh point - 8 stop-starts on this route. A player holds W and taps the
+  arrows, and a 20 deg correction at 0.184 deg/ms is a 0.1 s arc of about 2 yd; the
+  character now turns while running, and only stops for an error over 60 deg. Between
+  mesh points the forward key stays down.
+
+Still outstanding from this run: the goal the reader gave was 40.1 yd off the mesh in Z
+(`the target at (-623.6, -4286.8, 0.0) is 40.1 yd off the mesh`), which is the Z the
+reader supplies being wrong, not the mesh - the path snapped to (-623.6, -4286.8, 40.1).
+
 ## The 12:57 run: the write does not steer, and the click cannot be stopped
 
 Two findings, both decisive.

@@ -204,7 +204,7 @@ public static class RouteRunner
         if (!mover.KeyMode)
         {
             string keyReport;
-            if (mover.TryEnableKeySteering(IntPtr.Zero, out keyReport))
+            if (mover.TryEnableKeySteering(IntPtr.Zero, target.X, target.Y, out keyReport))
             {
                 Logging.Write("[Route] steering by facing + forward key, like BloogBot: " + keyReport);
             }
@@ -348,7 +348,12 @@ public static class RouteRunner
                     }
                 }
 
-                if (ClickAimPilot.WalkTo(mover, follow[p], StepTolerance, MeshPointTimeoutMs, false, true))
+                /* keepMoving: the next point of the polyline is already known, so the
+                 * character should not come to a stop to be told about it. Only the last
+                 * point of the path ends with a stop. */
+                bool lastPoint = p == follow.Length - 1;
+                if (ClickAimPilot.WalkTo(mover, follow[p], StepTolerance, MeshPointTimeoutMs,
+                                         false, true, !lastPoint))
                     continue;
 
                 atPoint = p;

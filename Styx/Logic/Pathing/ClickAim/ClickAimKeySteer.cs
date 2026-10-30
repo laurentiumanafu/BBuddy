@@ -64,9 +64,12 @@ internal static class ClickAimKeySteer
 
     // ---- learned convention -------------------------------------------------
     private static bool _calibrated;
-    private static int _turnKey = TurnRightVk;
-    private static double _turnKeyStepDeg = 30.0;   // signed, per 200 ms of _turnKey
-    private static double _degPerTurnMs = 0.15;
+    // Measured per key, because the two arrows are not interchangeable: one turns the
+    // facing up and one down, and they need not turn at the same rate.
+    private static int _turnPosVk = TurnRightVk;    // increases the facing
+    private static int _turnNegVk = TurnLeftVk;     // decreases it
+    private static double _turnPosRate = 0.15;      // deg per ms, per key
+    private static double _turnNegRate = 0.15;
     private static double _turnStepScale = 1.0;
     private static double _lastTurnError = double.NaN;
     private static bool _facingIsBearing = true;
@@ -201,6 +204,21 @@ internal static class ClickAimKeySteer
     /// </summary>
     public static bool Calibrate(IntPtr hwnd, out string report)
     {
+        return Calibrate(hwnd, double.NaN, double.NaN, out report);
+    }
+
+    /// <summary>
+    /// As above, with a goal to aim the probe walk at.
+    ///
+    /// The probe has to walk a couple of yards to answer "is the facing the direction it
+    /// walks", and the first version of this walked those yards on whatever heading the
+    /// character happened to be facing - up to 20 yd of it, in a random direction, which
+    /// is exactly the "walks 20 yards ahead and does useless calibration" this was
+    /// supposed to replace. Given a target it turns to face it first, so the probe is the
+    /// first few yards of the walk itself.
+    /// </summary>
+    public static bool Calibrate(IntPtr hwnd, double targetX, double targetY, out string report)
+    {
         report = "";
 
         string restReport;
@@ -211,11 +229,25 @@ internal static class ClickAimKeySteer
         }
 
         // ---- which way do the turn keys go ------------------------------------
-        double right = TurnFor(hwnd, TurnRightVk, 200, out report);
-        if (double.IsNaN(right)) return false;
+        /* Each key is measured TWICE and the bigger step is kept.
+         *
+         * The 13:11 run measured right arrow -18.0 deg and left arrow +36.7 deg in the
+         * same 200 ms, which reads like an asymmetry between the keys and is not one:
+         * the first keystroke after ReleaseAll is partly swallowed by the client (the
+         * same "hardware action" gate that makes the first click after a pause do
+         * nothing). Believing the halved number makes every turn tap twice as long as
+         * it should be - which is a stutter, not a failure, so nothing reports it. */
+        double r1 = TurnFor(hwnd, TurnRightVk, CalibrateTapMs, out report);
+        if (double.IsNaN(r1)) return false;
+        double r2 = TurnFor(hwnd, TurnRightVk, CalibrateTapMs, out report);
+        if (double.IsNaN(r2)) return false;
+        double l1 = TurnFor(hwnd, TurnLeftVk, CalibrateTapMs, out report);
+        if (double.IsNaN(l1)) return false;
+        double l2 = TurnFor(hwnd, TurnLeftVk, CalibrateTapMs, out report);
+        if (double.IsNaN(l2)) return false;
 
-        double left = TurnFor(hwnd, TurnLeftVk, 200, out report);
-        if (double.IsNaN(left)) return false;
+        double right = Math.Abs(r2) >= Math.Abs(r1) ? r2 : r1;
+        double left = Math.Abs(l2) >= Math.Abs(l1) ? l2 : l1;
 
         if (Math.Abs(right) < 1.0 && Math.Abs(left) < 1.0)
         {
@@ -227,31 +259,62 @@ internal static class ClickAimKeySteer
             return false;
         }
 
-        // Keep the key that moved the facing MORE, and remember which WAY it moved it.
-        // A boolean "right arrow is clockwise" is a guess; the signed step is measured,
-        // and it is what Steer compares the error's sign against.
-        _turnKey = Math.Abs(right) >= Math.Abs(left) ? TurnRightVk : TurnLeftVk;
-        _turnKeyStepDeg = _turnKey == TurnRightVk ? right : left;
-
-        double perMs = Math.Abs(_turnKeyStepDeg) / 200.0;
-        if (perMs < 0.002 || perMs > 1.0)
+        /* One key must turn the facing UP and the other DOWN, or there is no loop to
+         * close: a tap can only be aimed in one direction if the opposite key exists. */
+        if (right > 0 && left < 0)
+        {
+            _turnPosVk = TurnRightVk;
+            _turnNegVk = TurnLeftVk;
+            _turnPosRate = right / CalibrateTapMs;
+            _turnNegRate = -left / CalibrateTapMs;
+        }
+        else if (left > 0 && right < 0)
+        {
+            _turnPosVk = TurnLeftVk;
+            _turnNegVk = TurnRightVk;
+            _turnPosRate = left / CalibrateTapMs;
+            _turnNegRate = -right / CalibrateTapMs;
+        }
+        else
         {
             report = string.Format(CultureInfo.InvariantCulture,
-                "the turn keys moved the facing {0:F2} deg/ms, which is not a plausible rate; "
-                + "right {1:F1} deg, left {2:F1} deg in 200 ms", perMs, right, left);
+                "both arrows turn the facing the same way (right {0:+0.0;-0.0} deg, left "
+                + "{1:+0.0;-0.0} deg per {2} ms), so no key can turn it back - there is no closed "
+                + "loop to steer with", right, left, CalibrateTapMs);
             return false;
         }
-        _degPerTurnMs = perMs;
+
+        if (_turnPosRate < 0.002 || _turnPosRate > 1.0 || _turnNegRate < 0.002 || _turnNegRate > 1.0)
+        {
+            report = string.Format(CultureInfo.InvariantCulture,
+                "the turn keys moved the facing {0:F3} deg/ms up and {1:F3} deg/ms down, which is "
+                + "not a plausible rate; right {2:F1} deg, left {3:F1} deg per {4} ms",
+                _turnPosRate, _turnNegRate, right, left, CalibrateTapMs);
+            return false;
+        }
 
         // ---- is the walked bearing the facing? --------------------------------
-        double before;
-        if (!TryReadFacing(out before)) { report = "lost the facing field"; return false; }
-
         double sx, sy;
         if (!ClickAimPositions.TryRead(out sx, out sy)) { report = "cannot read the position"; return false; }
 
+        /* Face the goal before the probe walk, so its few yards are progress rather than
+         * a random 8 yd step. Without a goal, the probe walks on the current facing. */
+        bool aimed = false;
+        if (!double.IsNaN(targetX) && !double.IsNaN(targetY))
+        {
+            aimed = AimAt(hwnd, targetX, targetY, sx, sy);
+            if (!aimed)
+            {
+                Logging.Write("[Keys] could not turn onto the goal within a second; the probe walk "
+                              + "will run on the current facing");
+            }
+        }
+
+        double before;
+        if (!TryReadFacing(out before)) { report = "lost the facing field"; return false; }
+
         SetForward(hwnd, true);
-        Thread.Sleep(1200);
+        Thread.Sleep(ProbeWalkMs);
         SetForward(hwnd, false);
         Thread.Sleep(250);
 
@@ -278,10 +341,12 @@ internal static class ClickAimKeySteer
         _offsetDeg = 0.0;
 
         report = string.Format(CultureInfo.InvariantCulture,
-            "turn keys: right arrow {0:+0.0;-0.0} deg, left arrow {1:+0.0;-0.0} deg per 200 ms "
-            + "({2:F3} deg/ms). Facing read {3:F0} deg, walked bearing {4:F0} deg - {5}. "
-            + "Steering by turning the keys and holding forward; nothing is written to memory.",
-            right, left, _degPerTurnMs, facingDeg, bearing,
+            "turn keys: right arrow {0:+0.0;-0.0} deg, left arrow {1:+0.0;-0.0} deg per {2} ms "
+            + "({3:F3} deg/ms up with VK 0x{4:X2}, {5:F3} deg/ms down with VK 0x{6:X2}). "
+            + "Facing read {7:F0} deg, walked bearing {8:F0} deg - {9}. Steering by turning the keys "
+            + "and holding forward; nothing is written to memory.",
+            right, left, CalibrateTapMs, _turnPosRate, _turnPosVk, _turnNegRate, _turnNegVk,
+            facingDeg, bearing,
             _facingIsBearing
                 ? "the facing IS the walked direction, so the loop closes on it"
                 : "THE FACING IS NOT THE WALKED DIRECTION (" + gap.ToString("F0", CultureInfo.InvariantCulture)
@@ -332,6 +397,30 @@ internal static class ClickAimKeySteer
         report = string.Format(CultureInfo.InvariantCulture,
             "still moving {0} ms after the stop key (last two reads never agreed to 5 cm)",
             RestTimeoutMs);
+        return false;
+    }
+
+    /// <summary>
+    /// Turns in place until the character faces (tx, ty). Returns false if it could not
+    /// within <see cref="AimTicks"/> taps.
+    /// </summary>
+    private static bool AimAt(IntPtr hwnd, double tx, double ty, double px, double py)
+    {
+        for (int i = 0; i < AimTicks; i++)
+        {
+            double facing;
+            if (!TryReadFacing(out facing)) return false;
+
+            double want = ClickAimMath.HeadingDeg(tx - px, ty - py);
+            double error = ClickAimMath.WrapDeg(want - facing * 180.0 / Math.PI);
+            if (Math.Abs(error) <= TurnToleranceDeg) return true;
+
+            double rem;
+            if (!Steer(tx, ty, hwnd, false, out rem)) return false;
+            Thread.Sleep(80);
+
+            if (!ClickAimPositions.TryRead(out px, out py)) return false;
+        }
         return false;
     }
 
@@ -389,10 +478,19 @@ internal static class ClickAimKeySteer
 
         if (Math.Abs(error) > TurnToleranceDeg)
         {
-            /* Turn in place. One tap per tick, sized to the error but capped: a tap that
-             * is too long overshoots, and overshoot on a turn costs a whole tick to undo.
-             * The key pressed is whichever one moves the facing the way the error needs. */
-            SetForward(hwnd, false);
+            /* One tap per tick, sized to the error but capped: a tap that is too long
+             * overshoots, and overshoot on a turn costs a whole tick to undo. The key is
+             * the one measured to turn the facing in the direction the error needs.
+             *
+             * Turn while still running when the error is small.
+             *
+             * Cutting forward for every tap is what made the 13:11 walk choppy: each few
+             * degrees of correction stopped the character, turned, and started it again.
+             * A player holds W and taps the arrow keys, and so can this: the turn rate
+             * does not depend on movement, so a 20 deg correction is a 0.1 s arc of about
+             * 2 yd. Only a big error (a new leg pointing back the way we came) is worth
+             * standing still for. */
+            if (!forward || Math.Abs(error) > TurnWhileRunningDeg) SetForward(hwnd, false);
 
             /* Learn the turn rate instead of trusting the calibration.
              *
@@ -411,16 +509,13 @@ internal static class ClickAimKeySteer
             }
             _lastTurnError = error;
 
-            int ms = (int)Math.Round(Math.Abs(error) / Math.Max(0.02, _degPerTurnMs) * _turnStepScale);
+            bool turnUp = error > 0;
+            int vk = turnUp ? _turnPosVk : _turnNegVk;
+            double rate = turnUp ? _turnPosRate : _turnNegRate;
+
+            int ms = (int)Math.Round(Math.Abs(error) / Math.Max(0.02, rate) * _turnStepScale);
             if (ms < 10) ms = 10;   // the shortest tap that still registers
             if (ms > MaxTurnTapMs) ms = MaxTurnTapMs;
-
-            // Turn with the measured key when its measured direction matches the error's
-            // sign; otherwise the other arrow. Derived from the sign of the step, so it
-            // works even if both arrows turn the same way (the usual client behaviour is
-            // +-equal, but this does not assume it).
-            bool sameWay = Math.Sign(error) == Math.Sign(_turnKeyStepDeg);
-            int vk = sameWay ? _turnKey : _turnKey == TurnRightVk ? TurnLeftVk : TurnRightVk;
 
             ClickAimInput.TapKey(hwnd, vk, ms);
             Thread.Sleep(60);
@@ -446,6 +541,23 @@ internal static class ClickAimKeySteer
 
     /// <summary>Longest single turn tap. A 180 deg turn is several taps, re-measured each.</summary>
     private const int MaxTurnTapMs = 400;
+
+    /// <summary>How long each calibration tap holds an arrow key.</summary>
+    private const int CalibrateTapMs = 200;
+
+    /// <summary>Long enough to walk 3-4 yd from a standstill, short enough not to matter.</summary>
+    private const int ProbeWalkMs = 800;
+
+    /// <summary>Turn taps allowed while aiming the probe and the first leg.</summary>
+    private const int AimTicks = 12;
+
+    /// <summary>
+    /// Beyond this much error the character is stopped before turning. Up to it, the turn
+    /// is made while still running, which is what stops the walk stuttering: a 20 deg
+    /// correction at 184 deg/s is a 0.1 s arc of about 2 yd, so stopping for it is a
+    /// worse approximation of walking than turning through it.
+    /// </summary>
+    private const double TurnWhileRunningDeg = 60.0;
 
     /// <summary>The value to write so the character walks on <paramref name="bearingDeg"/>.</summary>
     public static double FacingForBearing(double bearingDeg)

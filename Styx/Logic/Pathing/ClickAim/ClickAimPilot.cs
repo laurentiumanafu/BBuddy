@@ -48,7 +48,7 @@ public static class ClickAimPilot
     /// caller with no mesh to re-plan on has nothing better to do with the time.
     /// </summary>
     public static bool WalkTo(ClickAimMover mover, WoWPoint goal, double tolerance, int timeoutMs,
-                              bool verbose, bool stopWhenBlocked)
+                              bool verbose, bool stopWhenBlocked, bool keepMoving = false)
     {
         if (mover == null) throw new ArgumentNullException(nameof(mover));
 
@@ -115,7 +115,11 @@ public static class ClickAimPilot
 
             if (mover.LastRemaining <= tolerance)
             {
-                mover.MoveStop();
+                /* Arriving at an INTERMEDIATE point is not a reason to stop walking.
+                 * Releasing the forward key every 30 yd is what made the 13:11 walk
+                 * choppy: stop, re-press, stop, re-press, for the length of the route.
+                 * The caller that owns the next waypoint passes keepMoving. */
+                if (!keepMoving) mover.MoveStop();
                 if (verbose)
                 {
                     Logging.Write(string.Format(CultureInfo.InvariantCulture,

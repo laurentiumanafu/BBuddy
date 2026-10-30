@@ -294,6 +294,16 @@ public sealed class ClickAimMover : IPlayerMover
     /// </summary>
     public bool TryEnableKeySteering(IntPtr hwnd, out string report)
     {
+        return TryEnableKeySteering(hwnd, double.NaN, double.NaN, out report);
+    }
+
+    /// <summary>
+    /// As above, with the goal the walk is for: the calibration's probe walk is then
+    /// aimed at it, so the calibration costs the first few yards of the walk instead of
+    /// a few yards in whatever direction the character happened to be facing.
+    /// </summary>
+    public bool TryEnableKeySteering(IntPtr hwnd, double targetX, double targetY, out string report)
+    {
         report = "";
         if (_keyMode) return true;
         if (_keyTried)
@@ -311,7 +321,7 @@ public sealed class ClickAimMover : IPlayerMover
         }
 
         string calibrated;
-        bool ok = ClickAimKeySteer.Calibrate(hwnd, out calibrated);
+        bool ok = ClickAimKeySteer.Calibrate(hwnd, targetX, targetY, out calibrated);
         report = calibrated;
         _keyMode = ok;
         return ok;
