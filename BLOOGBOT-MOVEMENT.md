@@ -79,6 +79,69 @@ The two pieces that differ from BloogBot on this client, and why:
 | `SetFacing` function call | write the facing field (`RecordFacingOffset`) | no address for the function on 70291; the field is already read, and `Human`-style write is available (`PROCESS_VM_WRITE`) |
 | `SetControlBit(Front, 1, tick)` | `PostMessage` `WM_KEYDOWN`/`WM_KEYUP` for the forward key | no address for `SetControlBit` on 70291; Winkr's `Movement.md` records that PostMessage key input drives Classic clients from outside, and this project already stops the character that way |
 
+## What the navigation chapter (20) changes here
+
+`drewkestell.us/Article/6/Chapter/20` - the article that Vicxqh credits for making the
+tile/mesh mapping click in this very repo - contains three facts that apply directly:
+
+**1. A two-point path is Detour's failure signal.** Quoting it:
+
+> Well, 2 is the minimum that Detour will return. If the library fails to find a path for
+> whatever reason, it'll just return those two points, and the navigation path would just
+> be a straight line between them.
+
+His test asserts the path is longer than 2 points for exactly that reason. This repo
+accepted `path.Length < 2` as failure, i.e. a 2-point result was treated as a **valid
+straight line through whatever Detour had just refused to route around**. That is the
+reported "walks into walls". Now a 2-point result for a leg longer than 5 yd is refused,
+with the reason logged.
+
+**2. `straightPath` means the smoothed path, and that is what to use.** His
+`CalculatePath(mapId, start, end, smoothPath, length)` passes the flag down to
+`PathFinder::setUseStrightPath`, and: "99% of the time we're going to use a smooth path".
+Detour's "straight path" is the string-pulled one - few long segments - while `false`
+gives the raw corridor, which is jagged. `Navigator.FindPath(mapId, start, end)` in this
+repo already defaults `straightPath: true`, so this side needs no change; the logs
+(`5 points, 92.3 yd for a 76.6 yd leg`) are string-pulled output.
+
+**3. Re-plan constantly, not once.** Because "enemies ... are actually constantly moving
+around", his `MoveToTarget` calls `CalculatePath` on every `Update`. Paths are cheap
+(0.1-0.2 ms here). Our `RouteRunner` plans once and re-plans only when the mover stalls;
+for a static quest point that is fine, but any moving goal (a mob, a player, a boat)
+needs the BloogBot cadence. Noted, not yet changed.
+
+His follower loop is worth copying verbatim for its radius choices: advance to the next
+waypoint at **1 yd**, consider the destination reached at **3 yd**.
+
+## Chapter 18: there are TWO facing fields, and that matters
+
+This one corrects something the first version of `ClickAimKeySteer` got wrong.
+
+> If you remember how we *read* the player's current facing, we used `Pointer + 0x9C4`.
+> So when we *set* the player's facing, why do we use `Pointer + 0x9A8`? This is an
+> implementation detail of the client/server architecture of WoW. We need two separate
+> memory locations to store the player's *actual* facing value (that which comes from the
+> single source of truth - the server), and a *different* place to store the outgoing
+> facing value (that which we send to the server). ... the client does something called
+> "client-side prediction" ... eventually the client and server will do what's called
+> "server reconciliation" ... and `FACING_OFFSET` will be overwritten with the true value
+> from the server.
+
+So: writing the **readable** field alone can look like it works and then be reverted, and
+the field that actually steers on his build is the **outgoing** one, 0x1C *before* the
+readable one. `ClickAimKeySteer` now:
+
+* writes the readable field first (it is the one the client's own movement code uses, and
+  while moving the client is authoritative over its facing);
+* if the two calibration probes walk the same bearing - the write did not steer - it says
+  so and **retries both probes against the outgoing field** at `readable - 0x1C`;
+* reports which field it ended up using in the calibration line.
+
+Chapter 18 also settles the angle convention: `GetFacingForPosition` is
+`Atan2(dY, dX)` normalised into `[0, 2pi)`, which is the same convention as this project's
+`ClickAimMath.HeadingDeg`. So the calibration should find **slope +1, offset 0** - if it
+finds anything else, that is information, not a bug in the arithmetic.
+
 ## The one thing not assumed
 
 The client's angle convention. Is facing radians clockwise from north, counter-clockwise

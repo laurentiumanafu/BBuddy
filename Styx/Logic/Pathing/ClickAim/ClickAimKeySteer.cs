@@ -58,6 +58,7 @@ internal static class ClickAimKeySteer
 
     // ---- learned convention -------------------------------------------------
     private static bool _calibrated;
+    private static bool _useOutgoing;
     private static double _slope = 1.0;       // d(bearing deg) / d(facing-input)
     private static double _offsetDeg = double.NaN; // bearing = slope*input + offset
 
@@ -103,7 +104,21 @@ internal static class ClickAimKeySteer
     /// client's own SetFacing function instead, which needs an address this build does
     /// not have.
     /// </summary>
-    public static bool TryWriteFacing(double radians)
+    /// <summary>
+    /// BloogBot's Vanilla/TBC split (chapter 18): the client keeps TWO facing values.
+    /// The one at <c>FACING_OFFSET</c> is the server's own value, used for rendering and
+    /// reads; the one at <c>SET_FACING_OFFSET</c> is the OUTGOING value, which the caller
+    /// writes and then pushes with <c>SendMovementUpdate</c> (opcode 0xDA). On that build
+    /// the write field sat 0x1C BEFORE the read field (read 0x9C4, write 0x9A8).
+    ///
+    /// That is why a write can look like it works and then come back: the client predicts
+    /// locally, the server reconciles, and the readable value is overwritten with the
+    /// server's truth. So the write is attempted on both fields, and the read-back is
+    /// checked again after a delay to see whether it stuck.
+    /// </summary>
+    private const int OutgoingFacingDelta = -0x1C;
+
+    public static bool TryWriteFacing(double radians, bool alsoOutgoing = false)
     {
         try
         {
@@ -115,7 +130,19 @@ internal static class ClickAimKeySteer
             if (!reader.TryGetPlayerObject(out obj) || obj.IsEmpty) return false;
 
             byte[] bytes = BitConverter.GetBytes((float)radians);
-            return mem.WriteBytes64(obj.RecordPtr + WowBOffsets.RecordFacingOffset, bytes);
+            bool ok = mem.WriteBytes64(obj.RecordPtr + WowBOffsets.RecordFacingOffset, bytes);
+
+            if (alsoOutgoing)
+            {
+                // The client's own SendMovementUpdate is not available on this build, so
+                // the outgoing value is written and left to the client's next movement
+                // packet, which carries whatever facing the client believes it has.
+                long off = (long)WowBOffsets.RecordFacingOffset + OutgoingFacingDelta;
+                if (off > 0)
+                    ok |= mem.WriteBytes64(obj.RecordPtr + (ulong)off, bytes);
+            }
+
+            return ok;
         }
         catch
         {
@@ -172,6 +199,21 @@ internal static class ClickAimKeySteer
         f1 = f0 + step;
         if (!Probe(hwnd, f1, out b1, out report)) return false;
 
+        /* Both probes walked the same bearing: the field that is being written is the
+         * readable (server) one, and this client ignores it for movement. BloogBot's
+         * chapter 18 says the OUTGOING field is the one that steers - so try that before
+         * blaming the mechanism. */
+        if (Math.Abs(ClickAimMath.WrapDeg(b1 - b0)) < 8.0)
+        {
+            Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                "[Keys] writing the readable facing field moved nothing ({0:F0} deg then {1:F0} deg "
+                + "bearing). Trying the OUTGOING field BloogBot writes (readable - 0x1C), which is the "
+                + "value the client sends to the server.", b0, b1));
+            _useOutgoing = true;
+            if (!Probe(hwnd, f0, out b0, out report)) return false;
+            if (!Probe(hwnd, f1, out b1, out report)) return false;
+        }
+
         double dInput = step * 180.0 / Math.PI;
         double dBearing = ClickAimMath.WrapDeg(b1 - b0);
         double slope = dBearing / dInput;
@@ -192,11 +234,12 @@ internal static class ClickAimKeySteer
         report = string.Format(CultureInfo.InvariantCulture,
             "facing {0:F0} deg walked bearing {1:F0} deg; facing {2:F0} deg walked bearing "
             + "{3:F0} deg. So bearing = {4:F2} x facing + {5:F1} deg, and the client's "
-            + "facing is {6}",
+            + "facing is {6} (writing the {7} field)",
             f0 * 180 / Math.PI, b0, f1 * 180 / Math.PI, b1, slope, _offsetDeg,
             Math.Abs(Math.Abs(slope) - 1.0) < 0.2
                 ? "the player's heading, as BloogBot assumes"
-                : "a heading scaled by " + slope.ToString("F2", CultureInfo.InvariantCulture));
+                : "a heading scaled by " + slope.ToString("F2", CultureInfo.InvariantCulture),
+            _useOutgoing ? "outgoing" : "readable");
         return true;
     }
 
@@ -209,7 +252,7 @@ internal static class ClickAimKeySteer
         double sx, sy;
         if (!ClickAimPositions.TryRead(out sx, out sy)) { report = "cannot read the position"; return false; }
 
-        if (!TryWriteFacing(facing)) { report = "cannot write the facing field"; return false; }
+        if (!TryWriteFacing(facing, _useOutgoing)) { report = "cannot write the facing field"; return false; }
         Thread.Sleep(120);
 
         // Did the write survive the client's own update?
@@ -277,7 +320,7 @@ internal static class ClickAimKeySteer
         int now = Environment.TickCount & int.MaxValue;
         if (Math.Abs(facing - _lastFacing) > 1e-4 || unchecked(now - _lastWriteMs) > 120)
         {
-            TryWriteFacing(facing);
+            TryWriteFacing(facing, _useOutgoing);
             _lastFacing = facing;
             _lastWriteMs = now;
         }

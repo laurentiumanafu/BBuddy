@@ -231,6 +231,29 @@ public static class RouteRunner
             lastPy = py;
 
             WoWPoint[]? path = TryMeshPath(px, py, target);
+
+            /* A two-point path is Detour's way of saying it FAILED.
+             *
+             * BloogBot's author states it plainly (drewkestell.us/Article/6/Chapter/20):
+             * "Well, 2 is the minimum that Detour will return. If the library fails to
+             * find a path for whatever reason, it'll just return those two points, and
+             * the navigation path would just be a straight line between them." His test
+             * asserts the path is longer than 2 points for exactly that reason.
+             *
+             * Accepting 2 points meant a failed query became a straight line through
+             * whatever Detour had just refused to route around - which is the reported
+             * "walks into walls". It is only innocent when the leg is short enough that
+             * a straight line IS the answer.
+             */
+            if (path != null && path.Length == 2 && remaining > 5.0)
+            {
+                Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                    "[Route] Detour returned 2 points for a {0:F1} yd leg - that is its failure "
+                    + "signal, not a straight path (it returns start+end when the query fails). "
+                    + "Refusing to walk it.", remaining));
+                path = null;
+            }
+
             if (path == null || path.Length < 2)
             {
                 if (plan == 0 && leg <= ProfileRoute.MaxClickWalkYd)
