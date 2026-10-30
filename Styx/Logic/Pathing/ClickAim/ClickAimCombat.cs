@@ -159,6 +159,11 @@ internal static class ClickAimCombat
         { 467, "Thorns" }, { 1126, "Mark of the Wild" },
         { 20549, "War Stomp" }, { 20550, "Endurance" }, { 20583, "Nature Resistance" },
 
+        /* Dwarf racials. The 22:47 shaman carried both on its bar and the log printed
+         * "spell 20594" and "spell 2481" on every engagement. Neither is a rotation spell -
+         * a named spell is simply one the log can talk about. */
+        { 20594, "Stoneform" }, { 2481, "Find Treasure" },
+
         /* Moonfire rank 1 is 8921 and it was the one spell the level-4 druid's own bar had
          * that this table did not know (the 19:07 run prints "spell 8921 (not in the table
          * yet)" on every single engagement). The ranks below are the whole family, because a
@@ -393,7 +398,8 @@ internal static class ClickAimCombat
         { "Sap", ClickAimSpellRole.Utility }, { "Pounce", ClickAimSpellRole.Utility },
         { "Bash", ClickAimSpellRole.Utility }, { "Demoralizing Roar", ClickAimSpellRole.Utility },
         { "Wing Clip", ClickAimSpellRole.Utility }, { "Intercept", ClickAimSpellRole.Utility },
-        { "Cat Form", ClickAimSpellRole.Buff }, { "Bear Form", ClickAimSpellRole.Buff }
+        { "Cat Form", ClickAimSpellRole.Buff }, { "Bear Form", ClickAimSpellRole.Buff },
+        { "Stoneform", ClickAimSpellRole.Utility }, { "Find Treasure", ClickAimSpellRole.Utility }
     };
 
     /// <summary>

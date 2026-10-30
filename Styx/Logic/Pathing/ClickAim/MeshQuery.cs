@@ -47,6 +47,18 @@ internal static class MeshQuery
     private const float WideVertical = 400.0f;
 
     /// <summary>
+    /// How far below or above the point a widened search may land before its answer is refused.
+    ///
+    /// The 22:47 run is the reason: the player stood at Z 386 and the 400 yd search "found the
+    /// mesh at 3.5" - a polygon 383 yd below, i.e. a different layer of the world (or a tile that
+    /// belongs to another map). Detour was then asked to route between two points that are not
+    /// connected, returned its 2-point failure, and the leg fell back to a straight click. A
+    /// column that only has ground 383 yd away has nothing usable in it, and saying so is more
+    /// honest than handing a wrong-layer point to the router.
+    /// </summary>
+    private const float MaxWidenedGap = 100.0f;
+
+    /// <summary>
     /// Moves the point onto the nearest walkable polygon and reports how far it had
     /// to move. Returns false when there is no polygon in either box, which is the
     /// "the mesh really is missing here" case.
@@ -67,8 +79,24 @@ internal static class MeshQuery
         bool found = TryFind(nav, mapId, point, SnapHorizontal, SnapVertical, out poly, out nearest);
         if (!found)
         {
-            found = TryFind(nav, mapId, point, SnapHorizontal, WideVertical, out poly, out nearest);
+            Vector3 wideNearest;
+            PolygonReference widePoly;
+            found = TryFind(nav, mapId, point, SnapHorizontal, WideVertical, out widePoly, out wideNearest);
             if (!found) return false;
+
+            float gap = Math.Abs(wideNearest.Z - point.Z);
+            if (gap > MaxWidenedGap)
+            {
+                Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                    "[MeshQuery] the only polygon within {0:F0} yd of ({1:F1}, {2:F1}, {3:F1}) is "
+                    + "{4:F0} yd away in height (at Z {5:F1}) - that is a different layer, so it is "
+                    + "refused and the caller falls back to aim-and-click",
+                    SnapHorizontal, point.X, point.Y, point.Z, gap, wideNearest.Z));
+                return false;
+            }
+
+            poly = widePoly;
+            nearest = wideNearest;
             widened = true;
         }
 

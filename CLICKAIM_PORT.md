@@ -1641,3 +1641,56 @@ else.
 Self-tests grew accordingly: `wrathIsRanged`, `clawIsMelee`, `rendIsMeleeDot`,
 `judgementIsShortRanged`, `unknownSpellHasNoRange`, `prefersRanged`/`findsMelee`, plus
 `healPowerEnough`/`healPowerTooLow`/`healPowerLearnedCost` and `meleeReachNests`.
+
+## The 22:47 run — healing with no mana, and never swinging
+
+    [Grind] rotation: heal at 40 and only above 25% power% health (slot 3 '3' Healing Wave) ...
+    [Grind] health 38% and Healing Wave did not lift it (still 51/135, power 30 -> 15 ...)
+    [Grind] health 34% and Healing Wave did not lift it (still 37/135, power 15 -> 19, the press did nothing at all)
+    [Grind] the local player reads 0 health - the character is dead
+
+Two separate bugs, both in the gate that was supposed to prevent exactly this.
+
+**The power gate had an escape hatch.** `HealPowerOk` started with `if (denom == 0) return true;` -
+"no maximum readable, so no opinion". On this session the max-power word read **0** (it has read
+100 for 139 power before; it is a candidate word, not a field), so the denominator was 0, the gate
+said yes, and the price rule that had already learned Healing Wave costs 25 power was never
+reached. A shaman with 15 power pressed it twice and died.
+
+Fixed:
+- **The price rule comes first and does not need a maximum.** Once a heal has been seen to cost
+  something, "can I afford it" is answered outright: power must cover the cost plus 25%.
+- **The price is learned from every press that spent power**, including one the mob out-damaged -
+  that is still proof of what the spell costs, and learning it early is what protects the next
+  press.
+- **An unknown maximum no longer means yes.** With no denominator and no price, the only honest
+  rule is that a heal needs power at all (`power > 0`).
+- **Every read feeds the session peak** (`_manaPeak`), not just the resting code, so after the
+  first fight a percentage has a real denominator even when the word lies.
+
+**Casting was gated on 10 power, which is not a price.** Lightning Bolt costs 15, so at 13 power
+the loop kept casting: the press was refused for want of mana, `canCast` stayed true, and the
+melee branch - the only thing that would have swung - was never reached. That is the user's "did
+not auto attack when out of mana".
+
+- **`_castCosts` + `PowerForCast`**: the price of each damage spell is measured and casting needs
+  cost + 20%. Below it, `canCast` is false, the loop logs
+  `13 of power left and Lightning Bolt needs about 18 - not casting again until the bar comes
+  back; auto-attacking instead`, and control falls to the melee branch, which walks in, right-
+  clicks, presses Attack and any melee ability.
+- **The measurement happens one read later.** On this client the cost leaves the bar at the end of
+  the cast, and the poll that catches the mob's health move can land first - every bolt in the log
+  says "mana 150 -> 150, 135 -> 135". So the press is remembered (`_pendingCastId`) and priced on
+  the next look at the bar.
+- **The banner has brackets now**: `heal at 40% health and only above 25% power (slot 3 '3'
+  Healing Wave)` - the old string glued `% health` onto the power phrase.
+
+Also in this run: `[MeshQuery] the player had no usable height (given 386.2); searched 400 yd and
+found the mesh at 3.5`. A polygon 383 yd below the character is a different layer of the world, and
+Detour was being asked to route between two points that are not connected - which is where the
+recurring `Detour returned 2 points` comes from. `MeshQuery.Snap` now refuses an answer more than
+`MaxWidenedGap` (100 yd) away in height and says so; the caller falls back to aim-and-click, which
+is what actually walked those legs.
+
+And the dwarf racials are named: 20594 `Stoneform`, 2481 `Find Treasure` (both `Utility`, never
+pressed - the log just stopped printing "spell 20594 (not in the table yet)").

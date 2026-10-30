@@ -477,6 +477,7 @@ internal static class GrindRunner
         _healthPeak = 0;
         _buffsApplied = false;
         _healCostGuess = 0;
+        _castCosts.Clear();
         Logging.Write("[Grind] combat settings: " + ClickAimSettings.Describe());
 
         int level = reader.ReadPlayerLevel();
@@ -993,21 +994,83 @@ internal static class GrindRunner
     /// </summary>
     private static bool HealPowerOk(uint power, uint maxPower)
     {
-        uint denom = maxPower;
-        if (denom < _manaPeak) denom = _manaPeak;
-        if (denom == 0) return true;                       // nothing to measure against
+        /* The price rule first, and it does not depend on a maximum being readable. The
+         * 22:47 run is why: the max-power word read 0 that session, the old code took "no
+         * denominator" for "no opinion" and returned true, and a shaman with 13 power pressed
+         * Healing Wave twice while a mob took it apart. A heal whose cost has been measured is
+         * a heal whose affordability can be answered outright. */
+        if (_healCostGuess > 0 && power < _healCostGuess + _healCostGuess / 4)
+            return false;
+
+        uint denom = DenomPower(maxPower);
+        if (denom == 0)
+        {
+            /* No maximum and no price learned yet: the only honest rule left is that a heal
+             * needs power to exist at all, so that the press is not a guaranteed refusal. */
+            return power > 0;
+        }
 
         if (ClickAimSettings.HealMinManaPercent > 0
             && power * 100.0 / denom < ClickAimSettings.HealMinManaPercent)
             return false;
 
-        if (_healCostGuess > 0 && power < _healCostGuess + _healCostGuess / 4)
-            return false;
-
         return true;
     }
 
-    /// <summary>Remembers what one heal costs, from a heal that demonstrably worked.</summary>
+    /// <summary>
+    /// The denominator for any power percentage: the recorded maximum, else the highest value
+    /// seen this session, else the value in hand. The max-power word is a candidate on this
+    /// build and has been seen reading both 100 for 139 power and 0 - the peak is what makes a
+    /// percentage mean something either way.
+    /// </summary>
+    private static uint DenomPower(uint maxPower)
+    {
+        uint denom = maxPower;
+        if (denom < _manaPeak) denom = _manaPeak;
+        return denom;
+    }
+
+    /// <summary>
+    /// Power needed to cast <paramref name="spell"/>: the cost learned from a cast that worked,
+    /// plus a margin, or <paramref name="fallback"/> while nothing is known yet.
+    ///
+    /// This is what makes the character auto-attack when its mana is gone. The 22:47 run kept
+    /// casting Lightning Bolt at 13 power because the only gate was `power >= 10`: every press
+    /// was refused for want of mana, and the mob was never answered with a swing.
+    /// </summary>
+    private static uint PowerForCast(ClickAimAction? spell, uint fallback)
+    {
+        if (spell == null) return fallback;
+        uint cost;
+        if (!_castCosts.TryGetValue(spell.Id, out cost) || cost == 0) return fallback;
+        return cost + cost / 5;
+    }
+
+    /// <summary>
+    /// The spell just pressed and the power in hand before it, waiting for the next read.
+    ///
+    /// On this client the cost is taken from the bar at the END of the cast, and the poll that
+    /// notices the mob's health move can land before that: every Lightning Bolt in the 22:47 log
+    /// printed "mana 150 -> 150, 135 -> 135" because the drop appeared one read later. So the
+    /// press is remembered and the price is measured on the next look.
+    /// </summary>
+    private static int _pendingCastId;
+    private static uint _pendingCastMana;
+
+    /// <summary>Remembers what a spell costs, from a cast that spent power.</summary>
+    private static void LearnCastCost(int spellId, uint before, uint after)
+    {
+        if (spellId <= 0 || before <= after) return;
+        uint spent = before - after;
+        uint known;
+        if (!_castCosts.TryGetValue(spellId, out known) || spent > known) _castCosts[spellId] = spent;
+    }
+
+    /// <summary>
+    /// Remembers what one heal costs. The evidence is any press where power actually dropped -
+    /// a heal the mob out-damaged still proves what it costs, and learning from it early is what
+    /// stops the next press from being made with power that cannot cover it.
+    /// </summary>
     private static void LearnHealCost(uint before, uint after)
     {
         if (before <= after) return;                        // nothing was spent: no evidence
@@ -1411,6 +1474,13 @@ internal static class GrindRunner
     /// guess is what makes a character press a heal it cannot pay for.
     /// </summary>
     private static uint _healCostGuess;
+
+    /// <summary>
+    /// What each damage spell has been seen to cost, by spell id. Same reasoning as the heal,
+    /// and it is what stops the character from casting with power it does not have: below the
+    /// price of the spell the rotation stops trying and swings instead.
+    /// </summary>
+    private static readonly Dictionary<int, uint> _castCosts = new Dictionary<int, uint>();
 
     /// <summary>
     /// The windows of a unit object that the loot probe reads. They bracket the fields this
@@ -1866,12 +1936,14 @@ internal static class GrindRunner
 
 
 
+        _pendingCastId = 0;                 // a cast remembered from the last fight is not evidence
         bool castEverLanded = false;        // a Wrath has demonstrably cast this fight
         bool melee = false;                 // set when casting is shown not to work
         bool announced = false;
         int healFailures = 0;               // presses of the heal key that changed nothing
         bool healBlocked = false;           // no power for it: fight instead of pressing it again
         bool healRefusalLogged = false;
+        bool powerShortLogged = false;
         var worked = new List<string>();
 
         WowBWorldSnapshot? snap;
@@ -1961,6 +2033,18 @@ internal static class GrindRunner
                 myMana = mine.Power;
                 myMaxMana = mine.MaxPower;      // a candidate on this build: see HealPowerOk
             }
+
+            /* Every read feeds the peak. It used to be fed only while resting, so a fight that
+             * began on a full bar had no denominator at all - and an unknown maximum is what
+             * let the 22:47 shaman press a heal with 13 power. */
+            if (myMana > _manaPeak) _manaPeak = myMana;
+
+            /* The price of the spell pressed last time, measured now (see _pendingCastId). */
+            if (_pendingCastId != 0)
+            {
+                LearnCastCost(_pendingCastId, _pendingCastMana, myMana);
+                _pendingCastId = 0;
+            }
             double myPercent = myMaxHealth > 0 ? myHealth * 100.0 / myMaxHealth : 100.0;
 
             /* A heal that lands too late is a corpse. Saying so beats pressing keys at a
@@ -1973,13 +2057,11 @@ internal static class GrindRunner
             {
                 announced = true;
                 Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                    "[Grind] rotation: heal at {0}% health ({1}), damage {2} at {5:F0} yd{6}, "
-                    + "damage over time {3}, auto-attack {4}{7}",
+                    "[Grind] rotation: heal at {0}% health and only above {8}% power ({1}), "
+                    + "damage {2} at {5:F0} yd{6}, damage over time {3}, auto-attack {4}{7}",
                     ClickAimSettings.HealBelowPercent == 0
                         ? "never"
-                        : ClickAimSettings.HealBelowPercent.ToString(CultureInfo.InvariantCulture)
-                          + " and only above " + ClickAimSettings.HealMinManaPercent.ToString(CultureInfo.InvariantCulture)
-                          + "% power",
+                        : ClickAimSettings.HealBelowPercent.ToString(CultureInfo.InvariantCulture),
                     heal == null ? "none on the bar" : "slot " + heal.Slot + " '" + ClickAimCombat.KeyLabel(heal.KeyVk) + "' " + heal.Name,
                     damage == null ? "none on the bar" : "slot " + damage.Slot + " '" + ClickAimCombat.KeyLabel(damage.KeyVk) + "' " + damage.Name,
                     !ClickAimSettings.UseDamageOverTime || dot == null
@@ -1992,7 +2074,8 @@ internal static class GrindRunner
                         : " - a melee ability, so the fight closes to arm's length",
                     meleeHit == null ? ""
                         : ", melee ability " + meleeHit.Name + " (slot " + meleeHit.Slot + " '"
-                          + ClickAimCombat.KeyLabel(meleeHit.KeyVk) + "')"));
+                          + ClickAimCombat.KeyLabel(meleeHit.KeyVk) + "')",
+                    ClickAimSettings.HealMinManaPercent));
             }
 
             /* ---- 1. heal, where Singular puts it: before everything else ----
@@ -2068,6 +2151,7 @@ internal static class GrindRunner
                      * third time costs another global cooldown in the middle of a fight the
                      * character is losing, so the heal is off for the rest of this fight. */
                     healFailures++;
+                    LearnHealCost(powerBeforeHeal, powerAfterHeal);   // "cast but out-damaged" is still a price
                     bool powerSpent = powerAfterHeal < powerBeforeHeal;
                     Logging.Write(string.Format(CultureInfo.InvariantCulture,
                         "[Grind] health {0:F0}% and {1} did not lift it (still {2}/{3}, power {4} -> {5}, "
@@ -2111,7 +2195,7 @@ internal static class GrindRunner
              * debuff list is not readable on this build, so the timer is our own cast - being
              * a second late costs nothing, being early costs mana. */
             if (dot != null && ClickAimSettings.UseDamageOverTime && !melee
-                && (dot.IsMelee || myMana >= 10) && d <= dotRange
+                && (dot.IsMelee || myMana >= PowerForCast(dot, 10)) && d <= dotRange
                 && (_dotGuid != target.Guid || unchecked(Environment.TickCount - _dotUntil) >= 0))
             {
                 StopAndSettle(hwnd);
@@ -2143,7 +2227,22 @@ internal static class GrindRunner
             /* A melee ability is not cast: it is pressed standing next to the mob, and the
              * melee branch below is what closes the distance and swings. So "can cast" means
              * "there is a spell on the bar that reaches the mob from here". */
-            bool canCast = !melee && damage != null && !damage.IsMelee && myMana >= 10;
+            /* Not just "some power left": enough for THIS spell. The cost is learned from a
+             * cast that worked (Lightning Bolt costs 15 on the character this was tested on),
+             * and below it the character stops casting and swings - which is what the user
+             * asked for and what a player does. 10 power was the old gate and it produced
+             * cast, refuse, cast, refuse while a mob ate the character. */
+            uint needForCast = PowerForCast(damage, 10);
+            bool canCast = !melee && damage != null && !damage.IsMelee && myMana >= needForCast;
+
+            if (!canCast && !melee && damage != null && !damage.IsMelee && myMana < needForCast
+                && !powerShortLogged)
+            {
+                powerShortLogged = true;
+                Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                    "[Grind] {0} of power left and {1} needs about {2} - not casting again until the "
+                    + "bar comes back; auto-attacking instead", myMana, damage.Name, needForCast));
+            }
 
             if (canCast && d > castRange)
             {
@@ -2195,6 +2294,8 @@ internal static class GrindRunner
                 lastCastMs = Environment.TickCount;
                 uint manaBefore = myMana;
                 int mobBeforeHealth = lastHealth;
+                _pendingCastId = damage.Id;
+                _pendingCastMana = manaBefore;
                 ClickAimInput.TapKey(hwnd, damage.KeyVk, 40);
                 presses++;
                 _presses++;
@@ -2228,6 +2329,7 @@ internal static class GrindRunner
                 if (spentMana || hurtMob)
                 {
                     castEverLanded = true;
+                    LearnCastCost(damage.Id, manaBefore, manaAfter);
                     string label = damage.Name + " (slot " + damage.Slot.ToString(CultureInfo.InvariantCulture) + ")";
                     if (!worked.Contains(label)) worked.Add(label);
                     if (hurtMob)
@@ -2241,6 +2343,7 @@ internal static class GrindRunner
                     continue;
                 }
 
+                LearnCastCost(damage.Id, manaBefore, manaAfter);   // a refusal costs nothing, a cast does
                 castFailures++;
                 Logging.Write(string.Format(CultureInfo.InvariantCulture,
                     "[Grind] {0} (slot {1}, key '{2}') changed nothing in {3} ms: mana {4} -> {5}, "
@@ -2525,6 +2628,26 @@ internal static class GrindRunner
             check("healCostLearned", _healCostGuess == 40);
             LearnHealCost(139, 139);                                  // nothing spent: no evidence
             check("healCostIgnoresNoSpend", _healCostGuess == 40);
+
+            /* The 22:47 run: the max-power word read 0, the old code called that "no opinion"
+             * and healed anyway, and a shaman pressed Healing Wave at 13 power twice while a
+             * mob killed it. An unreadable maximum must never mean yes. */
+            check("healPowerNoMaxRefusesZero", !HealPowerOk(0, 0));
+            check("healPowerNoMaxKeepsPositive", HealPowerOk(20, 0));
+
+            /* And what a cast costs, so the character stops casting it cannot afford: the
+             * Lightning Bolt in that log cost 15 power, so 13 is not enough to press it again -
+             * the melee branch takes over and the character swings. */
+            _castCosts.Clear();
+            check("castCostUnknown", PowerForCast(null, 10) == 10);
+            LearnCastCost(403, 150, 135);
+            var bolt = new ClickAimAction { Slot = 2, Id = 403, Kind = ClickAimActionKind.Spell };
+            check("castCostLearned", PowerForCast(bolt, 10) == 18);
+            check("castCostRefuses13", 13u < PowerForCast(bolt, 10));
+            check("castCostAllows50", 50u >= PowerForCast(bolt, 10));
+            LearnCastCost(403, 135, 135);        // nothing spent: no evidence, price unchanged
+            check("castCostIgnoresNoSpend", PowerForCast(bolt, 10) == 18);
+            _castCosts.Clear();
             _healCostGuess = 0;
             ClickAimSettings.HealMinManaPercent = 25;
 
