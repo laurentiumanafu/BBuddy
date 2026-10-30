@@ -207,6 +207,11 @@ public static class ClickAimDiagnostics
         try { Logging.Write(ClickAimDestHunt.SelfTest()); }
         catch (Exception ex) { Logging.Write("[Dest] self-test threw: " + ex.Message); }
 
+        // Profile bands are read from XML and the area is chosen by level: both are pure
+        // enough to check here, and both fail silently when they are wrong.
+        try { Logging.Write(GrindRunner.SelfTest()); }
+        catch (Exception ex) { Logging.Write("[Grind] self-test threw: " + ex.Message); }
+
         // The bot loop is disabled on x64, but the navmesh engine only needs
         // Navigation.dll (now built for x64) and the mmaps directory.
         bool mesh = false;

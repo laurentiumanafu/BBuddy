@@ -304,7 +304,8 @@ internal static class GrindRunner
     private static int SelectArea(List<ProfileGrindArea> areas, int level, out string why)
     {
         double px = 0, py = 0;
-        ClickAimPositions.TryRead(out px, out py);
+        try { ClickAimPositions.TryRead(out px, out py); }
+        catch { px = 0; py = 0; }     // also what the self-test runs: no client, no position
 
         int nearest = 0, inBand = -1;
         double nearestD = double.MaxValue, bandD = double.MaxValue;
@@ -738,6 +739,101 @@ internal static class GrindRunner
         var parts = new List<string>();
         for (int i = 0; i < bar.Count; i++) parts.Add(bar[i].ToString());
         return string.Join("; ", parts.ToArray());
+    }
+
+    /// <summary>
+    /// Checks the parts of grinding that do not need a game: reading a levelling profile's
+    /// bands, and choosing an area by level. Everything it touches is pure or file-only, so a
+    /// failure here is a code problem rather than a client problem.
+    ///
+    /// The fixtures are the shapes real profiles use, because that is where this broke
+    /// silently before: a band written as an attribute, or one level up on the SubProfile,
+    /// reads as 0 and switches level selection off without saying anything.
+    /// </summary>
+    public static string SelfTest()
+    {
+        int passed = 0, total = 0;
+        var fails = new System.Text.StringBuilder();
+        Action<string, bool> check = (label, ok) =>
+        {
+            total++;
+            if (ok) passed++;
+            else fails.Append(" [").Append(label).Append(']');
+        };
+
+        string path = System.IO.Path.Combine(System.IO.Path.GetTempPath(),
+            "clickaim-grind-selftest-" + Guid.NewGuid().ToString("N") + ".xml");
+        try
+        {
+            System.IO.File.WriteAllText(path,
+                "<?xml version=\"1.0\"?><HBProfile>"
+              + "<SubProfile><Name>Ladder 1</Name><TargetMinLevel>1</TargetMinLevel>"
+              +   "<TargetMaxLevel>6</TargetMaxLevel><Factions>16 109</Factions>"
+              +   "<GrindArea><Hotspot X=\"100\" Y=\"0\" Z=\"40\"/>"
+              +     "<Hotspot X=\"140\" Y=\"0\" Z=\"40\"/></GrindArea></SubProfile>"
+              + "<SubProfile><Name>Ladder 2</Name><TargetMinLevel>7</TargetMinLevel>"
+              +   "<TargetMaxLevel>12</TargetMaxLevel>"
+              +   "<GrindArea><Hotspot X=\"200\" Y=\"0\" Z=\"40\"/></GrindArea></SubProfile>"
+              + "<SubProfile><Name>Attributes</Name>"
+              +   "<GrindArea TargetMinLevel=\"13\" TargetMaxLevel=\"18\">"
+              +     "<Hotspot X=\"300\" Y=\"0\" Z=\"40\"/></GrindArea></SubProfile>"
+              + "<SubProfile><Name>Short names</Name><MinLevel>19</MinLevel><MaxLevel>24</MaxLevel>"
+              +   "<GrindArea><Hotspot X=\"400\" Y=\"0\" Z=\"40\"/></GrindArea></SubProfile>"
+              + "<SubProfile><Name>Band on the sub-profile</Name>"
+              +   "<TargetMinLevel>25</TargetMinLevel><TargetMaxLevel>30</TargetMaxLevel>"
+              +   "<GrindArea><Hotspot X=\"500\" Y=\"0\" Z=\"40\"/></GrindArea></SubProfile>"
+              + "<SubProfile><Name>Empty</Name><GrindArea><TargetMinLevel>31</TargetMinLevel>"
+              +   "</GrindArea></SubProfile>"
+              + "</HBProfile>");
+
+            List<ProfileGrindArea> areas = ProfileRoute.LoadGrindAreas(path);
+            check("areasLoaded", areas.Count == 5);          // the sixth has no hotspot
+            if (areas.Count == 5)
+            {
+                check("bandElements", areas[0].TargetMinLevel == 1 && areas[0].TargetMaxLevel == 6);
+                check("bandAttributes", areas[2].TargetMinLevel == 13 && areas[2].TargetMaxLevel == 18);
+                check("bandShortNames", areas[3].TargetMinLevel == 19 && areas[3].TargetMaxLevel == 24);
+                check("bandOnSubProfile", areas[4].TargetMinLevel == 25 && areas[4].TargetMaxLevel == 30);
+                check("factions", areas[0].Factions == "16 109");
+                check("hotspots", areas[0].Hotspots.Count == 2 && areas[1].Hotspots.Count == 1);
+                check("nameFromSubProfile", areas[1].Name == "Ladder 2");
+            }
+
+            check("inBandInside", InBand(new ProfileGrindArea { TargetMinLevel = 7, TargetMaxLevel = 12 }, 7)
+                               && InBand(new ProfileGrindArea { TargetMinLevel = 7, TargetMaxLevel = 12 }, 12));
+            check("inBandOutside", !InBand(new ProfileGrindArea { TargetMinLevel = 7, TargetMaxLevel = 12 }, 6)
+                                && !InBand(new ProfileGrindArea { TargetMinLevel = 7, TargetMaxLevel = 12 }, 13));
+            check("inBandOpenEnded", InBand(new ProfileGrindArea { TargetMinLevel = 40 }, 60));
+            check("inBandUnstated", !InBand(new ProfileGrindArea(), 60));
+
+            string span = LevelSpan(areas);
+            check("levelSpan", span.Contains("1-6") && span.Contains("25-30"));
+
+            /* The choice itself: with the level inside a band, the area picked must be one
+             * whose band contains it - never merely the closest one. */
+            if (areas.Count == 5)
+            {
+                string why;
+                int pick = SelectArea(areas, 20, out why);
+                check("selectByBand", pick >= 0 && pick < 5 && InBand(areas[pick], 20));
+                check("selectSaysWhy", why.Contains("19-24") || why.Contains("inside its band"));
+
+                pick = SelectArea(areas, 0, out why);
+                check("selectWithoutLevel", pick >= 0 && why.Contains("unknown"));
+            }
+        }
+        catch (Exception ex)
+        {
+            total++;
+            fails.Append(" [selftestThrew:").Append(ex.Message).Append(']');
+        }
+        finally
+        {
+            try { System.IO.File.Delete(path); } catch { }
+        }
+
+        if (fails.Length == 0) return string.Format("Grind self-test {0}/{1} passed", passed, total);
+        return string.Format("Grind self-test {0}/{1} FAILED:{2}", passed, total, fails);
     }
 
     /// <summary>The selected target's health, or -1 when the reader has no candidate.</summary>

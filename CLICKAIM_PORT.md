@@ -271,6 +271,12 @@ With no Lua there is no level, and the loop says so rather than guessing: it gri
 nearest area and prints `The player level is unknown (no Lua), so this is the NEAREST area,
 not necessarily the right one.`
 
+Bands are read from all four shapes a profile writes them in - elements inside `<GrindArea>`,
+attributes on it, elements on the enclosing `<SubProfile>`, or `<MinLevel>`/`<MaxLevel>` -
+because a band that silently reads as 0 switches level selection off without a word. The
+`Grind self-test N/M passed` line at attach covers exactly that, with a fixture per shape,
+plus the area choice itself; it runs with no game attached.
+
 Known gaps, stated rather than hidden: **combat is only checked between hotspots**, not
 mid-leg (`WalkTo` has no interrupt hook yet), so an add that aggros during a long leg is
 fought at the next point; the profile's `<Blackspots>` are not applied to the mesh; and a

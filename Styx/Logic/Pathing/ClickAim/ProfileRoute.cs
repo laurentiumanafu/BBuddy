@@ -135,10 +135,20 @@ public static class ProfileRoute
             XElement? nameElement = sub != null ? sub.Element("Name") : grind.Element("Name");
             area.Name = (string?)nameElement ?? "";
 
+            /* Bands are written four ways in the wild: elements inside <GrindArea>, attributes
+             * on it, elements inside the enclosing <SubProfile>, or as <MinLevel>/<MaxLevel>.
+             * Only one of them is common, but a band that silently reads as 0 turns level
+             * selection off and the loop grinds whatever is nearest - the exact failure the
+             * bands exist to prevent - so all four are read. */
             int level;
-            if (TryReadLevel(grind.Element("TargetMinLevel"), out level)) area.TargetMinLevel = level;
-            if (TryReadLevel(grind.Element("TargetMaxLevel"), out level)) area.TargetMaxLevel = level;
+            if (TryReadBand(grind, sub, "TargetMinLevel", out level)) area.TargetMinLevel = level;
+            if (TryReadBand(grind, sub, "TargetMaxLevel", out level)) area.TargetMaxLevel = level;
+            if (area.TargetMinLevel == 0 && TryReadBand(grind, sub, "MinLevel", out level)) area.TargetMinLevel = level;
+            if (area.TargetMaxLevel == 0 && TryReadBand(grind, sub, "MaxLevel", out level)) area.TargetMaxLevel = level;
+
             area.Factions = ((string?)grind.Element("Factions") ?? "").Trim();
+            if (area.Factions.Length == 0 && sub != null)
+                area.Factions = ((string?)sub.Element("Factions") ?? "").Trim();
 
             foreach (XElement hotspot in grind.Descendants())
             {
@@ -222,6 +232,32 @@ public static class ProfileRoute
     /// as element text, not as an attribute, so this is a different reader from
     /// <see cref="TryReadAttribute(XElement, string, out double)"/>.
     /// </summary>
+    /// <summary>
+    /// One level of a band: an element or an attribute on the grind area, else on the
+    /// enclosing SubProfile, in either the long or the short spelling.
+    /// </summary>
+    private static bool TryReadBand(XElement grind, XElement? sub, string name, out int value)
+    {
+        value = 0;
+        if (TryReadLevel(grind.Element(name), out value)) return true;
+        if (TryReadAttributeInt(grind, name, out value)) return true;
+        if (sub != null)
+        {
+            if (TryReadLevel(sub.Element(name), out value)) return true;
+            if (TryReadAttributeInt(sub, name, out value)) return true;
+        }
+        value = 0;
+        return false;
+    }
+
+    private static bool TryReadAttributeInt(XElement element, string name, out int value)
+    {
+        value = 0;
+        XAttribute? attribute = element.Attribute(name);
+        if (attribute == null) return false;
+        return int.TryParse(attribute.Value.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out value);
+    }
+
     private static bool TryReadLevel(XElement? element, out int level)
     {
         level = 0;
