@@ -1228,8 +1228,9 @@ internal static class GrindRunner
             {
                 _poolQuietAt = Environment.TickCount;
                 Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                    "[Grind] the pool has {0} alive and level-viable {1:F1} yd away - stopping the walk to "
-                    + "deal with it", poolUnit.Guid, poolYd));
+                    "[Grind] the pool has {0} alive and level-viable {1:F1} yd away ({2} in the pool inside "
+                    + "{3:F0} yd, {4} of them unreadable) - stopping the walk to deal with it",
+                    poolUnit.Guid, poolYd, poolLive, PoolSelectYd, poolUnread));
             }
             return true;
         }
