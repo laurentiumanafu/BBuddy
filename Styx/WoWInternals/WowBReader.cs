@@ -287,7 +287,7 @@ namespace Styx.WoWInternals
         // the slot still contains the same tag, opaque marker and record.
         // This reduces stale-slot observations; ABA reuse and post-check
         // changes are still possible and the marker's semantics are unknown.
-        private bool IsPoolRecordCurrent(WowBPoolObject record)
+        internal bool IsPoolRecordCurrent(WowBPoolObject record)
         {
             if (record.Family < 0 || record.Family >= MaxPools || record.Slot < 0 ||
                 record.Slot >= MaxPoolSlots || !IsUserPointer(record.PoolPtr) || !IsUserPointer(record.SlotArray))

@@ -19,12 +19,12 @@ detecting nodes, or using Grind's nearby-mob interrupt, is **not** gathering.
 | Need | Current 70291 status | Why it matters |
 |---|---|---|
 | World object enumeration | Handle pools and full 128-bit GUID records are available; `WowBWorldSnapshot` intentionally keeps only verified unit/player vtables. | Need a validated game-object snapshot, not the unit-only snapshot. Pool membership alone is not a node. |
-| Game-object identity and position | `record+0xD8` and position `record+0x60` are verified for units; their applicability, game-object vtable(s), pointer layout, lifecycle and transforms are **not verified for nodes**. | Detect nearby resources and route to them; revalidate full GUID immediately before interaction. |
-| Resource entry/type | No validated entry, game-object cache, lock type or herb/mineral discriminator for 70291. `WowBGuid.EntryId` is not verified for modern game objects. | Avoid treating doors, mailboxes or friendly NPCs as resources. `Bots/Gatherbuddy/GatherableNodes.cs` supplies legacy IDs and required skill levels, but IDs and coverage must be verified for the current client. |
+| Game-object identity and position | Two copper veins and a Peacebloom matched `record+0xD8`, position `record+0x60`, and vtable RVA `0x50B1838`; 4-byte object alignment is possible. Other resource types and lifecycle still need validation. | Detect nearby resources and route to them; revalidate full GUID immediately before interaction. |
+| Resource entry/type | The copper and Peacebloom samples agree on `object+0x90` and `(GUID.High >> 6) & 0x7FFFFF`, with legacy IDs 1731 and 1618. Other entries, cache and lock types remain unverified. `WowBGuid.EntryId` is not verified for modern game objects. | Avoid treating doors, mailboxes or friendly NPCs as resources. `Bots/Gatherbuddy/GatherableNodes.cs` supplies legacy IDs and required skill levels, but IDs and coverage must be verified for the current client. |
 | Gatherability / depleted state | No verified game-object state, dynamic flags or lootability offset. | Avoid approaching depleted/inaccessible nodes indefinitely; temporary GUID/position cooldowns and a bounded interaction attempt can supplement, not prove, success. |
 | Profession and skill level | No verified 70291 mining/herbalism profession/skill offsets. Legacy `WoWGameObject.CanLoot` relies on legacy skill, object cache and Lock.dbc. | Choose only trained professions and attainable nodes. A UI-selected profession and skill level can be a fallback if clearly labelled manual; never guess from unverified memory. |
 | Interaction / outcome | No verified node mouseover identity, interaction address or gather/loot-frame state. Candidate mouseover RVA `0x6283898` is **unverified**. Ground right-click projection is approximate and can issue a movement order when it misses. | A safe window-input-only gather requires a verified hover/identity or another reliable positive check, stop-and-settle, and bounded retry/backoff. A sent click is not proof of gathering. Do not use Lua or injection. |
-| Combat / defence | Player health and unit snapshots exist. `0x800` is present on idle units, so it is not proof of combat or an attacker. Hostility/reaction, unit target GUID and a reliable combat flag remain unverified. | Stop gathering to defend only when a real attacker can be identified; recent health loss is an imperfect fallback, not proof that the nearest mob attacked. Absorbs, heals and the first hit can mask it. |
+| Combat / defence | Player `+0x1E60` bit `0x80000` matched one labelled idle → combat → idle cycle; other combat situations still need testing. `0x800` is present while idle. Hostility/reaction and the attacker's identity are not established. | Stop gathering to defend only when a real attacker can be identified; recent health loss is an imperfect fallback, not proof that the nearest mob attacked. Absorbs, heals and the first hit can mask it. |
 | Bags / vendor | 70291 bag contents and counts are unresolved; recorded vendor clicks work when configured by the user. | Full bags and the presence of a tool cannot currently be detected reliably. |
 
 ## Read-only data collection from the window
@@ -56,12 +56,11 @@ visible until validated on the live client.
 The previous `InRealCombat` checked the player's `0x800` bit and then treated
 any nearby unit with that same bit as fighting. The repository's own samples
 include idle mobs with `0x800`, so that combination can stick true forever.
-The current fallback samples **raw player health**, regardless of that bit,
-and holds rest/vendor actions for eight seconds after a detected drop. An
-unreadable health value is treated conservatively as unknown; it is not
-converted to safe. The fallback cannot establish all combat states or identify
-the attacker. It is intentionally not presented as a fully reliable defence
-mechanism for Gatherbuddy.
+The earlier fallback sampled health loss. The labelled 18:02 probe now provides
+a stronger player-only candidate: `+0x1E60 & 0x80000`. Grind uses this candidate
+for rest and vendor guards, and treats an unreadable flag as unknown/unsafe.
+This is still one controlled cycle, not proof for every class, pet, target or
+PvP state, and it cannot identify the attacker.
 
 ## Copper and herb samples (user report, 17:53–17:55)
 
@@ -110,8 +109,33 @@ it, wait until the game itself exits combat and press it again. Repeat at least
 one more idle → combat → idle cycle, and share the full log with each sample
 labelled. A bit that turns on/off consistently across cycles is a candidate;
 check target changes, auto-attack, PvP, pets and damage independently before
-using it. Player `+0x1E60` bit `0x80000` is worth examining from older snapshots,
-but those observations are not a controlled comparison and do **not** verify
-it. The probe examines the unit's `0x0000..0x23FF` and record's first `0x100`
+using it. Player `+0x1E60` bit `0x80000` now matched one controlled cycle in the
+18:02 probe, and should be tested again in other combat states. The probe examines the unit's `0x0000..0x23FF` and record's first `0x100`
 bytes, so a flag outside those ranges will not be discovered by this probe.
 No Lua, process write, movement or combat input is used by either probe.
+
+
+## New 18:02–18:09 samples and scanner
+
+* Combat samples labelled by the user show `unit+0x1E60`: `0x808` idle,
+  `0x80808` fighting, `0x8` idle again. The difference `0x80000` fits combat
+  for this cycle; `0x800` does not. Grind now uses the candidate player bit,
+  with unknown reads conservatively blocking rest and selling. Additional
+  cycles and PvP/pet/target-only controls are still needed.
+* A second copper vein at 1.4 yd has `object+0x90 = 1731`, GUID entry 1731,
+  vtable RVA `0x50B1838`, and a 4-byte-aligned object. Peacebloom at 1.7 yd
+  has `object+0x90 = 1618`, GUID entry 1618 and the same vtable. A copper
+  node also appears 43.1 yd away in the same census. The user confirmed the
+  hovered herb was Peacebloom. Matching two resource types does not establish
+  that every legacy ID or required skill matches the new client.
+* `GatherNodeScanner.TryCapture` provides read-only, 100-yd observations to the
+  existing Gather probe: it requires a matching legacy ID from both GUID and
+  object, the observed vtable, full GUID, backpointer, plausible transform,
+  pool-slot and identity rechecks. Both object alignments are handled. The
+  returned list is non-atomic and may be incomplete; its nodes are not proven
+  harvestable and do not authorize mouse clicks. An empty scan is not proof
+  that no nodes exist.
+* Remaining work before Gatherbuddy is usable: verify hover **changes** on and
+  off resources and whether posted window mouse moves update it; verify
+  interaction/harvest success and depletion; provide profession/skill settings
+  and integrate hotspot traversal, mesh routing, defence and blackspots.

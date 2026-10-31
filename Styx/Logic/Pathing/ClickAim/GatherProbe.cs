@@ -135,6 +135,21 @@ internal static class GatherProbe
             byte[]? baseline = memory.ReadBytes64(address, 16);
             // Census first; the eight-second hover interval starts only after it completes.
             PrintNearbyCandidates(reader, memory);
+            if (GatherNodeScanner.TryCapture(100.0, out List<GatherNodeScanner.Node> nodes))
+            {
+                Logging.Write("[Gather probe] matching-layout resource candidates within 100 yd: "
+                              + nodes.Count + " (read-only; depleted state and skills unknown)");
+                for (int i = 0; i < nodes.Count && i < 20; i++)
+                {
+                    GatherNodeScanner.Node node = nodes[i];
+                    Logging.Write(string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                        "[Gather probe] {0:F1} yd {1} entry={2} {3} skill={4}{5} guid={6}",
+                        node.Distance, node.IsHerb ? "herb" : "ore", node.Entry, node.Name,
+                        node.RequiredSkill, node.DefaultBlacklisted ? " (legacy blacklist)" : "", node.Guid));
+                }
+            }
+            else
+                Logging.Write("[Gather probe] resource scan could not validate the player; not an empty-area result");
             Logging.Write("[Gather probe] read-only: within 8 seconds put the game cursor over a visible "
                           + "herb or ore node and leave it there. No click or Lua is used.");
             Thread.Sleep(8000);
