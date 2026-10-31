@@ -47,28 +47,38 @@ internal static class GrindRunner
     private const int TabTries = 3;
     private const int TabSettleMs = 250;
 
-    /// <summary>Look this far for something to fight before walking on.</summary>
-    private const double SearchYd = 40.0;
+    /// <summary>
+    /// How far from the CHARACTER something may stand and still be fought. This is the user's
+    /// number: "try to find more monsters around the character (max 100 yards, if no monsters
+    /// are around THEN move to next hotspot)".
+    ///
+    /// It started at 40 yd, which is why the 13:23 log has the line
+    /// "TAB has a target 48 yd away (40 yd is the search radius) - not chasing it": the client
+    /// offered a mob 48 yd out and the bot walked on past it. The radius is a circle around the
+    /// character - not around the path, and not around the hotspot - so a mob behind the
+    /// character or twenty yards back up the leg is a mob to fight, not a mob to leave.
+    /// </summary>
+    private const double SearchYd = 100.0;
 
     /// <summary>Walk this close before attacking. Melee reach plus a margin.</summary>
     private const double AttackRangeYd = 4.0;
 
     /// <summary>
-    /// The distance from which a fight will WALK to its target. It used to be the distance
-    /// at which the fight gave up, and the 16:46 run gave up on 18 mobs in 20 seconds for
-    /// standing 21-39 yd away - "it selects monsters but will not attack them".
-    ///
-    /// Singular's own numbing for the same idea is
-    /// <c>Movement.CreateMoveToTargetBehavior(true, 20f)</c> in the lowbie druid pull and
-    /// combat routines, so 20 yd is the number it moves in to.
+    /// The distance from which a fight will WALK to its target: the same radius the search
+    /// accepts, because "a monster 40 yards away ... it should move to the monster and attack
+    /// it" is the user's report. It was 20 yd - Singular's
+    /// <c>Movement.CreateMoveToTargetBehavior(true, 20f)</c> in the lowbie druid pull - and 20
+    /// yd is fine for a mob that is already in front, but it is the wrong number for a bot that
+    /// is supposed to clear a 100 yd circle: an out-of-mana level-2 warlock refused everything
+    /// between 20 and 40 yd and stood there.
     /// </summary>
-    private const double ChaseYd = 20.0;
+    private const double ChaseYd = SearchYd;
 
     /// <summary>
-    /// Past this the fight really does give up: the target walked away further than the
-    /// search radius, and chasing it leaves the hotspot ring.
+    /// Past this the fight really does give up: the target walked away beyond the search
+    /// radius by a margin, so chasing it is no longer the same decision the search made.
     /// </summary>
-    private const double GiveUpYd = 45.0;
+    private const double GiveUpYd = SearchYd + 15.0;
 
     // ---- attacking ---------------------------------------------------------
     /// <summary>
@@ -86,6 +96,17 @@ internal static class GrindRunner
     private const uint InCombatFlag = 0x800;
 
     /// <summary>
+    /// <c>UnitFlags</c> bit 0x2. The client's own attack predicate - the function the
+    /// registered <c>UnitCanAttack</c> handler calls - tests bit 1 of the dword at object
+    /// +0x1E60 and returns false on the path that takes it (see hunt/WOWB_70291_TRACE_FINDINGS.md,
+    /// 16:27 "it also reads second object +0x1E60, testing bit 1"), and bit 1 is
+    /// UNIT_FLAG_NON_ATTACKABLE in every field layout this engine has used. It is used here as a
+    /// FILTER, never as proof: a unit carrying the bit is skipped, and a unit without it still
+    /// has to survive the fight before it counts as a monster.
+    /// </summary>
+    private const uint NonAttackableFlag = 0x2;
+
+    /// <summary>
     /// Something worth fighting this close cuts a hotspot leg short. The 16:07 run walked
     /// 25-40 s legs while mobs were hitting it, because the loop could only look between
     /// legs; 18 yd is inside a caster's 28 yd range and close enough that the mob is coming.
@@ -97,8 +118,17 @@ internal static class GrindRunner
     /// </summary>
     private const int InterruptRetryMs = 4000;
 
-    /// <summary>Stand at a hotspot this long looking for a mob before walking to the next.</summary>
-    private const int HotspotDwellMs = 9000;
+    /// <summary>
+    /// The longest a hotspot is stood at, looking for a mob. It is a ceiling, not a timer: the
+    /// hotspot ends as soon as two fresh scans of the pool inside <see cref="SearchYd"/> find
+    /// nothing alive, which is the user's rule ("if no monsters are around THEN move to next
+    /// hotspot"). It used to be 9 s and was the only rule, so a fight that started at second 8
+    /// was cut in half and a clear hotspot was still ignored for nine seconds.
+    /// </summary>
+    private const int HotspotDwellMs = 30000;
+
+    /// <summary>How long to wait between two scans before calling a hotspot finished.</summary>
+    private const int AreaRescanMs = 1200;
 
     // ---- looting ----------------------------------------------------------
     /// <summary>
@@ -111,12 +141,11 @@ internal static class GrindRunner
     private const int RestFullPercent = 90;
 
     /// <summary>
-    /// How far off the path a mob may be and still be worth stopping the walk for. Big enough
-    /// to catch what a walk passes (the interrupt radius was 18 yd and only fired for mobs
-    /// already fighting the character), small enough that the character does not cross a field
-    /// for every wolf it sees.
+    /// How far off the path a mob may be and still be worth stopping the walk for: the same
+    /// 100 yd the hotspot uses, because a leg is walked through the same circle the character
+    /// fights in. It was 30 yd, which is why every mob the walk passed was "not taken".
     /// </summary>
-    private const double PullYd = 30.0;
+    private const double PullYd = SearchYd;
 
     /// <summary>How often the walk asks the client whether there is something to kill nearby.</summary>
     private const int PullProbeMs = 1500;
@@ -259,6 +288,45 @@ internal static class GrindRunner
     /// <summary>Last time the "TAB has a target out of range" note was printed.</summary>
     private static int _farQuietAt;
 
+    /// <summary>
+    /// Last time "nothing alive within the search radius" was printed. This used to be the
+    /// corpse line, printed once per engage attempt - the 13:24 run printed it eight times in
+    /// eight seconds while the character stood over a body it had already looted.
+    /// </summary>
+    private static int _clearQuietAt;
+
+    /// <summary>Last time the pool said something was there and TAB disagreed.</summary>
+    private static int _poolQuietAt;
+
+    /// <summary>
+    /// Whether the last <see cref="TryEngage"/> scan found the area empty. Set only when the
+    /// snapshot itself has nothing alive and level-viable inside the search radius, so a caller
+    /// can stop waiting at a hotspot without guessing from the report text.
+    /// </summary>
+    private static bool _scanWasClear;
+
+    /// <summary>Minimum spacing between two memory-based (left-click) selections.</summary>
+    private const int PoolSelectMs = 2500;
+
+    /// <summary>
+    /// How far away a unit the POOL offers may be and still be walked to without TAB having
+    /// agreed first. The full <see cref="SearchYd"/> circle is what the bot fights in, but the
+    /// pool cannot tell a wolf from a guard, so an unverified pick from it is only worth a short
+    /// walk: 50 yd covers the user's "a monster 40 yards away is skipped" and leaves the far half
+    /// of the circle to TAB, which does know. Anything the pool sees further out is picked up on
+    /// the way in, by the walk or by the next scan.
+    /// </summary>
+    private const double PoolSelectYd = 50.0;
+    private static int _lastPoolSelectMs;
+
+    /// <summary>
+    /// Units the pool offered and the left-click search could not put the cursor on. One miss is
+    /// bad luck (the body may be behind the character's own model for one frame); the second
+    /// miss means "this one is not clickable from here" and it is set aside like any other
+    /// refused unit, so a hotspot can still become clear and the walk can move on.
+    /// </summary>
+    private static readonly HashSet<WowBGuid> _poolMisses = new HashSet<WowBGuid>();
+
     /// <summary>Leave a target it gave up on alone for this long.</summary>
     private const int GiveUpMs = 15000;
 
@@ -344,9 +412,14 @@ internal static class GrindRunner
         _interruptQuietUntil = 0;
         _lastPullProbeMs = 0;
         _pullQuietAt = 0;
+        _clearQuietAt = 0;
+        _poolQuietAt = 0;
+        _lastPoolSelectMs = 0;
+        _scanWasClear = false;
         _combatQuietAt = 0;
         _farQuietAt = 0;
         _notViable.Clear();
+        _poolMisses.Clear();
         _looted.Clear();
         _loots = 0;
         _lootProbed = false;
@@ -447,7 +520,10 @@ internal static class GrindRunner
                  * end of the leg. The 16:07 run walked 25-40 s at a time with mobs on it and
                  * never turned round; a leg is a whole hotspot, so "check between legs" was
                  * checking every 40 s. */
-                RouteRunner.ShouldInterrupt = () => FightNeeded(hwnd, InterruptYd);
+                /* The same radius the character fights in: a leg is walked through the same
+                 * circle a hotspot is cleared in, so "monsters between hotspots" are monsters
+                 * this stops for. */
+                RouteRunner.ShouldInterrupt = () => FightNeeded(hwnd, SearchYd);
                 bool ok = false;
                 try { ok = RouteRunner.Run(mover, one, 1); }
                 finally { RouteRunner.ShouldInterrupt = null; }
@@ -565,6 +641,30 @@ internal static class GrindRunner
                     Logging.Write("[Grind] memory: player " + f);
                 else
                     Logging.Write("[Grind] memory: the player's unit fields did not read at 0x" + me.UnitAddress.ToString("X"));
+
+                /* Who is around, straight out of the pool and BEFORE any key is pressed. This is
+                 * the line that answers "do we have a memory offset so the bot sees the monsters
+                 * around it": position and distance come from the snapshot, level, health and
+                 * flags from each unit's data block. What is missing - and what this census is
+                 * meant to help find - is a reaction word: compare a wolf and a guard in the same
+                 * list and the field that differs is the faction/reaction candidate. */
+                int shown = 0;
+                for (int i = 0; i < snap.Units.Count && shown < 10; i++)
+                {
+                    WowBObservedUnit u = snap.Units[i];
+                    if (u.IsLocalPlayer) continue;
+                    double d = ClickAimMath.Len(u.Location.X - me.Location.X, u.Location.Y - me.Location.Y);
+                    if (d > SearchYd) continue;
+                    Styx.WoWInternals.WowBReader.WowBUnitFields uf;
+                    if (!reader.TryGetUnitFields(u.UnitAddress, out uf)) continue;
+                    shown++;
+                    Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                        "[Grind]   in the pool {0:F1} yd away: level {1}, hp {2}/{3}, flags 0x{4:X}",
+                        d, uf.Level, uf.Health, uf.MaxHealth, uf.UnitFlags));
+                }
+                if (shown == 0)
+                    Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                        "[Grind]   no readable unit inside {0:F0} yd of the character", SearchYd));
             }
             Logging.Write("[Grind] memory: " + Math.Max(0, snap.Units.Count - 1)
                 + " other unit(s) in the pool; each fight line names the one it picked");
@@ -702,19 +802,52 @@ internal static class GrindRunner
         double px = player.Location.X, py = player.Location.Y;
         int near = CountNear(snap, px, py, SearchYd);
 
-        /* ONE way to choose a target: TAB.
+        /* Three ways to choose a target, in this order, and the order is the whole design:
          *
-         * The right-click fallback is gone. It cannot tell a mob from a guard - the snapshot
-         * carries positions, levels and flags, and no reaction word - so on 2026-10-30 17:22
-         * it walked up to a friendly townsman 3.6 yd away and right-clicked him, which is a
-         * "fight" against the town and nothing else. TAB is the client's own enemy filter
-         * and it is the only thing here that knows who is an enemy. If TAB selects nothing,
-         * the answer is "nothing here to fight", which is a correct answer in a town.
+         *   1. what is already selected (the walk asks once, TAB costs a key);
+         *   2. TAB - the client's own enemy filter, the only thing on this build that knows
+         *      who is an enemy;
+         *   3. the unit pool in memory, selected with a LEFT-click, when TAB has nothing live
+         *      to offer but the pool says something alive is standing right there.
          *
-         * The cost of being wrong is asymmetric: a missed mob is a wasted walk, an allied
-         * NPC is a broken run and a reputation. Hence the strict version. */
+         * Step 3 is the answer to the 13:23 report ("it's not attacking monsters between
+         * hotspots unless the monsters are in front of the character ... do we have a memory
+         * offset so that the bot sees the monsters around it?"). The pool has always had the
+         * units, their positions, levels and unit flags; what it does not have is a reaction
+         * (friendly/hostile) word, which is why TAB stays first and why a pool pick is only
+         * trusted as far as the fight can verify it.
+         *
+         * The right-CLICK fallback stays gone. It cannot tell a mob from a guard, and on
+         * 2026-10-30 17:22 it walked up to a friendly townsman 3.6 yd away and right-clicked
+         * him: a right-click is "attack and walk to it", so the "fight" was against the town.
+         * A left-click SELECTS and does nothing else, which is a very different proposition.
+         * */
         WowBObservedUnit target = default(WowBObservedUnit);
         bool have = false;
+
+        /* What the pool says, before any key is pressed. A radius with nothing alive and
+         * level-viable in it is the user's "if no monsters are around THEN move to next
+         * hotspot", and answering it here is also what stops the eight-times-in-eight-seconds
+         * "the only thing the client offered was a corpse" loop: the corpse is not in this
+         * count, so an area holding only a body answers "clear" without pressing TAB once. */
+        WowBObservedUnit nearest;
+        double nearestYd;
+        int live, unread;
+        bool haveNearest = NearestKillable(snap, px, py, SearchYd, out nearest, out nearestYd,
+                                          out live, out unread);
+        if (!haveNearest && unread == 0)
+        {
+            _scanWasClear = true;
+            if (unchecked(Environment.TickCount - _clearQuietAt) > 15000)
+            {
+                _clearQuietAt = Environment.TickCount;
+                report = string.Format(CultureInfo.InvariantCulture,
+                    "nothing alive and level-viable within {0:F0} yd of the character ({1} unit(s) in the pool "
+                    + "inside that radius, none of them a fight) - the area is clear", SearchYd, near);
+            }
+            return false;
+        }
+        _scanWasClear = false;
 
         /* Turn toward whatever is actually fighting before asking: TAB only considers
          * enemies in FRONT of the character (the 16:07 run logged "behind the camera" for
@@ -729,6 +862,16 @@ internal static class GrindRunner
             px = player.Location.X;
             py = player.Location.Y;
         }
+
+        /* TAB only considers what is in FRONT of the character (the 16:07 run logged
+         * "behind the camera" for two and a half minutes because of that). The pool knows where
+         * the nearest live unit is, so turn onto it before asking - a turn costs no walk, and it
+         * is what turns a mob standing behind the character from a "nothing offered" into a
+         * target. Nothing is walked yet: this is a facing change only. */
+        if (!haveNearest)
+            NearestKillable(snap, px, py, SearchYd, out nearest, out nearestYd, out live, out unread);
+        if (haveNearest && nearestYd > 2.0)
+            ClickAimKeySteer.Face(nearest.Location.X, nearest.Location.Y, hwnd, 25.0, 4);
 
         Styx.WoWInternals.WowBReader? selReader = ObjectManager.WowB;
 
@@ -762,6 +905,59 @@ internal static class GrindRunner
             have = true;
         }
 
+        /* ---- step 3: the pool, and a left-click to select it ----
+         *
+         * TAB had nothing live to offer, but the unit pool says something alive and inside the
+         * level band is standing <nearestYd> yd away. Ask the client to select it the only other
+         * way a player can: a LEFT-click on it. A left-click selects and does nothing else - it
+         * is not an attack order and not a walk order - and FindUnitPixel only reports success
+         * when the client's own target guid answers with that unit, so a probe that lands on the
+         * ground costs nothing but the probe.
+         *
+         * The last check is the fight itself: a friendly NPC takes no damage from anything and
+         * the fight gives up on it after a few presses and blacklists it, so a town costs a
+         * couple of wasted presses rather than a reputation. */
+        if (!have && haveNearest && nearestYd <= PoolSelectYd
+            && unchecked(Environment.TickCount - _lastPoolSelectMs) >= PoolSelectMs)
+        {
+            _lastPoolSelectMs = Environment.TickCount;
+
+            uint nearestLevel = 0;
+            Styx.WoWInternals.WowBReader? poolReader = ObjectManager.WowB;
+            Styx.WoWInternals.WowBReader.WowBUnitFields nearestFields;
+            if (poolReader != null && poolReader.TryGetUnitFields(nearest.UnitAddress, out nearestFields))
+                nearestLevel = nearestFields.Level;
+
+            int fx, fy;
+            string how;
+            bool selected = FindUnitPixel(hwnd, nearest, px, py, out fx, out fy, out how);
+            if (selected && Capture(out snap) && snap != null && snap.TryGetSelectedTarget(out target))
+            {
+                have = true;
+                Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                    "[Grind] TAB offered nothing live, so the pool was used: {0} is alive at {1:F1} yd "
+                    + "(level {2}) and the client selected it on a left-click at {3},{4} px",
+                    target.Guid, nearestYd, nearestLevel, fx, fy));
+            }
+            else
+            {
+                if (!_poolMisses.Add(nearest.Guid))
+                {
+                    /* Second miss: stop letting this one keep the hotspot open. */
+                    _notViable.Add(nearest.Guid);
+                    if (_notViable.Count > 256) _notViable.Clear();
+                }
+                if (unchecked(Environment.TickCount - _poolQuietAt) > 15000)
+                {
+                    _poolQuietAt = Environment.TickCount;
+                    Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                        "[Grind] the pool has {0} alive at {1:F1} yd (level {2}) and the left-click search "
+                        + "could not put the cursor on it: {3}", nearest.Guid, nearestYd, nearestLevel,
+                        how));
+                }
+            }
+        }
+
         if (!have)
         {
             /* Nothing LIVE came up. If the client still has a corpse selected - which is what
@@ -785,18 +981,28 @@ internal static class GrindRunner
                  * menu appeared over the game and swallowed every key. A corpse left selected is
                  * harmless: the fight refuses it by health 0 and TAB steps off it when something
                  * live is around. Leave the selection alone. */
-                report = "the only thing the client offered was a corpse (health 0) - walking on "
-                         + "without touching it";
+                /* Once per 15 s, not once per attempt: the 13:24 run printed this eight times
+                 * in eight seconds while the character stood over a body it had looted. */
+                if (unchecked(Environment.TickCount - _clearQuietAt) > 15000)
+                {
+                    _clearQuietAt = Environment.TickCount;
+                    report = "the only thing the client offered was a corpse (health 0) - walking on "
+                             + "without touching it";
+                }
                 return false;
             }
 
-            /* Nothing selected means nothing hostile in front. In a town that is the whole
-             * population: 27 friendly units within 40 yd at 17:22, none of them an enemy. */
-            if (near > 0)
+            /* Nothing selected: TAB offered nothing, and the pool's own candidate could not be
+             * clicked. In a town that is the whole population - 27 friendly units within 40 yd at
+             * 17:22, none of them an enemy - so this is a correct answer there too. */
+            if (unchecked(Environment.TickCount - _clearQuietAt) > 15000)
+            {
+                _clearQuietAt = Environment.TickCount;
                 report = string.Format(CultureInfo.InvariantCulture,
-                    "{0} unit(s) within {1:F0} yd, none of them selected by TAB - the client only "
-                    + "targets enemies, so nothing here is attackable and the walk continues",
-                    near, SearchYd);
+                    "{0} unit(s) within {1:F0} yd; {2} alive and level-viable, but TAB selected none of "
+                    + "them and the pool's nearest could not be selected either - nothing attackable here, "
+                    + "the walk continues", near, SearchYd, live);
+            }
             return false;
         }
 
@@ -1002,7 +1208,30 @@ internal static class GrindRunner
          * only fought at the hotspots (the user's report). Ask the client instead of guessing:
          * TAB applies its own hostility filter, so whatever it selects is attackable by
          * definition, and the level band and the distance are checked here. */
-        return TryPullOnTheWay(hwnd, me);
+        if (TryPullOnTheWay(hwnd, me)) return true;
+
+        /* TAB can only offer what is in front of the character, so a mob beside or behind it
+         * leaves the walk running. The unit pool has no such blind spot: if something alive and
+         * level-viable is standing within the short radius, stop the walk and let the main loop
+         * do the selecting - the left-click search that selects a pool unit takes seconds and
+         * does not belong on the route thread. */
+        WowBObservedUnit poolUnit;
+        double poolYd;
+        int poolLive, poolUnread;
+        if (NearestKillable(snap, me.Location.X, me.Location.Y, PoolSelectYd, out poolUnit, out poolYd,
+                            out poolLive, out poolUnread))
+        {
+            if (unchecked(Environment.TickCount - _poolQuietAt) > 5000)
+            {
+                _poolQuietAt = Environment.TickCount;
+                Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                    "[Grind] the pool has {0} alive and level-viable {1:F1} yd away - stopping the walk to "
+                    + "deal with it", poolUnit.Guid, poolYd));
+            }
+            return true;
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -1122,6 +1351,11 @@ internal static class GrindRunner
         int fought = 0;
         int killed = 0;
 
+        /* Two clear scans in a row end the hotspot. One is not enough: a single read can miss a
+         * mob that the client is still streaming in, and the whole point of standing here is that
+         * mobs walk past. Two scans a second and a bit apart cannot both miss the same wolf. */
+        int clearScans = 0;
+
         while (!_stop && unchecked(Environment.TickCount - dwellStart) < HotspotDwellMs)
         {
             string report;
@@ -1132,10 +1366,23 @@ internal static class GrindRunner
                 if (report.StartsWith("killed", StringComparison.Ordinal)) { kills++; killed++; }
                 else if (report.IndexOf("killed or fled", StringComparison.Ordinal) >= 0) { kills++; killed++; }
                 Logging.Write("[Grind] " + report);
+                clearScans = 0;               // something was here: this hotspot is not finished
                 continue;
             }
             if (report.Length > 0) Logging.Write("[Grind] " + report);
-            Thread.Sleep(400);
+
+            /* "_scanWasClear" is the pool's own answer, not a string match: it is set only when
+             * the snapshot had nothing alive and level-viable inside the radius. Walk on the
+             * moment that answer is stable. */
+            if (_scanWasClear && ++clearScans >= 2)
+            {
+                Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                    "[Grind] nothing left within {0:F0} yd after being here {1:F0} s - moving to the next hotspot",
+                    SearchYd, unchecked(Environment.TickCount - dwellStart) / 1000.0));
+                break;
+            }
+            if (!_scanWasClear) clearScans = 0;
+            Thread.Sleep(AreaRescanMs);
         }
 
         /* Anything left lying around while standing here is worth the walk. */
@@ -1771,6 +2018,67 @@ internal static class GrindRunner
             if (snap.Units[i].Guid == guid) return true;
         }
         return false;
+    }
+
+    /// <summary>
+    /// The nearest thing in the unit pool worth walking to: alive, inside the level band, not a
+    /// player, not already refused, and not carrying <see cref="NonAttackableFlag"/> - plus the
+    /// counts a caller needs to tell "nothing here" from "I could not read anything here":
+    /// <paramref name="live"/> is how many units passed every filter inside the radius, and
+    /// <paramref name="unread"/> is how many were inside it but would not read at all.
+    ///
+    /// This is the "does the bot see the monsters around it" half of the 13:23 report. The pool
+    /// has had positions, levels and unit flags since the 2026-10-30 dumps, so it can answer
+    /// "something alive and level-appropriate is 62 yd away, and it is the nearest one" without
+    /// a key press. It cannot answer "is it a wolf": there is no reaction/faction word in this
+    /// snapshot yet (WowBObservedUnit says so in its own summary),
+    /// which is why TAB is asked FIRST and this is only the fallback.
+    /// </summary>
+    private static bool NearestKillable(WowBWorldSnapshot snap, double px, double py, double radius,
+                                        out WowBObservedUnit unit, out double yards,
+                                        out int live, out int unread)
+    {
+        unit = default(WowBObservedUnit);
+        yards = double.MaxValue;
+        live = 0;
+        unread = 0;
+
+        Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
+        int myLevel = PlayerLevel();
+
+        for (int i = 0; i < snap.Units.Count; i++)
+        {
+            WowBObservedUnit candidate = snap.Units[i];
+            if (candidate.IsLocalPlayer) continue;
+            if (candidate.HasPlayerVtable) continue;
+            if (Refused(candidate.Guid)) continue;
+            if (_notViable.Contains(candidate.Guid)) continue;
+
+            double d = ClickAimMath.Len(candidate.Location.X - px, candidate.Location.Y - py);
+            if (d > radius) continue;
+
+            Styx.WoWInternals.WowBReader.WowBUnitFields f;
+            if (reader == null || !reader.TryGetUnitFields(candidate.UnitAddress, out f))
+            {
+                /* A unit whose block will not read is not an empty area. Counting it as
+                 * "unread" keeps a failed read from switching the whole scan off. */
+                unread++;
+                continue;
+            }
+
+            if (f.Health == 0) continue;                       // a corpse is not a monster
+            if ((f.UnitFlags & NonAttackableFlag) != 0) continue;
+            if (!LevelViable(f.Level, myLevel)) continue;
+
+            live++;
+            if (d > 0.4 && d < yards)
+            {
+                unit = candidate;
+                yards = d;
+            }
+        }
+
+        return live > 0 && yards < double.MaxValue;
     }
 
     /// <summary>
@@ -2612,11 +2920,13 @@ internal static class GrindRunner
              * the range instead of through it. */
             if (d > MeleeEngageYd)
             {
-                /* Walk in, but not across the whole ring: melee is a decision, and a mob that
-                 * keeps backing off is not worth chasing. If it is on US, the limit is the
-                 * give-up distance instead - a mob hitting the character has to be answered,
-                 * which is the other half of the 17:26 stall. */
-                double chase = PlayerInCombat() ? GiveUpYd : ChaseYd;
+                /* Walk in, and keep walking: melee is now the normal half of a level-2
+                 * warlock's fight ("18 of power left and Shadow Bolt needs about 30"), so this
+                 * is where the character spends most of a kill. The only limit is the give-up
+                 * distance, which is the search radius plus a margin - the 13:23 run's "it
+                 * skips a monster 40 yards away" was this gate refusing anything past 20 yd
+                 * whenever the character was out of mana. */
+                double chase = GiveUpYd;
                 if (d > chase)
                     return string.Format(CultureInfo.InvariantCulture,
                         "cannot cast at it and it is {0:F0} yd away (the melee chase is {1:F0} yd); "
@@ -2950,10 +3260,24 @@ internal static class GrindRunner
             /* The distances have to nest: melee reach &lt; the melee chase &lt; casting range &lt;
              * the point at which a fight gives up &lt; the radius units are searched in. Getting
              * this order wrong is what produced "selects monsters but will not attack them". */
-            check("rangesNest", AttackRangeYd < ChaseYd
-                              && ChaseYd < ClickAimCombat.CasterRangeYd
+            check("rangesNest", AttackRangeYd < ClickAimCombat.MeleeRangeYd
+                              && ClickAimCombat.MeleeRangeYd < ClickAimCombat.CasterRangeYd
                               && ClickAimCombat.CasterRangeYd < SearchYd
                               && SearchYd < GiveUpYd);
+
+            /* The user's number, written down so a later "tidy-up" cannot quietly make the bot
+             * short-sighted again: 100 yd around the CHARACTER is what it fights in, the fight
+             * walks as far as the search accepts, and the walk-off path stops for the same
+             * radius. The 13:23 log lost a mob at 48 yd to a 40 yd radius. */
+            check("engagementRadius", Math.Abs(SearchYd - 100.0) < 0.001);
+            check("chaseReachesTheSearch", ChaseYd >= SearchYd - 0.001);
+            check("pullUsesTheSameRadius", Math.Abs(PullYd - SearchYd) < 0.001);
+
+            /* An unverified pool pick is only walked to inside the short radius; the rest of the
+             * circle is TAB's job, because the pool cannot see who is friendly. */
+            check("poolSelectInsideSearch", PoolSelectYd > ClickAimCombat.CasterRangeYd
+                                            && PoolSelectYd < SearchYd);
+            check("giveUpBeyondSearch", GiveUpYd > SearchYd);
 
             /* Melee reach sits inside the melee chase: a 5 yd ability is pressed from inside
              * the distance the melee branch is willing to close. Getting this wrong is a

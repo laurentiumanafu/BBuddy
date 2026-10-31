@@ -1770,3 +1770,61 @@ Fixed with a *pull probe*:
 
 Self-tests: `pullInsideSearch` (18 yd interrupt < 30 yd pull ≤ 40 yd search, ≥ 28 yd cast range),
 `pullProbeIsThrottled`, `swingQuietWindow`.
+
+## The 13:23 run: a 100 yd circle, chasing, and the pool instead of TAB
+
+User, after `6518c03` (auto-attack confirmed fixed): *"It's not attacking monsters between hotspots
+unless the monsters are in front of the character, also the bot is not chasing monsters (if a monster
+at the hotspot is 40 yards away it skips it - it should move to the monster and attack it then try to
+find more monsters around the character (max 100 yards, if no monsters are around THEN move to next
+hotspot). Do we have a memory offset so that the bot sees the monsters around it? so that we don't have
+to rely on TAB?"*
+
+The 13:23 log (`2026-10-31_1323_6888.log`) has every symptom in it: `TAB has a target 48 yd away
+(40 yd is the search radius) - not chasing it, walking on`, and `the only thing the client offered was
+a corpse (health 0) - walking on without touching it` eight times in eight seconds.
+
+**Radii are the user's numbers now, all measured from the CHARACTER.**
+
+| constant | was | now | why |
+| --- | --- | --- | --- |
+| `SearchYd` | 40 | **100** | the circle the bot fights in |
+| `PullYd` (walk-off path) | 30 | **100** | a leg runs through the same circle |
+| `ChaseYd` (melee walk-in) | 20 | **`SearchYd`** | out of mana is the normal state at level 2, and 20 yd refused the mob the search had just accepted |
+| `GiveUpYd` | 45 | **`SearchYd + 15`** | the fight only gives up past the circle |
+| `PoolSelectYd` | — | **50** | how far an *unverified* pool pick may be walked to |
+| `HotspotDwellMs` | 9 000 | **30 000** | a ceiling, not a timer: two clear scans end the hotspot early |
+
+**The hotspot ends when the area is clear, not when the clock says so.** `DwellAtHotspot` counts
+consecutive empty scans (`AreaRescanMs` 1.2 s apart) and leaves after two, so a hotspot that has been
+swept is left immediately and one where a mob walked in is not cut off mid-fight.
+
+**The unit pool is now a first-class source of targets** (`NearestKillable`), not just a way to count
+what is around. Per unit it has the position (`Location`), the distance, `hp/max` (`+0x1E30`/`+0x1E38`),
+`level` (`+0x1E40`) and `UnitFlags` (`+0x1E60`). It filters on: alive, not a player, not refused, inside
+the level band, and not carrying `NonAttackableFlag` (`0x2` — bit 1 of `+0x1E60`, which is the first
+thing the client's own attack predicate tests; see `hunt/WOWB_70291_TRACE_FINDINGS.md`, 16:27). What it
+does **not** have is a reaction (friendly/hostile) word, so the order of asking is:
+
+1. the current selection (free);
+2. **TAB** — the client's enemy filter, still the only authority on "is it an enemy";
+3. the **pool**, selected with a **left-click** (`FindUnitPixel`, which only reports success when the
+   client's own target guid answers with that unit). A left-click selects and does nothing else — no
+   attack order, no walk order — which is exactly why the old *right*-click fallback (the 17:22
+   townsman) stays gone.
+
+Two safety rules on step 3: it is only used for a unit within `PoolSelectYd` (50 yd), and a unit the
+left-click search misses twice is set aside (`_poolMisses` → `_notViable`), so a hotspot can still
+become clear. A pool pick that turns out to be a friendly NPC does nothing when attacked: no damage,
+no aggro, and the fight gives up and blacklists it.
+
+`FightNeeded` (the route interrupt) also asks the pool now, so a mob beside or behind the character
+stops the walk even when TAB — which only looks in front — offers nothing. The selecting is left to the
+main loop: a 40-probe left-click search does not belong on the route thread.
+
+**Diagnostic for the reaction hunt:** `ReportMemory` now prints up to ten units inside the circle with
+`distance, level, hp/max, flags`. Standing next to a wolf and a guard in one spot puts the two lists in
+one log; the field that differs between them is the faction/reaction candidate.
+
+Self-tests added: `engagementRadius` (SearchYd == 100), `chaseReachesTheSearch`, `pullUsesTheSameRadius`,
+`giveUpBeyondSearch`, `poolSelectInsideSearch`; `rangesNest` re-expressed without `ChaseYd`.
