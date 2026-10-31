@@ -22,6 +22,22 @@ internal static class GatherRunner
     private const int MaxGatherAttempts = 4;
     // Covers a 2.5 s mining cast plus time for the loot window / auto-loot.
     private const int GatherHoldMs = 6000;
+    // Only throttle degenerate routes whose points are repeatedly already reached.
+    // Normal hotspot transitions have no fixed delay.
+    private const int FastHotspotMs = 100;
+    private const int HotspotLoopPauseMs = 250;
+    private const int MaxFastHotspots = 8;
+
+    internal static bool ShouldPauseHotspotLoop(int fastCount, int hotspotCount)
+        => fastCount >= Math.Min(MaxFastHotspots, Math.Max(1, hotspotCount));
+
+    internal static string HotspotSelfTest()
+    {
+        bool ok = !ShouldPauseHotspotLoop(1, 668) && !ShouldPauseHotspotLoop(7, 668)
+               && ShouldPauseHotspotLoop(8, 668) && ShouldPauseHotspotLoop(1, 1)
+               && !ShouldPauseHotspotLoop(2, 3) && ShouldPauseHotspotLoop(3, 3);
+        return "[Gather] hotspot loop fixtures: " + (ok ? "pass" : "FAIL") + " (not a live movement test)";
+    }
     private static volatile bool _running;
     private static volatile bool _stop;
     private static readonly Dictionary<WowBGuid, int> Retry = new Dictionary<WowBGuid, int>();
@@ -413,7 +429,7 @@ internal static class GatherRunner
     private static void Run(List<RoutePoint> points)
     {
         var mover = new ClickAimMover { QuietKeyStop = true };
-        int index = 0, failures = 0;
+        int index = 0, failures = 0, fastHotspots = 0;
         try
         {
             IntPtr hwnd = ObjectManager.Wow?.WindowHandle ?? IntPtr.Zero;
@@ -443,6 +459,7 @@ internal static class GatherRunner
                 }
                 if (fighting)
                 {
+                    fastHotspots = 0;
                     ClickAimKeySteer.ReleaseHeld();
                     try { mover.MoveStop(); } catch { }
                     string defence = GrindRunner.DefendGatherer(hwnd);
@@ -450,7 +467,7 @@ internal static class GatherRunner
                     ClickAimAbort.Wait(1000); continue;
                 }
                 string rest = GrindRunner.RestForGather(hwnd);
-                if (rest.Length > 0) Logging.Write("[Gather] " + rest);
+                if (rest.Length > 0) { fastHotspots = 0; Logging.Write("[Gather] " + rest); }
                 if (_stop || ClickAimAbort.Requested) break;
                 // Re-check combat after a meal or a slow state read, before moving.
                 if (!GrindRunner.TryReadGatherCombat(out fighting) || fighting) continue;
@@ -462,15 +479,34 @@ internal static class GatherRunner
                     if (IsBlackspot(next.X, next.Y))
                     {
                         Logging.Write("[Gather] hotspot lies inside a profile blackspot; skipping it");
-                        index++; ClickAimAbort.Wait(1000); continue;
+                        index = (index + 1) % points.Count;
+                        fastHotspots = 0;
+                        ClickAimAbort.Wait(1000);
+                        continue;
                     }
+                    int startedHotspot = Environment.TickCount;
                     bool walked = Walk(mover, next, true);
                     if (_stop || ClickAimAbort.Requested) break;
-                    if (RouteRunner.LastRunInterrupted) continue;
-                    if (walked) { index++; failures = 0; ClickAimAbort.Wait(500); }
-                    else if (++failures >= 3) { Logging.Write("[Gather] three mesh leg failures; stopping"); break; }
+                    if (RouteRunner.LastRunInterrupted) { fastHotspots = 0; continue; }
+                    if (walked)
+                    {
+                        index = (index + 1) % points.Count;
+                        failures = 0;
+                        if (unchecked(Environment.TickCount - startedHotspot) < FastHotspotMs)
+                        {
+                            if (ShouldPauseHotspotLoop(++fastHotspots, points.Count))
+                            { fastHotspots = 0; ClickAimAbort.Wait(HotspotLoopPauseMs); }
+                        }
+                        else fastHotspots = 0;
+                    }
+                    else
+                    {
+                        fastHotspots = 0;
+                        if (++failures >= 3) { Logging.Write("[Gather] three mesh leg failures; stopping"); break; }
+                    }
                     continue;
                 }
+                fastHotspots = 0;
                 if (!Ready(node)) continue;
                 // An interrupted leg may have left a stale observation; refresh position and range.
                 if (!GatherNodeScanner.TryCapture(SearchYd, out List<GatherNodeScanner.Node> current)) continue;

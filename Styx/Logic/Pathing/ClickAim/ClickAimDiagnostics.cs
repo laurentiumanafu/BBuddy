@@ -398,6 +398,9 @@ public static class ClickAimDiagnostics
         try { Logging.Write(GatherNodeScanner.SelfTest()); }
         catch (Exception ex) { Logging.Write("[Gather] node scanner self-test threw: " + ex.Message); }
 
+        try { Logging.Write(GatherRunner.HotspotSelfTest()); }
+        catch (Exception ex) { Logging.Write("[Gather] hotspot self-test threw: " + ex.Message); }
+
         try { Logging.Write(GatherInteraction.SelfTest()); }
         catch (Exception ex) { Logging.Write("[Gather] hover self-test threw: " + ex.Message); }
 
