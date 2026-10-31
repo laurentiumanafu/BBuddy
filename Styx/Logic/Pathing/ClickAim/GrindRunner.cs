@@ -2698,7 +2698,9 @@ internal static class GrindRunner
                     Thread.Sleep(TabSettleMs);
 
                     WowBWorldSnapshot? verdictSnap;
-                    WowBObservedUnit verdictUnit;
+                    /* Initialised, not just declared: "&&" short-circuits, so the compiler cannot
+                     * promise the out-parameter was ever written when the first test fails. */
+                    WowBObservedUnit verdictUnit = default(WowBObservedUnit);
                     bool offered = Capture(out verdictSnap) && verdictSnap != null
                                    && verdictSnap.TryGetSelectedTarget(out verdictUnit);
                     int offeredHealth = offered ? Health(verdictUnit) : 0;
