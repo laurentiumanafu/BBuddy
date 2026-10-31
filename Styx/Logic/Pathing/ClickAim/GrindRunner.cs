@@ -2868,26 +2868,67 @@ internal static class GrindRunner
         ClickAimSettings.Load();
     }
 
+    // Proximity is a heuristic, not attacker identity or hostility proof. Never chase
+    // a remote TAB pick while a nearby NPC is hitting the character.
+    private const double GatherDefenceRadius = 12.0;
+
     internal static string DefendGatherer(IntPtr hwnd)
     {
         if (_stop || ClickAimAbort.Requested || !TryReadGatherCombat(out bool fighting) || !fighting) return "";
         WowBReader? reader = ObjectManager.WowB;
-        if (reader == null) return "cannot read a target";
-        WowBGuid before = reader.ReadTargetGuid();
-        ClickAimInput.TapKey(hwnd, TabVk, 40);
-        if (ClickAimAbort.Wait(TabSettleMs)) return "stopped";
-        if (!TryReadGatherCombat(out fighting) || !fighting) return "combat ended or state unreadable";
-        if (!Capture(out WowBWorldSnapshot? snap) || snap == null || !snap.TryGetLocalPlayer(out WowBObservedUnit me)
-            || !snap.TryGetSelectedTarget(out WowBObservedUnit target) || target.Guid == before
-            || target.IsLocalPlayer || target.HasPlayerVtable
-            || !reader.TryGetUnitFields(target.UnitAddress, out WowBReader.WowBUnitFields fields)
-            || fields.Health == 0 || (fields.UnitFlags & NotAFightFlag) != 0
-            || ClickAimMath.Len(target.Location.X - me.Location.X, target.Location.Y - me.Location.Y) > TabReachYd)
-            return "TAB did not change to a live nearby NPC; holding position";
-        Logging.Write("[Gather] combat detected; using Grind rotation on TAB's selected NPC " + target.Guid
-            + ". TAB does not establish whether it is the attacker.");
-        try { return Fight(hwnd, me.Location.X, me.Location.Y, false, true, target.Guid); }
-        finally { ClickAimKeySteer.ReleaseHeld(); }
+        if (reader == null || !Capture(out WowBWorldSnapshot? snap) || snap == null
+            || !snap.TryGetLocalPlayer(out WowBObservedUnit player)) return "cannot read nearby units";
+        var nearby = new List<WowBObservedUnit>();
+        foreach (WowBObservedUnit unit in snap.Units)
+        {
+            if (unit.IsLocalPlayer || unit.HasPlayerVtable || unit.Guid.IsEmpty) continue;
+            double d = ClickAimMath.Len(unit.Location.X - player.Location.X, unit.Location.Y - player.Location.Y);
+            if (d > GatherDefenceRadius) continue;
+            if (!reader.TryGetUnitFields(unit.UnitAddress, out WowBReader.WowBUnitFields fields)
+                || fields.Health == 0 || (fields.UnitFlags & NotAFightFlag) != 0) continue;
+            nearby.Add(unit);
+        }
+        nearby.Sort((a, b) => ClickAimMath.Len(a.Location.X - player.Location.X, a.Location.Y - player.Location.Y)
+            .CompareTo(ClickAimMath.Len(b.Location.X - player.Location.X, b.Location.Y - player.Location.Y)));
+        if (nearby.Count == 0) return "no live NPC within 12 yd; holding position (attacker may be ranged)";
+        int candidates = Math.Min(nearby.Count, 6);
+        for (int i = 0; i < candidates && !_stop && !ClickAimAbort.Requested; i++)
+        {
+            WowBObservedUnit candidate = nearby[i];
+            // Turning is only an aim for TAB. Pool proximity/flags do NOT prove hostility.
+            if (!ClickAimKeySteer.Face(candidate.Location.X, candidate.Location.Y, hwnd, 30.0, 6)) continue;
+            for (int tries = 0; tries < 3 && !_stop && !ClickAimAbort.Requested; tries++)
+            {
+                if (!TryReadGatherCombat(out fighting) || !fighting) return "combat ended or state unreadable";
+                WowBGuid before = reader.ReadTargetGuid();
+                if (before == candidate.Guid)
+                {
+                    // TAB may keep a pre-existing selection without validating it. As in
+                    // Grind's heal routine, try F1 (default select self) and VERIFY it
+                    // actually selected the player before using TAB as a fresh selection.
+                    ClickAimInput.TapKey(hwnd, 0x70, 40);
+                    if (ClickAimAbort.Wait(TabSettleMs)) return "stopped";
+                    before = reader.ReadTargetGuid();
+                    if (before != player.Guid) continue;
+                }
+                ClickAimInput.TapKey(hwnd, TabVk, 40);
+                if (ClickAimAbort.Wait(TabSettleMs)) return "stopped";
+                if (!TryReadGatherCombat(out fighting) || !fighting) return "combat ended or state unreadable";
+                if (!Capture(out snap) || snap == null || !snap.TryGetLocalPlayer(out player)
+                    || !snap.TryGetSelectedTarget(out WowBObservedUnit selected)
+                    || selected.Guid == before || selected.Guid != candidate.Guid
+                    || selected.IsLocalPlayer || selected.HasPlayerVtable
+                    || !reader.TryGetUnitFields(selected.UnitAddress, out WowBReader.WowBUnitFields current)
+                    || current.Health == 0 || (current.UnitFlags & NotAFightFlag) != 0
+                    || ClickAimMath.Len(selected.Location.X - player.Location.X, selected.Location.Y - player.Location.Y) > GatherDefenceRadius)
+                    continue;
+                Logging.Write("[Gather] combat: Grind rotation on nearby TAB-selected NPC " + selected.Guid
+                    + "; proximity and TAB do not prove it is the attacker");
+                try { return Fight(hwnd, player.Location.X, player.Location.Y, false, true, selected.Guid); }
+                finally { ClickAimKeySteer.ReleaseHeld(); }
+            }
+        }
+        return "no nearby candidate confirmed by a changed TAB selection; holding position";
     }
 
     private static bool InRealCombat()
@@ -3470,6 +3511,8 @@ internal static class GrindRunner
             WowBObservedUnit me;
             if (!snap.TryGetLocalPlayer(out me)) break;
             double d = ClickAimMath.Len(target.Location.X - me.Location.X, target.Location.Y - me.Location.Y);
+            if (defenceOnly && d > GatherDefenceRadius + 3.0)
+                return "defensive target moved more than 15 yd away; not chasing a distant unit";
 
             /* ---- the pool's target has to be settled by the client ----
              *
@@ -4142,6 +4185,7 @@ internal static class GrindRunner
         }
 
         ClickAimKeySteer.Release(hwnd);
+        if (_stop || ClickAimAbort.Requested) return "stopped";
 
         if (worked.Count > 0)
             return "gave up on the target after " + presses + " press(es) but "

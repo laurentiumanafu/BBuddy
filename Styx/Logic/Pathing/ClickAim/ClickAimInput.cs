@@ -153,20 +153,29 @@ internal static class ClickAimInput
         return true;
     }
 
-    // Only press the button if the caller still confirms the hovered object after
-    // the final mouse move. Always send button-up, including when Stop is pressed.
-    internal static bool ConfirmedRightClick(IntPtr hWnd, int dx, int dy, Func<bool> confirm)
+    // The caller has already posted the mouse move and verified its hover transition.
+    // Reposting WM_MOUSEMOVE here could invalidate that state before the final read.
+    // Always send button-up, including if Stop is pressed after button-down.
+    internal static bool ConfirmedRightClick(IntPtr hWnd, int x, int y, int expectedWidth,
+                                             int expectedHeight, Func<bool> confirm, out string reason)
     {
-        if (ClickAimAbort.Requested || !ClientSize(hWnd, out int w, out int h)) return false;
-        int x = w / 2 + dx, y = h / 2 + dy;
-        if (x <= 0 || x >= w - 1 || y <= 0 || y >= h - 1) return false;
-        if (!PostMessageInternal(hWnd, WM_MOUSEMOVE, IntPtr.Zero, Lp(x, y))) return false;
-        if (ClickAimAbort.Wait(100) || !confirm() || ClickAimAbort.Requested) return false;
+        reason = "stopped or client size changed";
+        if (ClickAimAbort.Requested || !ClientSize(hWnd, out int w, out int h)
+            || w != expectedWidth || h != expectedHeight || x <= 0 || x >= w - 1 || y <= 0 || y >= h - 1)
+            return false;
+        reason = "final validation rejected the click";
+        if (!confirm() || ClickAimAbort.Requested) return false;
+        reason = "client size changed during final validation";
+        if (!ClientSize(hWnd, out int finalWidth, out int finalHeight)
+            || finalWidth != expectedWidth || finalHeight != expectedHeight) return false;
+        reason = "posting right-button down failed";
         if (!PostMessageInternal(hWnd, WM_RBUTTONDOWN, new IntPtr(MK_RBUTTON), Lp(x, y))) return false;
         Thread.Sleep(45);
-        PostMessageInternal(hWnd, WM_RBUTTONUP, IntPtr.Zero, Lp(x, y));
+        bool up = PostMessageInternal(hWnd, WM_RBUTTONUP, IntPtr.Zero, Lp(x, y));
         Thread.Sleep(5);
-        PostMessageInternal(hWnd, WM_RBUTTONUP, IntPtr.Zero, Lp(x, y));
+        bool upAgain = PostMessageInternal(hWnd, WM_RBUTTONUP, IntPtr.Zero, Lp(x, y));
+        reason = up || upAgain ? "right-button messages posted" : "down posted, but both button-up posts failed";
+        // Even if button-up posting failed, a down was sent: callers must wait still.
         return true;
     }
 

@@ -221,3 +221,35 @@ bot will hold position rather than assume it is valid. Supervise testing; this
 is not reliable attacker-only defence. The combat candidate remains based on
 one observed idle/combat/idle sample. Previous paragraph describing manual-only
 defence was accurate for the earlier revision, not this one.
+
+## 19:14–19:17 gathering and defence follow-up
+
+The reported run found and approached copper, but the log said the final hover,
+reach, combat, cursor or click check failed; the old combined message did not
+identify which check. In that logged attempt the bot reported no right-button
+down, while the user observed a mining cast that was promptly interrupted.
+The exact source of that cast is not established by the log. A separate code
+hazard was found: the generic movement stop sends mouse button-up events, a
+centre left-click and a W key tap, including at the resource. The gather mover
+now uses key-release-only stops instead of this panic sequence; it still uses
+the normal key-steering calibration before a walk.
+
+The extra mouse-move immediately before the final hover check was removed;
+there is now a settle wait followed by separate diagnostic reasons and the
+same GUID recheck before button-down. After any attempted interaction, even if
+no down was posted, the gather loop remains still for six seconds unless Stop
+or combat intervenes. It re-scans and makes up to four attempts on a node that
+remains observed, then retries later rather than immediately suppressing it for
+90 seconds. Cast state and inventory/loot are not readable, so neither a sent
+click nor the wait or disappearance proves a successful gather. Nodes may
+require multiple hits; retries remain bounded to avoid getting stuck.
+
+In the combat report, TAB selected a level-7 NPC 28.8 yd away, not the nearby
+monster the user says was attacking. Defence now faces nearby pool candidates
+and only starts the Grind rotation when TAB changes to that same live NPC
+within 12 yd; it will not chase that target past 15 yd. If already selected,
+it uses Grind's default F1 self-target key and verifies self was selected before
+asking TAB again. **Proximity and TAB are heuristics, not attacker identity**;
+a different nearby hostile could still be attacked, a ranged attacker may be
+missed, and F1 must retain its default binding. The combat bit is provisional.
+These changes have not been validated on a live client.

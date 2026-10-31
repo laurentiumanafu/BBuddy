@@ -15,6 +15,10 @@ internal static class GatherRunner
     private const double SearchYd = 100.0;
     private const double InteractYd = 5.0;
     private const int RetryMs = 90000;
+    private const int InteractionRetryMs = 20000;
+    private const int MaxGatherAttempts = 4;
+    // Covers a 2.5 s mining cast plus time for the loot window / auto-loot.
+    private const int GatherHoldMs = 6000;
     private static volatile bool _running;
     private static volatile bool _stop;
     private static readonly Dictionary<WowBGuid, int> Retry = new Dictionary<WowBGuid, int>();
@@ -155,13 +159,86 @@ internal static class GatherRunner
         if (!RouteRunner.MeshReady()) { Logging.Write("[Gather] mesh navigation lost; refusing the leg"); return false; }
         RouteRunner.ShouldInterrupt = () => Interrupt(checkNodes);
         RouteRunner.PollInterruptDuringWalk = true;
+        RouteRunner.RequireMeshDuringSession = true;
         try { return RouteRunner.RunWithinSession(mover, new List<RoutePoint> { point }, 1); }
-        finally { RouteRunner.PollInterruptDuringWalk = false; RouteRunner.ShouldInterrupt = null; }
+        finally { RouteRunner.RequireMeshDuringSession = false; RouteRunner.PollInterruptDuringWalk = false; RouteRunner.ShouldInterrupt = null; }
+    }
+
+    // No movement, turns, stop-key taps or extra clicks while a cast may be running.
+    // A resource remaining in the pool can need another hit, or the attempt can have
+    // failed; neither proves success. Bound attempts and revisit rather than spin forever.
+    private static void GatherAtNode(IntPtr hwnd, GatherNodeScanner.Node node)
+    {
+        for (int attempt = 1; attempt <= MaxGatherAttempts && !_stop && !ClickAimAbort.Requested; attempt++)
+        {
+            if (!GrindRunner.TryReadGatherCombat(out bool fighting) || fighting)
+            {
+                _pending = node;
+                return;
+            }
+            Logging.Write("[Gather] hover search attempt " + attempt + "/" + MaxGatherAttempts
+                          + "; keep the real mouse still");
+            bool clicked = GatherInteraction.TryInteract(hwnd, node, out string reason);
+            Logging.Write(clicked ? "[Gather] node interaction: " + reason
+                                  : "[Gather] no right-button down sent: " + reason);
+            if (ClickAimAbort.Requested || _stop) return;
+            // Even an unconfirmed attempt may coincide with a manual or unexpected cast.
+            // Stay still for the entire window instead of scanning once and walking off.
+            Logging.Write("[Gather] holding still for 6 seconds for a possible cast and auto-loot; success is not yet known");
+            int started = Environment.TickCount;
+            bool unknownLogged = false;
+            while (true)
+            {
+                if (ClickAimAbort.Wait(250) || _stop) return;
+                if (!GrindRunner.TryReadGatherCombat(out fighting))
+                {
+                    if (!unknownLogged) Logging.Write("[Gather] combat state unreadable; continuing to hold still");
+                    unknownLogged = true;
+                    continue;
+                }
+                if (fighting)
+                {
+                    Logging.Write("[Gather] combat detected during cast wait; interrupting wait for defence");
+                    _pending = node;
+                    return;
+                }
+                if (unchecked(Environment.TickCount - started) >= GatherHoldMs) break;
+            }
+            if (!GatherNodeScanner.TryCapture(SearchYd, out List<GatherNodeScanner.Node> after))
+            {
+                Logging.Write("[Gather] post-attempt scan failed; result unknown, will retry later");
+                Retry[node.Guid] = unchecked(Environment.TickCount + InteractionRetryMs);
+                return;
+            }
+            bool observed = false;
+            foreach (var fresh in after)
+                if (fresh.Guid == node.Guid) { node = fresh; observed = true; break; }
+            if (!observed)
+            {
+                Logging.Write("[Gather] node no longer observed after the wait; loot was not independently verified");
+                Retry[node.Guid] = unchecked(Environment.TickCount + InteractionRetryMs);
+                return;
+            }
+            if (!Ready(node)) return;
+            if (node.Distance > InteractYd)
+            {
+                Logging.Write("[Gather] node still observed but out of reach; will approach again");
+                _pending = node;
+                return;
+            }
+            Logging.Write("[Gather] node still observed after attempt " + attempt
+                          + "; may need another hit or previous interaction may have failed");
+        }
+        if (!_stop && !ClickAimAbort.Requested)
+        {
+            Retry[node.Guid] = unchecked(Environment.TickCount + InteractionRetryMs);
+            Logging.Write("[Gather] attempt limit reached; will reconsider this node after 20 seconds");
+        }
     }
 
     private static void Run(List<RoutePoint> points)
     {
-        var mover = new ClickAimMover();
+        var mover = new ClickAimMover { QuietKeyStop = true };
         int index = 0, failures = 0;
         try
         {
@@ -232,40 +309,26 @@ internal static class GatherRunner
                 bool stillHere = false;
                 foreach (var fresh in nearby) if (fresh.Guid == node.Guid && Ready(fresh)) { node = fresh; stillHere = true; break; }
                 if (!stillHere) { Logging.Write("[Gather] node not observed in reach; no click sent"); Retry[node.Guid] = unchecked(Environment.TickCount + RetryMs); continue; }
-                if (!ClickAimKeySteer.Face(node.Position.X, node.Position.Y, hwnd, 20.0, 6)) { Retry[node.Guid] = unchecked(Environment.TickCount + RetryMs); continue; }
-                if (_stop || ClickAimAbort.Requested) break;
-                Logging.Write("[Gather] searching the viewport for the node's hover GUID; keep the real mouse still");
-                bool clicked = GatherInteraction.TryInteract(hwnd, node, out string interactionReason);
-                if (!clicked) Logging.Write("[Gather] no right-click sent: " + interactionReason);
-                else Logging.Write("[Gather] one confirmed-node right-click sent; watching for disappearance (not proof of loot)");
-                if (clicked)
-                {
-                    for (int i = 0; i < 20 && !_stop && !ClickAimAbort.Requested; i++)
-                    {
-                        if (ClickAimAbort.Wait(600)) break;
-                        if (!GrindRunner.TryReadGatherCombat(out bool attacked) || attacked) break;
-                        if (GatherNodeScanner.TryCapture(InteractYd, out List<GatherNodeScanner.Node> after))
-                        {
-                            bool present = false;
-                            foreach (var seen in after) if (seen.Guid == node.Guid) { present = true; break; }
-                            if (!present) { Logging.Write("[Gather] node no longer observed; loot was not independently verified"); break; }
-                        }
-                    }
-                }
-                // If combat interrupted a hover search, defend first and revisit the node.
-                if (!clicked && !ClickAimAbort.Requested
-                    && (!GrindRunner.TryReadGatherCombat(out bool nowFighting) || nowFighting))
+                if (!GrindRunner.TryReadGatherCombat(out bool combatBeforeFace) || combatBeforeFace)
                 {
                     _pending = node;
                     continue;
                 }
-                // Failed/unknown or still-present nodes must not pin the route. Revisit later.
-                Retry[node.Guid] = unchecked(Environment.TickCount + RetryMs);
+                if (!ClickAimKeySteer.Face(node.Position.X, node.Position.Y, hwnd, 20.0, 6))
+                {
+                    Logging.Write("[Gather] could not face node; will retry it later");
+                    Retry[node.Guid] = unchecked(Environment.TickCount + InteractionRetryMs);
+                    continue;
+                }
+                if (_stop || ClickAimAbort.Requested) break;
+                GatherAtNode(hwnd, node);
+
             }
         }
         catch (Exception ex) { Logging.Write("[Gather] stopped on error: " + ex.Message); }
         finally
         {
+            RouteRunner.RequireMeshDuringSession = false;
             RouteRunner.PollInterruptDuringWalk = false;
             RouteRunner.ShouldInterrupt = null;
             ClickAimKeySteer.ReleaseHeld();

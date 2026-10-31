@@ -347,6 +347,10 @@ public sealed class ClickAimMover : IPlayerMover
     /// <summary>True when movement is by facing + forward key rather than by clicking.</summary>
     public bool KeyMode { get { return _keyMode; } }
 
+    // Gather uses only key steering. Its stops must not click the centre or tap W:
+    // either input can start/interfere with an interaction at the character's feet.
+    internal bool QuietKeyStop { get; set; }
+
     public void MoveTowards(WoWPoint location)
     {
         lock (_gate)
@@ -426,7 +430,10 @@ public sealed class ClickAimMover : IPlayerMover
             IntPtr hwnd = Handle();
             // A held movement key is a runaway waiting to happen: release it first, always.
             ClickAimKeySteer.Release(hwnd);
-            if (hwnd != IntPtr.Zero) ClickAimInput.ReleaseAll(hwnd, StopKeyVk, 120);
+            if (QuietKeyStop)
+                ClickAimKeySteer.ReleaseArrows(hwnd);
+            else if (hwnd != IntPtr.Zero)
+                ClickAimInput.ReleaseAll(hwnd, StopKeyVk, 120);
             _phase = Phase.Idle;
             _bestRemaining = double.MaxValue;
         }

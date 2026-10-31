@@ -98,6 +98,8 @@ public static class RouteRunner
 
     // Opt-in for owners that need detection during a long individual segment.
     internal static bool PollInterruptDuringWalk;
+    // Gather uses a quiet key-only stop and must not fall back to an unsteerable click walk.
+    internal static bool RequireMeshDuringSession;
 
     /// <summary>True when the last <see cref="Run"/> was cut short by <see cref="ShouldInterrupt"/>.</summary>
     public static bool LastRunInterrupted;
@@ -121,6 +123,11 @@ public static class RouteRunner
         }
 
         bool mesh = MeshAvailable();
+        if (!mesh && RequireMeshDuringSession)
+        {
+            Logging.Write("[Route] mesh became unavailable; refusing this gather leg rather than click-walking");
+            return false;
+        }
         if (mesh)
         {
             Logging.Write("[Route] navmesh available: every leg is routed on the mmaps (Navigator.FindPath), then followed point by point");

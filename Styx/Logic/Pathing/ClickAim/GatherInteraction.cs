@@ -55,20 +55,31 @@ internal static class GatherInteraction
             if (!ClickAimInput.PostMouseMoveFraction(hwnd, x, y) || ClickAimAbort.Wait(350)) return false;
             if (!ReadHover(memory, out WowBGuid hover)) return false;
             if (hover != node.Guid) continue;
-            int dx = (int)Math.Round(x * (width - 1)) - width / 2;
-            int dy = (int)Math.Round(y * (height - 1)) - height / 2;
-            reason = "node matched, but final hover, reach, combat, cursor or click check failed";
-            bool sent = ClickAimInput.ConfirmedRightClick(hwnd, dx, dy, () =>
+            int pixelX = (int)Math.Round(x * (width - 1));
+            int pixelY = (int)Math.Round(y * (height - 1));
+            // The first GUID match may be transient. Let it settle, without posting
+            // another mouse move, then revalidate after all slower reads.
+            reason = "stopped while confirming hover";
+            if (ClickAimAbort.Wait(200)) return false;
+            string validation = "";
+            bool sent = ClickAimInput.ConfirmedRightClick(hwnd, pixelX, pixelY, width, height, () =>
             {
-                if (ObjectManager.Wow != memory || memory.WindowHandle != hwnd || !CursorStill(realX, realY)
-                    || !GrindRunner.TryReadGatherCombat(out bool fighting) || fighting
-                    || !GatherNodeScanner.TryCapture(5.0, out List<GatherNodeScanner.Node> fresh)) return false;
+                if (ObjectManager.Wow != memory || memory.WindowHandle != hwnd) { validation = "client changed"; return false; }
+                if (!CursorStill(realX, realY)) { validation = "real cursor moved"; return false; }
+                if (!GrindRunner.TryReadGatherCombat(out bool fighting)) { validation = "combat state unreadable"; return false; }
+                if (fighting) { validation = "combat detected"; return false; }
+                if (!GatherNodeScanner.TryCapture(5.0, out List<GatherNodeScanner.Node> fresh))
+                { validation = "final resource scan failed"; return false; }
                 bool present = false;
                 foreach (var item in fresh) if (item.Guid == node.Guid) { present = true; break; }
-                // Last read before button-down, after the potentially long pool scan.
-                return present && ReadHover(memory, out WowBGuid final) && final == node.Guid;
-            });
-            if (sent) reason = "right-click sent at confirmed hover GUID";
+                if (!present) { validation = "node not observed within 5 yd"; return false; }
+                if (!GrindRunner.TryReadGatherCombat(out fighting) || fighting) { validation = "combat detected or unreadable after node scan"; return false; }
+                if (!CursorStill(realX, realY)) { validation = "real cursor moved during validation"; return false; }
+                if (!ReadHover(memory, out WowBGuid final)) { validation = "final hover read failed"; return false; }
+                if (final != node.Guid) { validation = "final hover changed to " + final; return false; }
+                return true;
+            }, out string clickReason);
+            reason = validation.Length > 0 ? validation : clickReason;
             return sent;
         }
         reason = "node GUID was not found in the sampled central viewport";

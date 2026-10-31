@@ -117,7 +117,7 @@ internal static class ClickAimUi
             if (gatherPath.Length == 0) return "load a profile with hotspots first";
             if (!GatherRunner.Start(gatherPath)) return "GatherBuddy did not start; see the log";
             return "experimental GatherBuddy started. Set your professions in Gather settings; "
-                + "combat uses the Grind rotation on a TAB-selected NPC, whose attacker identity is unverified";
+                + "combat uses the Grind rotation on a nearby TAB-selected NPC; attacker identity remains unverified";
         }
 
         if (!string.Equals(botName, GrindBotName, StringComparison.OrdinalIgnoreCase))
