@@ -1841,8 +1841,12 @@ the gained mana so auto-attack is canceled - DPS is lost)."* Log `2026-10-31_134
 
 Every real mob in that log was selected by TAB or was the current selection; the one thing the pool
 fallback added was a friendly peon, and it cost twenty seconds of casting at something that cannot be
-damaged. The pool has no reaction word, so it cannot tell a peon from a wolf — and TAB, which can,
-had already said no. **The left-click pool fallback is gone.** TAB stays the only selector.
+damaged. The pool has no reaction word, so it cannot tell a peon from a wolf — and TAB, which can, had
+already said no.
+
+**First answer: the fallback was removed** (commit `64983cc`). **Second answer, on the user's
+instruction: it is back, with a verdict attached** — see "Move to it, then let TAB decide" at the end
+of this file.
 
 What replaces it is bookkeeping on TAB's own answer: a unit the pool can see **inside `TabReachYd`
 (45 yd — TAB has been seen to reach 48)** that TAB refuses twice, at least `TabMissSpacingMs` (5 s)
@@ -1884,3 +1888,49 @@ Three separate faults, all in the melee half of the rotation:
    The break now also requires `2 × MeleeSwingQuietMs` of no damage.
 
 Self-tests: `meleePressGraceExceedsSwing`, `tabReachInsideSearch` (replaces `poolSelectInsideSearch`).
+
+## Move to it, then let TAB decide
+
+User, on `64983cc`: *"OK I don't like this change. Make it so THAT it moves to the alive NPC AND if the
+HP stays full for 10 seconds and IT IS IN THE RANGE of TAB try to use TAB, if nothing is offered then
+it means the target is friendly or BLOCKED so ignore it and try a new target or go to the next hotspot
+if no target is found. OR we try to find the Factions OFFSET (if this doesn't work)."*
+
+So the pool selects again — it is the only way to reach a mob that is not in front of the character or
+further out than TAB — but a pool pick is now **on trial**:
+
+1. `TryEngage` step 3 left-clicks it (`FindUnitPixel`; success means the client's own target guid
+   answered with that unit), logs `TAB offered nothing live, so the pool was used: … it has 10 s
+   inside TAB's reach to prove itself`, and the fight starts — the fight walks to it, so this is the
+   "move to the monster" the user asked for.
+2. In `Fight`, for a target that did not come from TAB: the clock starts when the target is first
+   inside `TabReachYd` (45 yd) and only runs while **its health has not moved**. After `PoolVerifyMs`
+   (10 s, the user's number) the client is asked directly — one TAB.
+   - **nothing live offered** → the client does not treat it as an enemy (friendly NPC, or something
+     behind a wall). It goes into `_notViable` for the session (`it is ignored from now on and the
+     next target is taken`), so the scan goes clear and the hotspot finishes if there is nothing else.
+   - **the same unit** → it *is* an enemy: `TAB confirmed the pool's target is an enemy - the fight
+     carries on`.
+   - **a different live unit** → the client moved the selection; the fight stops and the loop
+     re-engages what TAB picked (`TAB skipped … and selected … instead`). Nothing is blacklisted on a
+     guess.
+3. A TAB-selected target is never doubted (no verdict), and one ask per fight is the limit.
+
+Together with the pause rule this means a peon costs at most: the walk to it, ten seconds in reach,
+one TAB, and then it is invisible for the rest of the run — and a wolf that TAB cannot see from the
+front is fought instead of walked past.
+
+**The faction offset hunt, in the same run.** Every engage now prints a second line:
+
+```
+[Grind] target words: +0x90: 00000000 … | +0x1AB0: … | +0x1E50: …
+```
+
+24 raw dwords covering the words the client's own attack predicate reads (+0x94, +0x1ABE bit 7,
++0x1E60 the flags, +0x1E64 bit 28, +0x1E68 bit 8 — `hunt/WOWB_70291_TRACE_FINDINGS.md`, 2026-10-13 and
+16:27). A wolf and a peon in one log, same shape: the word that differs is the reaction/faction
+answer, and once it is known the pool can pre-filter and the whole trial disappears.
+
+Self-tests: `poolVerifyWindow` (5 s ≤ PoolVerifyMs ≤ 15 s, and inside EngageTimeoutMs),
+`tabRefusePauseFitsVerify` (the pause is longer than the verdict window, the double-refusal spacing is
+shorter).

@@ -343,6 +343,28 @@ internal static class GrindRunner
     /// <summary>How long a unit TAB refused twice is left out of the scan.</summary>
     private const int TabRefusePauseMs = 60000;
 
+    /// <summary>Minimum spacing between two pool selections (a left-click search costs seconds).</summary>
+    private const int PoolSelectMs = 2500;
+
+    /// <summary>
+    /// How long a target the POOL picked may show no damage at all, while it is inside TAB's
+    /// reach, before the client is asked to settle it. This is the user's number: "if the HP
+    /// stays full for 10 seconds and it is in the range of TAB try to use TAB - if nothing is
+    /// offered then it means the target is friendly or BLOCKED, so ignore it and try a new target,
+    /// or go to the next hotspot if no target is found". A real mob loses health to the first
+    /// Shadow Bolt; a peon cannot lose health at all.
+    /// </summary>
+    private const int PoolVerifyMs = 10000;
+
+    private static int _lastPoolSelectMs;
+
+    /// <summary>
+    /// Pool units whose left-click selection failed. One miss is bad luck (the body can be behind
+    /// the character's own model for a frame); the second means it cannot be clicked from here and
+    /// it is set aside, so a hotspot can still become clear.
+    /// </summary>
+    private static readonly HashSet<WowBGuid> _poolMisses = new HashSet<WowBGuid>();
+
     /// <summary>Two refusals only count when they are this far apart (a real second look).</summary>
     private const int TabMissSpacingMs = 5000;
 
@@ -439,6 +461,8 @@ internal static class GrindRunner
         _notViable.Clear();
         _tabMisses.Clear();
         _tabRefusedUntil.Clear();
+        _poolMisses.Clear();
+        _lastPoolSelectMs = 0;
         _looted.Clear();
         _loots = 0;
         _lootProbed = false;
@@ -845,6 +869,11 @@ internal static class GrindRunner
         WowBObservedUnit target = default(WowBObservedUnit);
         bool have = false;
 
+        /* Whether this target came from the pool rather than from TAB. A pool pick is UNVERIFIED
+         * - the pool cannot tell a wolf from a peon - so the fight that takes it also has to
+         * settle it (see the TAB verdict in Fight). */
+        bool poolPick = false;
+
         /* What the pool says, before any key is pressed. A radius with nothing alive and
          * level-viable in it is the user's "if no monsters are around THEN move to next
          * hotspot", and answering it here is also what stops the eight-times-in-eight-seconds
@@ -925,24 +954,70 @@ internal static class GrindRunner
             have = true;
         }
 
-        /* ---- step 3: TAB said no, so believe it ----
+        /* ---- step 3: the pool, then let the client settle it ----
          *
-         * The 13:46 run had a pool fallback here: if TAB offered nothing, a left-click selected
-         * the nearest unit in the pool and the fight was tried on it. It found a real mob or two
-         * and then it found a friendly lazy peon and spent twenty seconds casting Shadow Bolt at
-         * it ("changed nothing in 3200 ms: mana 97 -> 132"), because the pool has no reaction
-         * word: it can say "something alive, level 4, 34 yd away" and not "a peon".
+         * TAB had nothing live to offer (it only looks in front, and only inside its own reach),
+         * but the pool says something alive and inside the level band is standing <nearestYd> yd
+         * away. Select it with a LEFT-click - a left-click selects and does nothing else, it is
+         * not an attack order and not a walk order - and report success only when the client's own
+         * target guid answers with that unit, so a probe that lands on the ground costs nothing
+         * but the probe.
          *
-         * So the fallback is gone. TAB is the client's own enemy filter and the only authority
-         * on who may be attacked; the pool keeps the jobs it is actually good at - deciding
-         * whether the area is clear, which way to face before asking TAB, and stopping the walk
-         * when something is standing beside the path.
+         * This is the user's rule: move to the alive thing, and if its health has not moved once
+         * it is inside TAB's reach, ask TAB. TAB not offering it means it is friendly or blocked,
+         * and then it is ignored for the session and the next target is taken - see the verdict in
+         * Fight. The 13:46 peon was found by exactly this fallback; what was missing was the
+         * verdict, not the fallback.
+         */
+        if (!have && haveNearest
+            && unchecked(Environment.TickCount - _lastPoolSelectMs) >= PoolSelectMs)
+        {
+            _lastPoolSelectMs = Environment.TickCount;
+
+            uint nearestLevel = 0;
+            Styx.WoWInternals.WowBReader? poolReader = ObjectManager.WowB;
+            Styx.WoWInternals.WowBReader.WowBUnitFields nearestFields;
+            if (poolReader != null && poolReader.TryGetUnitFields(nearest.UnitAddress, out nearestFields))
+                nearestLevel = nearestFields.Level;
+
+            int fx, fy;
+            string how;
+            bool selected = FindUnitPixel(hwnd, nearest, px, py, out fx, out fy, out how);
+            if (selected && Capture(out snap) && snap != null && snap.TryGetSelectedTarget(out target))
+            {
+                have = true;
+                poolPick = true;
+                Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                    "[Grind] TAB offered nothing live, so the pool was used: {0} is alive at {1:F1} yd "
+                    + "(level {2}) and the client selected it on a left-click at {3},{4} px - it has {5} s "
+                    + "inside TAB's reach to prove itself, or TAB will be asked about it",
+                    target.Guid, nearestYd, nearestLevel, fx, fy, PoolVerifyMs / 1000));
+            }
+            else
+            {
+                if (!_poolMisses.Add(nearest.Guid))
+                {
+                    _notViable.Add(nearest.Guid);
+                    if (_notViable.Count > 256) _notViable.Clear();
+                }
+                if (unchecked(Environment.TickCount - _poolQuietAt) > 15000)
+                {
+                    _poolQuietAt = Environment.TickCount;
+                    Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                        "[Grind] the pool has {0} alive at {1:F1} yd (level {2}) and the left-click search "
+                        + "could not put the cursor on it: {3}", nearest.Guid, nearestYd, nearestLevel,
+                        how));
+                }
+            }
+        }
+
+        /* ---- step 4: TAB said no twice, so leave that one out of the scan ----
          *
-         * What is left of the old "and if TAB is just being difficult" case is bookkeeping: a
-         * unit the pool can see INSIDE TAB's own reach that TAB keeps refusing is either a
-         * friend or something this character cannot attack, and after two refusals it is set
-         * aside for the session so a hotspot full of peons can finish. Beyond TAB's reach a
-         * refusal proves nothing, so nothing is recorded there. */
+         * A unit the pool can see INSIDE TAB's reach that TAB refuses twice, a few seconds apart,
+         * is either a friend or something this character cannot attack; it is left out of the scan
+         * for a minute so a hotspot holding nothing but friends can finish. It is a pause, not a
+         * blacklist: a mob at the edge of TAB's reach is refused for being far, not for being
+         * friendly, and it is asked about again later. */
         if (!have && haveNearest && nearestYd <= TabReachYd)
         {
             int lastMiss;
@@ -1082,7 +1157,7 @@ internal static class GrindRunner
         /* The fight presses the action bar and right-clicks the SELECTED target, and the
          * verdict comes from the mob's health and my own mana in memory. No Lua anywhere. */
         int fightStarted = Environment.TickCount;
-        report = Fight(hwnd, px, py);
+        report = Fight(hwnd, px, py, poolPick);
 
         /* A fight that ended inside a second and a half never pressed anything: it gave up
          * (or lost) immediately. Remember the target so the next iteration walks instead of
@@ -2461,7 +2536,7 @@ internal static class GrindRunner
     /// key did not cast and falls back to melee. Nothing here is reported as working
     /// because it was sent.
     /// </summary>
-    private static string Fight(IntPtr hwnd, double px, double py)
+    private static string Fight(IntPtr hwnd, double px, double py, bool unverified)
     {
         int started = Environment.TickCount;
         int lastHealth = -1;
@@ -2492,6 +2567,14 @@ internal static class GrindRunner
         bool attackPressed = false;     // the Attack key has been pressed this fight
         int lastMeleeClickMs = 0;
         var worked = new List<string>();
+
+        /* Settling a target the pool picked (see TryEngage step 3). The rule is the user's: while
+         * the target's health has not moved, once it is inside TAB's reach, wait PoolVerifyMs and
+         * then ask TAB whether the client considers it an enemy at all. */
+        bool verifyAsked = false;
+        int inReachSince = 0;           // when the target first came inside TAB's reach
+        int lastHealthDropMs = started; // when its health last went down
+        int lastSeenHealth = -1;
 
         WowBWorldSnapshot? snap;
         WowBObservedUnit target;
@@ -2546,6 +2629,10 @@ internal static class GrindRunner
             targetWords,
             ClickAimCombat.Describe(bar)));
 
+        /* Raw words for the faction hunt, one line per engage. See AttackWords. */
+        string attackWords = AttackWords(target.UnitAddress);
+        if (attackWords.Length > 0) Logging.Write("[Grind] target words:" + attackWords);
+
         while (!_stop && unchecked(Environment.TickCount - started) < EngageTimeoutMs)
         {
             if (!Capture(out snap) || snap == null) break;
@@ -2570,6 +2657,74 @@ internal static class GrindRunner
             WowBObservedUnit me;
             if (!snap.TryGetLocalPlayer(out me)) break;
             double d = ClickAimMath.Len(target.Location.X - me.Location.X, target.Location.Y - me.Location.Y);
+
+            /* ---- the pool's target has to be settled by the client ----
+             *
+             * The pool cannot tell a wolf from a peon: both are "alive, level 4, full health". So a
+             * target that came from the pool is on trial. Nothing about it has been a fight - no
+             * damage on it - and it is close enough for TAB to have an opinion about, so after
+             * PoolVerifyMs (the user's ten seconds) the client is asked directly.
+             *
+             *   TAB offers nothing live  -> not an enemy (a friendly NPC, or something behind a
+             *                               wall): ignore it for the session and let the caller pick
+             *                               another target or walk to the next hotspot;
+             *   TAB offers it            -> it IS an enemy; the fight carries on;
+             *   TAB offers something else-> the client moved the selection; follow it, because
+             *                               that is the enemy it wants targeted.
+             *
+             * One ask per fight, and never for a target TAB itself selected. */
+            if (unverified && !verifyAsked)
+            {
+                int seen = Health(target);
+                if (seen >= 0 && lastSeenHealth >= 0 && seen < lastSeenHealth)
+                    lastHealthDropMs = Environment.TickCount;
+                if (seen >= 0) lastSeenHealth = seen;
+
+                if (inReachSince == 0 && d <= TabReachYd) inReachSince = Environment.TickCount;
+
+                if (inReachSince != 0
+                    && unchecked(Environment.TickCount - inReachSince) >= PoolVerifyMs
+                    && unchecked(Environment.TickCount - lastHealthDropMs) >= PoolVerifyMs)
+                {
+                    verifyAsked = true;
+                    WowBGuid asked = target.Guid;
+
+                    Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                        "[Grind] {0} has been in TAB's reach for {1} s at {2:F1} yd with no damage on it - "
+                        + "asking the client whether it is an enemy at all",
+                        asked, PoolVerifyMs / 1000, d));
+
+                    ClickAimInput.TapKey(hwnd, TabVk, 40);
+                    Thread.Sleep(TabSettleMs);
+
+                    WowBWorldSnapshot? verdictSnap;
+                    WowBObservedUnit verdictUnit;
+                    bool offered = Capture(out verdictSnap) && verdictSnap != null
+                                   && verdictSnap.TryGetSelectedTarget(out verdictUnit);
+                    int offeredHealth = offered ? Health(verdictUnit) : 0;
+
+                    if (!offered || offeredHealth == 0)
+                    {
+                        /* The user's rule, verbatim: nothing offered means friendly or blocked. */
+                        _notViable.Add(asked);
+                        if (_notViable.Count > 256) _notViable.Clear();
+                        return string.Format(CultureInfo.InvariantCulture,
+                            "TAB offered nothing for {0} after {1} s with its health untouched - the client "
+                            + "does not treat it as an enemy (friendly NPC or blocked), so it is ignored from "
+                            + "now on and the next target is taken", asked, PoolVerifyMs / 1000);
+                    }
+
+                    if (verdictUnit.Guid != asked)
+                    {
+                        Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                            "[Grind] TAB skipped {0} and selected {1} instead - taking the client's own pick",
+                            asked, verdictUnit.Guid));
+                        return "TAB skipped the pool's target - re-engaging what the client selected";
+                    }
+
+                    Logging.Write("[Grind] TAB confirmed the pool's target is an enemy - the fight carries on");
+                }
+            }
 
             /* ChaseYd is how far the fight will WALK to a target, never the distance at
              * which it gives up. The 16:46 run gave up 18 times in 20 s on mobs 21-39 yd
@@ -3161,6 +3316,41 @@ internal static class GrindRunner
     /// any unit, which is what "is this mob dying" needs, and it is the same 0x1E30 word the
     /// attach line has been printing as hp=75/95 since the max-health word was fixed.
     /// </summary>
+    /// <summary>
+    /// The raw words the client's own attack predicate inspects - object +0x94, +0x1ABE (bit 7),
+    /// +0x1E60 (the flags), +0x1E64 (bit 28), +0x1E68 (bit 8), per the 2026-10-13/16:27 hunt notes
+    /// in hunt/WOWB_70291_TRACE_FINDINGS.md - printed as hex next to the level and health of every
+    /// target the bot engages.
+    ///
+    /// This is the faction/reaction hunt, done with the only instrument available outside the
+    /// disassembler: a wolf and a friendly peon in one log, same line shape. The bot itself does
+    /// not act on any of these numbers - it cannot, none of them has a proven meaning - but the
+    /// word that separates a mob from a peon is the offset the whole "does it see monsters" question
+    /// is waiting on.
+    /// </summary>
+    private static string AttackWords(ulong unitAddress)
+    {
+        Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
+        if (reader == null || unitAddress == 0) return "";
+
+        ulong[] bases = { 0x90UL, 0x1AB0UL, 0x1E50UL };
+        var sb = new System.Text.StringBuilder();
+        for (int i = 0; i < bases.Length; i++)
+        {
+            uint[] words;
+            if (i > 0) sb.Append(" |");
+            sb.Append(" +0x").Append(bases[i].ToString("X", CultureInfo.InvariantCulture)).Append(':');
+            if (!reader.TryReadWords(unitAddress + bases[i], 8, out words))
+            {
+                sb.Append(" unreadable");
+                continue;
+            }
+            for (int w = 0; w < words.Length; w++)
+                sb.Append(' ').Append(words[w].ToString("X8", CultureInfo.InvariantCulture));
+        }
+        return sb.ToString();
+    }
+
     private static int Health(WowBObservedUnit unit)
     {
         Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
@@ -3341,6 +3531,15 @@ internal static class GrindRunner
              * further than that only the walk itself closes the distance. */
             check("tabReachInsideSearch", TabReachYd > ClickAimCombat.CasterRangeYd
                                            && TabReachYd < SearchYd);
+
+            /* The user's ten seconds for a pool target to prove itself, and it has to fit inside
+             * the time one fight is given in total - a peon must not outlast the fight. */
+            check("poolVerifyWindow", PoolVerifyMs >= 5000 && PoolVerifyMs <= 15000
+                                    && PoolVerifyMs < EngageTimeoutMs);
+
+            /* TAB's verdict comes before the scan gives up on a unit, not after. */
+            check("tabRefusePauseFitsVerify", TabRefusePauseMs > PoolVerifyMs
+                                            && TabMissSpacingMs < PoolVerifyMs);
             check("giveUpBeyondSearch", GiveUpYd > SearchYd);
 
             /* Melee reach sits inside the melee chase: a 5 yd ability is pressed from inside
