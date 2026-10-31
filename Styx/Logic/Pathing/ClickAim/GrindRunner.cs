@@ -96,15 +96,23 @@ internal static class GrindRunner
     private const uint InCombatFlag = 0x800;
 
     /// <summary>
-    /// <c>UnitFlags</c> bit 0x2. The client's own attack predicate - the function the
-    /// registered <c>UnitCanAttack</c> handler calls - tests bit 1 of the dword at object
-    /// +0x1E60 and returns false on the path that takes it (see hunt/WOWB_70291_TRACE_FINDINGS.md,
-    /// 16:27 "it also reads second object +0x1E60, testing bit 1"), and bit 1 is
-    /// UNIT_FLAG_NON_ATTACKABLE in every field layout this engine has used. It is used here as a
-    /// FILTER, never as proof: a unit carrying the bit is skipped, and a unit without it still
-    /// has to survive the fight before it counts as a monster.
+    /// <c>UnitFlags</c> bits that mean "this is not something to fight", read from the dword at
+    /// object +0x1E60:
+    ///
+    ///   0x2    NON_ATTACKABLE. The client's own attack predicate - the function the registered
+    ///          <c>UnitCanAttack</c> handler calls - tests bit 1 of +0x1E60 and returns false on
+    ///          the path that takes it (hunt/WOWB_70291_TRACE_FINDINGS.md, 16:27).
+    ///   0x100  IMMUNE_TO_PC  \  measured, not guessed: the 14:23 run dumped the same window for a
+    ///   0x200  IMMUNE_TO_NPC /  friendly lazy peon (level 4, hp 86/86) as flags 0x200 and for the
+    ///          scorpions it killed as flags 0x0, and the pool census in the same log lists a
+    ///          second "friend" as 0x300 - both immune bits. A unit carrying either bit cannot be
+    ///          damaged by this character, which is exactly what the fight spent twenty seconds
+    ///          proving at 1.3 yd.
+    ///
+    /// Used as a FILTER, never as proof: a unit carrying a bit is skipped, and a unit without one
+    /// still has to be an enemy that TAB agrees with before it counts.
     /// </summary>
-    private const uint NonAttackableFlag = 0x2;
+    private const uint NotAFightFlag = 0x2 | 0x100 | 0x200;
 
     /// <summary>
     /// Something worth fighting this close cuts a hotspot leg short. The 16:07 run walked
@@ -359,6 +367,14 @@ internal static class GrindRunner
     private static int _lastPoolSelectMs;
 
     /// <summary>
+    /// The unit the pool selected and the client has not confirmed yet. The 14:23 run re-engaged
+    /// the same peon four times through "going with the target already selected", and every
+    /// re-engage came back as a TAB-selected target - so it was never on trial again and the
+    /// verdict never ran. The trial belongs to the UNIT, not to the one fight that started it.
+    /// </summary>
+    private static WowBGuid _unverifiedGuid;
+
+    /// <summary>
     /// Pool units whose left-click selection failed. One miss is bad luck (the body can be behind
     /// the character's own model for a frame); the second means it cannot be clicked from here and
     /// it is set aside, so a hotspot can still become clear.
@@ -463,6 +479,7 @@ internal static class GrindRunner
         _tabRefusedUntil.Clear();
         _poolMisses.Clear();
         _lastPoolSelectMs = 0;
+        _unverifiedGuid = default(WowBGuid);
         _looted.Clear();
         _loots = 0;
         _lootProbed = false;
@@ -931,6 +948,8 @@ internal static class GrindRunner
         if (TryCurrentSelection(snap, selReader, px, py, out target))
         {
             have = true;
+            /* Still unproven if this is the unit the pool picked: see _unverifiedGuid. */
+            poolPick = !_unverifiedGuid.IsEmpty && target.Guid == _unverifiedGuid;
             Logging.Write(string.Format(CultureInfo.InvariantCulture,
                 "[Grind] going with the target already selected: {0} ({1:F1} yd)", target.Guid,
                 ClickAimMath.Len(target.Location.X - px, target.Location.Y - py)));
@@ -987,6 +1006,7 @@ internal static class GrindRunner
             {
                 have = true;
                 poolPick = true;
+                _unverifiedGuid = target.Guid;
                 Logging.Write(string.Format(CultureInfo.InvariantCulture,
                     "[Grind] TAB offered nothing live, so the pool was used: {0} is alive at {1:F1} yd "
                     + "(level {2}) and the client selected it on a left-click at {3},{4} px - it has {5} s "
@@ -1212,6 +1232,21 @@ internal static class GrindRunner
         Styx.WoWInternals.WowBReader.WowBUnitFields f;
         if (!reader.TryGetUnitFields(target.UnitAddress, out f)) return false;
         if (f.Health == 0) return false;
+
+        /* A unit the flags say cannot be fought is not a target, whoever selected it. The 14:23
+         * peon sat at 1.3 yd with 0x200 on it and was taken as "the target already selected" four
+         * fights in a row. */
+        if ((f.UnitFlags & NotAFightFlag) != 0) return false;
+
+        /* A unit this run has already given up on must not come back through the selection.
+         * The 14:23 run is that bug: the fight refused the friendly peon four times in a row -
+         * "giving up on ... for this session" then "going with the target already selected",
+         * 1.3 yd, forever - because the refusal list was only consulted for pool picks. */
+        if (_notViable.Contains(target.Guid)) return false;
+        int refusedUntil;
+        if (_tabRefusedUntil.TryGetValue(target.Guid, out refusedUntil)
+            && unchecked(Environment.TickCount - refusedUntil) < 0)
+            return false;
 
         double d = ClickAimMath.Len(target.Location.X - px, target.Location.Y - py);
         return d <= PullYd;
@@ -2164,7 +2199,7 @@ internal static class GrindRunner
             }
 
             if (f.Health == 0) continue;                       // a corpse is not a monster
-            if ((f.UnitFlags & NonAttackableFlag) != 0) continue;
+            if ((f.UnitFlags & NotAFightFlag) != 0) continue;
             if (!LevelViable(f.Level, myLevel)) continue;
 
             live++;
@@ -2661,71 +2696,101 @@ internal static class GrindRunner
             /* ---- the pool's target has to be settled by the client ----
              *
              * The pool cannot tell a wolf from a peon: both are "alive, level 4, full health". So a
-             * target that came from the pool is on trial. Nothing about it has been a fight - no
-             * damage on it - and it is close enough for TAB to have an opinion about, so after
-             * PoolVerifyMs (the user's ten seconds) the client is asked directly.
+             * target that came from the pool is on trial, and the clock starts when it first comes
+             * inside TAB's reach and runs while nothing happens to it.
              *
-             *   TAB offers nothing live  -> not an enemy (a friendly NPC, or something behind a
-             *                               wall): ignore it for the session and let the caller pick
-             *                               another target or walk to the next hotspot;
-             *   TAB offers it            -> it IS an enemy; the fight carries on;
-             *   TAB offers something else-> the client moved the selection; follow it, because
-             *                               that is the enemy it wants targeted.
+             * The user's rule was "ask TAB, and if nothing is offered it is friendly". The 14:23
+             * run showed why that alone does not work: TAB on an already-selected unit KEEPS that
+             * unit, so the peon came back as "confirmed". So the ask stays, but it only counts when
+             * TAB actually moves - and the real verdict is the client's own combat state:
              *
-             * One ask per fight, and never for a target TAB itself selected. */
-            if (unverified && !verifyAsked)
+             *   TAB moved to another live unit -> take it, it is the enemy the client wants;
+             *   TAB offered nothing at all    -> friendly or blocked, ignore it;
+             *   TAB kept the same unit        -> says nothing, fall through to the combat test;
+             *
+             *   and, whatever TAB said: no damage on the target for PoolVerifyMs, Attack pressed
+             *   at arm's length more than MeleeSwingQuietMs ago, and the character is NOT in combat
+             *   -> the client never started a fight. That is a friendly NPC or something behind a
+             *   wall either way, and it is dropped. */
+            if (unverified)
             {
                 int seen = Health(target);
                 if (seen >= 0 && lastSeenHealth >= 0 && seen < lastSeenHealth)
+                {
+                    /* Damage on it is the proof the pool could not give: it is a fight. */
                     lastHealthDropMs = Environment.TickCount;
+                    if (!_unverifiedGuid.IsEmpty && _unverifiedGuid == target.Guid)
+                    {
+                        _unverifiedGuid = default(WowBGuid);
+                        Logging.Write("[Grind] the pool's target is confirmed by landing damage on it");
+                    }
+                }
                 if (seen >= 0) lastSeenHealth = seen;
 
                 if (inReachSince == 0 && d <= TabReachYd) inReachSince = Environment.TickCount;
+            }
 
-                if (inReachSince != 0
-                    && unchecked(Environment.TickCount - inReachSince) >= PoolVerifyMs
-                    && unchecked(Environment.TickCount - lastHealthDropMs) >= PoolVerifyMs)
+            if (unverified && !verifyAsked && inReachSince != 0
+                && unchecked(Environment.TickCount - inReachSince) >= PoolVerifyMs
+                && unchecked(Environment.TickCount - lastHealthDropMs) >= PoolVerifyMs)
+            {
+                verifyAsked = true;
+                WowBGuid asked = target.Guid;
+
+                Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                    "[Grind] {0} has been in TAB's reach for {1} s at {2:F1} yd with no damage on it - "
+                    + "asking the client whether it is an enemy at all",
+                    asked, PoolVerifyMs / 1000, d));
+
+                ClickAimInput.TapKey(hwnd, TabVk, 40);
+                Thread.Sleep(TabSettleMs);
+
+                WowBWorldSnapshot? verdictSnap;
+                WowBObservedUnit verdictUnit = default(WowBObservedUnit);
+                bool offered = Capture(out verdictSnap) && verdictSnap != null
+                               && verdictSnap.TryGetSelectedTarget(out verdictUnit);
+                int offeredHealth = offered ? Health(verdictUnit) : 0;
+
+                if (!offered || offeredHealth == 0)
                 {
-                    verifyAsked = true;
-                    WowBGuid asked = target.Guid;
-
-                    Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                        "[Grind] {0} has been in TAB's reach for {1} s at {2:F1} yd with no damage on it - "
-                        + "asking the client whether it is an enemy at all",
-                        asked, PoolVerifyMs / 1000, d));
-
-                    ClickAimInput.TapKey(hwnd, TabVk, 40);
-                    Thread.Sleep(TabSettleMs);
-
-                    WowBWorldSnapshot? verdictSnap;
-                    /* Initialised, not just declared: "&&" short-circuits, so the compiler cannot
-                     * promise the out-parameter was ever written when the first test fails. */
-                    WowBObservedUnit verdictUnit = default(WowBObservedUnit);
-                    bool offered = Capture(out verdictSnap) && verdictSnap != null
-                                   && verdictSnap.TryGetSelectedTarget(out verdictUnit);
-                    int offeredHealth = offered ? Health(verdictUnit) : 0;
-
-                    if (!offered || offeredHealth == 0)
-                    {
-                        /* The user's rule, verbatim: nothing offered means friendly or blocked. */
-                        _notViable.Add(asked);
-                        if (_notViable.Count > 256) _notViable.Clear();
-                        return string.Format(CultureInfo.InvariantCulture,
-                            "TAB offered nothing for {0} after {1} s with its health untouched - the client "
-                            + "does not treat it as an enemy (friendly NPC or blocked), so it is ignored from "
-                            + "now on and the next target is taken", asked, PoolVerifyMs / 1000);
-                    }
-
-                    if (verdictUnit.Guid != asked)
-                    {
-                        Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                            "[Grind] TAB skipped {0} and selected {1} instead - taking the client's own pick",
-                            asked, verdictUnit.Guid));
-                        return "TAB skipped the pool's target - re-engaging what the client selected";
-                    }
-
-                    Logging.Write("[Grind] TAB confirmed the pool's target is an enemy - the fight carries on");
+                    _notViable.Add(asked);
+                    if (_notViable.Count > 256) _notViable.Clear();
+                    return string.Format(CultureInfo.InvariantCulture,
+                        "TAB offered nothing for {0} after {1} s with its health untouched - the client "
+                        + "does not treat it as an enemy (friendly NPC or blocked), so it is ignored from "
+                        + "now on and the next target is taken", asked, PoolVerifyMs / 1000);
                 }
+
+                if (verdictUnit.Guid != asked)
+                {
+                    Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                        "[Grind] TAB moved off {0} and selected {1} instead - taking the client's own pick",
+                        asked, verdictUnit.Guid));
+                    return "TAB moved off the pool's target - re-engaging what the client selected";
+                }
+
+                Logging.Write("[Grind] TAB kept the same target, which proves nothing on this client - "
+                            + "the verdict is whether a fight starts at all");
+            }
+
+            /* The combat verdict. It runs a few seconds after the TAB ask, because a press of
+             * Attack needs MeleeSwingQuietMs to prove itself - and on a friendly NPC it never does.
+             * The 14:23 peon sat at 1.3 yd with Attack pressed and the character never entered
+             * combat; a scorpion enters combat on the first swing. */
+            if (unverified && inReachSince != 0
+                && unchecked(Environment.TickCount - lastHealthDropMs) >= PoolVerifyMs
+                && lastAttackPressMs != 0
+                && unchecked(Environment.TickCount - lastAttackPressMs) >= MeleeSwingQuietMs
+                && !PlayerInCombat())
+            {
+                WowBGuid dead = target.Guid;
+                _notViable.Add(dead);
+                if (_notViable.Count > 256) _notViable.Clear();
+                return string.Format(CultureInfo.InvariantCulture,
+                    "{0} has taken no damage for {1} s, Attack was pressed at arm's length and the client "
+                    + "never put the character in combat - it is not something this character can fight "
+                    + "(friendly NPC, or blocked); ignoring it and taking the next target",
+                    dead, PoolVerifyMs / 1000);
             }
 
             /* ChaseYd is how far the fight will WALK to a target, never the distance at
@@ -3292,7 +3357,7 @@ internal static class GrindRunner
              * waiting, and a level-3 swing lands every 3.5 s. The 13:48 run gave up on a mob at
              * 25 health mid-swing, re-engaged it 0.3 s later and killed it, which is one wasted
              * decide. So a break also needs twice MeleeSwingQuietMs of real silence. */
-            if (++quietRounds >= 12
+            if (!unverified && ++quietRounds >= 12
                 && unchecked(Environment.TickCount - lastMeleeDamageMs) >= MeleeSwingQuietMs * 2)
                 break;
         }
@@ -3538,6 +3603,12 @@ internal static class GrindRunner
              * the time one fight is given in total - a peon must not outlast the fight. */
             check("poolVerifyWindow", PoolVerifyMs >= 5000 && PoolVerifyMs <= 15000
                                     && PoolVerifyMs < EngageTimeoutMs);
+
+            /* The flags that mean "not something to fight", each measured against a real peon
+             * (0x200/0x300) and real scorpions (0x0) in the 14:23 log. */
+            check("notAFightMask", (NotAFightFlag & 0x2) != 0
+                                && (NotAFightFlag & 0x100) != 0
+                                && (NotAFightFlag & 0x200) != 0);
 
             /* TAB's verdict comes before the scan gives up on a unit, not after. */
             check("tabRefusePauseFitsVerify", TabRefusePauseMs > PoolVerifyMs

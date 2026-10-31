@@ -1934,3 +1934,62 @@ answer, and once it is known the pool can pre-filter and the whole trial disappe
 Self-tests: `poolVerifyWindow` (5 s ≤ PoolVerifyMs ≤ 15 s, and inside EngageTimeoutMs),
 `tabRefusePauseFitsVerify` (the pause is longer than the verdict window, the double-refusal spacing is
 shorter).
+
+## The 14:23 run: the peon on trial, and the offset that gave it away
+
+User: *"It tried to engage the Peon BUT didn't try another target after 10 seconds."* — plus two word
+dumps, one for the peon and one for a scorpion it killed cleanly.
+
+### The offset
+
+Same window, two units, base +0x1E50:
+
+```
+peon      (level 4, hp 86/86)  +0x1E50: 00000004 00000000 CECECE00 0000001D 00000200 00000800 00000010 00000000
+scorpion  (level 3, hp 71/71)  +0x1E50: 00000003 00000000 CECECE00 00000007 00000000 00000800 00000000 00000000
+```
+
+| word | peon | scorpion | read as |
+| --- | --- | --- | --- |
+| +0x1E50 | 4 | 3 | level (0x1E40 does not lie either) |
+| +0x1E5C | 0x1D | 0x07 | unknown, next candidate |
+| **+0x1E60** | **0x200** | **0x000** | **UnitFlags** — the answer |
+| +0x1E64 | 0x800 | 0x800 | identical, so not it |
+| +0x1E68 | 0x10 | 0x00 | candidate, needs a second friendly |
+
+`0x200` is IMMUNE_TO_NPC and `0x100` is IMMUNE_TO_PC; the run's own pool census lists a second
+friendly as **0x300** (both bits). The scorpions are `0x0`. So `NotAFightFlag = 0x2 | 0x100 | 0x200`
+(+0x1E60) is now a hard filter in the scan and in "the target already selected" — a peon is not even
+a candidate, and a unit carrying an immune bit is never fought however it got selected. `0x1E68 = 0x10`
+and `0x1E5C` stay in the log lines as the next candidates if a friendly ever shows with clean flags.
+
+### Why the ten seconds did not settle it
+
+```
+14:23:20.905 …asking the client whether it is an enemy at all
+14:23:21.198 TAB confirmed the pool's target is an enemy - the fight carries on     <- wrong
+```
+
+TAB on an already-selected unit **keeps that unit**: it has nothing else to move to, so "same GUID
+back" proves nothing. The verdict is now the client's own combat state instead:
+
+1. TAB moved to *another* live unit → take it, that is the enemy the client wants;
+2. TAB offered *nothing at all* → friendly or blocked, ignore it;
+3. TAB kept the same unit → inconclusive, and the real test runs: no damage on it for `PoolVerifyMs`,
+   Attack pressed at arm's length more than `MeleeSwingQuietMs` ago, and **the character is not in
+   combat** → the client never started a fight, so it is not something this character can fight.
+
+Damage on the target is the proof that ends the trial early (`the pool's target is confirmed by
+landing damage on it`).
+
+Two more fixes from the same log:
+
+- **The trial is attached to the unit, not to the fight** (`_unverifiedGuid`). The peon was re-engaged
+  four times through `going with the target already selected`, and each re-engage looked like a
+  TAB-selected target, so the verdict never ran again. It does now.
+- **A refused unit cannot come back through the selection**: `TryCurrentSelection` honours
+  `_notViable`, `_tabRefusedUntil` and `NotAFightFlag`. That was the four-times-in-a-row loop.
+- **The quiet-round brake no longer cuts an unproven target off** before the verdict can read the
+  combat state — the peon fight ended 0.6 s before the trial's own test would have run.
+
+Self-test: `notAFightMask`.
