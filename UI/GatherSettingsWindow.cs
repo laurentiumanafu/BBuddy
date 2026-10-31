@@ -16,15 +16,17 @@ namespace CopilotBuddy.UI
     {
         private readonly CheckBox _mining = new CheckBox { Content = "Mining", Margin = new Thickness(0, 8, 0, 4) };
         private readonly CheckBox _herbalism = new CheckBox { Content = "Herbalism", Margin = new Thickness(0, 8, 0, 4) };
+        private readonly CheckBox _grind = new CheckBox { Content = "Gather nearby resources while grinding", Margin = new Thickness(0, 10, 0, 4) };
         private readonly TextBox _miningSkill = new TextBox { Width = 90, HorizontalAlignment = HorizontalAlignment.Left };
         private readonly TextBox _herbSkill = new TextBox { Width = 90, HorizontalAlignment = HorizontalAlignment.Left };
 
         public GatherSettingsWindow()
         {
             GatherSettings.Load();
-            Title = "Gatherbuddy settings";
-            Width = 390; Height = 320; ResizeMode = ResizeMode.NoResize;
+            Title = "Gather settings";
+            Width = 420; Height = 400; ResizeMode = ResizeMode.NoResize;
             WindowStartupLocation = WindowStartupLocation.CenterOwner;
+            _grind.IsChecked = GatherSettings.GatherWhileGrinding;
             _mining.IsChecked = GatherSettings.Mining;
             _herbalism.IsChecked = GatherSettings.Herbalism;
             _miningSkill.Text = GatherSettings.MiningSkill.ToString(CultureInfo.InvariantCulture);
@@ -37,6 +39,8 @@ namespace CopilotBuddy.UI
             panel.Children.Add(_herbalism);
             panel.Children.Add(new TextBlock { Text = "Herbalism skill" });
             panel.Children.Add(_herbSkill);
+            panel.Children.Add(_grind);
+            panel.Children.Add(new TextBlock { Text = "Grind fights first. Gathering waits if combat or a nearby living NPC is detected; friendly NPCs can also block it because hostility is not known (100 yd).", TextWrapping = TextWrapping.Wrap });
             var save = new Button { Content = "Save", Width = 110, Height = 28, Margin = new Thickness(0, 12, 0, 0), HorizontalAlignment = HorizontalAlignment.Right };
             save.Click += SaveClick;
             panel.Children.Add(save);
@@ -54,6 +58,7 @@ namespace CopilotBuddy.UI
                 MessageBox.Show(this, "Select at least one profession and enter its skill (1–1000).", "Gatherbuddy", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
+            GatherSettings.GatherWhileGrinding = _grind.IsChecked == true;
             GatherSettings.Mining = _mining.IsChecked == true;
             GatherSettings.Herbalism = _herbalism.IsChecked == true;
             GatherSettings.MiningSkill = mining;

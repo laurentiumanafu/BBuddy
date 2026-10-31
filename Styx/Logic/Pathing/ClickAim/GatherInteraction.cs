@@ -70,7 +70,7 @@ internal static class GatherInteraction
     // hoverMiss is only set after the bounded grid search really failed to find the
     // node. Cursor/client/stop/read failures are NOT evidence of a depleted node.
     public static bool TryInteract(IntPtr hwnd, GatherNodeScanner.Node node,
-                                   Func<GatherNodeScanner.Node, bool> allowed,
+                                   Func<GatherNodeScanner.Node, bool> allowed, Func<bool>? extraSafety,
                                    out GatherNodeScanner.Node clickedNode, out string reason, out bool hoverMiss)
     {
         clickedNode = default;
@@ -102,6 +102,7 @@ internal static class GatherInteraction
         foreach (double baseX in xs)
         {
             if (ClickAimAbort.Requested) { reason = "Stop requested during hover search"; return false; }
+            if (extraSafety != null && !extraSafety()) { reason = "Grind safety check interrupted hover search"; return false; }
             if (ObjectManager.Wow != memory) { reason = "attached client changed during hover search"; return false; }
             if (memory.WindowHandle != hwnd) { reason = "game window handle changed during hover search"; return false; }
             if (!CursorStill(realX, realY, out reason)) return false;
@@ -170,6 +171,7 @@ internal static class GatherInteraction
                 }
                 if (!present) { validation = "eligible node not observed in reach near the intended resource"; return false; }
                 if (!GrindRunner.TryReadGatherCombat(out fighting) || fighting) { validation = "combat detected or unreadable after node scan"; return false; }
+                if (extraSafety != null && !extraSafety()) { validation = "Grind safety check failed before interaction"; return false; }
                 if (!CursorStill(realX, realY, out cursorReason)) { validation = cursorReason; return false; }
                 if (!ReadHover(memory, out WowBGuid final)) { validation = "final hover read failed"; return false; }
                 if (final != hoveredNode.Guid) { validation = "final hover changed to " + final; return false; }

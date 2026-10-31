@@ -10,6 +10,8 @@ internal static class GatherSettings
 {
     public static bool Mining = true;
     public static bool Herbalism;
+    // Opt-in: legacy settings files do not enable gathering during Grind.
+    public static bool GatherWhileGrinding;
     public static uint MiningSkill = 1;
     public static uint HerbalismSkill = 1;
     private static string PathName => System.IO.Path.Combine(
@@ -27,6 +29,7 @@ internal static class GatherSettings
                 string key = parts[0].Trim(), value = parts[1].Trim();
                 if (key == "Mining" && bool.TryParse(value, out bool m)) Mining = m;
                 else if (key == "Herbalism" && bool.TryParse(value, out bool h)) Herbalism = h;
+                else if (key == "GatherWhileGrinding" && bool.TryParse(value, out bool g)) GatherWhileGrinding = g;
                 else if (key == "MiningSkill" && uint.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out uint ms) && ms <= 1000) MiningSkill = ms;
                 else if (key == "HerbalismSkill" && uint.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out uint hs) && hs <= 1000) HerbalismSkill = hs;
             }
@@ -41,7 +44,8 @@ internal static class GatherSettings
             string path = PathName;
             Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path) ?? ".");
             File.WriteAllLines(path, new[] { "Mining=" + Mining, "MiningSkill=" + MiningSkill.ToString(CultureInfo.InvariantCulture),
-                "Herbalism=" + Herbalism, "HerbalismSkill=" + HerbalismSkill.ToString(CultureInfo.InvariantCulture) });
+                "Herbalism=" + Herbalism, "HerbalismSkill=" + HerbalismSkill.ToString(CultureInfo.InvariantCulture),
+                "GatherWhileGrinding=" + GatherWhileGrinding });
             return true;
         }
         catch (Exception ex) { Logging.Write("[Gather] cannot save settings: " + ex.Message); return false; }

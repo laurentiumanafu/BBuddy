@@ -354,3 +354,35 @@ the legacy 32-bit map heuristic remains unchanged. Navmesh pathing can
 still fail if the correct map has missing/outdated tiles or different terrain;
 a short straight key-steered fallback is not a mesh path. The new reader and
 routing behavior have not been validated against the live client.
+
+## Optional gathering while grinding
+
+Open **Gather & tools** under Settings, then **Gather settings**. The new
+**Gather nearby resources while grinding** checkbox is off by default and is
+saved with the manually configured professions and skill levels. It applies to
+70291 Grind sessions with a `<GrindArea>`; a plain hotspot-only profile is
+currently run as a one-shot route by the existing UI, not as the Grind loop.
+
+The Grind thread and mover remain in control; no second GatherBuddy loop is
+started. Combat and vendor requests take priority. Eligible nodes are searched
+within 100 yd before and during hotspot legs, using the same profession, skill,
+GUID, cooldown and profile-blackspot checks as GatherBuddy. A node detour uses
+the same mesh and exact-hover-confirmed interaction, and resumes the interrupted
+hotspot afterward. Before and during the detour, hover search, and cast wait,
+combat, Stop, vendor requests, client/map reads and nearby units are rechecked.
+
+The client has no verified hostility/reaction field. To honour “no monsters in
+range” without treating a friendly NPC as a confirmed monster, this option
+conservatively refuses to gather if *any* living non-player NPC is observed
+within 100 yd, or a nearby NPC's health is unreadable. Friendly or neutral
+NPCs and pets can therefore block gathering; snapshot coverage is non-atomic
+and does not prove the absence of a threat. The combat flag remains provisional.
+The option, the new panel, and their safety behavior require a Windows build and
+live verification; fixture checks are not proof of either.
+
+The subsequent `2026-10-31_2125_12804.log` reports client map 0, 23 nearby
+ground polygons and a successful 40-yd mesh probe; it also contains 21 logged
+mesh paths and 17 posted node interactions followed by those GUIDs no longer
+being observed. Two early hover attempts sent no button-down after desktop
+cursor coordinates changed, and a later retry posted the click. The user reports
+that the run harvested successfully; the log by itself does not verify loot.

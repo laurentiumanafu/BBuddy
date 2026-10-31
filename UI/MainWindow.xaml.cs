@@ -43,6 +43,7 @@ namespace CopilotBuddy.UI
         private const int MaxLogLines = 1000;
         private bool _isRunning;
         private DispatcherTimer? _infoTimer;
+        private ClickAimToolsWindow? _clickAimToolsWindow;
 
         /// <summary>
         /// True while the Start button is running the ClickAim grind loop instead of the
@@ -229,26 +230,7 @@ namespace CopilotBuddy.UI
                                 btnDevTools.ToolTip = "View a read-only WowB snapshot";
                                 btnDevTools.Visibility = Visibility.Visible;
                                 btnDevTools.IsEnabled = true;
-                                btnAimWalk.Visibility = Visibility.Visible;
-                                btnAimWalk.IsEnabled = true;
-                                btnAimHotspot.Visibility = Visibility.Visible;
-                                btnAimHotspot.IsEnabled = true;
-                                btnAimHotspots.Visibility = Visibility.Visible;
-                                btnAimHotspots.IsEnabled = true;
-                                btnAimPlanHotspots.Visibility = Visibility.Visible;
-                                btnAimPlanHotspots.IsEnabled = true;
-                                btnAimClearHotspots.Visibility = Visibility.Visible;
-                                btnAimClearHotspots.IsEnabled = true;
-                                btnAimOffsets.Visibility = Visibility.Visible;
-                                btnAimOffsets.IsEnabled = true;
-                                btnGatherProbe.Visibility = Visibility.Visible;
-                                btnGatherProbe.IsEnabled = true;
-                                btnCombatProbe.Visibility = Visibility.Visible;
-                                btnCombatProbe.IsEnabled = true;
-                                btnGatherHoverTest.Visibility = Visibility.Visible;
-                                btnGatherHoverTest.IsEnabled = true;
-                                btnGatherSettings.Visibility = Visibility.Visible;
-                                btnGatherSettings.IsEnabled = true;
+                                btnClickAimTools.IsEnabled = true;
 
                                 /* Enable the three controls that do something on this client.
                                  * Everything else stays as ToggleButtons(false) left it, because
@@ -1405,6 +1387,27 @@ namespace CopilotBuddy.UI
                 System.Windows.MessageBox.Show(this, "The combat settings window could not open: " + ex.Message,
                                 "Combat settings", MessageBoxButton.OK, MessageBoxImage.Warning);
             }
+        }
+
+        private void btnClickAimTools_Click(object sender, RoutedEventArgs e)
+        {
+            if (_clickAimToolsWindow != null) { _clickAimToolsWindow.Activate(); return; }
+            var window = new ClickAimToolsWindow(new (string Label, string Tip, Action Action)[]
+            {
+                ("Gather settings", "Configure professions, skills and gathering while grinding", () => btnGatherSettings_Click(this, new RoutedEventArgs())),
+                ("Gather hover test", "Test hover tracking without clicking", () => btnGatherHoverTest_Click(this, new RoutedEventArgs())),
+                ("Combat probe", "Compare idle and combat memory samples", () => btnCombatProbe_Click(this, new RoutedEventArgs())),
+                ("Gather probe", "Inspect a hovered herb or ore", () => btnGatherProbe_Click(this, new RoutedEventArgs())),
+                ("Add hotspot", "Remember your current position as a hotspot", () => btnAimHotspot_Click(this, new RoutedEventArgs())),
+                ("Walk hotspots", "Walk the captured hotspots", () => btnAimHotspots_Click(this, new RoutedEventArgs())),
+                ("Plan hotspots", "Plan routes without walking", () => btnAimPlanHotspots_Click(this, new RoutedEventArgs())),
+                ("Clear hotspots", "Empty the captured hotspot list", () => btnAimClearHotspots_Click(this, new RoutedEventArgs())),
+                ("Offsets", "Print the client offsets", () => btnAimOffsets_Click(this, new RoutedEventArgs())),
+                ("ClickAim 40 yd", "Walk 40 yards ahead", () => btnAimWalk_Click(this, new RoutedEventArgs()))
+            }) { Owner = this };
+            _clickAimToolsWindow = window;
+            window.Closed += (closedSender, closedArgs) => _clickAimToolsWindow = null;
+            window.Show();
         }
 
         private void btnGatherSettings_Click(object sender, RoutedEventArgs e)

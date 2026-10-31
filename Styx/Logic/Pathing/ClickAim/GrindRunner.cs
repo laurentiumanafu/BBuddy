@@ -544,16 +544,17 @@ internal static class GrindRunner
 
         _stop = false;
         ClickAimAbort.Clear();
+        RouteRunner.StopRequested = false;
         _running = true;
 
-        var thread = new Thread(() => Run(areas, minutes));
+        var thread = new Thread(() => Run(areas, minutes, profilePath));
         thread.IsBackground = true;
         thread.Name = "ClickAimGrind";
         thread.Start();
         return true;
     }
 
-    private static void Run(List<ProfileGrindArea> areas, int minutes)
+    private static void Run(List<ProfileGrindArea> areas, int minutes, string profilePath)
     {
         int started = Environment.TickCount;
         int budgetMs = minutes <= 0 ? int.MaxValue : minutes * 60000;
@@ -601,6 +602,7 @@ internal static class GrindRunner
         _sellClicks = 0;
         _unreachableUntil.Clear();
         _realCombatQuietAt = 0;
+        bool gatherDuringGrind = !_stop && !ClickAimAbort.Requested && GatherRunner.PrepareForGrind(profilePath);
 
         /* What the client can be asked without Lua: level, health, the stored action bar
          * and what is standing around. It is printed once because it is the answer to
@@ -717,6 +719,10 @@ internal static class GrindRunner
                 string rested = RestIfNeeded(hwnd);
                 if (rested.Length > 0) Logging.Write("[Grind] " + rested);
 
+                // Combat and vendor checks have priority over an optional resource detour.
+                if (gatherDuringGrind && GatherRunner.GatherForGrind(hwnd, mover, GatherAreaSafe)) continue;
+                if (_stop || ClickAimAbort.Requested) break;
+
                 RoutePoint next = area.Hotspots[index % area.Hotspots.Count];
                 index++;
 
@@ -729,13 +735,32 @@ internal static class GrindRunner
                 /* The same radius the character fights in: a leg is walked through the same
                  * circle a hotspot is cleared in, so "monsters between hotspots" are monsters
                  * this stops for. */
-                RouteRunner.ShouldInterrupt = () => FightNeeded(hwnd, SearchYd);
+                bool resourceInterrupt = false;
+                int lastFightCheck = unchecked(Environment.TickCount - 500);
+                RouteRunner.ShouldInterrupt = () =>
+                {
+                    if (!gatherDuringGrind || unchecked(Environment.TickCount - lastFightCheck) >= 500)
+                    {
+                        lastFightCheck = Environment.TickCount;
+                        if (FightNeeded(hwnd, SearchYd)) return true;
+                    }
+                    if (gatherDuringGrind && GatherRunner.HasGrindResource(GatherAreaSafe))
+                    { resourceInterrupt = true; return true; }
+                    return false;
+                };
+                RouteRunner.PollInterruptDuringWalk = gatherDuringGrind;
                 bool ok = false;
-                try { ok = RouteRunner.Run(mover, one, 1); }
-                finally { RouteRunner.ShouldInterrupt = null; }
+                try { ok = RouteRunner.RunWithinSession(mover, one, 1); }
+                finally { RouteRunner.ShouldInterrupt = null; RouteRunner.PollInterruptDuringWalk = false; }
 
                 if (!ok && RouteRunner.LastRunInterrupted)
                 {
+                    if (resourceInterrupt)
+                    {
+                        index--; // resume the same hotspot after the detour, not the next one
+                        Logging.Write("[Grind] resource in range; pausing the hotspot leg to reconsider combat and gathering");
+                        continue;
+                    }
                     Logging.Write("[Grind] the walk was cut short on purpose: something worth fighting "
                                   + "is within " + PullYd.ToString("F0", CultureInfo.InvariantCulture)
                                   + " yd. Fighting it instead of walking on");
@@ -2854,6 +2879,41 @@ internal static class GrindRunner
         catch { return false; }
     }
 
+    // Fail closed: this client cannot establish hostility from pool records. Every
+    // living NPC within Grind's 100-yard radius (including friendly/neutral NPCs)
+    // blocks the optional detour; unknown reads and pending vendor/stop requests do too.
+    private static bool GatherUnitBlocks(bool local, bool player, double distance, bool readable, uint health)
+    {
+        return !local && !player && distance <= SearchYd && (!readable || health > 0);
+    }
+
+    private static bool GatherAreaSafe()
+    {
+        if (_stop || ClickAimAbort.Requested || _vendorDue) return false;
+        WowBReader? reader = ObjectManager.WowB;
+        GreenMagic.Memory? memory = ObjectManager.Wow;
+        if (reader == null || memory == null) return false;
+        try
+        {
+            using var uncached = memory.TemporaryCacheState(false);
+            if (!Capture(out WowBWorldSnapshot? snap) || snap == null
+                || !snap.TryGetLocalPlayer(out WowBObservedUnit player)
+                || !reader.TryGetUnitFields(player.UnitAddress, out WowBReader.WowBUnitFields self)
+                || self.Health == 0 || (self.UnitFlags & PlayerCombatFlagCandidate) != 0) return false;
+            foreach (WowBObservedUnit unit in snap.Units)
+            {
+                if (unit.IsLocalPlayer || unit.HasPlayerVtable) continue;
+                double distance = ClickAimMath.Len(unit.Location.X - player.Location.X, unit.Location.Y - player.Location.Y);
+                if (distance > SearchYd) continue;
+                bool readable = reader.TryGetUnitFields(unit.UnitAddress, out WowBReader.WowBUnitFields fields);
+                if (GatherUnitBlocks(unit.IsLocalPlayer, unit.HasPlayerVtable, distance, readable, readable ? fields.Health : 0))
+                    return false;
+            }
+            return !_stop && !ClickAimAbort.Requested && !_vendorDue && ObjectManager.Wow == memory && ObjectManager.WowB == reader;
+        }
+        catch { return false; }
+    }
+
     // Gather uses the Grind rotation only while the player combat candidate is set.
     // TAB confirms a changed selection, not that the selected NPC is the attacker.
     internal static void PrepareGatherDefence()
@@ -4423,6 +4483,11 @@ internal static class GrindRunner
              * walks as far as the search accepts, and the walk-off path stops for the same
              * radius. The 13:23 log lost a mob at 48 yd to a 40 yd radius. */
             check("engagementRadius", Math.Abs(SearchYd - 100.0) < 0.001);
+            check("gatherSafetyNearbyAlive", GatherUnitBlocks(false, false, 100.0, true, 1));
+            check("gatherSafetyUnknown", GatherUnitBlocks(false, false, 10.0, false, 0));
+            check("gatherSafetyCorpse", !GatherUnitBlocks(false, false, 10.0, true, 0));
+            check("gatherSafetyOutOfRange", !GatherUnitBlocks(false, false, 100.1, true, 1));
+            check("gatherSafetyPlayer", !GatherUnitBlocks(false, true, 10.0, true, 1));
             check("chaseReachesTheSearch", ChaseYd >= SearchYd - 0.001);
             check("pullUsesTheSameRadius", Math.Abs(PullYd - SearchYd) < 0.001);
 
