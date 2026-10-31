@@ -16,6 +16,9 @@ internal static class GatherRunner
     private const double InteractYd = 5.0;
     private const int RetryMs = 90000;
     private const int InteractionRetryMs = 20000;
+    // A missed hover is not evidence of depletion. Back off for the exact GUID
+    // without suppressing new spawns at the same position.
+    private const int UnavailableRetryMs = 120000;
     private const int MaxGatherAttempts = 4;
     // Covers a 2.5 s mining cast plus time for the loot window / auto-loot.
     private const int GatherHoldMs = 6000;
@@ -178,7 +181,7 @@ internal static class GatherRunner
             }
             Logging.Write("[Gather] hover search attempt " + attempt + "/" + MaxGatherAttempts
                           + "; keep the real mouse still");
-            bool clicked = GatherInteraction.TryInteract(hwnd, node, out string reason);
+            bool clicked = GatherInteraction.TryInteract(hwnd, node, out string reason, out bool hoverMiss);
             Logging.Write(clicked ? "[Gather] node interaction: " + reason
                                   : "[Gather] no right-button down sent: " + reason);
             if (ClickAimAbort.Requested || _stop) return;
@@ -215,11 +218,20 @@ internal static class GatherRunner
                 if (fresh.Guid == node.Guid) { node = fresh; observed = true; break; }
             if (!observed)
             {
-                Logging.Write("[Gather] node no longer observed after the wait; loot was not independently verified");
-                Retry[node.Guid] = unchecked(Environment.TickCount + InteractionRetryMs);
+                int delay = clicked ? UnavailableRetryMs : InteractionRetryMs;
+                Logging.Write("[Gather] " + node.Guid + " no longer observed after the wait; loot was not independently verified. "
+                              + "The same GUID is deferred for " + (delay / 1000) + " seconds.");
+                Retry[node.Guid] = unchecked(Environment.TickCount + delay);
                 return;
             }
             if (!Ready(node)) return;
+            if (hoverMiss)
+            {
+                Retry[node.Guid] = unchecked(Environment.TickCount + UnavailableRetryMs);
+                Logging.Write("[Gather] could not hover " + node.Guid + "; deferring this GUID for 120 seconds. "
+                              + "It may be depleted, occluded or missed by the search; a different GUID is not deferred.");
+                return;
+            }
             if (node.Distance > InteractYd)
             {
                 Logging.Write("[Gather] node still observed but out of reach; will approach again");
@@ -293,7 +305,8 @@ internal static class GatherRunner
                 foreach (var fresh in current) if (fresh.Guid == node.Guid && Ready(fresh)) { node = fresh; observed = true; break; }
                 if (!observed) continue;
                 Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                    "[Gather] {0} ({1:F1} yd, id {2}) - routing toward the resource", node.Name, node.Distance, node.Entry));
+                    "[Gather] {0} ({1:F1} yd, id {2}, guid {3}, position {4:F1},{5:F1},{6:F1}) - routing toward the resource",
+                    node.Name, node.Distance, node.Entry, node.Guid, node.Position.X, node.Position.Y, node.Position.Z));
                 if (node.Distance > InteractYd)
                 {
                     var destination = new RoutePoint { X = node.Position.X, Y = node.Position.Y, Z = node.Position.Z };

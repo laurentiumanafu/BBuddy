@@ -283,3 +283,38 @@ apply. These additions do not establish a complete catalog, successful herb
 interaction, or herb depletion/loot behavior. Enable Herbalism and enter the
 character's actual skill manually before testing; mining-only settings must
 continue to skip both herbs.
+
+## 21:00 herb test: observations and repeat avoidance
+
+The user reports the bot gathered the first two herbs successfully: a Wilted
+Peacebloom and a Stunted Silverleaf. The log shows a posted right-click and
+then no matching scan observation after six seconds for each. It does not
+independently verify bag contents. The bot then went to another Wilted
+Peacebloom which the user says had been gathered earlier, and its hover search
+stopped after 19 seconds with the combined reason "stopped, client changed, or
+real cursor moved". Stop was logged three seconds *after* that message, and the
+user reports they did not move the mouse. That combined reason cannot establish
+whether a desktop cursor position actually changed, GetCursorPos failed, or
+the client/window changed; OS or game cursor movement is not evidence of human
+interference. The old gather logs did not include GUIDs, so they cannot establish
+whether this was the exact same object as either earlier herb. There remains no
+validated depleted-state offset and a pool record is not proof of availability.
+
+The loop now logs each target's full GUID and coordinates. A GUID on which a
+button-down was posted and which is subsequently not observed is deferred for
+120 seconds, not labelled successfully harvested. A hover search has a 45-second
+budget; if no matching hover is found after that bounded search, the bot defers
+only that exact GUID for 120 seconds rather than repeating the whole search
+four times. A search miss is not proof of depletion: the object may be too
+small, obscured, or outside the searched pixels. A cursor/client/read failure is
+reported separately and is **not** treated as a hover miss; the existing
+stationary wait and bounded retries remain. Changed desktop coordinates report
+both positions without attributing them to the user, and still prevent clicks.
+Neither cooldown is persistent or based on position, so a new GUID is not
+blocked, and gathering a node before the bot starts remains unknowable without
+additional observations or a verified depletion field.
+
+The log also shows navmesh queries finding a polygon hundreds of yards below the
+character and falling back to a direct short walk. The navmesh was therefore not
+actually used for those specific legs; the map/tile/layer mismatch is not fixed
+by this change.
