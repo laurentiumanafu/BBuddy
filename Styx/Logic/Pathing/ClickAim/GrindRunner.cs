@@ -376,18 +376,13 @@ internal static class GrindRunner
     private static volatile bool _vendorDue;
 
     // ---- "is this character really fighting?" -------------------------------
-    // Recent damage is evidence, not a verified combat-state offset. Use raw health rather
-    // than rounded percent so even one point of damage is observable.
-    private static uint? _lastHpSeen;
-    private static int _lastHurtAt;
-    private static bool _hasHurtEvidence;
+    // Player-only candidate, observed idle -> combat -> idle on 2026-10-31.
+    // This is 0x80000, NOT the unrelated 0x800 which can persist while idle.
+    private const uint PlayerCombatFlagCandidate = 0x80000;
     private static int _realCombatQuietAt;
 
     /// <summary>Throttles the "not eating next to that" line to once per 15 s.</summary>
     private static int _restHeldQuietAt;
-
-    /// <summary>How long after losing health the character still counts as fighting.</summary>
-    private const int CombatEvidenceMs = 8000;
 
     /// <summary>
     /// Bodies looted since the last trip. This is the bag-full stand-in: the container slots
@@ -605,9 +600,6 @@ internal static class GrindRunner
         _killsSinceTrip = 0;
         _sellClicks = 0;
         _unreachableUntil.Clear();
-        _lastHpSeen = null;
-        _lastHurtAt = 0;
-        _hasHurtEvidence = false;
         _realCombatQuietAt = 0;
 
         /* What the client can be asked without Lua: level, health, the stored action bar
@@ -1919,9 +1911,8 @@ internal static class GrindRunner
     {
         if (_stop) return "";
         if (ClickAimSettings.EatBelowPercent <= 0 && ClickAimSettings.DrinkBelowPercent <= 0) return "";
-        /* The verdict, not the flag: the 15:50 run never ate or drank once, and this line is
-         * where that came from - the flag stays set for a minute after a fight, so every chance
-         * to sit down was spent waiting for a combat that was already over. */
+        /* The old 0x800 bit remained set while idle. The candidate player combat bit
+         * is 0x80000; unreadable flags conservatively postpone the meal. */
         if (InRealCombat()) return "";
 
         Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
@@ -2834,47 +2825,36 @@ internal static class GrindRunner
     }
 
     /// <summary>
-    /// Recent health loss is a conservative fallback, not a verified combat flag. Unknown
-    /// health blocks rest/vendor actions; a readable unchanged value is not combat evidence.
-    /// The window also catches damage while the client flag is clear. Absorbed attacks,
-    /// full heals between samples, and an initial hit before the first sample can be missed.
+    /// Player-only 70291 candidate. A controlled sample read +0x1E60 as 0x808 idle,
+    /// 0x80808 fighting and 0x8 after combat. The candidate is 0x80000, not 0x800.
+    /// One cycle is promising but not proof for every class or situation. Unknown reads
+    /// conservatively hold rest/vendor actions. Never infer a particular attacker from it.
     /// </summary>
-    private static bool CombatEvidence(uint? health, int now, ref uint? previous,
-                                       ref int hurtAt, ref bool hasHurtEvidence)
+    private static bool CombatFlagSaysFight(uint? flags)
     {
-        if (!health.HasValue) return true;
-        if (previous.HasValue && health.Value < previous.Value)
-        {
-            hurtAt = now;
-            hasHurtEvidence = true;
-        }
-        previous = health;
-        return hasHurtEvidence && unchecked((uint)(now - hurtAt)) < CombatEvidenceMs;
+        return !flags.HasValue || (flags.Value & PlayerCombatFlagCandidate) != 0;
     }
 
     private static bool InRealCombat()
     {
-        Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
+        WowBReader? reader = ObjectManager.WowB;
         WowBWorldSnapshot? snap;
         WowBObservedUnit me;
-        Styx.WoWInternals.WowBReader.WowBUnitFields fields;
-        uint? hp = null;
+        WowBReader.WowBUnitFields fields;
+        uint? flags = null;
         try
         {
             if (reader != null && Capture(out snap) && snap != null && snap.TryGetLocalPlayer(out me)
-                && reader.TryGetUnitFields(me.UnitAddress, out fields) && fields.MaxHealth > 0)
-                hp = fields.Health;
+                && reader.TryGetUnitFields(me.UnitAddress, out fields))
+                flags = fields.UnitFlags;
         }
         catch { /* An interrupted or failed read is unknown, not safe. */ }
-
-        bool fighting = CombatEvidence(hp, Environment.TickCount, ref _lastHpSeen,
-                                       ref _lastHurtAt, ref _hasHurtEvidence);
-        if (!hp.HasValue && unchecked(Environment.TickCount - _realCombatQuietAt) > 15000)
+        if (!flags.HasValue && unchecked(Environment.TickCount - _realCombatQuietAt) > 15000)
         {
             _realCombatQuietAt = Environment.TickCount;
-            Logging.Write("[Grind] cannot read health; holding rest and vendor actions until it reads again");
+            Logging.Write("[Grind] cannot read player combat flags; holding rest and vendor actions until they read again");
         }
-        return fighting;
+        return CombatFlagSaysFight(flags);
     }
 
     private static bool UnderAttack() { return InRealCombat(); }
@@ -3524,7 +3504,7 @@ internal static class GrindRunner
                 if (_notViable.Count > 256) _notViable.Clear();
                 return string.Format(CultureInfo.InvariantCulture,
                     "{0} has taken no damage for {1} s, Attack was pressed at arm's length and the client "
-                    + "showed no recent player damage - it may not be something this character can fight "
+                    + "did not show the candidate player combat bit - it may not be something this character can fight "
                     + "(friendly NPC, or blocked); ignoring it and taking the next target",
                     dead, PoolVerifyMs / 1000);
             }
@@ -4308,22 +4288,14 @@ internal static class GrindRunner
             /* Which mobs are worth attacking, from the level word the 15:57 dump confirmed:
              * a level-2 character fighting level 3 and 4 mobs is inside the band, level 9 is
              * not, and a level that did not read is allowed rather than skipped. */
-            // No unverified unit flag can keep this verdict true. Unknown reads are not
-            // mistaken for safety, and damage remains evidence for the timeout window.
-            uint? previousHp = null;
-            int hurtAt = 0;
-            bool hurtEvidence = false;
-            check("combatUnknown", CombatEvidence(null, 100, ref previousHp, ref hurtAt, ref hurtEvidence));
-            check("combatInitialIdle", !CombatEvidence(100, 200, ref previousHp, ref hurtAt, ref hurtEvidence));
-            check("combatIdle", !CombatEvidence(100, 16000, ref previousHp, ref hurtAt, ref hurtEvidence));
-            check("combatDamage", CombatEvidence(99, 16100, ref previousHp, ref hurtAt, ref hurtEvidence));
-            check("combatDamageRecent", CombatEvidence(99, 17000, ref previousHp, ref hurtAt, ref hurtEvidence));
-            check("combatDamageExpires", !CombatEvidence(99, 24100, ref previousHp, ref hurtAt, ref hurtEvidence));
-            check("combatUnreadAfterIdle", CombatEvidence(null, 25000, ref previousHp, ref hurtAt, ref hurtEvidence));
-            previousHp = 100;
-            hurtEvidence = false;
-            check("combatTickWrapDamage", CombatEvidence(99, int.MaxValue - 100, ref previousHp, ref hurtAt, ref hurtEvidence));
-            check("combatTickWrapRecent", CombatEvidence(99, int.MinValue + 100, ref previousHp, ref hurtAt, ref hurtEvidence));
+            // 18:02 controlled sample: 0x808 (idle), 0x80808 (in combat),
+            // 0x8 (idle again). 0x800 on its own must not hold combat true.
+            check("combatUnknown", CombatFlagSaysFight(null));
+            check("combatIdleBefore", !CombatFlagSaysFight(0x808));
+            check("combatObservedFight", CombatFlagSaysFight(0x80808));
+            check("combatIdleAfter", !CombatFlagSaysFight(0x8));
+            check("combatOldStaleBit", !CombatFlagSaysFight(0x800));
+            check("combatCandidateOnItsOwn", CombatFlagSaysFight(0x80000));
 
             check("viableSameLevel", LevelViable(2, 2));
             check("viableTheDumpedMobs", LevelViable(3, 2) && LevelViable(4, 2));
