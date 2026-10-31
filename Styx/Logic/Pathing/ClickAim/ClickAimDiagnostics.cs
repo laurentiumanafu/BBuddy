@@ -379,6 +379,9 @@ public static class ClickAimDiagnostics
         try { Logging.Write(WowBReader.MapIdSelfTest()); }
         catch (Exception ex) { Logging.Write("[Mesh] map self-test threw: " + ex.Message); }
 
+        try { Logging.Write(RouteRunner.SelfTest()); }
+        catch (Exception ex) { Logging.Write("[Route] mesh self-test threw: " + ex.Message); }
+
         try { Logging.Write(NavGridStore.SelfTest()); }
         catch (Exception ex) { Logging.Write("[NavGrid] self-test threw: " + ex.Message); }
 

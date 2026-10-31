@@ -386,3 +386,43 @@ mesh paths and 17 posted node interactions followed by those GUIDs no longer
 being observed. Two early hover attempts sent no button-down after desktop
 cursor coordinates changed, and a later retry posted the click. The user reports
 that the run harvested successfully; the log by itself does not verify loot.
+
+## 21:54 short-leg mesh, recovery and hover improvements
+
+The user reports becoming lost on an Elwynn leg and missing food/drink recovery.
+The excerpt shows successful short straight key-steered fallback walks after
+successful Detour results with two points were discarded. It does not prove a
+mesh was missing, nor does it show the obstacle or how the character got lost.
+A successful two-point result can be a straight path as well as an ambiguous
+failure-shaped answer. Gather legs now refuse an unverified direct fallback.
+A two-point result must pass a separate mesh raycast with a complete status,
+no boundary hit, the actual goal polygon reached, and readable non-blackspot
+visited polygons. Both path endpoints and partial status are checked, and large
+snap corrections / unreadable player height are refused. A validated mesh ray
+is still not a guarantee against dynamic objects, terrain changes, stale
+meshes or a wrong client-to-mmap map assignment. If validation fails Gather may
+stop rather than navigate around the obstruction; the new logs give raycast
+status, hit fraction, and polygon details to investigate.
+
+GatherBuddy now invokes Grind's existing food/drink recovery between combat and
+choosing the next resource/hotspot. Set thresholds and food/drink action-bar
+slots in **Combat settings**. The loop checks for combat or unreadable nearby
+units, releases movement, holds still while resting, and responds to Stop.
+A pressed key is not proof an item was consumed. Power maximum remains an
+unverified candidate; a session peak is used and starting already low with no
+reliable maximum can make the percentage misleading. The bag inventory is not
+read, so this does not automatically find food in bags.
+
+Herb searches try the last successful herb screen point, the original center
+point, and a few approximate projected points before the existing grid. The
+projection and remembered pixel are only hover hints: full GUID, eligibility,
+range, client/cursor, combat and final click checks remain mandatory. Mining's
+search order and the six-second cast/loot wait remain unchanged. These changes
+are untested on the live client; hints can miss, and a mesh ray cannot detect
+moving objects that are not represented in the mmap.
+
+The mesh follower previously folded away short path corners and then skipped
+additional points less than 12 yd away, even in key-steering mode. Both could
+cut across the mesh corridor. Key-steered mesh paths now retain every corner;
+this is a plausible navigation issue but the excerpt alone cannot establish
+that it caused this particular incident.

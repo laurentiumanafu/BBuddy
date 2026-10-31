@@ -49,12 +49,6 @@ public static class RouteRunner
     /// </summary>
     private const double FollowStepYd = 15.0;
 
-    /// <summary>
-    /// Shortest distance a click should be aimed at. Below this the projected point
-    /// lands on the character's own feet and the click is ignored by the client.
-    /// </summary>
-    private const double LookAheadYd = 12.0;
-
     /// <summary>Radius marked as bad around a point the character could not pass.</summary>
     private const float BlackspotRadius = 8.0f;
 
@@ -354,30 +348,13 @@ public static class RouteRunner
                 return false;
             }
 
-            /* A two-point path is Detour's way of saying it FAILED.
-             *
-             * BloogBot's author states it plainly (drewkestell.us/Article/6/Chapter/20):
-             * "Well, 2 is the minimum that Detour will return. If the library fails to
-             * find a path for whatever reason, it'll just return those two points, and
-             * the navigation path would just be a straight line between them." His test
-             * asserts the path is longer than 2 points for exactly that reason.
-             *
-             * Accepting 2 points meant a failed query became a straight line through
-             * whatever Detour had just refused to route around - which is the reported
-             * "walks into walls". It is only innocent when the leg is short enough that
-             * a straight line IS the answer.
-             */
-            if (path != null && path.Length == 2 && remaining > 5.0)
-            {
-                Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                    "[Route] Detour returned 2 points for a {0:F1} yd leg - that is its failure "
-                    + "signal, not a straight path (it returns start+end when the query fails). "
-                    + "Refusing to walk it.", remaining));
-                path = null;
-            }
-
             if (path == null || path.Length < 2)
             {
+                if (RequireMeshDuringSession)
+                {
+                    Logging.Write("[Route] no validated mesh path; refusing an unverified straight walk for gathering");
+                    return false;
+                }
                 if (plan == 0 && leg <= ProfileRoute.MaxClickWalkYd)
                 {
                     Logging.Write(string.Format(CultureInfo.InvariantCulture,
@@ -417,30 +394,8 @@ public static class RouteRunner
 
             for (int p = 1; p < follow.Length; p++)
             {
-                /* Never aim a click closer than LookAheadYd unless it is the last point.
-                 *
-                 * A click is aimed at the ground under a screen position, and a point a
-                 * couple of yards from the character projects onto the character's own
-                 * feet - where a click does nothing. On 2026-10-29 that is exactly what
-                 * happened: the walk sat at 5.7 yd from its next point and clicked at it
-                 * a dozen times without moving. Skipping ahead to the next point keeps
-                 * the aim at an angle the projection can express. */
-                if (p < follow.Length - 1)
-                {
-                    double cx, cy;
-                    if (ClickAimPositions.TryRead(out cx, out cy))
-                    {
-                        int skipped = p;
-                        while (skipped < follow.Length - 1 &&
-                               ClickAimMath.Len(follow[skipped].X - cx, follow[skipped].Y - cy) < LookAheadYd)
-                            skipped++;
-                        if (skipped != p)
-                        {
-                            p = skipped - 1;    // the loop's ++p lands on `skipped`
-                            continue;
-                        }
-                    }
-                }
+                // Key steering can follow nearby corners. Skipping them cuts across
+                // the mesh corridor, potentially sending the character through walls.
 
                 /* keepMoving: the next point of the polyline is already known, so the
                  * character should not come to a stop to be told about it. Only the last
@@ -584,9 +539,8 @@ public static class RouteRunner
 
     /// <summary>
     /// Splits a polyline so no hop is longer than <paramref name="maxStep"/>, keeping
-    /// every original corner. A hop shorter than half a step is folded into the next
-    /// one, otherwise a corner 2 yd after another produces a click that is all aim
-    /// error and no travel.
+    /// every original corner. Key steering can follow short hops without skipping a
+    /// corner and cutting across an obstacle.
     /// </summary>
     private static WoWPoint[] Resample(WoWPoint[] path, double maxStep)
     {
@@ -601,11 +555,9 @@ public static class RouteRunner
             WoWPoint to = path[i];
             double length = ClickAimMath.Len(to.X - from.X, to.Y - from.Y);
 
-            if (length <= maxStep * 0.5)
+            if (length < 0.001)
             {
-                // Too short to steer at; jump to the next corner instead and let the
-                // hop that follows be the one that gets subdivided.
-                if (i == path.Length - 1) outPoints.Add(to);
+                if (i == path.Length - 1 && outPoints.Count == 1) outPoints.Add(to);
                 continue;
             }
 
@@ -647,11 +599,76 @@ public static class RouteRunner
         return _meshReady;
     }
 
+    private static bool ValidRayResult(Tripper.Navigation.Status status, float hit, ulong[] visited,
+                                       int count, ulong goalPoly)
+    {
+        // Detail bits 0x10/0x20/0x40 mean buffer too small, out of nodes or partial.
+        return status.Succeeded && !status.Failed && (status.Value & 0x70U) == 0
+            && float.IsFinite(hit) && hit >= 1.0f && goalPoly != 0
+            && visited != null && count > 0 && count < visited.Length && visited[count - 1] == goalPoly;
+    }
+
+    private static bool EndpointNear(System.Numerics.Vector3 p, System.Numerics.Vector3 expected, double horizontal, double vertical)
+    {
+        return float.IsFinite(p.X) && float.IsFinite(p.Y) && float.IsFinite(p.Z)
+            && ClickAimMath.Len(p.X - expected.X, p.Y - expected.Y) <= horizontal
+            && Math.Abs(p.Z - expected.Z) <= vertical;
+    }
+
+    private static bool ValidateStraightMeshSegment(Tripper.Navigation.Navigator nav, uint mapId,
+                                                     System.Numerics.Vector3 start, System.Numerics.Vector3 end)
+    {
+        // A successful 2-point result may be straight ground or a synthetic failure.
+        // Independently require a clear mesh ray reaching the goal polygon. This is
+        // still only a terrain check, not proof that dynamic obstacles are absent.
+        if (!nav.FindNearestPolyRef(mapId, end, 0.5f, 2.0f, out Tripper.Navigation.PolygonReference goal, out System.Numerics.Vector3 nearest)
+            || !goal.IsValid || !EndpointNear(nearest, end, 0.25, 1.0))
+        { Logging.Write("[Route] straight validation could not resolve the goal polygon"); return false; }
+        var status = nav.RaycastWithExtents(mapId, start, end, new System.Numerics.Vector3(0.5f, 0.5f, 2.0f),
+                                           out float hit, out _, out ulong[] visited, out int count);
+        if (!ValidRayResult(status, hit, visited, count, goal.Id))
+        {
+            ulong last = count > 0 && count <= visited.Length ? visited[count - 1] : 0UL;
+            Logging.Write("[Route] straight validation: status=0x" + status.Value.ToString("X8")
+                + " hit=" + hit.ToString("G", CultureInfo.InvariantCulture) + " polygons=" + count
+                + " last=" + last + " goal=" + goal.Id);
+            return false;
+        }
+        for (int i = 0; i < count; i++)
+        {
+            if (visited[i] == 0 || (nav.GetPolyArea(mapId, new Tripper.Navigation.PolygonReference(visited[i]), out byte area) & 0x80000000U) != 0
+                || area == (byte)Tripper.Navigation.AreaType.Blackspot) return false;
+        }
+        return true;
+    }
+
+    public static string SelfTest()
+    {
+        var good = Tripper.Navigation.Status.Success;
+        var partial = new Tripper.Navigation.Status(0x40000040U);
+        ulong[] polys = { 12UL, 13UL, 0UL };
+        var corners = Resample(new[] { new WoWPoint(0, 0, 0), new WoWPoint(2, 0, 0),
+                                        new WoWPoint(2, 2, 0), new WoWPoint(20, 2, 0) }, 15.0);
+        bool keptCorners = corners.Length >= 4 && corners[1].X == 2 && corners[1].Y == 0
+                           && corners[2].X == 2 && corners[2].Y == 2;
+        bool ok = keptCorners && ValidRayResult(good, 1f, polys, 2, 13UL)
+               && !ValidRayResult(good, 0.5f, polys, 2, 13UL)
+               && !ValidRayResult(partial, 1f, polys, 2, 13UL)
+               && !ValidRayResult(good, 1f, polys, 2, 14UL)
+               && !ValidRayResult(good, 1f, polys, 3, 13UL)
+               && !ValidRayResult(good, float.NaN, polys, 2, 13UL)
+               && EndpointNear(new System.Numerics.Vector3(1, 2, 3), new System.Numerics.Vector3(1, 2, 3), 1, 1)
+               && !EndpointNear(new System.Numerics.Vector3(1, 2, 10), new System.Numerics.Vector3(1, 2, 3), 1, 1);
+        return "[Route] mesh validation fixtures: " + (ok ? "pass" : "FAIL") + " (not a live path test)";
+    }
+
     private static WoWPoint[]? TryMeshPath(double px, double py, RoutePoint target)
     {
         try
         {
             double z = ClickAimPositions.Z();
+            if (RequireMeshDuringSession && !double.IsFinite(z))
+            { Logging.Write("[Route] player height unreadable; refusing to guess the terrain layer"); return null; }
             float fromZ = double.IsNaN(z) ? (float)target.Z : (float)z;
 
             // Navigator.GeneratePath asks ObjectManager.Me for the map id, and on the
@@ -682,17 +699,42 @@ public static class RouteRunner
                 return null;
             if (!MeshQuery.SnapLogged(nav, mapId, to, "goal", out snappedTo))
                 return null;
+            if (RequireMeshDuringSession && (!EndpointNear(snappedFrom, from, 2.5, 5.0)
+                                             || !EndpointNear(snappedTo, to, 2.5, 5.0)))
+            {
+                Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                    "[Route] mesh snap too far from player or goal; refusing a possibly wrong terrain layer. "
+                    + "Player ({0:F1},{1:F1},{2:F1}) -> ({3:F1},{4:F1},{5:F1}); goal ({6:F1},{7:F1},{8:F1}) -> ({9:F1},{10:F1},{11:F1})",
+                    from.X, from.Y, from.Z, snappedFrom.X, snappedFrom.Y, snappedFrom.Z,
+                    to.X, to.Y, to.Z, snappedTo.X, snappedTo.Y, snappedTo.Z));
+                return null;
+            }
             from = snappedFrom;
             to = snappedTo;
 
             Tripper.Navigation.PathFindResult result = nav.FindPath(mapId, from, to, true);
-            if (result == null || !result.Status.Succeeded)
+            if (result == null || !result.Status.Succeeded || result.Status.Failed
+                || result.IsPartialPath || (result.Status.Value & 0x70U) != 0)
             {
-                Logging.Write("[Route] navmesh found no path to ("
-                    + string.Format(CultureInfo.InvariantCulture, "{0:F1}, {1:F1}", target.X, target.Y) + ")");
+                Logging.Write("[Route] no complete mesh path; status=" + (result == null ? "null" : "0x" + result.Status.Value.ToString("X8") + " step=" + result.FailStep));
                 return null;
             }
-            if (result.Points == null || result.Points.Length < 2) return null;
+            if (result.Points == null || result.Points.Length < 2
+                || !EndpointNear(result.Points[0], from, 1.5, 3.0)
+                || !EndpointNear(result.Points[result.Points.Length - 1], to, 1.5, 3.0))
+            { Logging.Write("[Route] mesh path did not reach the snapped endpoints"); return null; }
+            foreach (var point in result.Points)
+                if (!float.IsFinite(point.X) || !float.IsFinite(point.Y) || !float.IsFinite(point.Z)) return null;
+            if (result.Flags != null)
+                foreach (var flag in result.Flags)
+                    if ((flag & Tripper.Navigation.StraightPathFlags.OffMeshConnection) != 0)
+                    { Logging.Write("[Route] mesh path requires an unsupported off-mesh connection"); return null; }
+            if (result.Points.Length == 2)
+            {
+                if (!ValidateStraightMeshSegment(nav, mapId, result.Points[0], result.Points[1]))
+                { Logging.Write("[Route] 2-point mesh result could not be independently validated by raycast; refusing it"); return null; }
+                Logging.Write("[Route] 2-point mesh result confirmed by a clear ray reaching the goal polygon");
+            }
 
             var path = new WoWPoint[result.Points.Length];
             for (int i = 0; i < result.Points.Length; i++)
@@ -701,7 +743,7 @@ public static class RouteRunner
         }
         catch (Exception ex)
         {
-            Logging.Write("[Route] mesh path failed, falling back: " + ex.Message);
+            Logging.Write("[Route] mesh path query failed: " + ex.Message);
             return null;
         }
     }

@@ -21,6 +21,60 @@ internal static class GatherInteraction
 
     private const int HoverSearchBudgetMs = 45000;
 
+    // Only a hint: every eventual button-down still requires the current full GUID,
+    // fresh node scan, combat/cursor checks and final confirmation.
+    private static bool _herbHintKnown;
+    private static double _herbHintX, _herbHintY;
+
+    internal static void ResetHoverHint() { _herbHintKnown = false; }
+
+    private static void AddHint(List<(double X, double Y)> points, double x, double y)
+    {
+        if (double.IsFinite(x) && double.IsFinite(y) && x > 0.05 && x < 0.95 && y > 0.05 && y < 0.95)
+            points.Add((x, y));
+    }
+
+    private static List<(double X, double Y)> SearchPoints(GatherNodeScanner.Node node, int width, int height)
+    {
+        var points = new List<(double X, double Y)>();
+        if (node.IsHerb)
+        {
+            if (_herbHintKnown) AddHint(points, _herbHintX, _herbHintY);
+            // Retain the grid's successful first point before trying speculative projection.
+            AddHint(points, 0.50, 0.45);
+            // Approximate projection is only a search hint, never a click authorization.
+            // The camera may not look exactly at the player and plant models have height.
+            if (ClickAimPositions.TryReadCamera(out double cx, out double cy, out double cz)
+                && ClickAimPositions.TryRead(out double px, out double py))
+            {
+                double pz = ClickAimPositions.Z();
+                if (double.IsFinite(pz)
+                    && ClickAimMath.ProjectToScreen(cx, cy, cz, px, py, pz,
+                        node.Position.X, node.Position.Y, node.Position.Z + 0.3,
+                        width / 2.0, height / 2.0, 90.0, out int dx, out int dy))
+                {
+                    double x = (width / 2.0 + dx) / (width - 1.0);
+                    double y = (height / 2.0 + dy) / (height - 1.0);
+                    AddHint(points, x, y);
+                    AddHint(points, x, y - 0.025);
+                    AddHint(points, x, y + 0.025);
+                    AddHint(points, x - 0.025, y);
+                    AddHint(points, x + 0.025, y);
+                }
+            }
+        }
+        double[] xs = { 0.50, 0.46, 0.54, 0.42, 0.58, 0.38, 0.62, 0.34, 0.66 };
+        double[] ys = { 0.45, 0.50, 0.40, 0.55, 0.35, 0.60, 0.30, 0.65, 0.25 };
+        for (int pass = 0; pass < 2; pass++)
+        foreach (double baseY in ys)
+        foreach (double baseX in xs)
+        {
+            if (node.IsHerb && pass == 0 && baseX == 0.50 && baseY == 0.45) continue;
+            points.Add((baseX + (pass == 0 ? 0 : 0.02), baseY + (pass == 0 ? 0 : 0.025)));
+        }
+        return points;
+    }
+
     private static bool CursorStill(int x, int y, out string reason)
     {
         if (!ClickAimInput.TryCursorScreen(out int nowX, out int nowY))
@@ -58,7 +112,14 @@ internal static class GatherInteraction
         var near = new GatherNodeScanner.Node(b, kind, true, new WoWPoint(0, 0, 0), 2);
         var far = new GatherNodeScanner.Node(b, kind, true, new WoWPoint(0, 0, 4.1f), 2);
         var outOfReach = new GatherNodeScanner.Node(b, kind, true, new WoWPoint(0, 0, 0), 5.1);
-        bool ok = MaySubstitute(node, near, b, default, _ => true)
+        var oreNode = new GatherNodeScanner.Node(a, kind, false, new WoWPoint(0, 0, 0), 2);
+        var orePoints = SearchPoints(oreNode, 1920, 1080);
+        var hints = new List<(double X, double Y)>();
+        AddHint(hints, 0.5, 0.45);
+        AddHint(hints, double.NaN, 0.45);
+        AddHint(hints, -0.1, 0.45);
+        bool ok = orePoints.Count == 162 && orePoints[0].X == 0.50 && orePoints[0].Y == 0.45
+               && hints.Count == 1 && MaySubstitute(node, near, b, default, _ => true)
                && !MaySubstitute(node, near, b, b, _ => true)
                && !MaySubstitute(node, near, a, default, _ => true)
                && !MaySubstitute(node, near, b, default, _ => false)
@@ -92,14 +153,11 @@ internal static class GatherInteraction
         if (away == node.Guid) return false;
         // Two interleaved grids cover gaps in the first pass. They still cannot guarantee
         // a hit on a small/occluded node, so a miss is reported rather than clicked blindly.
-        double[] xs = { 0.50, 0.46, 0.54, 0.42, 0.58, 0.38, 0.62, 0.34, 0.66 };
-        double[] ys = { 0.45, 0.50, 0.40, 0.55, 0.35, 0.60, 0.30, 0.65, 0.25 };
+        List<(double X, double Y)> points = SearchPoints(node, width, height);
         int started = Environment.TickCount;
         int sampled = 0;
         bool loggedOther = false;
-        for (int pass = 0; pass < 2; pass++)
-        foreach (double baseY in ys)
-        foreach (double baseX in xs)
+        foreach (var point in points)
         {
             if (ClickAimAbort.Requested) { reason = "Stop requested during hover search"; return false; }
             if (extraSafety != null && !extraSafety()) { reason = "Grind safety check interrupted hover search"; return false; }
@@ -112,8 +170,8 @@ internal static class GatherInteraction
                 reason = "node GUID not found within 45 seconds (" + sampled + " pixels sampled); may be occluded or unavailable";
                 return false;
             }
-            double x = baseX + (pass == 0 ? 0 : 0.02);
-            double y = baseY + (pass == 0 ? 0 : 0.025);
+            double x = point.X;
+            double y = point.Y;
             reason = "combat detected or combat state unreadable during hover search";
             if (!GrindRunner.TryReadGatherCombat(out bool combat) || combat) return false;
             reason = "failed to post hover-search mouse move";
@@ -178,7 +236,12 @@ internal static class GatherInteraction
                 return true;
             }, out string clickReason);
             reason = validation.Length > 0 ? validation : clickReason;
-            if (sent) clickedNode = hoveredNode;
+            if (sent)
+            {
+                clickedNode = hoveredNode;
+                if (hoveredNode.IsHerb) { _herbHintKnown = true; _herbHintX = x; _herbHintY = y; }
+                Logging.Write("[Gather] hover match after " + sampled + " sampled point(s)");
+            }
             return sent;
         }
         hoverMiss = true;

@@ -69,6 +69,7 @@ internal static class GatherRunner
         RouteRunner.StopRequested = false;
         ClickAimAbort.Clear();
         Retry.Clear();
+        GatherInteraction.ResetHoverHint();
         _pending = null;
         _lastScan = unchecked(Environment.TickCount - 1500);
         _lastCombatCheck = unchecked(Environment.TickCount - 500);
@@ -290,6 +291,7 @@ internal static class GatherRunner
             { Logging.Write("[Grind gather] navmesh unavailable; gathering disabled"); return false; }
             if (ClickAimAbort.Requested) return false;
             Retry.Clear();
+            GatherInteraction.ResetHoverHint();
             _pending = null;
             _stop = false;
             _lastScan = unchecked(Environment.TickCount - 1500);
@@ -407,6 +409,11 @@ internal static class GatherRunner
                     if (defence.Length > 0) Logging.Write("[Gather] defence: " + defence);
                     ClickAimAbort.Wait(1000); continue;
                 }
+                string rest = GrindRunner.RestForGather(hwnd);
+                if (rest.Length > 0) Logging.Write("[Gather] " + rest);
+                if (_stop || ClickAimAbort.Requested) break;
+                // Re-check combat after a meal or a slow state read, before moving.
+                if (!GrindRunner.TryReadGatherCombat(out fighting) || fighting) continue;
                 GatherNodeScanner.Node node;
                 if (_pending.HasValue) { node = _pending.Value; _pending = null; }
                 else if (!FindNode(out node))

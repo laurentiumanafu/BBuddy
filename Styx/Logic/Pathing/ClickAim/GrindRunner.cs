@@ -1963,17 +1963,23 @@ internal static class GrindRunner
             WowBWorldSnapshot? around;
             WowBObservedUnit near;
             double nearYd;
-            if (Capture(out around) && around != null && around.TryGetLocalPlayer(out WowBObservedUnit here))
+            if (!Capture(out around) || around == null || !around.TryGetLocalPlayer(out WowBObservedUnit here))
             {
-                int live2, unread2;
-                if (NearestKillable(around, here.Location.X, here.Location.Y, RestSafeYd,
-                                    out near, out nearYd, out live2, out unread2))
-                {
-                    if (unchecked(Environment.TickCount - _restHeldQuietAt) <= 15000) return "";
-                    _restHeldQuietAt = Environment.TickCount;
-                    return string.Format(CultureInfo.InvariantCulture,
-                        "eating and drinking can wait: something potentially attackable is {0:F0} yd away", nearYd);
-                }
+                if (unchecked(Environment.TickCount - _restHeldQuietAt) <= 15000) return "";
+                _restHeldQuietAt = Environment.TickCount;
+                return "eating and drinking postponed: nearby units could not be read";
+            }
+            int live2, unread2;
+            bool threat = NearestKillable(around, here.Location.X, here.Location.Y, RestSafeYd,
+                                          out near, out nearYd, out live2, out unread2);
+            if (threat || unread2 > 0)
+            {
+                if (unchecked(Environment.TickCount - _restHeldQuietAt) <= 15000) return "";
+                _restHeldQuietAt = Environment.TickCount;
+                return threat
+                    ? string.Format(CultureInfo.InvariantCulture,
+                        "eating and drinking can wait: something potentially attackable is {0:F0} yd away", nearYd)
+                    : "eating and drinking postponed: a nearby unit could not be read";
             }
         }
 
@@ -1994,8 +2000,15 @@ internal static class GrindRunner
             return "";
         }
 
-        ClickAimKeySteer.ReleaseHeld();
-        StopAndSettle(hwnd);
+        if (!StopForRest(hwnd))
+        {
+            if (_stop || ClickAimAbort.Requested) return "";
+            if (unchecked(Environment.TickCount - _restHeldQuietAt) <= 15000) return "";
+            _restHeldQuietAt = Environment.TickCount;
+            return "eating and drinking postponed: could not confirm the character is stationary";
+        }
+        // Combat or Stop can arrive while movement is settling.
+        if (_stop || ClickAimAbort.Requested || InRealCombat()) return "";
 
         var said = new List<string>();
         if (wantFood)
@@ -2003,17 +2016,20 @@ internal static class GrindRunner
             ClickAimInput.TapKey(hwnd, food!.KeyVk, 40);
             _presses++;
             said.Add(string.Format(CultureInfo.InvariantCulture,
-                "ate {0} (slot {1} '{2}') at {3}% health", food.Name, food.Slot,
+                "pressed food key for {0} (slot {1} '{2}') at {3}% health", food.Name, food.Slot,
                 ClickAimCombat.KeyLabel(food.KeyVk), health));
         }
-        if (wantDrink)
+        if (wantDrink && !_stop && !ClickAimAbort.Requested && !InRealCombat())
         {
             ClickAimInput.TapKey(hwnd, drink!.KeyVk, 40);
             _presses++;
             said.Add(string.Format(CultureInfo.InvariantCulture,
-                "drank {0} (slot {1} '{2}') at {3}% mana", drink.Name, drink.Slot,
+                "pressed drink key for {0} (slot {1} '{2}') at {3}% mana", drink.Name, drink.Slot,
                 ClickAimCombat.KeyLabel(drink.KeyVk), mana));
         }
+
+        if (said.Count == 0) return "";
+        Logging.Write("[Rest] " + string.Join("; ", said.ToArray()) + "; holding still");
 
         /* Sit and let it work, the way a player does: eat and drink to NEARLY full, not to one
          * point past the threshold. The first version stopped the moment the rule cleared, so a
@@ -2025,7 +2041,7 @@ internal static class GrindRunner
         int afterMana = mana;
         while (unchecked(Environment.TickCount - started) < ClickAimSettings.RestMs && !_stop)
         {
-            ClickAimAbort.Wait(500);
+            if (ClickAimAbort.Wait(500)) break;
             afterHealth = HealthPercent();
             afterMana = ManaPercent();
 
@@ -2926,6 +2942,20 @@ internal static class GrindRunner
         _unverifiedGuid = default(WowBGuid);
         _gaveUpAt = 0;
         ClickAimSettings.Load();
+        _manaPeak = 0;
+        _healthPeak = 0;
+        _restHeldQuietAt = unchecked(Environment.TickCount - 15001);
+        // Seed the observed peaks now; if already low and max-power is unreadable,
+        // a reliable mana percentage cannot be reconstructed from one observation.
+        int health = HealthPercent();
+        int mana = ManaPercent();
+        Logging.Write("[Gather] recovery uses Combat settings and configured food/drink hotbar slots; initial health="
+                      + health + "% mana=" + mana + "% (power maximum is a candidate; session peak is also used)");
+    }
+
+    internal static string RestForGather(IntPtr hwnd)
+    {
+        return RestIfNeeded(hwnd);
     }
 
     // Proximity is a heuristic, not attacker identity or hostility proof. Never chase
@@ -3054,6 +3084,22 @@ internal static class GrindRunner
     /// that while moving" and costs the whole cast window, so this is worth two position
     /// reads: the same point twice means stopped.
     /// </summary>
+    private static bool StopForRest(IntPtr hwnd)
+    {
+        ClickAimKeySteer.ReleaseHeld();
+        ClickAimKeySteer.ReleaseArrows(hwnd);
+        double lastX = double.NaN, lastY = double.NaN;
+        for (int i = 0; i < 6; i++)
+        {
+            if (ClickAimAbort.Wait(120) || _stop) return false;
+            if (!ClickAimPositions.TryRead(out double x, out double y)) return false;
+            if (!double.IsNaN(lastX) && ClickAimMath.Len(x - lastX, y - lastY) < 0.15) return true;
+            lastX = x;
+            lastY = y;
+        }
+        return false;
+    }
+
     private static void StopAndSettle(IntPtr hwnd)
     {
         ClickAimKeySteer.ReleaseHeld();
@@ -3061,7 +3107,7 @@ internal static class GrindRunner
         double lastX = double.NaN, lastY = double.NaN;
         for (int i = 0; i < 6; i++)
         {
-            Thread.Sleep(120);
+            if (ClickAimAbort.Wait(120)) return;
             double x, y;
             if (!ClickAimPositions.TryRead(out x, out y)) return;
             if (!double.IsNaN(lastX) && ClickAimMath.Len(x - lastX, y - lastY) < 0.15) return;
