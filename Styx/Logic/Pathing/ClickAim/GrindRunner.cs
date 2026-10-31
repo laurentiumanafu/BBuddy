@@ -195,6 +195,13 @@ internal static class GrindRunner
     private const int PullProbeMs = 1500;
 
     /// <summary>
+    /// Do not sit down with a fight this close. A meal is cancelled by any damage and a character
+    /// sitting next to a wolf is a character about to be eaten, so the rest waits for the next gap
+    /// instead - the walk continues and the next tick re-checks.
+    /// </summary>
+    private const double RestSafeYd = 12.0;
+
+    /// <summary>
     /// How close the walk stops short of the mob: inside <see cref="AttackRangeYd"/> once the
     /// character's own momentum has been spent, instead of through it and out the other side.
     /// </summary>
@@ -383,6 +390,22 @@ internal static class GrindRunner
     /// <summary>Set by the window's "Sell now" button, cleared by the trip it starts.</summary>
     private static volatile bool _vendorDue;
 
+    // ---- "is this character really fighting?" -------------------------------
+    /// <summary>Health as last sampled by <see cref="InRealCombat"/>; -1 while out of combat.</summary>
+    private static int _lastHpSeen = -1;
+
+    /// <summary>When the health bar last went DOWN. Damage needs no flags to be believed.</summary>
+    private static int _lastHurtAt;
+
+    /// <summary>Throttles the "the flag is stale" line to once per 15 s.</summary>
+    private static int _realCombatQuietAt;
+
+    /// <summary>Throttles the "not eating next to that" line to once per 15 s.</summary>
+    private static int _restHeldQuietAt;
+
+    /// <summary>How long after losing health the character still counts as fighting.</summary>
+    private const int CombatEvidenceMs = 8000;
+
     /// <summary>
     /// Bodies looted since the last trip. This is the bag-full stand-in: the container slots
     /// cannot be read on this build, so the count of things taken is the count of things the
@@ -495,10 +518,15 @@ internal static class GrindRunner
     /// <summary>The camera's field of view: the mover's own default, and what its log prints.</summary>
     private const double CameraFovDeg = 90.0;
 
-    /// <summary>Set by the "stop" request. The loop ends after the current tick.</summary>
+    /// <summary>
+    /// Set by the "stop" request. The loop ends after the current tick - and every loop it can be
+    /// sitting inside (the walk, the turn, the cast wait) ends with it, because they all read
+    /// <see cref="ClickAimAbort"/> as well.
+    /// </summary>
     public static void Stop()
     {
         _stop = true;
+        ClickAimAbort.Request();
     }
 
     public static bool Running { get { return _running; } }
@@ -537,6 +565,7 @@ internal static class GrindRunner
             System.IO.Path.GetFileName(profilePath), areas.Count, LevelSpan(areas)));
 
         _stop = false;
+        ClickAimAbort.Clear();
         _running = true;
 
         var thread = new Thread(() => Run(areas, minutes));
@@ -652,6 +681,20 @@ internal static class GrindRunner
                     Logging.Write("[Grind] the local player reads 0 health - the character is dead or "
                                   + "being resurrected. Stopping instead of walking a corpse round the ring.");
                     break;
+                }
+
+                /* The table before the road. The 15:50 run walked 200 yd to the vendor at 17 of
+                 * 167 power with food and drink on the bar and never took a bite, because the
+                 * rest check sat BELOW this one and the trip returns to the top of the loop on
+                 * the tick it starts. Eating is cheap, the walk is not, and the thresholds are
+                 * the user's own: rest first, then sell.
+                 *
+                 * Not when the window asked, though. "Sell now" is a button somebody is watching;
+                 * a trip the counters asked for can afford to eat first. */
+                if (!_vendorDue)
+                {
+                    string restedFirst = RestIfNeeded(hwnd);
+                    if (restedFirst.Length > 0) Logging.Write("[Grind] " + restedFirst);
                 }
 
                 /* The bags before the mobs. The 2026-10-31 run pressed "Sell now" and watched the
@@ -987,6 +1030,16 @@ internal static class GrindRunner
          * "the area is clear" behind for the hotspot loop to act on. */
         _scanWasClear = false;
 
+        /* A trip that was asked for is not a suggestion: nothing NEW is picked up while one is
+         * waiting. (The loop asks VendorDue first, so this is the second line of defence - the
+         * case it really covers is a request that arrives while this function is already
+         * running.) */
+        if (_vendorDue && !InRealCombat())
+        {
+            report = "a vendor trip is waiting - not picking up a new fight before it";
+            return false;
+        }
+
         WowBWorldSnapshot? snap;
         if (!Capture(out snap) || snap == null)
         {
@@ -1212,9 +1265,19 @@ internal static class GrindRunner
                 && corpseFields.Health == 0)
             {
                 /* A body we can see is a body we can take, and this is the moment we are
-                 * standing on it: loot first, then clear the target. */
-                string loot = LootNearby(hwnd, 2);
-                if (loot.Length > 0) Logging.Write("[Grind] " + loot);
+                 * standing on it: loot first, then clear the target. Not when a vendor trip is
+                 * waiting, though - in the 15:50 run these two right-clicks were the eight
+                 * seconds between "Sell now" and the walk to the vendor. */
+                if (_vendorDue && !InRealCombat())
+                {
+                    Logging.Write("[Grind] a vendor trip is waiting: the corpse is left where it is and "
+                                  + "taken on the way back");
+                }
+                else
+                {
+                    string loot = LootNearby(hwnd, 2);
+                    if (loot.Length > 0) Logging.Write("[Grind] " + loot);
+                }
 
                 _notViable.Add(target.Guid);
                 if (_notViable.Count > 256) _notViable.Clear();
@@ -1342,8 +1405,20 @@ internal static class GrindRunner
         if (report.StartsWith("killed", StringComparison.Ordinal)
             || report.IndexOf("killed or fled", StringComparison.Ordinal) >= 0)
         {
-            string loot = LootNearby(hwnd, 3);
-            if (loot.Length > 0) Logging.Write("[Grind] " + loot);
+            /* A trip that was asked for outranks the corpse on the ground. The 15:50 run pressed
+             * "Sell now" at 15:50:35 and spent the next eight seconds right-clicking two bodies
+             * before it went - which the user reads, correctly, as "it fights before it sells".
+             * The body keeps; the vendor is 200 yd away. */
+            if (_vendorDue && !InRealCombat())
+            {
+                Logging.Write("[Grind] a vendor trip is waiting, so the body left on the ground for now - "
+                              + "it is taken on the way back through");
+            }
+            else
+            {
+                string loot = LootNearby(hwnd, 3);
+                if (loot.Length > 0) Logging.Write("[Grind] " + loot);
+            }
         }
 
         return true;
@@ -1668,7 +1743,7 @@ internal static class GrindRunner
         /* Out of combat only: a buff is a cast, and a cast in a fight is a wasted global. The
          * flag stays false until a quiet moment actually happens, so a run that starts next to
          * a mob still gets its buffs on the first calm iteration. */
-        if (PlayerInCombat() || UnderAttack()) return "";
+        if (InRealCombat()) return "";
         _buffsApplied = true;
 
         Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
@@ -1864,7 +1939,10 @@ internal static class GrindRunner
     {
         if (_stop) return "";
         if (ClickAimSettings.EatBelowPercent <= 0 && ClickAimSettings.DrinkBelowPercent <= 0) return "";
-        if (PlayerInCombat() || UnderAttack()) return "";
+        /* The verdict, not the flag: the 15:50 run never ate or drank once, and this line is
+         * where that came from - the flag stays set for a minute after a fight, so every chance
+         * to sit down was spent waiting for a combat that was already over. */
+        if (InRealCombat()) return "";
 
         Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
         if (reader == null) return "";
@@ -1880,6 +1958,29 @@ internal static class GrindRunner
                         && health >= 0 && health <= ClickAimSettings.EatBelowPercent;
         bool wantDrink = drink != null && ClickAimSettings.DrinkBelowPercent > 0
                          && mana >= 0 && mana <= ClickAimSettings.DrinkBelowPercent;
+
+        /* Standing next to something that can reach the character is not a place to sit. Said
+         * once per 15 s, because a silent skip here looks exactly like the bug this round is
+         * fixing: the user watched a character at 10% mana walk 200 yd instead of drinking. */
+        if (wantFood || wantDrink)
+        {
+            WowBWorldSnapshot? around;
+            WowBObservedUnit near;
+            double nearYd;
+            if (Capture(out around) && around != null && around.TryGetLocalPlayer(out WowBObservedUnit here))
+            {
+                int live2, unread2;
+                if (NearestKillable(around, here.Location.X, here.Location.Y, RestSafeYd,
+                                    out near, out nearYd, out live2, out unread2)
+                    && unchecked(Environment.TickCount - _restHeldQuietAt) > 15000)
+                {
+                    _restHeldQuietAt = Environment.TickCount;
+                    return string.Format(CultureInfo.InvariantCulture,
+                        "eating and drinking can wait: something killable is {0:F0} yd away, and a meal "
+                        + "with that on the character is a meal that gets interrupted", nearYd);
+                }
+            }
+        }
 
         if (!wantFood && !wantDrink)
         {
@@ -1929,7 +2030,7 @@ internal static class GrindRunner
         int afterMana = mana;
         while (unchecked(Environment.TickCount - started) < ClickAimSettings.RestMs && !_stop)
         {
-            Thread.Sleep(500);
+            ClickAimAbort.Wait(500);
             afterHealth = HealthPercent();
             afterMana = ManaPercent();
 
@@ -2070,8 +2171,9 @@ internal static class GrindRunner
         }
 
         _vendorDue = true;
-        Logging.Write("[Grind] a vendor trip was asked for: it is taken as soon as the character is "
-                      + "out of combat, before the next leg");
+        Logging.Write("[Grind] a vendor trip was asked for: it is taken before the next fight and before "
+                      + "the next leg, as soon as the character is out of combat - a fight already running "
+                      + "is finished, but nothing new is picked up and no body is looted on the way");
         return true;
     }
 
@@ -2216,7 +2318,7 @@ internal static class GrindRunner
         for (int attempt = 0; attempt < VendorNpcAttempts && !_stop && !found; attempt++)
         {
             if (TryFindVendorNpc(out npc, out npcYd)) { found = true; break; }
-            Thread.Sleep(400);
+            ClickAimAbort.Wait(400);
         }
 
         if (!found)
@@ -2520,7 +2622,7 @@ internal static class GrindRunner
         int result = 0;
         for (int waited = 0; waited < LootSettleMs && !_stop; waited += 300)
         {
-            Thread.Sleep(300);
+            ClickAimAbort.Wait(300);
             if (!BodyStillThere(corpse.Guid))
             {
                 result = 1;
@@ -2800,19 +2902,115 @@ internal static class GrindRunner
     }
 
     /// <summary>
+    /// Whether a unit is FIGHTING within <paramref name="radius"/> - any level, any reaction, no
+    /// bookkeeping filters. This is not a target scan: it answers "is a fight happening next to
+    /// this character", which is what the client's own in-combat flag is supposed to mean.
+    /// <see cref="NearestFighting"/> cannot answer it, because that one throws away everything the
+    /// current level band would not fight - and a level-8 mob beating on a level-4 character is
+    /// still a fight, however unwise.
+    /// </summary>
+    private static bool AnyFighting(WowBWorldSnapshot snap, double px, double py, double radius,
+                                    out WowBObservedUnit unit, out double yards)
+    {
+        Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
+        unit = default(WowBObservedUnit);
+        yards = double.MaxValue;
+        if (reader == null) return false;
+
+        bool found = false;
+        for (int i = 0; i < snap.Units.Count; i++)
+        {
+            WowBObservedUnit candidate = snap.Units[i];
+            if (candidate.IsLocalPlayer) continue;
+
+            double d = ClickAimMath.Len(candidate.Location.X - px, candidate.Location.Y - py);
+            if (d <= 0.5 || d > radius || d >= yards) continue;
+
+            Styx.WoWInternals.WowBReader.WowBUnitFields f;
+            if (!reader.TryGetUnitFields(candidate.UnitAddress, out f)) continue;
+            if (f.Health == 0) continue;
+            if ((f.UnitFlags & InCombatFlag) == 0) continue;
+
+            unit = candidate;
+            yards = d;
+            found = true;
+        }
+        return found;
+    }
+
+    /// <summary>
+    /// Whether this character is REALLY in a fight, as opposed to the client's in-combat flag
+    /// still being set.
+    ///
+    /// The 2026-10-31 15:50 run is why this exists. For the whole walk to the vendor the log
+    /// repeated "the character reads as in combat but nothing nearby is fighting - walking on",
+    /// and that stale flag is what kept the character from eating and drinking: both the rest and
+    /// the vendor check asked <see cref="PlayerInCombat"/>, which is one word in one block, and it
+    /// stayed set for about a minute after the last kill.
+    ///
+    /// So the flag is now only the question, never the answer:
+    ///
+    ///   * not set              -> out of combat, nothing more to look at;
+    ///   * set, health falling  -> in combat: damage is the proof that needs no flags;
+    ///   * set, something inside <see cref="InterruptYd"/> is fighting -> in combat;
+    ///   * set, neither         -> out of combat, and the log says so once in a while.
+    ///
+    /// The third case is what makes this safe to use for eating and selling: a mob that is on the
+    /// character is flagged as fighting, and it is inside 18 yd long before it is a threat.
+    /// </summary>
+    private static bool InRealCombat()
+    {
+        if (!PlayerInCombat())
+        {
+            _lastHurtAt = 0;
+            _lastHpSeen = -1;
+            return false;
+        }
+
+        /* Damage is the proof no flag can fake. Sampled here because this runs between fights,
+         * where a health bar that is not full and not rising is a bar being hit. */
+        int hp = HealthPercent();
+        if (hp >= 0)
+        {
+            if (_lastHpSeen >= 0 && hp < _lastHpSeen) _lastHurtAt = Environment.TickCount;
+            _lastHpSeen = hp;
+        }
+        if (_lastHurtAt != 0 && unchecked(Environment.TickCount - _lastHurtAt) < CombatEvidenceMs)
+            return true;
+
+        WowBWorldSnapshot? snap;
+        if (!Capture(out snap) || snap == null) return true;      // cannot look: believe the flag
+        WowBObservedUnit me;
+        if (!snap.TryGetLocalPlayer(out me)) return true;
+
+        WowBObservedUnit unit;
+        double d;
+        if (AnyFighting(snap, me.Location.X, me.Location.Y, InterruptYd, out unit, out d))
+            return true;
+
+        if (unchecked(Environment.TickCount - _realCombatQuietAt) > 15000)
+        {
+            _realCombatQuietAt = Environment.TickCount;
+            Logging.Write("[Grind] the in-combat flag is still set but nothing within "
+                          + InterruptYd.ToString("F0", CultureInfo.InvariantCulture)
+                          + " yd is fighting and the health bar is not falling - treating the character "
+                          + "as out of combat (so eating, drinking and selling can happen)");
+        }
+        return false;
+    }
+
+    /// <summary>
     /// Whether something is actually on the character: the in-combat flag AND a unit that is
     /// fighting within 25 yd. The flag alone lags for seconds after a kill, which would have
     /// made every loot trip wait for a combat state that is already over.
     /// </summary>
     private static bool UnderAttack()
     {
-        if (!PlayerInCombat()) return false;
-        WowBWorldSnapshot? snap;
-        if (!Capture(out snap) || snap == null) return false;
-        if (!snap.TryGetLocalPlayer(out WowBObservedUnit me)) return false;
-        WowBObservedUnit unit;
-        double d;
-        return NearestFighting(snap, me.Location.X, me.Location.Y, 25.0, out unit, out d);
+        /* One verdict for the whole class. It used to be its own scan, with two problems the
+         * 15:50 run made visible: it threw away the units outside the current level band (so a
+         * level-8 mob on a level-4 character was "not a fight"), and it could not tell a stale
+         * flag from a real one. */
+        return InRealCombat();
     }
 
     /// <summary>
@@ -3607,7 +3805,7 @@ internal static class GrindRunner
                 uint powerAfterHeal = powerBeforeHeal;
                 for (int waited = 0; waited < ClickAimCombat.HealVerifyMs && !_stop; waited += 300)
                 {
-                    Thread.Sleep(300);
+                    ClickAimAbort.Wait(300);
                     WowBWorldSnapshot? healed;
                     if (reader == null || !Capture(out healed) || healed == null) continue;
                     if (healed.TryGetLocalPlayer(out WowBObservedUnit me2)
@@ -3799,7 +3997,7 @@ internal static class GrindRunner
                 bool hurtMob = false;
                 for (int waited = 0; waited < ClickAimCombat.CastVerifyMs && !_stop; waited += 250)
                 {
-                    Thread.Sleep(250);
+                    ClickAimAbort.Wait(250);
                     WowBWorldSnapshot? afterCast;
                     if (!Capture(out afterCast) || afterCast == null) continue;
 
@@ -3948,7 +4146,7 @@ internal static class GrindRunner
             {
                 double nudged;
                 ClickAimKeySteer.Steer(target.Location.X, target.Location.Y, hwnd, true, out nudged);
-                Thread.Sleep(220);
+                ClickAimAbort.Wait(220);
                 ClickAimKeySteer.ReleaseHeld();
             }
 

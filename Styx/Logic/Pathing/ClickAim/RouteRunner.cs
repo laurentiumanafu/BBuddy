@@ -102,6 +102,7 @@ public static class RouteRunner
     public static bool Run(ClickAimMover mover, IList<RoutePoint> route, int maxLegs)
     {
         StopRequested = false;
+        ClickAimAbort.Clear();          // a new run is not the one that was stopped
         LastRunInterrupted = false;
         if (mover == null) throw new ArgumentNullException(nameof(mover));
         if (route == null || route.Count == 0)
@@ -131,10 +132,12 @@ public static class RouteRunner
 
         for (int i = 0; i < route.Count; i++)
         {
-            if (StopRequested)
+            if (StopRequested || ClickAimAbort.Requested)
             {
                 Logging.Write(string.Format(CultureInfo.InvariantCulture,
                     "[Route] stopped on request after {0} of {1} waypoint(s)", walked, route.Count));
+                ClickAimKeySteer.ReleaseHeld();
+                try { mover.MoveStop(); } catch { }
                 return walked > 0;
             }
 
@@ -279,6 +282,13 @@ public static class RouteRunner
 
         for (int plan = 0; plan <= MaxReplans; plan++)
         {
+            if (StopRequested || ClickAimAbort.Requested)
+            {
+                Logging.Write("[Route] stopped on request while planning the leg");
+                ClickAimKeySteer.ReleaseHeld();
+                return false;
+            }
+
             double px, py;
             if (!ClickAimPositions.TryRead(out px, out py))
             {
@@ -414,6 +424,15 @@ public static class RouteRunner
                     return false;
                 }
 
+                if (StopRequested || ClickAimAbort.Requested)
+                {
+                    Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                        "[Route] stopped on request at point {0}/{1}", p, follow.Length - 1));
+                    ClickAimKeySteer.ReleaseHeld();
+                    try { mover.MoveStop(); } catch { }
+                    return false;
+                }
+
                 bool lastPoint = p == follow.Length - 1;
                 if (ClickAimPilot.WalkTo(mover, follow[p], StepTolerance, MeshPointTimeoutMs,
                                          false, true, !lastPoint))
@@ -504,6 +523,13 @@ public static class RouteRunner
 
             for (int s = 1; s <= steps; s++)
             {
+                // A stop is immediate, even in the middle of a segment.
+                if (StopRequested || ClickAimAbort.Requested)
+                {
+                    ClickAimKeySteer.ReleaseHeld();
+                    return false;
+                }
+
                 double t = (double)s / steps;
                 var step = new WoWPoint((float)(from.X + (to.X - from.X) * t),
                                         (float)(from.Y + (to.Y - from.Y) * t),
@@ -549,6 +575,13 @@ public static class RouteRunner
             int steps = (int)Math.Ceiling(length / maxStep);
             for (int s = 1; s <= steps; s++)
             {
+                // A stop is immediate, even in the middle of a segment.
+                if (StopRequested || ClickAimAbort.Requested)
+                {
+                    ClickAimKeySteer.ReleaseHeld();
+                    return false;
+                }
+
                 double t = (double)s / steps;
                 outPoints.Add(new WoWPoint((float)(from.X + (to.X - from.X) * t),
                                            (float)(from.Y + (to.Y - from.Y) * t),

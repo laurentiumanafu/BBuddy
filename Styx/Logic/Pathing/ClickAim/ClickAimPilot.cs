@@ -87,6 +87,16 @@ public static class ClickAimPilot
 
         while (unchecked(Environment.TickCount - started) < timeoutMs)
         {
+            /* A stop is immediate: let go of the movement key, stop the mover, and say the walk
+             * did not arrive. Everything above this line would otherwise walk the whole leg. */
+            if (ClickAimAbort.Requested)
+            {
+                mover.MoveStop();
+                ClickAimKeySteer.ReleaseHeld();
+                if (verbose) Logging.Write("[ClickAim] the walk was stopped on request");
+                return false;
+            }
+
             mover.MoveTowards(goal);
 
             if (stopWhenBlocked && mover.Blocked)
@@ -267,6 +277,12 @@ public static class ClickAimPilot
         int started = Environment.TickCount;
         while (unchecked(Environment.TickCount - started) < SidestepMs)
         {
+            if (ClickAimAbort.Requested)
+            {
+                mover.MoveStop();
+                ClickAimKeySteer.ReleaseHeld();
+                break;
+            }
             mover.MoveTowards(to);
             if (mover.Blocked) break;
             Thread.Sleep(60);

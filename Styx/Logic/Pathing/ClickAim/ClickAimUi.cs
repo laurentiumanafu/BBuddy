@@ -152,10 +152,14 @@ internal static class ClickAimUi
     /// <summary>Stops whatever is running. Safe to call when nothing is.</summary>
     public static string Stop()
     {
+        /* Requesting the abort is unconditional and comes first. Even with no loop registered as
+         * running, a key pressed by the last one can still be held down, and letting go of it is
+         * the difference between "stopped" and "walks away from the window". */
+        ClickAimAbort.Request();
+        ClickAimDiagnostics.RequestStop();
         if (!Running) return "nothing is running";
         GrindRunner.Stop();
-        ClickAimDiagnostics.RequestStop();
-        return "stopping after the current step";
+        return "stopped: the walk and the turn loop end on this tick";
     }
 
     /// <summary>

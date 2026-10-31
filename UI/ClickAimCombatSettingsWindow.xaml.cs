@@ -603,8 +603,9 @@ namespace CopilotBuddy.UI
         private void btnVendorSellNow_Click(object sender, RoutedEventArgs e)
         {
             if (GrindRunner.RequestVendorTrip())
-                lblVendorNote.Text = "Asked the grind loop to sell: it goes before the next hotspot, as soon as the "
-                                     + "character is out of combat.";
+                lblVendorNote.Text = "Asked the grind loop to sell: it goes before the next fight and before the "
+                                     + "next hotspot. A fight already running is finished first; nothing new is "
+                                     + "picked up and no body is looted on the way.";
             else
                 lblVendorNote.Text = "No grind run is going. Start the bot first, or record the plan while it runs.";
         }

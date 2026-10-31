@@ -2096,6 +2096,7 @@ first decision the loop makes after "is the character alive":
 
 ```
 if (PlayerDead()) break;
+if (!_vendorDue) RestIfNeeded(...)                   <- added in the 15:50 round, see below
 if (VendorDue()) { VendorTrip(...); continue; }     <- moved here
 ApplyBuffsIfNeeded(...)
 TryEngage(...)
@@ -2196,3 +2197,82 @@ a half-moved step never exists on disk - order is the whole meaning of a sale.
 Self-tests: `vendorRemoveStep`, `vendorRemoveStepTookTheRightOne`, `vendorRemoveStepRejectsBadIndex`,
 `vendorMoveStep`, `vendorMoveStepOrder`, `vendorMoveStepClamps`, `vendorAddSecondPoint`,
 `vendorRemovePoint`, `vendorRemovePointTookTheRightOne`, `vendorRemovePointRejectsBadIndex`.
+
+## The 15:50 run: a stale flag, the meal it skipped, and a stop that was not one
+
+The log (`google_drive/2026-10-31_1550_9652.log`) has one fact at its centre and two symptoms on
+top of it: the client's in-combat bit stayed set for the whole walk to the vendor. Every line
+below is from that run.
+
+| time | what the log says |
+|---|---|
+| 15:50:34.130 | `17 of power left and Shadow Bolt needs about 42 … melee from here FOR THE REST OF THIS FIGHT` |
+| 15:50:35.379 | `a vendor trip was asked for: it is taken as soon as the character is out of combat` |
+| 15:50:43.384 | `selling first, before the next hotspot: vendor 3 … is 201 yd away` |
+| 15:50:43.392 | `the character reads as in combat but nothing nearby is fighting - walking on` |
+| 15:50:59.261, 15:51:15.627, 15:51:33.416 | the same line, 16 s apart, for the whole 200 yd walk |
+| 15:51:48.487 | `Stopping the bot!` |
+| 15:51:48.487 → 15:51:57.157 | 28 more `[Keys]` lines, including a 180 deg re-aim at 15:51:55 |
+| — | no `ate` and no `drank` line anywhere in 225 lines |
+
+### 1. Selling and eating asked the flag, and the flag was wrong
+
+`VendorDue()` and `RestIfNeeded()` both began with `PlayerInCombat() || UnderAttack()`. The flag
+survived the kill by about a minute, so the character walked 200 yd at 17 of 167 power with
+Refreshing Spring Water in slot 11 and Tough Jerky in slot 12 - both of them already mapped by
+`ClickAimCombat.FindDrink`/`FindFood`, which is why the item lookup was never the bug.
+
+`InRealCombat()` replaces the guess, and `UnderAttack()` is now a call to it:
+
+```
+flag clear                                  -> false
+flag set, health fell within 8 s            -> true    (damage needs no flags)
+flag set, something inside 18 yd is fighting -> true    (any level - a level-8 mob on a
+                                                        level-4 character is still a fight)
+flag set, neither                           -> false, said once per 15 s
+```
+
+`AnyFighting` is the new scan behind the third case. It is deliberately *not* `NearestFighting`:
+that one drops everything outside the current level band, which is right for picking a target and
+wrong for deciding whether the character is being hit.
+
+### 2. The order: eat, then walk to the vendor
+
+`VendorTrip` returns to the top of the loop on the tick it starts, so a rest check below it was a
+rest check that never ran when a trip was due. `RestIfNeeded` now runs before `VendorDue` - except
+when `_vendorDue` is set, because "Sell now" is a button somebody is watching and a trip the
+counters asked for can afford a meal first.
+
+Two more guards came out of the same run:
+
+* **A meal beside a mob is not a meal.** If something level-viable is inside `RestSafeYd` (12 yd),
+  the rest is held and the log says so once per 15 s, instead of sitting down and being interrupted
+  (or eaten).
+* **"Sell now" pre-empts the corpse, too.** The 8 s between the request and the walk in this log
+  were two right-clicks on bodies. With a trip waiting, the body is left on the ground (it keeps;
+  the vendor does not go anywhere) and `TryEngage` refuses to pick up a new fight, so the walk
+  starts on the next tick.
+
+### 3. Stop is a hand on the wheel
+
+`ClickAimUi.Stop()` set `_stop` and printed `stopping after the current step`, and nine seconds of
+arrow keys followed, because the key-steer loop, the pilot loop and every `Thread.Sleep` between
+them belonged to nobody that had heard about the stop.
+
+`ClickAimAbort` (`Styx/Logic/Pathing/ClickAim/ClickAimAbort.cs`) is one flag for every long loop:
+
+* `ClickAimKeySteer.Steer` and `.Face` return on entry and inside the tick loop, releasing the
+  arrows;
+* `ClickAimPilot.WalkTo` and its sidestep stop the mover and let go of the forward key;
+* `RouteRunner.Run` checks it beside `StopRequested` at the waypoint, the re-plan and every follow
+  point, and `WalkSteps` in the middle of a segment;
+* `ClickAimAbort.Wait(ms)` replaces the long sleeps in `GrindRunner` (500, 400, 300, 250, 220 ms), so
+  a stop cuts a two-and-a-half second merchant wait down to nothing instead of waiting it out;
+* `ClickAimUi.Stop()` requests it *before* it looks at `Running`, and `ClickAimUi.Stop` on a stray
+  held key still lets go of it.
+
+`GrindRunner.Stop()` requests it too, `GrindRunner.Start()` and `RouteRunner.Run()` clear it, so a
+stop that arrives between runs cannot abort the next one.
+
+It is still not a pre-emption of the client: a key that is already down is released, a click that
+has already been sent is already sent. What it is now is one tick, not nine seconds.

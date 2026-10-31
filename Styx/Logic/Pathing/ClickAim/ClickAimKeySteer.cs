@@ -464,6 +464,14 @@ internal static class ClickAimKeySteer
     {
         remaining = 0;
 
+        /* Stop is a hand on the wheel, not a request to finish the leg. The 15:51 run kept turning
+         * for nine seconds after "Stopping the bot!" because this loop never asked. */
+        if (ClickAimAbort.Requested)
+        {
+            if (hwnd != IntPtr.Zero) SetForward(hwnd, false);
+            return false;
+        }
+
         double px, py;
         if (!ClickAimPositions.TryRead(out px, out py)) return false;
 
@@ -574,6 +582,12 @@ internal static class ClickAimKeySteer
     /// </summary>
     public static bool Face(double tx, double ty, IntPtr hwnd, double toleranceDeg, int maxTicks)
     {
+        if (ClickAimAbort.Requested)
+        {
+            if (hwnd != IntPtr.Zero) ReleaseArrows(hwnd);
+            return false;
+        }
+
         double px, py;
         if (!ClickAimPositions.TryRead(out px, out py)) return false;
         if (ClickAimMath.Len(tx - px, ty - py) < 0.5) return true;      // standing on it
@@ -589,6 +603,12 @@ internal static class ClickAimKeySteer
 
         for (int tick = 0; tick <= maxTicks; tick++)
         {
+            if (ClickAimAbort.Requested)
+            {
+                ReleaseArrows(hwnd);
+                return false;
+            }
+
             /* The bearing is recomputed every tick: the character may be walking while it
              * turns, and the mob it is aiming at is usually moving toward it. */
             double cx, cy;
