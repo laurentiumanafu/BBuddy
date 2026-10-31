@@ -186,6 +186,15 @@ internal static class GrindRunner
     /// </summary>
     private const int MeleeClickMs = 2500;
 
+    /// <summary>
+    /// How long a press of the Attack key is left alone before it is judged to have worked or
+    /// not. A swing on a level-3 character takes up to three seconds to land, and the 13:46 log
+    /// is a press at 37.9 s, another at 40.8 s, and the first damage at 41.4 s: the second press
+    /// toggled OFF the swing the first one had just started. Six seconds covers every swing timer
+    /// this character has been seen with, and the cost of waiting is one swing.
+    /// </summary>
+    private const int MeleePressGraceMs = 6000;
+
     /// <summary>How long to wait in melee when nothing was sent this pass.</summary>
     private const int MeleeWaitMs = 350;
 
@@ -305,27 +314,37 @@ internal static class GrindRunner
     /// </summary>
     private static bool _scanWasClear;
 
-    /// <summary>Minimum spacing between two memory-based (left-click) selections.</summary>
-    private const int PoolSelectMs = 2500;
+    /// <summary>
+    /// The longest distance the client's own targeting has been seen to offer a target: the
+    /// 13:23 log has "TAB has a target 48 yd away", and the 13:46 run engaged one at 45 yd.
+    /// Inside this radius a TAB refusal MEANS something ("the client does not consider this an
+    /// enemy"); beyond it a refusal only means "too far for TAB". That is the difference between
+    /// blacklisting a friendly peon and blacklisting a wolf.
+    /// </summary>
+    private const double TabReachYd = 45.0;
 
     /// <summary>
-    /// How far away a unit the POOL offers may be and still be walked to without TAB having
-    /// agreed first. The full <see cref="SearchYd"/> circle is what the bot fights in, but the
-    /// pool cannot tell a wolf from a guard, so an unverified pick from it is only worth a short
-    /// walk: 50 yd covers the user's "a monster 40 yards away is skipped" and leaves the far half
-    /// of the circle to TAB, which does know. Anything the pool sees further out is picked up on
-    /// the way in, by the walk or by the next scan.
+    /// Units the pool can see inside <see cref="TabReachYd"/> that TAB refused to select, and
+    /// when. TAB is the client's own enemy filter, so a refusal is the client saying "not an
+    /// enemy" - which is what a friendly NPC is. This exists because the 13:46 run walked up to a
+    /// friendly lazy peon and spent twenty seconds casting at it: the old pool fallback selected
+    /// it by left-click, and the pool cannot tell a peon from a wolf.
     /// </summary>
-    private const double PoolSelectYd = 50.0;
-    private static int _lastPoolSelectMs;
+    private static readonly Dictionary<WowBGuid, int> _tabMisses = new Dictionary<WowBGuid, int>();
 
     /// <summary>
-    /// Units the pool offered and the left-click search could not put the cursor on. One miss is
-    /// bad luck (the body may be behind the character's own model for one frame); the second
-    /// miss means "this one is not clickable from here" and it is set aside like any other
-    /// refused unit, so a hotspot can still become clear and the walk can move on.
+    /// Units TAB has refused twice, with the tick until which the scan should ignore them. It is
+    /// a PAUSE, not a blacklist: a mob at the edge of TAB's reach is refused because it is too
+    /// far, not because it is friendly, and it has to be fought once the character is five yards
+    /// closer. After <see cref="TabRefusePauseMs"/> the unit is asked about again.
     /// </summary>
-    private static readonly HashSet<WowBGuid> _poolMisses = new HashSet<WowBGuid>();
+    private static readonly Dictionary<WowBGuid, int> _tabRefusedUntil = new Dictionary<WowBGuid, int>();
+
+    /// <summary>How long a unit TAB refused twice is left out of the scan.</summary>
+    private const int TabRefusePauseMs = 60000;
+
+    /// <summary>Two refusals only count when they are this far apart (a real second look).</summary>
+    private const int TabMissSpacingMs = 5000;
 
     /// <summary>Leave a target it gave up on alone for this long.</summary>
     private const int GiveUpMs = 15000;
@@ -414,12 +433,12 @@ internal static class GrindRunner
         _pullQuietAt = 0;
         _clearQuietAt = 0;
         _poolQuietAt = 0;
-        _lastPoolSelectMs = 0;
         _scanWasClear = false;
         _combatQuietAt = 0;
         _farQuietAt = 0;
         _notViable.Clear();
-        _poolMisses.Clear();
+        _tabMisses.Clear();
+        _tabRefusedUntil.Clear();
         _looted.Clear();
         _loots = 0;
         _lootProbed = false;
@@ -805,25 +824,23 @@ internal static class GrindRunner
         double px = player.Location.X, py = player.Location.Y;
         int near = CountNear(snap, px, py, SearchYd);
 
-        /* Three ways to choose a target, in this order, and the order is the whole design:
+        /* Two ways to choose a target, and TAB is the last word:
          *
          *   1. what is already selected (the walk asks once, TAB costs a key);
          *   2. TAB - the client's own enemy filter, the only thing on this build that knows
-         *      who is an enemy;
-         *   3. the unit pool in memory, selected with a LEFT-click, when TAB has nothing live
-         *      to offer but the pool says something alive is standing right there.
+         *      who is an enemy.
          *
-         * Step 3 is the answer to the 13:23 report ("it's not attacking monsters between
-         * hotspots unless the monsters are in front of the character ... do we have a memory
-         * offset so that the bot sees the monsters around it?"). The pool has always had the
-         * units, their positions, levels and unit flags; what it does not have is a reaction
-         * (friendly/hostile) word, which is why TAB stays first and why a pool pick is only
-         * trusted as far as the fight can verify it.
+         * The unit pool in memory does not select anything any more. It has the units, their
+         * positions, levels and unit flags - everything needed to answer "is anything alive
+         * within 100 yd, and which way is it" - but no reaction (friendly/hostile) word, and the
+         * 13:46 run is what that costs: a left-click pool fallback selected a friendly lazy peon
+         * and the bot cast Shadow Bolt at it for twenty seconds. The pool is used for the scan,
+         * for turning onto the nearest unit before asking TAB (TAB only looks in front), and for
+         * stopping the walk beside a mob. TAB decides.
          *
-         * The right-CLICK fallback stays gone. It cannot tell a mob from a guard, and on
+         * The right-CLICK fallback stays gone too: it cannot tell a mob from a guard, and on
          * 2026-10-30 17:22 it walked up to a friendly townsman 3.6 yd away and right-clicked
-         * him: a right-click is "attack and walk to it", so the "fight" was against the town.
-         * A left-click SELECTS and does nothing else, which is a very different proposition.
+         * him - a right-click is "attack and walk to it", so the "fight" was against the town.
          * */
         WowBObservedUnit target = default(WowBObservedUnit);
         bool have = false;
@@ -908,56 +925,48 @@ internal static class GrindRunner
             have = true;
         }
 
-        /* ---- step 3: the pool, and a left-click to select it ----
+        /* ---- step 3: TAB said no, so believe it ----
          *
-         * TAB had nothing live to offer, but the unit pool says something alive and inside the
-         * level band is standing <nearestYd> yd away. Ask the client to select it the only other
-         * way a player can: a LEFT-click on it. A left-click selects and does nothing else - it
-         * is not an attack order and not a walk order - and FindUnitPixel only reports success
-         * when the client's own target guid answers with that unit, so a probe that lands on the
-         * ground costs nothing but the probe.
+         * The 13:46 run had a pool fallback here: if TAB offered nothing, a left-click selected
+         * the nearest unit in the pool and the fight was tried on it. It found a real mob or two
+         * and then it found a friendly lazy peon and spent twenty seconds casting Shadow Bolt at
+         * it ("changed nothing in 3200 ms: mana 97 -> 132"), because the pool has no reaction
+         * word: it can say "something alive, level 4, 34 yd away" and not "a peon".
          *
-         * The last check is the fight itself: a friendly NPC takes no damage from anything and
-         * the fight gives up on it after a few presses and blacklists it, so a town costs a
-         * couple of wasted presses rather than a reputation. */
-        if (!have && haveNearest && nearestYd <= PoolSelectYd
-            && unchecked(Environment.TickCount - _lastPoolSelectMs) >= PoolSelectMs)
+         * So the fallback is gone. TAB is the client's own enemy filter and the only authority
+         * on who may be attacked; the pool keeps the jobs it is actually good at - deciding
+         * whether the area is clear, which way to face before asking TAB, and stopping the walk
+         * when something is standing beside the path.
+         *
+         * What is left of the old "and if TAB is just being difficult" case is bookkeeping: a
+         * unit the pool can see INSIDE TAB's own reach that TAB keeps refusing is either a
+         * friend or something this character cannot attack, and after two refusals it is set
+         * aside for the session so a hotspot full of peons can finish. Beyond TAB's reach a
+         * refusal proves nothing, so nothing is recorded there. */
+        if (!have && haveNearest && nearestYd <= TabReachYd)
         {
-            _lastPoolSelectMs = Environment.TickCount;
-
-            uint nearestLevel = 0;
-            Styx.WoWInternals.WowBReader? poolReader = ObjectManager.WowB;
-            Styx.WoWInternals.WowBReader.WowBUnitFields nearestFields;
-            if (poolReader != null && poolReader.TryGetUnitFields(nearest.UnitAddress, out nearestFields))
-                nearestLevel = nearestFields.Level;
-
-            int fx, fy;
-            string how;
-            bool selected = FindUnitPixel(hwnd, nearest, px, py, out fx, out fy, out how);
-            if (selected && Capture(out snap) && snap != null && snap.TryGetSelectedTarget(out target))
+            int lastMiss;
+            int now = Environment.TickCount;
+            if (_tabMisses.TryGetValue(nearest.Guid, out lastMiss)
+                && unchecked(now - lastMiss) >= TabMissSpacingMs)
             {
-                have = true;
-                Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                    "[Grind] TAB offered nothing live, so the pool was used: {0} is alive at {1:F1} yd "
-                    + "(level {2}) and the client selected it on a left-click at {3},{4} px",
-                    target.Guid, nearestYd, nearestLevel, fx, fy));
-            }
-            else
-            {
-                if (!_poolMisses.Add(nearest.Guid))
+                _tabMisses.Remove(nearest.Guid);
+                if (_tabRefusedUntil.Count > 256) _tabRefusedUntil.Clear();
+                _tabRefusedUntil[nearest.Guid] = now + TabRefusePauseMs;
+                if (unchecked(now - _poolQuietAt) > 15000)
                 {
-                    /* Second miss: stop letting this one keep the hotspot open. */
-                    _notViable.Add(nearest.Guid);
-                    if (_notViable.Count > 256) _notViable.Clear();
-                }
-                if (unchecked(Environment.TickCount - _poolQuietAt) > 15000)
-                {
-                    _poolQuietAt = Environment.TickCount;
+                    _poolQuietAt = now;
                     Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                        "[Grind] the pool has {0} alive at {1:F1} yd (level {2}) and the left-click search "
-                        + "could not put the cursor on it: {3}", nearest.Guid, nearestYd, nearestLevel,
-                        how));
+                        "[Grind] {0} is {1:F1} yd away and TAB has refused it twice in a row - the client "
+                        + "does not consider it an enemy, so it is left out of the scan for {2} s "
+                        + "(a friendly NPC looks exactly like this)", nearest.Guid, nearestYd,
+                        TabRefusePauseMs / 1000));
                 }
+            }
+            else if (!_tabMisses.ContainsKey(nearest.Guid))
+            {
+                if (_tabMisses.Count > 256) _tabMisses.Clear();
+                _tabMisses[nearest.Guid] = now;
             }
         }
 
@@ -1215,13 +1224,13 @@ internal static class GrindRunner
 
         /* TAB can only offer what is in front of the character, so a mob beside or behind it
          * leaves the walk running. The unit pool has no such blind spot: if something alive and
-         * level-viable is standing within the short radius, stop the walk and let the main loop
-         * do the selecting - the left-click search that selects a pool unit takes seconds and
-         * does not belong on the route thread. */
+         * level-viable is standing inside TAB's reach, stop the walk and let the main loop face
+         * it and ask TAB - a unit further out than TAB can see is not worth stopping for, because
+         * the walk itself is closing that distance. */
         WowBObservedUnit poolUnit;
         double poolYd;
         int poolLive, poolUnread;
-        if (NearestKillable(snap, me.Location.X, me.Location.Y, PoolSelectYd, out poolUnit, out poolYd,
+        if (NearestKillable(snap, me.Location.X, me.Location.Y, TabReachYd, out poolUnit, out poolYd,
                             out poolLive, out poolUnread))
         {
             if (unchecked(Environment.TickCount - _poolQuietAt) > 5000)
@@ -1230,7 +1239,7 @@ internal static class GrindRunner
                 Logging.Write(string.Format(CultureInfo.InvariantCulture,
                     "[Grind] the pool has {0} alive and level-viable {1:F1} yd away ({2} in the pool inside "
                     + "{3:F0} yd, {4} of them unreadable) - stopping the walk to deal with it",
-                    poolUnit.Guid, poolYd, poolLive, PoolSelectYd, poolUnread));
+                    poolUnit.Guid, poolYd, poolLive, TabReachYd, poolUnread));
             }
             return true;
         }
@@ -2058,6 +2067,15 @@ internal static class GrindRunner
             if (Refused(candidate.Guid)) continue;
             if (_notViable.Contains(candidate.Guid)) continue;
 
+            /* ...and a unit TAB refused twice is left out of the scan for a minute, so a hotspot
+             * holding nothing but friendly NPCs can finish. Only the scan: nothing is remembered
+             * beyond the pause, because a mob at the edge of TAB's reach is refused for being far,
+             * not for being friendly. */
+            int refusedUntil;
+            if (_tabRefusedUntil.TryGetValue(candidate.Guid, out refusedUntil)
+                && unchecked(Environment.TickCount - refusedUntil) < 0)
+                continue;
+
             double d = ClickAimMath.Len(candidate.Location.X - px, candidate.Location.Y - py);
             if (d > radius) continue;
 
@@ -2471,6 +2489,7 @@ internal static class GrindRunner
         bool meleeSwinging = false;
         int lastMeleeDamageMs = 0;
         int lastAttackPressMs = 0;
+        bool attackPressed = false;     // the Attack key has been pressed this fight
         int lastMeleeClickMs = 0;
         var worked = new List<string>();
 
@@ -2907,11 +2926,24 @@ internal static class GrindRunner
             if (!meleeOnce)
             {
                 meleeOnce = true;
+                string whyCasting = castFailures > 0
+                    ? "switched off: the casts landed nothing"
+                    : damage == null
+                        ? "no damage spell on the bar"
+                        : damage.IsMelee
+                            ? "not applicable: the damage spell is a melee ability"
+                            : "not enough power";
+
+                /* LATCHED for the rest of the fight. The 13:46 run is the reason: the swing was
+                 * running, mana regenerated past the price of Shadow Bolt, the cast broke the
+                 * swing, the mob hit back and the mana was gone again - every four seconds,
+                 * which is the "DPS is lost" the user reported. A player does not stop swinging
+                 * to start a 2.5 s cast in melee at level 3, and neither does this now. */
+                melee = true;
                 Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                    "[Grind] melee from here: casting is {0} (damage spell {1}{2}, power {3}, {4} failed cast(s))",
-                    melee ? "switched off for this fight"
-                          : damage != null && damage.IsMelee ? "not applicable: the damage spell is a melee ability"
-                          : "not available",
+                    "[Grind] melee from here FOR THE REST OF THIS FIGHT - casting is {0} (damage spell {1}{2}, "
+                    + "power {3}, {4} failed cast(s)); a swing that is running stays running",
+                    whyCasting,
                     damage == null ? "none on the bar" : damage.Name,
                     meleeHit == null ? "" : " and " + meleeHit.Name + " to press at arm's length",
                     myMana, castFailures));
@@ -3007,10 +3039,21 @@ internal static class GrindRunner
              * has stopped. The key is preferred to a click because a click at arm's length can
              * be a walk order. */
             bool attacked = false;
+            int sincePressMs = unchecked(Environment.TickCount - lastAttackPressMs);
+            /* A press is still "in flight" until a swing has had time to land. Without this the
+             * loop pressed Attack a second time 2.8 s after the first, which on this client is a
+             * toggle: the swing the first press started was turned off again. */
+            bool pressPending = lastAttackPressMs != 0 && sincePressMs < MeleePressGraceMs;
             if (auto != null)
             {
-                if (!swinging && unchecked(Environment.TickCount - lastAttackPressMs) >= MeleeClickMs)
+                /* One press is the norm. A second is only made when the first demonstrably did
+                 * nothing - no swing has landed for twice MeleeSwingQuietMs - because after a
+                 * heal or a spell the client keeps auto-attack ON and resumes swinging by
+                 * itself, and every extra press is a chance to toggle it off. */
+                if (!swinging && !pressPending && sincePressMs >= MeleeClickMs
+                    && sinceDamageMs >= (attackPressed ? MeleeSwingQuietMs * 2 : MeleeSwingQuietMs))
                 {
+                    attackPressed = true;
                     ClickAimInput.TapKey(hwnd, auto.KeyVk, 40);
                     lastAttackPressMs = Environment.TickCount;
                     presses++;
@@ -3020,7 +3063,8 @@ internal static class GrindRunner
                                 + "something stops it; pressing it again would turn it off)");
                 }
             }
-            else if (!swinging && unchecked(Environment.TickCount - lastMeleeClickMs) >= MeleeClickMs)
+            else if (!swinging && !pressPending
+                     && unchecked(Environment.TickCount - lastMeleeClickMs) >= MeleeClickMs)
             {
                 lastMeleeClickMs = Environment.TickCount;
                 if (TryClickUnit(hwnd, target, me.Location.X, me.Location.Y))
@@ -3076,8 +3120,13 @@ internal static class GrindRunner
             }
 
             /* Melee and ranged both reported nothing: stop at twelve rounds rather than
-             * standing there for the full engage timeout. */
-            if (++quietRounds >= 12) break;
+             * standing there for the full engage timeout - but twelve rounds is only ~4 s of
+             * waiting, and a level-3 swing lands every 3.5 s. The 13:48 run gave up on a mob at
+             * 25 health mid-swing, re-engaged it 0.3 s later and killed it, which is one wasted
+             * decide. So a break also needs twice MeleeSwingQuietMs of real silence. */
+            if (++quietRounds >= 12
+                && unchecked(Environment.TickCount - lastMeleeDamageMs) >= MeleeSwingQuietMs * 2)
+                break;
         }
 
         ClickAimKeySteer.Release(hwnd);
@@ -3277,10 +3326,10 @@ internal static class GrindRunner
             check("chaseReachesTheSearch", ChaseYd >= SearchYd - 0.001);
             check("pullUsesTheSameRadius", Math.Abs(PullYd - SearchYd) < 0.001);
 
-            /* An unverified pool pick is only walked to inside the short radius; the rest of the
-             * circle is TAB's job, because the pool cannot see who is friendly. */
-            check("poolSelectInsideSearch", PoolSelectYd > ClickAimCombat.CasterRangeYd
-                                            && PoolSelectYd < SearchYd);
+            /* TAB's reach is inside the circle: the pool may stop the walk that far out, and
+             * further than that only the walk itself closes the distance. */
+            check("tabReachInsideSearch", TabReachYd > ClickAimCombat.CasterRangeYd
+                                           && TabReachYd < SearchYd);
             check("giveUpBeyondSearch", GiveUpYd > SearchYd);
 
             /* Melee reach sits inside the melee chase: a 5 yd ability is pressed from inside
@@ -3295,6 +3344,11 @@ internal static class GrindRunner
             check("meleeWaitsAreSane", MeleePressMs < MeleeRefaceAfterMs
                                     && MeleeClickMs > MeleePressMs
                                     && MeleeWaitMs < AttackSettleMs);
+
+            /* A press of Attack is a toggle: it must get longer than a whole swing to prove
+             * itself before another press is risked. */
+            check("meleePressGraceExceedsSwing", MeleePressGraceMs > MeleeSwingQuietMs
+                                               && MeleePressGraceMs > MeleePressMs);
             check("interruptInsideSearch", InterruptYd < SearchYd && InterruptYd > AttackRangeYd);
 
             /* The walk stops for an attackable mob further out than the old 18 yd interrupt:

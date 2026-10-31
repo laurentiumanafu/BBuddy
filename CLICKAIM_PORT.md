@@ -1808,15 +1808,9 @@ does **not** have is a reaction (friendly/hostile) word, so the order of asking 
 
 1. the current selection (free);
 2. **TAB** — the client's enemy filter, still the only authority on "is it an enemy";
-3. the **pool**, selected with a **left-click** (`FindUnitPixel`, which only reports success when the
-   client's own target guid answers with that unit). A left-click selects and does nothing else — no
-   attack order, no walk order — which is exactly why the old *right*-click fallback (the 17:22
-   townsman) stays gone.
-
-Two safety rules on step 3: it is only used for a unit within `PoolSelectYd` (50 yd), and a unit the
-left-click search misses twice is set aside (`_poolMisses` → `_notViable`), so a hotspot can still
-become clear. A pool pick that turns out to be a friendly NPC does nothing when attacked: no damage,
-no aggro, and the fight gives up and blacklists it.
+3. ~~the **pool**, selected with a left-click~~ — **removed in the 13:46 run**, see the section below.
+   It found the lazy peon. The pool now only decides *whether* the area is clear, *which way* to face
+   before asking TAB, and *when* to stop the walk.
 
 `FightNeeded` (the route interrupt) also asks the pool now, so a mob beside or behind the character
 stops the walk even when TAB — which only looks in front — offers nothing. The selecting is left to the
@@ -1828,3 +1822,65 @@ one log; the field that differs between them is the faction/reaction candidate.
 
 Self-tests added: `engagementRadius` (SearchYd == 100), `chaseReachesTheSearch`, `pullUsesTheSameRadius`,
 `giveUpBeyondSearch`, `poolSelectInsideSearch`; `rangesNest` re-expressed without `ChaseYd`.
+
+## The 13:46 run: a friendly peon, and casting that kills the swing
+
+User after the 100 yd build: *"target lookup was much better BUT it tried to attack a friendly NPC lazy
+peon. So I stopped the bot ... Also if the bot is auto-attacking but enough mana is regained it
+disables auto attack and tries to use a spell (but if the character is hit by the monster it looses
+the gained mana so auto-attack is canceled - DPS is lost)."* Log `2026-10-31_1346_1528.log`.
+
+### The peon
+
+```
+13:49:28.053 TAB offered nothing live, so the pool was used:
+             0x20011800200A4F00000000000000001F is alive at 34.4 yd (level 4) and the client
+             selected it on a left-click at -219,-254 px
+13:49:33.116 Shadow Bolt changed nothing in 3200 ms: mana 97 -> 132, mob health 86   (x3)
+```
+
+Every real mob in that log was selected by TAB or was the current selection; the one thing the pool
+fallback added was a friendly peon, and it cost twenty seconds of casting at something that cannot be
+damaged. The pool has no reaction word, so it cannot tell a peon from a wolf — and TAB, which can,
+had already said no. **The left-click pool fallback is gone.** TAB stays the only selector.
+
+What replaces it is bookkeeping on TAB's own answer: a unit the pool can see **inside `TabReachYd`
+(45 yd — TAB has been seen to reach 48)** that TAB refuses twice, at least `TabMissSpacingMs` (5 s)
+apart, is left out of the *scan* for `TabRefusePauseMs` (60 s), so a hotspot holding nothing but
+friends finishes instead of standing there. It is a pause, not a blacklist: a mob at the edge of
+TAB's reach is refused for being far, not for being friendly, and it is asked about again a minute
+later — or the moment the walk brings the character closer. Beyond TAB's reach a refusal proves
+nothing, so nothing is recorded there at all.
+
+`FightNeeded` now stops the walk for a pool unit inside `TabReachYd` (not 50 yd): the walk is what
+closes the rest of the distance, and the main loop faces the unit and asks TAB, which only looks in
+front.
+
+### The swing
+
+The log is four copies of the same four seconds:
+
+```
+13:47:37.639 Shadow Bolt does damage: mob health 37 -> 34 (mana 31 -> 37)   <- mana came back
+13:47:37.925 pressing Attack to start the swing ...                        <- 0.3 s later
+13:47:40.758 pressing Attack to start the swing ...                        <- 2.8 s later
+13:47:41.460 the swing is running (mob health 34 -> 33)
+13:47:44.085 Shadow Bolt does damage: mob health 30 -> 27 (mana 37 -> 23)  <- and again
+```
+
+Three separate faults, all in the melee half of the rotation:
+
+1. **Melee was not latched.** `canCast` was re-evaluated every pass, so as soon as mana regenerated
+   past `PowerForCast` the fight went back to casting — and a cast breaks a running swing, which is
+   the DPS the user lost. Now the first time a fight reaches arm's length it sets `melee = true` for
+   **the rest of that fight** (`melee from here FOR THE REST OF THIS FIGHT`). A player does not stop
+   swinging to start a 2.5 s cast in melee at level 3.
+2. **Attack was pressed twice.** The key is a toggle; the second press at 40.758 turned off the swing
+   the first one started. A press is now given `MeleePressGraceMs` (6 s — longer than any swing timer
+   seen) to prove itself, and a second press needs `2 × MeleeSwingQuietMs` (8 s) of real silence.
+   Auto-attack survives a heal or a spell on this client, so the default is not to press again at all.
+3. **The fight gave up mid-swing.** `quietRounds >= 12` is only ~4 s, and a level-3 swing lands every
+   3.5 s, so at 13:48:28 it gave up on a mob at 25 health, re-engaged it 0.3 s later and killed it.
+   The break now also requires `2 × MeleeSwingQuietMs` of no damage.
+
+Self-tests: `meleePressGraceExceedsSwing`, `tabReachInsideSearch` (replaces `poolSelectInsideSearch`).
