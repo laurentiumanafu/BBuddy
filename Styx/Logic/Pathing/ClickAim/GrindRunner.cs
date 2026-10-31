@@ -82,9 +82,8 @@ internal static class GrindRunner
 
     // ---- getting unstuck ---------------------------------------------------
     /// <summary>
-    /// How far the character has to move inside <see cref="StuckMs"/> for a chase to count as
-    /// progress. One yard is under a step, so a character that is walking answers it every tick
-    /// and a character standing inside a cactus never does.
+    /// How much closer the character must get to its current mesh follow point to
+    /// reset the local stalled-chase timer.
     /// </summary>
     private const double StuckMoveYd = 1.0;
 
@@ -100,13 +99,12 @@ internal static class GrindRunner
     private const int StuckMs = 2500;
 
     /// <summary>
-    /// Escape attempts before the target is dropped. Each one walks a few yards away from the mob
-    /// (or to the side of it), which is what a player does when the path ahead is a plant.
+    /// Stalled mesh-follow attempts before the target is temporarily dropped.
     /// </summary>
     private const int StuckEscapes = 3;
 
-    /// <summary>How long one escape step walks for, in milliseconds.</summary>
-    private const int StuckEscapeMs = 600;
+    // Even a moving goal or repeated replans cannot reset this no-closing limit.
+    private const int ChaseNoClosingMs = 20000;
 
     /// <summary>
     /// How long a unit the fight could not reach is left out of the target scans. The user's rule:
@@ -427,6 +425,8 @@ internal static class GrindRunner
     // A bounded TAB cycle encountered an unsuitable live selection and found no
     // fight. Dwell can move on rather than retrying it for the full timeout.
     private static bool _lastEngageRejected;
+    private static bool _combatHold;
+    private static int _combatHoldLogAt;
     private static int _rejectedQuietAt;
 
     /// <summary>
@@ -609,6 +609,8 @@ internal static class GrindRunner
         _poolQuietAt = 0;
         _scanWasClear = false;
         _lastEngageRejected = false;
+        _combatHold = false;
+        _combatHoldLogAt = unchecked(Environment.TickCount - 15001);
         _rejectedQuietAt = unchecked(Environment.TickCount - 15001);
         _farQuietAt = 0;
         _notViable.Clear();
@@ -746,6 +748,7 @@ internal static class GrindRunner
                 }
 
                 if (combatReport.Length > 0) Logging.Write("[Grind] " + combatReport);
+                if (_combatHold) continue;
 
                 /* Between fights, with nothing on us: eat and drink if the user's percentages say
                  * so. This is the cheapest place in the loop to sit - the next thing it would do
@@ -791,7 +794,7 @@ internal static class GrindRunner
                         lastRoamMapCheck = Environment.TickCount;
                         if (!roam.MapCurrent()) return true;
                     }
-                    if ((!gatherDuringGrind && roam == null) || unchecked(Environment.TickCount - lastFightCheck) >= 500)
+                    if (unchecked(Environment.TickCount - lastFightCheck) >= 500)
                     {
                         lastFightCheck = Environment.TickCount;
                         if (FightNeeded(hwnd, SearchYd)) return true;
@@ -800,7 +803,7 @@ internal static class GrindRunner
                     { resourceInterrupt = true; return true; }
                     return false;
                 };
-                RouteRunner.PollInterruptDuringWalk = gatherDuringGrind || roam != null;
+                RouteRunner.PollInterruptDuringWalk = true;
                 RouteRunner.RequireMeshDuringSession = roam != null;
                 bool ok = false;
                 try { ok = RouteRunner.RunWithinSession(mover, one, 1); }
@@ -1106,9 +1109,38 @@ internal static class GrindRunner
     {
         report = "";
         _lastEngageRejected = false;
+        _combatHold = false;
         /* Cleared on entry, not only on the scan below: a failed read must not leave a stale
          * "the area is clear" behind for the hotspot loop to act on. */
         _scanWasClear = false;
+
+        // Combat outranks every new pull, roam leg and vendor trip. The bit does
+        // not identify an attacker: defence only tries nearby changed TAB picks.
+        if (!TryReadGatherCombat(out bool combatNow))
+        {
+            _combatHold = true;
+            if (unchecked(Environment.TickCount - _combatHoldLogAt) >= 15000)
+            {
+                _combatHoldLogAt = Environment.TickCount;
+                report = "combat state unreadable; holding position instead of starting a new pull";
+            }
+            ClickAimAbort.Wait(300);
+            return false;
+        }
+        if (combatNow)
+        {
+            _combatHold = true;
+            ClickAimKeySteer.ReleaseHeld();
+            string defence = DefendNearby(hwnd, true, out bool engagedDefence);
+            if (engagedDefence) { report = defence; return true; }
+            if (unchecked(Environment.TickCount - _combatHoldLogAt) >= 5000)
+            {
+                _combatHoldLogAt = Environment.TickCount;
+                report = "combat defence: " + defence;
+            }
+            ClickAimAbort.Wait(300);
+            return false;
+        }
 
         /* A trip that was asked for is not a suggestion: nothing NEW is picked up while one is
          * waiting. (The loop asks VendorDue first, so this is the second line of defence - the
@@ -1207,10 +1239,13 @@ internal static class GrindRunner
          * stopped for. */
         if (TryCurrentSelection(snap, selReader, px, py, out target))
         {
-            have = true;
             /* Still unproven if this is the unit the pool picked: see _unverifiedGuid. */
             poolPick = !_unverifiedGuid.IsEmpty && target.Guid == _unverifiedGuid;
-            Logging.Write(string.Format(CultureInfo.InvariantCulture,
+            double selectedYd = ClickAimMath.Len(target.Location.X - px, target.Location.Y - py);
+            // An incidental pool click is not a reason to ignore a much nearer
+            // candidate. A client-confirmed selection remains usable as before.
+            have = !PreferNearerPoolCandidate(poolPick, haveNearest, target.Guid == nearest.Guid, selectedYd, nearestYd);
+            if (have) Logging.Write(string.Format(CultureInfo.InvariantCulture,
                 "[Grind] going with the target already selected: {0} ({1:F1} yd)", target.Guid,
                 ClickAimMath.Len(target.Location.X - px, target.Location.Y - py)));
         }
@@ -1218,6 +1253,8 @@ internal static class GrindRunner
         WowBGuid rejectedGuid = default(WowBGuid);
         for (int i = 0; i < TabTries && !have && !_stop && !ClickAimAbort.Requested; i++)
         {
+            if (!TryReadGatherCombat(out bool tabCombat) || tabCombat)
+            { _combatHold = true; ClickAimKeySteer.ReleaseHeld(); return false; }
             WowBGuid beforeTab = default(WowBGuid);
             try { if (selReader != null) beforeTab = selReader.ReadTargetGuid(); }
             catch { /* Unknown pre-TAB target cannot confirm a pool pick. */ }
@@ -1235,12 +1272,23 @@ internal static class GrindRunner
                 }
                 continue;
             }
-            have = true;
             // An unchanged pool pick is not proof that TAB confirmed hostility.
             poolPick = !_unverifiedGuid.IsEmpty && target.Guid == _unverifiedGuid
                        && (beforeTab.IsEmpty || beforeTab == target.Guid);
+            double tabYd = ClickAimMath.Len(target.Location.X - px, target.Location.Y - py);
+            if (PreferNearerPoolCandidate(poolPick, haveNearest, target.Guid == nearest.Guid, tabYd, nearestYd))
+            {
+                // TAB kept a much farther unverified click; try the nearer pool
+                // candidate instead of letting this same click win every cycle.
+                rejectedGuid = target.Guid;
+                _lastEngageRejected = true;
+                continue;
+            }
+            have = true;
         }
         if (_stop || ClickAimAbort.Requested) return false;
+        if (!TryReadGatherCombat(out bool beforePoolCombat) || beforePoolCombat)
+        { _combatHold = true; ClickAimKeySteer.ReleaseHeld(); return false; }
 
         /* ---- step 3: the pool, then let the client settle it ----
          *
@@ -1270,7 +1318,15 @@ internal static class GrindRunner
 
             int fx, fy;
             string how;
-            bool selected = FindUnitPixel(hwnd, nearest, px, py, out fx, out fy, out how);
+            bool poolCombatInterrupted = false;
+            int poolCombatCheckAt = unchecked(Environment.TickCount - 250);
+            bool selected = FindUnitPixel(hwnd, nearest, px, py, out fx, out fy, out how, () =>
+            {
+                if (unchecked(Environment.TickCount - poolCombatCheckAt) < 200) return false;
+                poolCombatCheckAt = Environment.TickCount;
+                poolCombatInterrupted = !TryReadGatherCombat(out bool fighting) || fighting;
+                return poolCombatInterrupted;
+            });
             // A pool click, including an incidental hit on another unit, is never
             // evidence of hostility. Remember the selection even if the following
             // snapshot/read fails, so the next attempt cannot mistake it for TAB.
@@ -1281,6 +1337,8 @@ internal static class GrindRunner
                 if (!afterPool.IsEmpty && afterPool != player.Guid) _unverifiedGuid = afterPool;
             }
             catch { /* The confirmed nearest GUID above remains unverified. */ }
+            if (poolCombatInterrupted || !TryReadGatherCombat(out bool afterPoolCombat) || afterPoolCombat)
+            { _combatHold = true; ClickAimKeySteer.ReleaseHeld(); return false; }
             if (selected && Capture(out snap) && snap != null
                 && TryCurrentSelection(snap, poolReader, px, py, out target) && target.Guid == nearest.Guid)
             {
@@ -1482,6 +1540,8 @@ internal static class GrindRunner
 
         /* The fight presses the action bar and right-clicks the SELECTED target, and the
          * verdict comes from the mob's health and my own mana in memory. No Lua anywhere. */
+        if (!TryReadGatherCombat(out bool beforeFightCombat) || beforeFightCombat)
+        { _combatHold = true; ClickAimKeySteer.ReleaseHeld(); return false; }
         int fightStarted = Environment.TickCount;
         report = Fight(hwnd, px, py, poolPick);
 
@@ -1567,6 +1627,10 @@ internal static class GrindRunner
         return d <= PullYd;
     }
 
+    private static bool PreferNearerPoolCandidate(bool unverified, bool haveNearest, bool same,
+                                                   double selectedYd, double nearestYd)
+        => unverified && haveNearest && !same && selectedYd > nearestYd + 10.0;
+
     private static bool SelectionFieldsValid(uint health, uint flags, uint mobLevel, int myLevel)
         => health > 0 && (flags & NotAFightFlag) == 0 && LevelViable(mobLevel, myLevel);
 
@@ -1633,15 +1697,14 @@ internal static class GrindRunner
     private static bool FightNeeded(IntPtr hwnd, double radius)
     {
         if (_stop) return false;
+        if (!TryReadGatherCombat(out bool combatNow) || combatNow) return true;
 
         /* An interrupt that produced no fight is not worth repeating four times a second.
          * The 17:26 run logged 130 interrupt/refuse pairs in 40 s and the character never
          * took a step; this is the brake. */
         if (_interruptQuietUntil != 0 && unchecked(Environment.TickCount - _interruptQuietUntil) < 0)
         {
-            // This quiet period is only for avoiding a repeated futile pull. It
-            // must not suppress a new attack (or an unreadable combat state).
-            if (!TryReadGatherCombat(out bool fighting) || fighting) return true;
+            // The combat check above also runs during this quiet period.
             return false;
         }
 
@@ -1825,6 +1888,7 @@ internal static class GrindRunner
                 continue;
             }
             if (report.Length > 0) Logging.Write("[Grind] " + report);
+            if (_combatHold) { clearScans = 0; continue; }
             if (_lastEngageRejected && TryReadGatherCombat(out bool fighting) && !fighting)
             {
                 Logging.Write("[Grind] no acceptable target after TAB and pool checks; leaving this hotspot");
@@ -2446,11 +2510,14 @@ internal static class GrindRunner
 
         /* The same interrupt a hotspot leg uses: a mob on the road is dealt with first, and the
          * trip is taken again afterwards, because the bags are still full. */
-        RouteRunner.ShouldInterrupt = () => FightNeeded(hwnd, SearchYd);
+        // A pending vendor trip outranks new pulls; only actual/unknown combat
+        // interrupts this leg. Do not reset the active session's STOP state.
+        RouteRunner.ShouldInterrupt = () => !TryReadGatherCombat(out bool fighting) || fighting;
+        RouteRunner.PollInterruptDuringWalk = true;
         bool arrived = false;
-        try { arrived = RouteRunner.Run(mover, route, 1); }
+        try { arrived = RouteRunner.RunWithinSession(mover, route, 1); }
         catch (Exception ex) { Logging.Write("[Grind] the walk to the vendor failed: " + ex.Message); }
-        finally { RouteRunner.ShouldInterrupt = null; }
+        finally { RouteRunner.ShouldInterrupt = null; RouteRunner.PollInterruptDuringWalk = false; }
 
         if (!arrived)
         {
@@ -3109,12 +3176,33 @@ internal static class GrindRunner
         return RestIfNeeded(hwnd);
     }
 
+    private static bool ShouldYieldRemotePull(double targetYd, double castRange, bool nearbyOther)
+        => targetYd > GatherDefenceRadius && (targetYd > Math.Max(castRange, MeleeEngageYd) || nearbyOther);
+
+    // An NPC nearby is only a reason to reconsider a remote pull, never an
+    // assertion that it is hostile or the attacker.
+    private static bool HasNearbyOtherNpc(WowBWorldSnapshot snap, WowBObservedUnit player, WowBGuid target, WowBReader? reader)
+    {
+        if (reader == null) return true;
+        foreach (WowBObservedUnit unit in snap.Units)
+        {
+            if (unit.IsLocalPlayer || unit.HasPlayerVtable || unit.Guid == target || unit.Guid.IsEmpty) continue;
+            if (ClickAimMath.Len(unit.Location.X - player.Location.X, unit.Location.Y - player.Location.Y) > GatherDefenceRadius) continue;
+            if (!reader.TryGetUnitFields(unit.UnitAddress, out WowBReader.WowBUnitFields fields) || fields.Health > 0) return true;
+        }
+        return false;
+    }
+
     // Proximity is a heuristic, not attacker identity or hostility proof. Never chase
     // a remote TAB pick while a nearby NPC is hitting the character.
     private const double GatherDefenceRadius = 12.0;
 
     internal static string DefendGatherer(IntPtr hwnd)
+        => DefendNearby(hwnd, false, out _);
+
+    private static string DefendNearby(IntPtr hwnd, bool levelRestricted, out bool engaged)
     {
+        engaged = false;
         if (_stop || ClickAimAbort.Requested || !TryReadGatherCombat(out bool fighting) || !fighting) return "";
         WowBReader? reader = ObjectManager.WowB;
         if (reader == null || !Capture(out WowBWorldSnapshot? snap) || snap == null
@@ -3126,7 +3214,8 @@ internal static class GrindRunner
             double d = ClickAimMath.Len(unit.Location.X - player.Location.X, unit.Location.Y - player.Location.Y);
             if (d > GatherDefenceRadius) continue;
             if (!reader.TryGetUnitFields(unit.UnitAddress, out WowBReader.WowBUnitFields fields)
-                || fields.Health == 0 || (fields.UnitFlags & NotAFightFlag) != 0) continue;
+                || fields.Health == 0 || (fields.UnitFlags & NotAFightFlag) != 0
+                || (levelRestricted && (!LevelViable(fields.Level, PlayerLevel()) || _notViable.Contains(unit.Guid)))) continue;
             nearby.Add(unit);
         }
         nearby.Sort((a, b) => ClickAimMath.Len(a.Location.X - player.Location.X, a.Location.Y - player.Location.Y)
@@ -3161,10 +3250,13 @@ internal static class GrindRunner
                     || selected.IsLocalPlayer || selected.HasPlayerVtable
                     || !reader.TryGetUnitFields(selected.UnitAddress, out WowBReader.WowBUnitFields current)
                     || current.Health == 0 || (current.UnitFlags & NotAFightFlag) != 0
+                    || (levelRestricted && (!LevelViable(current.Level, PlayerLevel()) || _notViable.Contains(selected.Guid)))
                     || ClickAimMath.Len(selected.Location.X - player.Location.X, selected.Location.Y - player.Location.Y) > GatherDefenceRadius)
                     continue;
-                Logging.Write("[Gather] combat: Grind rotation on nearby TAB-selected NPC " + selected.Guid
+                Logging.Write((levelRestricted ? "[Grind]" : "[Gather]")
+                    + " combat: rotation on nearby TAB-selected NPC " + selected.Guid
                     + "; proximity and TAB do not prove it is the attacker");
+                engaged = true;
                 try { return Fight(hwnd, player.Location.X, player.Location.Y, false, true, selected.Guid); }
                 finally { ClickAimKeySteer.ReleaseHeld(); }
             }
@@ -3357,7 +3449,7 @@ internal static class GrindRunner
     /// takes.
     /// </summary>
     private static bool FindUnitPixel(IntPtr hwnd, WowBObservedUnit unit, double px, double py,
-                                      out int foundX, out int foundY, out string how)
+                                      out int foundX, out int foundY, out string how, Func<bool>? cancel = null)
     {
         foundX = 0;
         foundY = 0;
@@ -3395,7 +3487,9 @@ internal static class GrindRunner
             int steps = radius == 0 ? 1 : 8;
             for (int s = 0; s < steps; s++)
             {
-                if (_stop || probes >= ClickProbeMax) break;
+                if (_stop || ClickAimAbort.Requested || (cancel != null && cancel()))
+                { how = "probe interrupted by stop or combat"; return false; }
+                if (probes >= ClickProbeMax) break;
 
                 int dx = centreX;
                 int dy = centreY;
@@ -3408,7 +3502,8 @@ internal static class GrindRunner
 
                 ClickAimInput.LeftClick(hwnd, dx, dy);
                 probes++;
-                Thread.Sleep(ClickProbeSettleMs);
+                if (ClickAimAbort.Wait(ClickProbeSettleMs))
+                { how = "probe stopped"; return false; }
 
                 WowBGuid after = reader.ReadTargetGuid();
                 if (after != unit.Guid)
@@ -3455,137 +3550,111 @@ internal static class GrindRunner
     }
 
     /// <summary>
-    /// One fight's movement watchdog: where the character was when it was last seen moving, when
-    /// that was, and how many escape attempts have been spent since.
+    /// One fight's mesh path, goal and bounded progress watchdog.
     ///
     /// A class rather than three locals because <see cref="ChaseStep"/> is called from two
     /// branches of the fight (the walk into casting range and the walk into melee) and both have
     /// to share the same tally - otherwise a fight that alternates between the two could spend
-    /// three escapes in each and never give up.
+    /// separate retry budgets in each and never give up.
     /// </summary>
     private sealed class ChaseWatch
     {
-        public double X = double.NaN;
-        public double Y = double.NaN;
-        public int LastMoveMs;
-        public int Escapes;
-        public int TotalEscapes;
-
-        public ChaseWatch(int started) { LastMoveMs = started; }
+        public WoWPoint[]? Path;
+        public int Point;
+        public uint Map;
+        public double GoalX, GoalY, GoalZ;
+        public int PlannedAt;
+        public int LastProgressMs;
+        public double BestPointDistance = double.PositiveInfinity;
+        public int Stalls;
+        public int LastClosingMs;
+        public double BestTargetDistance = double.PositiveInfinity;
+        public ChaseWatch(int started) { LastProgressMs = started; LastClosingMs = started; }
+        public void EndApproach()
+        {
+            Path = null;
+            Stalls = 0;
+            BestTargetDistance = double.PositiveInfinity;
+            BestPointDistance = double.PositiveInfinity;
+            LastClosingMs = Environment.TickCount;
+            LastProgressMs = LastClosingMs;
+        }
     }
 
-    /// <summary>
-    /// One step of a chase, with the stuck watchdog around it.
-    ///
-    /// Returns true when the fight should carry on, and false with <paramref name="why"/> set when
-    /// the character has stopped making progress and the target should be dropped: something in the
-    /// geometry is between it and the mob, and walking into it for another minute is not a
-    /// strategy. The 2026-10-31 run is the reason: the mob was far away and untouched, the
-    /// character was inside a cactus, and it spent a minute asking for one more step toward the
-    /// mob from the same spot - the distance to the mob never changed, so no branch noticed.
-    ///
-    /// Between the "stuck" reading and giving up, it tries to free itself: walk away from the mob,
-    /// then to either side of it. That is what a player does, and it is the only movement here
-    /// that is not aimed at the target.
-    /// </summary>
+    // Follow a complete validated mesh path one short segment at a time; fight
+    // ticks keep checking combat/STOP between steps. Re-plan for moving targets.
+    // Count stalled replans for the whole chase, not position changes from walking
+    // backwards: the old watchdog repeatedly reset "attempt 1" at the same wall.
     private static bool ChaseStep(IntPtr hwnd, ChaseWatch watch, WowBObservedUnit target, out string why)
     {
         why = "";
-
-        double px, py;
-        if (!ClickAimPositions.TryRead(out px, out py))
+        if (_stop || ClickAimAbort.Requested) { why = "stopped"; return false; }
+        if (!ClickAimPositions.TryRead(out double px, out double py))
+        { ClickAimKeySteer.ReleaseHeld(); why = "player position unreadable"; return false; }
+        int now = Environment.TickCount;
+        uint map = ClickAimDiagnostics.ResolveMap((uint)NavGridStore.MapId, px, py);
+        if (map == uint.MaxValue || (watch.Path != null && watch.Map != map))
+        { ClickAimKeySteer.ReleaseHeld(); why = "map changed or became unreadable during chase"; return false; }
+        double targetDistance = ClickAimMath.Len(target.Location.X - px, target.Location.Y - py);
+        if (watch.BestTargetDistance - targetDistance >= 2.0)
+        { watch.BestTargetDistance = targetDistance; watch.LastClosingMs = now; }
+        if (unchecked(now - watch.LastClosingMs) >= ChaseNoClosingMs)
+        { ClickAimKeySteer.ReleaseHeld(); why = "no net progress towards the mob for 20 seconds"; return false; }
+        bool movedGoal = watch.Path != null && (ClickAimMath.Len(target.Location.X - watch.GoalX,
+            target.Location.Y - watch.GoalY) > 5.0 || Math.Abs(target.Location.Z - watch.GoalZ) > 3.0);
+        if (watch.Path == null || movedGoal || unchecked(now - watch.PlannedAt) >= 8000)
         {
-            /* No position, no way to tell progress. Keep walking: told nothing, do nothing new. */
-            double unknown;
-            ClickAimKeySteer.Steer(target.Location.X, target.Location.Y, hwnd, true, out unknown);
-            Thread.Sleep(90);
+            ClickAimKeySteer.ReleaseHeld();
+            var goal = new RoutePoint { X = target.Location.X, Y = target.Location.Y, Z = target.Location.Z, Kind = "Mob" };
+            WoWPoint[]? path = RouteRunner.TryCombatMeshPath(px, py, goal);
+            if (_stop || ClickAimAbort.Requested) { why = "stopped"; return false; }
+            if (path == null || path.Length < 2
+                || ClickAimDiagnostics.ResolveMap((uint)NavGridStore.MapId, px, py) != map)
+            { why = "no complete validated mesh path to the mob, or map changed (no straight-walk fallback)"; return false; }
+            watch.Path = path;
+            watch.Map = map;
+            watch.Point = 1;
+            watch.GoalX = goal.X; watch.GoalY = goal.Y; watch.GoalZ = goal.Z;
+            watch.PlannedAt = Environment.TickCount;
+            watch.LastProgressMs = watch.PlannedAt;
+            watch.BestPointDistance = double.PositiveInfinity;
+            ClickAimKeySteer.BeginMeshPoint();
+            Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                "[Grind] mob chase uses validated mesh: {0} follow points, goal ({1:F1}, {2:F1})",
+                path.Length, goal.X, goal.Y));
+            // Do not take a step if combat began while the mesh query was running.
+            if (!TryReadGatherCombat(out bool fighting) || fighting) return true;
+        }
+
+        WoWPoint[] follow = watch.Path;
+        while (watch.Point < follow.Length - 1
+            && ClickAimMath.Len(follow[watch.Point].X - px, follow[watch.Point].Y - py) <= 2.0)
+        {
+            watch.Point++;
+            watch.BestPointDistance = double.PositiveInfinity;
+            watch.LastProgressMs = Environment.TickCount;
+            ClickAimKeySteer.BeginMeshPoint();
+        }
+        WoWPoint point = follow[watch.Point];
+        double distance = ClickAimMath.Len(point.X - px, point.Y - py);
+        if (watch.BestPointDistance - distance >= StuckMoveYd)
+        { watch.BestPointDistance = distance; watch.LastProgressMs = Environment.TickCount; }
+        if (unchecked(Environment.TickCount - watch.LastProgressMs) >= StuckMs)
+        {
+            ClickAimKeySteer.ReleaseHeld();
+            watch.Stalls++;
+            if (watch.Stalls >= StuckEscapes)
+            { why = "no progress along the mesh after " + watch.Stalls + " stalled attempts"; return false; }
+            Logging.Write("[Grind] mesh chase stalled; replanning (stall " + watch.Stalls + " of " + StuckEscapes + ")");
+            watch.Path = null;
             return true;
         }
-
-        if (double.IsNaN(watch.X))
-        {
-            watch.X = px;
-            watch.Y = py;
-            watch.LastMoveMs = Environment.TickCount;
-        }
-        else if (ClickAimMath.Len(px - watch.X, py - watch.Y) >= StuckMoveYd)
-        {
-            watch.X = px;
-            watch.Y = py;
-            watch.LastMoveMs = Environment.TickCount;
-            watch.Escapes = 0;              // it is moving again: whatever was in the way is behind
-        }
-
-        if (unchecked(Environment.TickCount - watch.LastMoveMs) < StuckMs)
-        {
-            double remaining;
-            ClickAimKeySteer.Steer(target.Location.X, target.Location.Y, hwnd, true, out remaining);
-            Thread.Sleep(90);
-            return true;
-        }
-
-        if (watch.Escapes >= StuckEscapes || watch.TotalEscapes >= StuckEscapes * 2)
-        {
-            double stuckYd = ClickAimMath.Len(px - watch.X, py - watch.Y);
-            why = string.Format(CultureInfo.InvariantCulture,
-                "{0:F1} yd from where it was {1:F1} s ago with the mob still {2:F1} yd away, after {3} "
-                + "attempt(s) to walk round whatever is in the way",
-                stuckYd, unchecked(Environment.TickCount - watch.LastMoveMs) / 1000.0,
-                ClickAimMath.Len(target.Location.X - px, target.Location.Y - py), watch.TotalEscapes);
-            return false;
-        }
-
-        ClickAimKeySteer.ReleaseHeld();
-        string how;
-        TryEscapeStep(hwnd, target, watch.Escapes, out how);
-        watch.Escapes++;
-        watch.TotalEscapes++;
-        watch.LastMoveMs = Environment.TickCount;      // give the escape its own window
-        watch.X = px;
-        watch.Y = py;
-
-        Logging.Write(string.Format(CultureInfo.InvariantCulture,
-            "[Grind] stuck: {0} - escape attempt {1} of {2}, {3}", how, watch.Escapes, StuckEscapes,
-            watch.Escapes >= StuckEscapes
-                ? "and if this does not free the character the target is dropped"
-                : "walking out and trying again"));
-        return true;
-    }
-
-    /// <summary>
-    /// One escape step: walk a few yards away from the mob (or to either side of it), because the
-    /// thing in the way is usually straight ahead and dead-on. Steered with the same calibrated
-    /// keys as every other walk, so it is a real step and not a hope.
-    /// </summary>
-    private static bool TryEscapeStep(IntPtr hwnd, WowBObservedUnit target, int attempt, out string how)
-    {
-        how = "";
-        double px, py;
-        if (!ClickAimPositions.TryRead(out px, out py))
-        {
-            how = "the player position does not read, so there is nothing to escape TO";
-            return false;
-        }
-
-        double away = ClickAimMath.HeadingDeg(px - target.Location.X, py - target.Location.Y);
-        double bearing = away + (attempt == 1 ? 80.0 : attempt == 2 ? -80.0 : 0.0);
-        double rad = bearing * Math.PI / 180.0;
-        double tx = px + Math.Cos(rad) * 5.0;
-        double ty = py + Math.Sin(rad) * 5.0;
-
-        for (int walked = 0; walked < StuckEscapeMs && !_stop; walked += 90)
-        {
-            double remaining;
-            ClickAimKeySteer.Steer(tx, ty, hwnd, true, out remaining);
-            Thread.Sleep(90);
-            if (remaining < 1.0) break;
-        }
-        ClickAimKeySteer.ReleaseHeld();
-
-        how = string.Format(CultureInfo.InvariantCulture,
-            "walking {0} to ({1:F0}, {2:F0}) for {3} ms",
-            attempt == 1 ? "to the right of the mob" : attempt == 2 ? "to the left of the mob" : "back from the mob",
-            tx, ty, StuckEscapeMs);
+        if (!ClickAimKeySteer.TryReadFacing(out double facing) || !double.IsFinite(facing))
+        { ClickAimKeySteer.ReleaseHeld(); why = "facing unreadable for mesh-point steering"; return false; }
+        double remaining;
+        if (!ClickAimKeySteer.Steer(point.X, point.Y, hwnd, true, out remaining, true))
+        { ClickAimKeySteer.ReleaseHeld(); why = "mesh-point steering failed"; return false; }
+        ClickAimAbort.Wait(90);
         return true;
     }
 
@@ -3596,6 +3665,8 @@ internal static class GrindRunner
     /// </summary>
     private static string DropUnreachable(WowBObservedUnit target, string why)
     {
+        ClickAimKeySteer.ReleaseHeld();
+        if (_stop || ClickAimAbort.Requested) return "stopped";
         if (_unreachableUntil.Count > 256) _unreachableUntil.Clear();
         _unreachableUntil[target.Guid] = Environment.TickCount + UnreachablePauseMs;
         return string.Format(CultureInfo.InvariantCulture,
@@ -3756,8 +3827,8 @@ internal static class GrindRunner
                     : "killed or fled after " + secs + " s; what landed: " + string.Join(", ", worked.ToArray());
             }
 
-            if (defenceOnly && target.Guid != defenceTarget)
-                return "target changed during defence; stopping rather than attacking another unit";
+            if (target.Guid != defenceTarget)
+                return "target changed during the fight; stopping rather than attacking another unit";
             if (target.HasPlayerVtable)
                 return "the target turned out to be a player - disengaged";
 
@@ -3770,6 +3841,17 @@ internal static class GrindRunner
             double d = ClickAimMath.Len(target.Location.X - me.Location.X, target.Location.Y - me.Location.Y);
             if (defenceOnly && d > GatherDefenceRadius + 3.0)
                 return "defensive target moved more than 15 yd away; not chasing a distant unit";
+
+            if (!defenceOnly)
+            {
+                if (!TryReadGatherCombat(out bool combatNow))
+                { ClickAimKeySteer.ReleaseHeld(); return "combat state unreadable; stopping the pull"; }
+                if (combatNow && ShouldYieldRemotePull(d, castRange, HasNearbyOtherNpc(snap, me, target.Guid, reader)))
+                {
+                    ClickAimKeySteer.ReleaseHeld();
+                    return "combat detected during a remote pull; stopping the chase and checking nearby TAB targets";
+                }
+            }
 
             /* ---- the pool's target has to be settled by the client ----
              *
@@ -3966,30 +4048,44 @@ internal static class GrindRunner
                 lastHealMs = Environment.TickCount;
                 meleeSwinging = false;          // a cast stops auto-attack; it must be restarted
                 uint powerBeforeHeal = myMana;
+                StopAndSettle(hwnd);             // the chase may still be holding forward
+                if (_stop || ClickAimAbort.Requested) return "stopped";
                 ClickAimInput.TapKey(hwnd, 0x70, 40);                  // F1 = target self (Blizzard default)
-                Thread.Sleep(120);
+                if (ClickAimAbort.Wait(120) || _stop) return "stopped";
+                GreenMagic.Memory? healMemory = ObjectManager.Wow;
+                if (reader == null || healMemory == null) return "self-target unreadable; heal withheld";
+                using (healMemory.TemporaryCacheState(false))
+                {
+                    if (ObjectManager.WowB != reader || ObjectManager.Wow != healMemory || reader.ReadTargetGuid() != me.Guid)
+                        return "F1 did not confirm self-target; heal withheld";
+                }
+                if (_stop || ClickAimAbort.Requested) return "stopped";
                 ClickAimInput.TapKey(hwnd, heal.KeyVk, 40);
 
                 /* Wait for the heal to actually land. Healing Touch is a 1.5 s cast on top
                  * of the retarget, and the previous version read my health once at 1.8 s and
                  * reported "did not lift it (still 12/113)" for heals that were still being
                  * cast - four times in one fight. Poll instead. */
-                uint afterHealth = 0;
+                uint afterHealth = 0, afterMaxHealth = 0;
                 uint powerAfterHeal = powerBeforeHeal;
                 for (int waited = 0; waited < ClickAimCombat.HealVerifyMs && !_stop; waited += 300)
                 {
-                    ClickAimAbort.Wait(300);
+                    if (ClickAimAbort.Wait(300) || _stop) return "stopped";
                     WowBWorldSnapshot? healed;
                     if (reader == null || !Capture(out healed) || healed == null) continue;
                     if (healed.TryGetLocalPlayer(out WowBObservedUnit me2)
                         && reader.TryGetUnitFields(me2.UnitAddress, out mine))
                     {
                         afterHealth = mine.Health;
+                        afterMaxHealth = mine.MaxHealth;
                         powerAfterHeal = mine.Power;
                     }
                     if (afterHealth > myHealth) break;
                 }
 
+                if (_stop || ClickAimAbort.Requested) return "stopped";
+                if (afterMaxHealth > 0 && afterHealth == 0)
+                    return "the character died during the heal; stopping the grind";
                 if (afterHealth > myHealth)
                 {
                     string label = "heal " + heal.Name;
@@ -4009,20 +4105,21 @@ internal static class GrindRunner
                      * cannot be paid for (or a key that cannot cast). Either way pressing it a
                      * third time costs another global cooldown in the middle of a fight the
                      * character is losing, so the heal is off for the rest of this fight. */
-                    healFailures++;
-                    LearnHealCost(powerBeforeHeal, powerAfterHeal);   // "cast but out-damaged" is still a price
+                    LearnHealCost(powerBeforeHeal, powerAfterHeal);
                     bool powerSpent = powerAfterHeal < powerBeforeHeal;
+                    // Net health can fall even when a heal landed: incoming damage
+                    // and the heal are not separately observable. Do not disable an
+                    // apparently paid-for heal as if the key did nothing.
+                    healFailures = powerSpent ? 0 : healFailures + 1;
                     Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                        "[Grind] health {0:F0}% and {1} did not lift it (still {2}/{3}, power {4} -> {5}, "
-                        + "{6}) - failure {7} this fight; fighting on instead of pressing it again",
-                        myPercent, heal.Name, afterHealth, myMaxHealth, powerBeforeHeal, powerAfterHeal,
-                        powerSpent ? "so it cast and the mob out-damaged it" : "the press did nothing at all",
-                        healFailures));
+                        "[Grind] {0} did not show a net health gain ({1}/{2}, power {3} -> {4}); {5}",
+                        heal.Name, afterHealth, myMaxHealth, powerBeforeHeal, powerAfterHeal,
+                        powerSpent ? "power fell, so the heal remains available" : "no power spent; failure " + healFailures));
                     if (healFailures >= 2)
                     {
                         healBlocked = true;
                         Logging.Write("[Grind] the heal is off for the rest of this fight: two presses "
-                                    + "did nothing useful, so the power goes to attacks instead");
+                                    + "showed no health gain or power cost");
                     }
                 }
 
@@ -4103,6 +4200,9 @@ internal static class GrindRunner
                     "[Grind] {0} of power left and {1} needs about {2} - not casting again until the "
                     + "bar comes back; auto-attacking instead", myMana, damage.Name, needForCast));
             }
+
+            if (watch.Path != null && ((canCast && d <= castRange) || (!canCast && d <= MeleeEngageYd)))
+                watch.EndApproach(); // a later chase gets a fresh progress budget
 
             if (canCast && d > castRange)
             {
@@ -4660,6 +4760,11 @@ internal static class GrindRunner
             check("combatIdleAfter", !CombatFlagSaysFight(0x8));
             check("combatOldStaleBit", !CombatFlagSaysFight(0x800));
             check("combatCandidateOnItsOwn", CombatFlagSaysFight(0x80000));
+            check("remotePullYields", ShouldYieldRemotePull(94, 28, true)
+                                     && ShouldYieldRemotePull(94, 28, false));
+            check("nearAddYields", ShouldYieldRemotePull(20, 28, true));
+            check("inRangeTargetWithoutAdd", !ShouldYieldRemotePull(20, 28, false));
+            check("closeTargetNotAbandoned", !ShouldYieldRemotePull(5, 28, true));
 
             check("viableSameLevel", LevelViable(2, 2));
             check("viableTheDumpedMobs", LevelViable(3, 2) && LevelViable(4, 2));
@@ -4673,6 +4778,10 @@ internal static class GrindRunner
             check("selectionRejectsDead", !SelectionFieldsValid(0, 0, 5, 7));
             check("selectionRejectsFlagged", !SelectionFieldsValid(10, 0x200, 5, 7));
             check("selectionUnknownLevel", SelectionFieldsValid(10, 0, 0, 7));
+            check("preferNearerUnverified", PreferNearerPoolCandidate(true, true, false, 93.9, 67.4));
+            check("keepTabConfirmed", !PreferNearerPoolCandidate(false, true, false, 93.9, 67.4));
+            check("keepNearUnverified", !PreferNearerPoolCandidate(true, true, false, 75, 67.4));
+            check("keepSameCandidate", !PreferNearerPoolCandidate(true, true, true, 94, 67));
 
             /* The distances have to nest: melee reach &lt; the melee chase &lt; casting range &lt;
              * the point at which a fight gives up &lt; the radius units are searched in. Getting
@@ -4829,7 +4938,8 @@ internal static class GrindRunner
              * follows a target the fight cannot reach has to outlast the escape attempts - or the
              * loop drops the mob and picks it straight back up. */
             check("stuckWindowIsQuick", StuckMs >= 1500 && StuckMs <= 5000);
-            check("stuckEscapeIsAStep", StuckEscapeMs >= 300 && StuckEscapeMs <= 1500);
+            check("chaseNoClosingBound", ChaseNoClosingMs > StuckMs * StuckEscapes
+                                           && ChaseNoClosingMs < UnreachablePauseMs);
             check("stuckPauseOutlastsTheEscapes", UnreachablePauseMs > StuckMs * StuckEscapes * 2);
             check("stuckMoveIsUnderAStep", StuckMoveYd > 0.2 && StuckMoveYd < 2.0);
             check("vendorRetryAfterFight", VendorRetryAfterFightMs > 0

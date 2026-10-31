@@ -477,7 +477,7 @@ internal static class ClickAimKeySteer
     /// combination oscillated for 60 ticks in a model of it). So the step size is adapted:
     /// if the error grew or changed sign, the tap was too long and is halved.
     /// </summary>
-    public static bool Steer(double tx, double ty, IntPtr hwnd, bool forward, out double remaining)
+    public static bool Steer(double tx, double ty, IntPtr hwnd, bool forward, out double remaining, bool requireFacing = false)
     {
         remaining = 0;
 
@@ -498,6 +498,7 @@ internal static class ClickAimKeySteer
         double facingRad;
         if (!TryReadFacing(out facingRad))
         {
+            if (requireFacing) { ReleaseHeld(); return false; }
             // No facing: walk anyway. Wrong direction is still information, and the
             // caller measures the result from positions.
             SetForward(hwnd, forward);

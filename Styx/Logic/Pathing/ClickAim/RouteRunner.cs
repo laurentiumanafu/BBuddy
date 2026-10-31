@@ -690,12 +690,27 @@ public static class RouteRunner
         return "[Route] mesh validation fixtures: " + (ok ? "pass" : "FAIL") + " (not a live path test)";
     }
 
-    private static WoWPoint[]? TryMeshPath(double px, double py, RoutePoint target)
+    // Combat uses the same complete-path, endpoint and straight-ray validation as
+    // roaming, but follows small points incrementally so each fight tick can check
+    // STOP, a moving target and combat. Never fall back to a straight chase.
+    internal static WoWPoint[]? TryCombatMeshPath(double px, double py, RoutePoint target)
+    {
+        if (!MeshAvailable() || !double.IsFinite(target.X) || !double.IsFinite(target.Y)
+            || !double.IsFinite(target.Z)) return null;
+        uint before = ClickAimDiagnostics.ResolveMap((uint)NavGridStore.MapId, px, py);
+        if (before == uint.MaxValue) return null;
+        WoWPoint[]? path = TryMeshPath(px, py, target, true);
+        if (path == null || ClickAimDiagnostics.ResolveMap((uint)NavGridStore.MapId, px, py) != before)
+            return null;
+        return Resample(path, 10.0);
+    }
+
+    private static WoWPoint[]? TryMeshPath(double px, double py, RoutePoint target, bool strict = false)
     {
         try
         {
             double z = ClickAimPositions.Z();
-            if (RequireMeshDuringSession && !double.IsFinite(z))
+            if ((strict || RequireMeshDuringSession) && !double.IsFinite(z))
             { Logging.Write("[Route] player height unreadable; refusing to guess the terrain layer"); return null; }
             float fromZ = double.IsNaN(z) ? (float)target.Z : (float)z;
 
@@ -727,7 +742,7 @@ public static class RouteRunner
                 return null;
             if (!MeshQuery.SnapLogged(nav, mapId, to, "goal", out snappedTo))
                 return null;
-            if (RequireMeshDuringSession && (!EndpointNear(snappedFrom, from, 2.5, 5.0)
+            if ((strict || RequireMeshDuringSession) && (!EndpointNear(snappedFrom, from, 2.5, 5.0)
                                              || !EndpointNear(snappedTo, to, 2.5, 5.0)))
             {
                 Logging.Write(string.Format(CultureInfo.InvariantCulture,

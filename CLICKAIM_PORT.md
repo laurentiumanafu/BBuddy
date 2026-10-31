@@ -2309,3 +2309,35 @@ selected the player; it does not claim the target was cleared, use Escape, or cl
 an old empty-screen coordinate. F1 must retain the client's self-target binding for
 this to work. If verification fails, the selection is still excluded from fighting.
 These changes have static diagnostics but require an in-client test.
+
+## Grind: mesh-guided pulls and combat interruption
+
+The 23:27 roaming log showed a 93.9 yd pull steering directly toward the mob,
+repeatedly backing away at the same obstacle, and continuing the chase while two
+other mobs attacked. Hotspot legs used the mesh, but `Fight` used a different,
+straight-line chase. Combat flags do not identify which NPC attacked.
+
+Grind now follows a complete, endpoint-validated mesh path to a pull target, in
+short points with re-plans for movement and bounded progress/stall checks. It
+will not substitute a straight walk if the mesh path is unavailable. Dynamic
+obstacles can still block a mesh path; repeated stalls or no closing progress
+cause a temporary unreachable pause instead of an endless backward/forward loop.
+This applies to profile and profile-free Grind, not only roaming.
+
+A known or unreadable combat state interrupts new pulls, pool click probes and
+route legs. During a remote chase, the candidate combat bit stops the chase
+when the selected target is out of casting range or another NPC is nearby.
+Grind then holds position and uses the existing nearby, changed-TAB defensive
+selection; its usual player, flag, and level restrictions remain in effect.
+Proximity and TAB do not prove attacker identity, and an unreadable state or
+failure to select a nearby eligible unit causes a hold, not an attack on a
+pool guess. Combat and threat identification remain based on provisional client
+observations, so ranged attackers or unavailable TAB picks may still require
+manual intervention. In-combat adds after a kill are reconsidered before roaming
+or vendoring resumes.
+
+An unverified incidental pool-click target no longer outranks a substantially
+nearer pool candidate merely because TAB kept it selected. The heal loop no
+longer disables healing solely because net health failed to rise when power was
+spent; incoming damage and healing cannot be separated by that observation.
+The STOP check now interrupts the heal verification wait as well.
