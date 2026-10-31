@@ -241,6 +241,8 @@ namespace CopilotBuddy.UI
                                 btnAimClearHotspots.IsEnabled = true;
                                 btnAimOffsets.Visibility = Visibility.Visible;
                                 btnAimOffsets.IsEnabled = true;
+                                btnGatherProbe.Visibility = Visibility.Visible;
+                                btnGatherProbe.IsEnabled = true;
 
                                 /* Enable the three controls that do something on this client.
                                  * Everything else stays as ToggleButtons(false) left it, because
@@ -1394,6 +1396,21 @@ namespace CopilotBuddy.UI
                 Logging.Write("[Grind] combat settings window failed: " + ex.Message);
                 System.Windows.MessageBox.Show(this, "The combat settings window could not open: " + ex.Message,
                                 "Combat settings", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+        }
+
+        private void btnGatherProbe_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                if (Styx.Logic.Pathing.GatherProbe.Start())
+                    SetStatus("Hover a node in the game for 8 seconds...");
+                else
+                    SetStatus("Gather probe already running");
+            }
+            catch (Exception ex)
+            {
+                Logging.Write("[Gather probe] could not start: " + ex.Message);
             }
         }
 

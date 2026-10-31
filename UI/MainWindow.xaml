@@ -199,6 +199,16 @@
             </Viewbox>
         </Button>
 
+        <!-- Read-only node offset probe; available only on the 64-bit client. -->
+        <Button x:Name="btnGatherProbe" Height="25" Visibility="Hidden"
+                Margin="0,213,136,0" VerticalAlignment="Top" HorizontalAlignment="Right"
+                Width="120" ToolTip="After pressing, hover a herb or ore in the game for 8 seconds; no clicks are sent"
+                Click="btnGatherProbe_Click">
+            <Viewbox Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center">
+                <TextBlock Text="Gather probe"/>
+            </Viewbox>
+        </Button>
+
         <Button x:Name="btnAimOffsets"
                 Height="25"
                 Visibility="Hidden"
