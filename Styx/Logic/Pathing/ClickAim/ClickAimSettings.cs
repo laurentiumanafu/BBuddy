@@ -83,10 +83,11 @@ internal static class ClickAimSettings
     public static bool AutoSell = true;
 
     /// <summary>
-    /// Sell after this many looted corpses; 0 means only when the window's "Sell now" button is
-    /// pressed. A level-3 character gets one or two items a body and the backpack holds 16, so
-    /// 20 is a full bag plus a few - the trip is a long walk and doing it twice an hour is
-    /// better than doing it every five minutes.
+    /// Sell after this many kills or looted bodies; 0 means only when the window's "Sell now"
+    /// button is pressed. A level-3 character gets one or two items a body and the backpack holds
+    /// 16, so 20 is a full bag plus a few - the trip is a long walk and doing it twice an hour is
+    /// better than doing it every five minutes. Counted both ways and compared separately, so an
+    /// unlootable corpse still counts and nothing is counted twice.
     /// </summary>
     public static int SellAfterLoots = 20;
 
@@ -99,6 +100,14 @@ internal static class ClickAimSettings
 
     /// <summary>How far from a vendor point the NPC itself is looked for, in yards.</summary>
     public static int VendorSearchYd = 25;
+
+    /// <summary>
+    /// Read the player's block before and after every looted body and report the words that move by
+    /// exactly one: that is how a free-slot (or used-slot) count is found without a Lua call. Costs
+    /// one 2.5 KB read per loot, nothing is written, and the report is a list of candidates with the
+    /// evidence attached - see <c>Styx.WoWInternals.BagSlotHunt</c>.
+    /// </summary>
+    public static bool BagSlotHunt = true;
 
     private const string FileName = "clickaim-grind.txt";
 
@@ -144,6 +153,7 @@ internal static class ClickAimSettings
         SellAfterLoots = 20;
         VendorWaitMs = 2500;
         VendorSearchYd = 25;
+        BagSlotHunt = true;
     }
 
     /// <summary>
@@ -273,6 +283,11 @@ internal static class ClickAimSettings
             if (hasNumber) VendorSearchYd = number;
             return true;
         }
+        if (string.Equals(key, "BagSlotHunt", StringComparison.OrdinalIgnoreCase))
+        {
+            BagSlotHunt = flag;
+            return true;
+        }
         return false;
     }
 
@@ -328,6 +343,7 @@ internal static class ClickAimSettings
         text.AppendLine("SellAfterLoots = " + SellAfterLoots.ToString(CultureInfo.InvariantCulture));
         text.AppendLine("VendorWaitMs = " + VendorWaitMs.ToString(CultureInfo.InvariantCulture));
         text.AppendLine("VendorSearchYd = " + VendorSearchYd.ToString(CultureInfo.InvariantCulture));
+        text.AppendLine("BagSlotHunt = " + (BagSlotHunt ? "true" : "false"));
 
         try
         {
@@ -349,14 +365,15 @@ internal static class ClickAimSettings
         return string.Format(CultureInfo.InvariantCulture,
             "heal at {0}% (0 = never) and only above {8}% power, eat at {1}%, drink at {2}%, "
             + "damage over time {3}, buffs {4}, food slot {5}, drink slot {6}, "
-            + "{7} spell role(s) set by hand; selling {9} (after {10} looted bodie(s), {11} ms "
-            + "for the merchant window, vendor NPC looked for within {12} yd)",
+            + "{7} spell role(s) set by hand; selling {9} (after {10} kill(s) or looted bodie(s), "
+            + "{11} ms for the merchant window, vendor NPC looked for within {12} yd; bag offset hunt {13})",
             HealBelowPercent, EatBelowPercent, DrinkBelowPercent,
             UseDamageOverTime ? "on" : "off", UseBuffs ? "on" : "off",
             FoodSlot == 0 ? "auto" : FoodSlot.ToString(CultureInfo.InvariantCulture),
             DrinkSlot == 0 ? "auto" : DrinkSlot.ToString(CultureInfo.InvariantCulture),
             ClickAimCombat.OverrideCount, HealMinManaPercent,
-            AutoSell ? "on" : "off", SellAfterLoots, VendorWaitMs, VendorSearchYd);
+            AutoSell ? "on" : "off", SellAfterLoots, VendorWaitMs, VendorSearchYd,
+            BagSlotHunt ? "on" : "off");
     }
 
     /// <summary>
@@ -398,6 +415,7 @@ internal static class ClickAimSettings
         check(Apply("SellAfterLoots", "7") && SellAfterLoots == 7, "applySellAfter");
         check(Apply("VendorWaitMs", "900") && VendorWaitMs == 900, "applyVendorWait");
         check(Apply("VendorSearchYd", "12") && VendorSearchYd == 12, "applyVendorSearch");
+        check(Apply("BagSlotHunt", "false") && !BagSlotHunt, "applyBagHunt");
 
         SellAfterLoots = -5;
         VendorWaitMs = 1;
@@ -408,8 +426,8 @@ internal static class ClickAimSettings
         check(VendorSearchYd == 5, "clampVendorSearch");
 
         ResetDefaults();
-        check(AutoSell && SellAfterLoots == 20 && VendorWaitMs == 2500 && VendorSearchYd == 25,
-              "vendorDefaults");
+        check(AutoSell && SellAfterLoots == 20 && VendorWaitMs == 2500 && VendorSearchYd == 25
+              && BagSlotHunt, "vendorDefaults");
         check(Describe().IndexOf("heal at 60%", StringComparison.Ordinal) >= 0, "describe");
 
         if (fails.Length == 0) return string.Format(CultureInfo.InvariantCulture,

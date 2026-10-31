@@ -80,6 +80,42 @@ internal static class GrindRunner
     /// </summary>
     private const double GiveUpYd = SearchYd + 15.0;
 
+    // ---- getting unstuck ---------------------------------------------------
+    /// <summary>
+    /// How far the character has to move inside <see cref="StuckMs"/> for a chase to count as
+    /// progress. One yard is under a step, so a character that is walking answers it every tick
+    /// and a character standing inside a cactus never does.
+    /// </summary>
+    private const double StuckMoveYd = 1.0;
+
+    /// <summary>
+    /// How long a chase may go without moving before the character tries to free itself.
+    ///
+    /// The run this comes from: the mob was 40 yd away with full health, the character had walked
+    /// into a cactus, and it stood there for a minute asking for one more step toward the mob from
+    /// the same spot. Nothing in the loop measured its OWN movement - every branch only looked at
+    /// the distance to the mob, which never changed. Two and a half seconds of no movement is a
+    /// wall, not a slope.
+    /// </summary>
+    private const int StuckMs = 2500;
+
+    /// <summary>
+    /// Escape attempts before the target is dropped. Each one walks a few yards away from the mob
+    /// (or to the side of it), which is what a player does when the path ahead is a plant.
+    /// </summary>
+    private const int StuckEscapes = 3;
+
+    /// <summary>How long one escape step walks for, in milliseconds.</summary>
+    private const int StuckEscapeMs = 600;
+
+    /// <summary>
+    /// How long a unit the fight could not reach is left out of the target scans. The user's rule:
+    /// "it should try to unstuck or blacklist the target for a while if it can't reach it". Ninety
+    /// seconds is long enough for the character to be somewhere else, and short enough that a mob
+    /// which is still there afterwards is tried again.
+    /// </summary>
+    private const int UnreachablePauseMs = 90000;
+
     // ---- attacking ---------------------------------------------------------
     /// <summary>
     /// <c>UnitFlags</c> bit 0x800, which the three 2026-10-30 dumps agree means IN COMBAT:
@@ -337,6 +373,12 @@ internal static class GrindRunner
     /// <summary>Last time the "TAB has a target out of range" note was printed.</summary>
     private static int _farQuietAt;
 
+    /// <summary>
+    /// Units the fight could not walk to, and until when they are left out of the scans. A mob
+    /// behind a cactus is not a mob worth twenty more seconds of walking into it.
+    /// </summary>
+    private static readonly Dictionary<WowBGuid, int> _unreachableUntil = new Dictionary<WowBGuid, int>();
+
     // ---- selling (the vendor trip) ----------------------------------------
     /// <summary>Set by the window's "Sell now" button, cleared by the trip it starts.</summary>
     private static volatile bool _vendorDue;
@@ -356,6 +398,14 @@ internal static class GrindRunner
 
     /// <summary>Clicks the sell plan itself sent, for the summary.</summary>
     private static int _sellClicks;
+
+    /// <summary>
+    /// Monsters killed since the last trip - the other half of the bag-full stand-in, because the
+    /// user's own words are "if 20 monsters are defeated". Counted next to the loots rather than
+    /// instead of them: a kill whose corpse could not be looted still filled a bag slot, and a
+    /// body looted twice cannot happen, so the two numbers are compared separately.
+    /// </summary>
+    private static int _killsSinceTrip;
 
     /// <summary>
     /// Last time "nothing alive within the search radius" was printed. This used to be the
@@ -541,7 +591,9 @@ internal static class GrindRunner
         _vendorImpossible = false;
         _vendorRetryAt = 0;
         _lootsSinceTrip = 0;
+        _killsSinceTrip = 0;
         _sellClicks = 0;
+        _unreachableUntil.Clear();
 
         /* What the client can be asked without Lua: level, health, the stored action bar
          * and what is standing around. It is printed once because it is the answer to
@@ -602,6 +654,18 @@ internal static class GrindRunner
                     break;
                 }
 
+                /* The bags before the mobs. The 2026-10-31 run pressed "Sell now" and watched the
+                 * bot take the next hotspot leg first, because the check sat after the fight and
+                 * after the rest - which is the wrong order for a decision about the whole
+                 * character rather than about this hotspot. A fight still outranks it (VendorDue
+                 * refuses while something is attacking), and the hotspot index is not advanced,
+                 * so the character comes back to the ring it left. */
+                if (VendorDue())
+                {
+                    if (VendorTrip(hwnd, mover)) vendorTrips++;
+                    continue;
+                }
+
                 /* Once, before the first fight rather than in the middle of one: whatever this
                  * class buffs itself with (Mark of the Wild, Arcane Intellect, ...). */
                 string buffed = ApplyBuffsIfNeeded(hwnd);
@@ -615,7 +679,10 @@ internal static class GrindRunner
                      * prefix, not the whole line. */
                     if (combatReport.StartsWith("killed", StringComparison.Ordinal)
                         || combatReport.IndexOf("killed or fled", StringComparison.Ordinal) >= 0)
+                    {
                         kills++;
+                        _killsSinceTrip++;
+                    }
                     Logging.Write("[Grind] " + combatReport);
                     if (combatReport.StartsWith("the character died", StringComparison.Ordinal)) break;
                     continue;
@@ -628,16 +695,6 @@ internal static class GrindRunner
                  * is walk, and walking is what cancels a meal. */
                 string rested = RestIfNeeded(hwnd);
                 if (rested.Length > 0) Logging.Write("[Grind] " + rested);
-
-                /* The bags, between fights and before the next leg. Original LevelBot put the
-                 * vendor in the profile and walked to it as a PoiType.Sell POI; this is the same
-                 * decision taken here (see VendorTrip), and the hotspot index is not advanced,
-                 * so the character walks back to the ring it left. */
-                if (VendorDue())
-                {
-                    if (VendorTrip(hwnd, mover)) vendorTrips++;
-                    continue;
-                }
 
                 RoutePoint next = area.Hotspots[index % area.Hotspots.Count];
                 index++;
@@ -708,6 +765,9 @@ internal static class GrindRunner
             _running = false;
         }
 
+        string bagReport = BagSlotHunt.Report();
+        if (bagReport.Length > 0) Logging.Write(bagReport);
+
         Logging.Write(string.Format(CultureInfo.InvariantCulture,
             "[Grind] done: {0} hotspot(s) reached, {1} fight(s), {2} kill(s) confirmed, "
             + "{3} corpse(s) looted, {4} key press(es), {5} click(s) that landed, {6} area switch(es), "
@@ -734,6 +794,12 @@ internal static class GrindRunner
         /* The user's own numbers, from Settings\clickaim-grind.txt. Read here, once per run, so
          * a change made in the window (or in a text editor) is what this run uses. */
         ClickAimSettings.Load();
+
+        /* The bag-slot hunt: on unless the user turned it off. One read per looted body, and a
+         * candidate list at the end of the run - see BagSlotHunt.Reset/Sample/Report. */
+        BagSlotHunt.Enabled = ClickAimSettings.BagSlotHunt;
+        BagSlotHunt.Reset();
+
         _dotGuid = default(WowBGuid);
         _dotUntil = 0;
         _manaPeak = 0;
@@ -1312,6 +1378,7 @@ internal static class GrindRunner
          * "giving up on ... for this session" then "going with the target already selected",
          * 1.3 yd, forever - because the refusal list was only consulted for pool picks. */
         if (_notViable.Contains(target.Guid)) return false;
+        if (Unreachable(target.Guid)) return false;
         int refusedUntil;
         if (_tabRefusedUntil.TryGetValue(target.Guid, out refusedUntil)
             && unchecked(Environment.TickCount - refusedUntil) < 0)
@@ -1510,6 +1577,7 @@ internal static class GrindRunner
         if (candidate.IsLocalPlayer) return false;
         if (candidate.HasPlayerVtable) { why = "the client offered a PLAYER"; return false; }
         if (Refused(candidate.Guid) || _notViable.Contains(candidate.Guid)) return false;
+        if (Unreachable(candidate.Guid)) return false;
 
         Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
         if (reader == null) return false;
@@ -1555,8 +1623,8 @@ internal static class GrindRunner
             {
                 fights++;
                 fought++;
-                if (report.StartsWith("killed", StringComparison.Ordinal)) { kills++; killed++; }
-                else if (report.IndexOf("killed or fled", StringComparison.Ordinal) >= 0) { kills++; killed++; }
+                if (report.StartsWith("killed", StringComparison.Ordinal)) { kills++; killed++; _killsSinceTrip++; }
+                else if (report.IndexOf("killed or fled", StringComparison.Ordinal) >= 0) { kills++; killed++; _killsSinceTrip++; }
                 Logging.Write("[Grind] " + report);
                 clearScans = 0;               // something was here: this hotspot is not finished
                 continue;
@@ -1959,6 +2027,10 @@ internal static class GrindRunner
             clicked++;
             _loots++;
             _lootsSinceTrip++;
+
+            /* Something just went into the bags: this is the moment a free-slot count moves by
+             * one, which is the whole point of the hunt. */
+            BagSlotHunt.Sample("looted a body");
             if (result > 0)
             {
                 gone++;
@@ -2023,7 +2095,13 @@ internal static class GrindRunner
 
         if (!ClickAimSettings.AutoSell) return false;
         int after = ClickAimSettings.SellAfterLoots;
-        return after > 0 && _lootsSinceTrip >= after;
+        if (after <= 0) return false;
+
+        /* "20 monsters are defeated" is the user's own rule, and a kill and a loot are the same
+         * corpse. Counted separately and compared separately: whichever number gets there first
+         * is the one that decides, so an unlootable body still fills a bag slot and a body cannot
+         * be counted twice. */
+        return _killsSinceTrip >= after || _lootsSinceTrip >= after;
     }
 
     /// <summary>
@@ -2095,8 +2173,9 @@ internal static class GrindRunner
         }
 
         Logging.Write(string.Format(CultureInfo.InvariantCulture,
-            "[Grind] selling: {0} is {1:F0} yd away and has {2} recorded step(s); {3} bodie(s) looted since the "
-            + "last trip", point, ClickAimMath.Len(point.X - px, point.Y - py), point.Steps.Count, _lootsSinceTrip));
+            "[Grind] selling first, before the next hotspot: {0} is {1:F0} yd away and has {2} recorded "
+            + "step(s); {3} kill(s) and {4} looted bodie(s) since the last trip", point,
+            ClickAimMath.Len(point.X - px, point.Y - py), point.Steps.Count, _killsSinceTrip, _lootsSinceTrip));
 
         var route = new List<RoutePoint>();
         route.Add(new RoutePoint { X = point.X, Y = point.Y, Z = point.Z, Kind = "Vendor", Label = point.Name });
@@ -2113,9 +2192,14 @@ internal static class GrindRunner
         {
             if (RouteRunner.LastRunInterrupted)
             {
-                _vendorRetryAt = Environment.TickCount + VendorRetryAfterFightMs;
+                /* No retry delay: the bags are still full and the trip is the whole reason the
+                 * loop is in town mode. Only the interrupt itself is quieted, so a leg that keeps
+                 * being cut short for something that never turns into a fight cannot pin the
+                 * character in place - the same brake a hotspot leg uses. */
+                _interruptQuietUntil = Environment.TickCount + InterruptRetryMs;
+                _vendorRetryAt = 0;
                 Logging.Write("[Grind] the walk to the vendor was cut short: there is something to fight on the "
-                              + "way. The trip is taken again afterwards.");
+                              + "way. The trip is taken again as soon as that is dealt with.");
             }
             else
             {
@@ -2211,7 +2295,12 @@ internal static class GrindRunner
         int sent = RunSellPlan(hwnd, point);
 
         _lootsSinceTrip = 0;
+        _killsSinceTrip = 0;
         _vendorRetryAt = 0;
+
+        /* ...and here the same words move the other way, by the number of items sold. A candidate
+         * that does that is the bag count, not a coincidence. */
+        BagSlotHunt.Sample("sold at the vendor");
         Logging.Write(string.Format(CultureInfo.InvariantCulture,
             "[Grind] vendor trip done: {0} of {1} step(s) sent ({2} click(s)). The merchant window cannot be read "
             + "on this build, so the plan is what sells the loot - if the bags still hold junk, the plan needs "
@@ -2625,6 +2714,7 @@ internal static class GrindRunner
             if (candidate.HasPlayerVtable) continue;
             if (Refused(candidate.Guid)) continue;
             if (_notViable.Contains(candidate.Guid)) continue;
+            if (Unreachable(candidate.Guid)) continue;
 
             /* ...and a unit TAB refused twice is left out of the scan for a minute, so a hotspot
              * holding nothing but friendly NPCs can finish. Only the scan: nothing is remembered
@@ -3003,6 +3093,169 @@ internal static class GrindRunner
     }
 
     /// <summary>
+    /// One fight's movement watchdog: where the character was when it was last seen moving, when
+    /// that was, and how many escape attempts have been spent since.
+    ///
+    /// A class rather than three locals because <see cref="ChaseStep"/> is called from two
+    /// branches of the fight (the walk into casting range and the walk into melee) and both have
+    /// to share the same tally - otherwise a fight that alternates between the two could spend
+    /// three escapes in each and never give up.
+    /// </summary>
+    private sealed class ChaseWatch
+    {
+        public double X = double.NaN;
+        public double Y = double.NaN;
+        public int LastMoveMs;
+        public int Escapes;
+        public int TotalEscapes;
+
+        public ChaseWatch(int started) { LastMoveMs = started; }
+    }
+
+    /// <summary>
+    /// One step of a chase, with the stuck watchdog around it.
+    ///
+    /// Returns true when the fight should carry on, and false with <paramref name="why"/> set when
+    /// the character has stopped making progress and the target should be dropped: something in the
+    /// geometry is between it and the mob, and walking into it for another minute is not a
+    /// strategy. The 2026-10-31 run is the reason: the mob was far away and untouched, the
+    /// character was inside a cactus, and it spent a minute asking for one more step toward the
+    /// mob from the same spot - the distance to the mob never changed, so no branch noticed.
+    ///
+    /// Between the "stuck" reading and giving up, it tries to free itself: walk away from the mob,
+    /// then to either side of it. That is what a player does, and it is the only movement here
+    /// that is not aimed at the target.
+    /// </summary>
+    private static bool ChaseStep(IntPtr hwnd, ChaseWatch watch, WowBObservedUnit target, out string why)
+    {
+        why = "";
+
+        double px, py;
+        if (!ClickAimPositions.TryRead(out px, out py))
+        {
+            /* No position, no way to tell progress. Keep walking: told nothing, do nothing new. */
+            double unknown;
+            ClickAimKeySteer.Steer(target.Location.X, target.Location.Y, hwnd, true, out unknown);
+            Thread.Sleep(90);
+            return true;
+        }
+
+        if (double.IsNaN(watch.X))
+        {
+            watch.X = px;
+            watch.Y = py;
+            watch.LastMoveMs = Environment.TickCount;
+        }
+        else if (ClickAimMath.Len(px - watch.X, py - watch.Y) >= StuckMoveYd)
+        {
+            watch.X = px;
+            watch.Y = py;
+            watch.LastMoveMs = Environment.TickCount;
+            watch.Escapes = 0;              // it is moving again: whatever was in the way is behind
+        }
+
+        if (unchecked(Environment.TickCount - watch.LastMoveMs) < StuckMs)
+        {
+            double remaining;
+            ClickAimKeySteer.Steer(target.Location.X, target.Location.Y, hwnd, true, out remaining);
+            Thread.Sleep(90);
+            return true;
+        }
+
+        if (watch.Escapes >= StuckEscapes || watch.TotalEscapes >= StuckEscapes * 2)
+        {
+            double stuckYd = ClickAimMath.Len(px - watch.X, py - watch.Y);
+            why = string.Format(CultureInfo.InvariantCulture,
+                "{0:F1} yd from where it was {1:F1} s ago with the mob still {2:F1} yd away, after {3} "
+                + "attempt(s) to walk round whatever is in the way",
+                stuckYd, unchecked(Environment.TickCount - watch.LastMoveMs) / 1000.0,
+                ClickAimMath.Len(target.Location.X - px, target.Location.Y - py), watch.TotalEscapes);
+            return false;
+        }
+
+        ClickAimKeySteer.ReleaseHeld();
+        string how;
+        TryEscapeStep(hwnd, target, watch.Escapes, out how);
+        watch.Escapes++;
+        watch.TotalEscapes++;
+        watch.LastMoveMs = Environment.TickCount;      // give the escape its own window
+        watch.X = px;
+        watch.Y = py;
+
+        Logging.Write(string.Format(CultureInfo.InvariantCulture,
+            "[Grind] stuck: {0} - escape attempt {1} of {2}, {3}", how, watch.Escapes, StuckEscapes,
+            watch.Escapes >= StuckEscapes
+                ? "and if this does not free the character the target is dropped"
+                : "walking out and trying again"));
+        return true;
+    }
+
+    /// <summary>
+    /// One escape step: walk a few yards away from the mob (or to either side of it), because the
+    /// thing in the way is usually straight ahead and dead-on. Steered with the same calibrated
+    /// keys as every other walk, so it is a real step and not a hope.
+    /// </summary>
+    private static bool TryEscapeStep(IntPtr hwnd, WowBObservedUnit target, int attempt, out string how)
+    {
+        how = "";
+        double px, py;
+        if (!ClickAimPositions.TryRead(out px, out py))
+        {
+            how = "the player position does not read, so there is nothing to escape TO";
+            return false;
+        }
+
+        double away = ClickAimMath.HeadingDeg(px - target.Location.X, py - target.Location.Y);
+        double bearing = away + (attempt == 1 ? 80.0 : attempt == 2 ? -80.0 : 0.0);
+        double rad = bearing * Math.PI / 180.0;
+        double tx = px + Math.Cos(rad) * 5.0;
+        double ty = py + Math.Sin(rad) * 5.0;
+
+        for (int walked = 0; walked < StuckEscapeMs && !_stop; walked += 90)
+        {
+            double remaining;
+            ClickAimKeySteer.Steer(tx, ty, hwnd, true, out remaining);
+            Thread.Sleep(90);
+            if (remaining < 1.0) break;
+        }
+        ClickAimKeySteer.ReleaseHeld();
+
+        how = string.Format(CultureInfo.InvariantCulture,
+            "walking {0} to ({1:F0}, {2:F0}) for {3} ms",
+            attempt == 1 ? "to the right of the mob" : attempt == 2 ? "to the left of the mob" : "back from the mob",
+            tx, ty, StuckEscapeMs);
+        return true;
+    }
+
+    /// <summary>
+    /// Drops a target the fight could not walk to, for <see cref="UnreachablePauseMs"/>, and
+    /// returns the line for the log. The pause is a pause, not a blacklist: a mob behind a cactus
+    /// now is a mob standing in the open in two minutes.
+    /// </summary>
+    private static string DropUnreachable(WowBObservedUnit target, string why)
+    {
+        if (_unreachableUntil.Count > 256) _unreachableUntil.Clear();
+        _unreachableUntil[target.Guid] = Environment.TickCount + UnreachablePauseMs;
+        return string.Format(CultureInfo.InvariantCulture,
+            "could not reach {0}: {1}. Out of the target scans for {2} s, and the loop takes another one",
+            target.Guid, why, UnreachablePauseMs / 1000);
+    }
+
+    /// <summary>Whether a unit is still in its "cannot be walked to" pause.</summary>
+    private static bool Unreachable(WowBGuid guid)
+    {
+        if (guid.IsEmpty || _unreachableUntil.Count == 0) return false;
+        int until;
+        if (!_unreachableUntil.TryGetValue(guid, out until)) return false;
+        if (unchecked(Environment.TickCount - until) >= 0)
+        {
+            _unreachableUntil.Remove(guid);          // the pause is over: ask again
+            return false;
+        }
+        return true;
+    }
+
+    /// <summary>
     /// One fight: Singular's lowbie druid rotation, driven by the action bar the client
     /// keeps in memory and verified against the mob's health and my own mana.
     ///
@@ -3059,6 +3312,11 @@ internal static class GrindRunner
         int inReachSince = 0;           // when the target first came inside TAB's reach
         int lastHealthDropMs = started; // when its health last went down
         int lastSeenHealth = -1;
+
+        /* The movement watchdog. It measures the character's own position, not its intent: every
+         * branch of this loop only ever looked at the distance to the mob, and a mob 40 yd away
+         * behind a cactus keeps that number the same forever. See StuckMs. */
+        var watch = new ChaseWatch(started);
 
         WowBWorldSnapshot? snap;
         WowBObservedUnit target;
@@ -3476,9 +3734,9 @@ internal static class GrindRunner
 
             if (canCast && d > castRange)
             {
-                double approach;
-                ClickAimKeySteer.Steer(target.Location.X, target.Location.Y, hwnd, true, out approach);
-                Thread.Sleep(90);
+                string blocked;
+                if (!ChaseStep(hwnd, watch, target, out blocked))
+                    return DropUnreachable(target, blocked);
                 continue;
             }
 
@@ -3644,14 +3902,14 @@ internal static class GrindRunner
                  * distance, which is the search radius plus a margin - the 13:23 run's "it
                  * skips a monster 40 yards away" was this gate refusing anything past 20 yd
                  * whenever the character was out of mana. */
-                double chase = GiveUpYd;
-                if (d > chase)
+                double chaseYd = GiveUpYd;
+                if (d > chaseYd)
                     return string.Format(CultureInfo.InvariantCulture,
                         "cannot cast at it and it is {0:F0} yd away (the melee chase is {1:F0} yd); "
-                        + "giving up on it", d, chase);
-                double closer;
-                ClickAimKeySteer.Steer(target.Location.X, target.Location.Y, hwnd, true, out closer);
-                Thread.Sleep(90);
+                        + "giving up on it", d, chaseYd);
+                string blocked;
+                if (!ChaseStep(hwnd, watch, target, out blocked))
+                    return DropUnreachable(target, blocked);
                 continue;
             }
 
@@ -4136,9 +4394,33 @@ internal static class GrindRunner
                 }
 
                 check("vendorNearest", VendorFile.Nearest(vendorPoints, 12.0, 20.0) == 0);
+
+                /* Editing a plan: a step that was recorded wrong is deleted on its own, and the
+                 * order can be changed without re-recording the whole plan. */
+                check("vendorAddSecondClick", VendorFile.AddStep(0,
+                    new VendorFile.Step { Kind = "LeftClick", Fx = 0.5, Fy = 0.5, WaitMs = 300 },
+                    out vendorError, vendorPath));
+                check("vendorRemoveStep", VendorFile.RemoveStep(0, 2, out vendorError, vendorPath));
+                List<VendorFile.VendorPoint> edited = VendorFile.Read(vendorPath);
+                check("vendorRemoveStepTookTheRightOne", edited.Count == 1 && edited[0].Steps.Count == 2
+                                                       && edited[0].Steps[1].IsKey);
+                check("vendorRemoveStepRejectsBadIndex", !VendorFile.RemoveStep(0, 9, out vendorError, vendorPath));
+                check("vendorMoveStep", VendorFile.MoveStep(0, 1, -1, out vendorError, vendorPath));
+                edited = VendorFile.Read(vendorPath);
+                check("vendorMoveStepOrder", edited.Count == 1 && edited[0].Steps.Count == 2
+                                           && edited[0].Steps[0].IsKey && edited[0].Steps[1].IsClick);
+                check("vendorMoveStepClamps", VendorFile.MoveStep(0, 0, -5, out vendorError, vendorPath)
+                                           && VendorFile.Read(vendorPath)[0].Steps[0].IsKey);
+
                 check("vendorClearSteps", VendorFile.ClearSteps(0, out vendorError, vendorPath));
                 List<VendorFile.VendorPoint> afterClear = VendorFile.Read(vendorPath);
                 check("vendorStepsGone", afterClear.Count == 1 && afterClear[0].Steps.Count == 0);
+
+                /* A vendor point captured by mistake goes away whole. */
+                check("vendorAddSecondPoint", VendorFile.Add(200.0, 300.0, 0.0, out vendorError, vendorPath) == 2);
+                check("vendorRemovePoint", VendorFile.Remove(1, out vendorError, vendorPath));
+                check("vendorRemovePointTookTheRightOne", VendorFile.Read(vendorPath).Count == 1);
+                check("vendorRemovePointRejectsBadIndex", !VendorFile.Remove(5, out vendorError, vendorPath));
             }
             finally
             {
@@ -4148,6 +4430,14 @@ internal static class GrindRunner
             /* The trip's own arithmetic: the reach is inside the search radius, and a trip cut
              * short by a fight is retried sooner than one that failed outright. */
             check("vendorReachIsInteractionRange", VendorReachYd > 0.0 && VendorReachYd < 8.0);
+
+            /* Getting unstuck: the watchdog has to notice a wall quickly, and the pause that
+             * follows a target the fight cannot reach has to outlast the escape attempts - or the
+             * loop drops the mob and picks it straight back up. */
+            check("stuckWindowIsQuick", StuckMs >= 1500 && StuckMs <= 5000);
+            check("stuckEscapeIsAStep", StuckEscapeMs >= 300 && StuckEscapeMs <= 1500);
+            check("stuckPauseOutlastsTheEscapes", UnreachablePauseMs > StuckMs * StuckEscapes * 2);
+            check("stuckMoveIsUnderAStep", StuckMoveYd > 0.2 && StuckMoveYd < 2.0);
             check("vendorRetryAfterFight", VendorRetryAfterFightMs > 0
                                         && VendorRetryAfterFightMs < VendorRetryMs);
         }

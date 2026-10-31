@@ -99,6 +99,23 @@ internal static class VendorFile
             return new Step { Kind = Kind, Fx = Fx, Fy = Fy, Vk = Vk, WaitMs = WaitMs };
         }
 
+        /// <summary>
+        /// The one-line form for the list in the window: short enough for a column, but never so
+        /// short that two steps look alike.
+        /// </summary>
+        public string Short
+        {
+            get
+            {
+                if (IsWait) return "wait " + WaitMs.ToString(CultureInfo.InvariantCulture) + " ms";
+                if (IsKey) return "press " + Vk.ToString(CultureInfo.InvariantCulture)
+                                  + (Vk > 32 && Vk < 127 ? " (" + (char)Vk + ")" : "");
+                return (IsRightClick ? "right click " : "left click ")
+                       + Fx.ToString("0.00", CultureInfo.InvariantCulture) + ", "
+                       + Fy.ToString("0.00", CultureInfo.InvariantCulture);
+            }
+        }
+
         public override string ToString()
         {
             if (IsWait)
@@ -318,6 +335,136 @@ internal static class VendorFile
             error = ex.Message;
             return false;
         }
+    }
+
+    /// <summary>
+    /// Removes one point and everything recorded under it, so a vendor captured by mistake can be
+    /// taken back out. The grind loop picks the nearest point, so a stray point in a town the
+    /// character walks through is worse than no point at all.
+    /// </summary>
+    public static bool Remove(int index, out string error, string? path = null)
+    {
+        error = "";
+        string file = path ?? DefaultPath;
+        try
+        {
+            lock (Gate)
+            {
+                if (!File.Exists(file)) { error = "there is no vendor file"; return false; }
+                XDocument doc = XDocument.Load(file);
+                XElement? target = VendorAt(doc, index);
+                if (target == null) { error = "there is no vendor point to remove"; return false; }
+
+                target.Remove();
+                Save(doc, file);
+                return true;
+            }
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Removes one step from a plan. This is the fix for a mis-recorded click: the wrong step is
+    /// deleted and the rest of the plan stays as it was, instead of clearing everything and
+    /// recording it again.
+    /// </summary>
+    public static bool RemoveStep(int index, int stepIndex, out string error, string? path = null)
+    {
+        error = "";
+        string file = path ?? DefaultPath;
+        try
+        {
+            lock (Gate)
+            {
+                if (!File.Exists(file)) { error = "there is no vendor file"; return false; }
+                XDocument doc = XDocument.Load(file);
+                XElement? target = VendorAt(doc, index);
+                if (target == null) { error = "there is no vendor point"; return false; }
+
+                XElement? step = StepAt(target, stepIndex);
+                if (step == null) { error = "there is no step at that position"; return false; }
+
+                step.Remove();
+                Save(doc, file);
+                return true;
+            }
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Moves one step up or down the plan. Order is the whole meaning of a sale: the bag key has to
+    /// open the bags before an item is clicked, and the merchant window has to be open first.
+    /// </summary>
+    public static bool MoveStep(int index, int stepIndex, int by, out string error, string? path = null)
+    {
+        error = "";
+        string file = path ?? DefaultPath;
+        try
+        {
+            lock (Gate)
+            {
+                if (!File.Exists(file)) { error = "there is no vendor file"; return false; }
+                XDocument doc = XDocument.Load(file);
+                XElement? target = VendorAt(doc, index);
+                if (target == null) { error = "there is no vendor point"; return false; }
+
+                var steps = new List<XElement>();
+                foreach (XElement element in target.Elements())
+                {
+                    if (string.Equals(element.Name.LocalName, "Step", StringComparison.OrdinalIgnoreCase))
+                        steps.Add(element);
+                }
+
+                if (steps.Count == 0) { error = "there are no steps to move"; return false; }
+                if (stepIndex < 0 || stepIndex >= steps.Count) { error = "there is no step at that position"; return false; }
+
+                int to = stepIndex + by;
+                if (to < 0) to = 0;
+                if (to >= steps.Count) to = steps.Count - 1;
+                if (to == stepIndex) return true;
+
+                XElement moving = steps[stepIndex];
+                XElement neighbour = steps[to];
+
+                /* Rebuild the position by cloning the moving element next to its neighbour: the
+                 * original is removed afterwards, so a half-moved step never exists on disk - and
+                 * a half-moved step is a plan that sells in the wrong order. */
+                var clone = new XElement(moving);
+                if (by < 0) neighbour.AddBeforeSelf(clone);
+                else neighbour.AddAfterSelf(clone);
+                moving.Remove();
+
+                Save(doc, file);
+                return true;
+            }
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+            return false;
+        }
+    }
+
+    private static XElement? StepAt(XElement vendor, int stepIndex)
+    {
+        int at = 0;
+        foreach (XElement element in vendor.Elements())
+        {
+            if (!string.Equals(element.Name.LocalName, "Step", StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (at == stepIndex) return element;
+            at++;
+        }
+        return null;
     }
 
     /// <summary>Removes every point (the file stays, with an empty list).</summary>

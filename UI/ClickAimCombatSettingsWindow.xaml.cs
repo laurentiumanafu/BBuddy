@@ -312,8 +312,32 @@ namespace CopilotBuddy.UI
 
         // ---------------------------------------------------------------- selling
 
-        /// <summary>The vendor points, re-read every time the plan has to be shown.</summary>
+        /// <summary>The vendor points, re-read every time the lists have to be shown.</summary>
         private List<VendorFile.VendorPoint> _vendors = new List<VendorFile.VendorPoint>();
+
+        /// <summary>One row of the vendor list. Properties, because WPF binding needs them.</summary>
+        public sealed class VendorRow
+        {
+            public int Index { get; set; }
+            public string Place { get; set; }
+            public string Steps { get; set; }
+
+            public VendorRow() { Place = ""; Steps = ""; }
+
+            public override string ToString() { return Place; }
+        }
+
+        /// <summary>One row of the sell plan.</summary>
+        public sealed class StepRow
+        {
+            public int Index { get; set; }
+            public string Number { get; set; }
+            public string Text { get; set; }
+
+            public StepRow() { Number = ""; Text = ""; }
+
+            public override string ToString() { return Number + ". " + Text; }
+        }
 
         /// <summary>
         /// The place to sell and the clicks that do it.
@@ -323,35 +347,100 @@ namespace CopilotBuddy.UI
         /// and the clicks (the merchant frame is a Lua object and the Lua route is retired, so
         /// selling is right-clicking the items in the bags like a player). Both are captured once
         /// from the game and replayed by the grind loop - see <c>GrindRunner.VendorTrip</c>.
+        ///
+        /// Every point and every step can be deleted and the steps can be reordered, because a
+        /// recording is made with a cursor and a three-second countdown: the third click WILL be
+        /// wrong sometimes, and re-recording the whole plan to fix one step is not an answer.
         /// </summary>
         private void LoadVendor()
         {
+            int keep = SelectedVendorIndex();      // whatever was being looked at, if anything
+
             try { _vendors = VendorFile.Read(); }
             catch (Exception ex)
             {
                 _vendors = new List<VendorFile.VendorPoint>();
+                lstVendors.ItemsSource = null;
+                lstSteps.ItemsSource = null;
                 lblVendorPlan.Text = "The vendor file could not be read: " + ex.Message;
                 return;
             }
 
+            var rows = new List<VendorRow>();
+            double px = double.NaN, py = double.NaN;
+            try { ClickAimPositions.TryRead(out px, out py); } catch { px = double.NaN; }
+
+            for (int i = 0; i < _vendors.Count; i++)
+            {
+                VendorFile.VendorPoint point = _vendors[i];
+                var row = new VendorRow { Index = i, Place = point.Name, Steps = Text(point.Steps.Count) };
+                if (!double.IsNaN(px) && !double.IsNaN(py))
+                {
+                    row.Place = string.Format(CultureInfo.InvariantCulture, "{0} ({1:F0} yd)",
+                        point.Name, ClickAimMath.Len(point.X - px, point.Y - py));
+                }
+                rows.Add(row);
+            }
+
+            lstVendors.ItemsSource = null;
+            lstVendors.ItemsSource = rows;
+
             if (_vendors.Count == 0)
             {
+                lstSteps.ItemsSource = null;
                 lblVendorPlan.Text = "No vendor point yet. Stand at the vendor in town and press "
                                      + "\"Add vendor here\", then record the clicks that sell.";
                 return;
             }
 
-            int at = NearestVendorIndex();
+            int at = keep >= 0 && keep < _vendors.Count ? keep : NearestVendorIndex();
             if (at < 0) at = 0;
-            lblVendorPlan.Text = VendorFile.DescribePlan(_vendors[at]);
+            lstVendors.SelectedIndex = at;
+            LoadSteps(at);
+        }
+
+        /// <summary>The plan of one point, in the list on the right.</summary>
+        private void LoadSteps(int vendorIndex)
+        {
+            if (vendorIndex < 0 || vendorIndex >= _vendors.Count)
+            {
+                lstSteps.ItemsSource = null;
+                return;
+            }
+
+            VendorFile.VendorPoint point = _vendors[vendorIndex];
+            var rows = new List<StepRow>();
+            for (int i = 0; i < point.Steps.Count; i++)
+                rows.Add(new StepRow { Index = i, Number = Text(i + 1), Text = point.Steps[i].Short });
+
+            lstSteps.ItemsSource = null;
+            lstSteps.ItemsSource = rows;
+
+            /* One line, not the whole plan: the list above IS the plan, and printing it twice pushes
+             * the buttons off the tab. */
+            lblVendorPlan.Text = point.Steps.Count == 0
+                ? point.ToString() + " - no steps yet: open the merchant window in the game and record them "
+                  + "left to right, top to bottom."
+                : string.Format(CultureInfo.InvariantCulture,
+                    "{0}, {1} step(s). The plan runs top to bottom: it is what sells the loot, so it has to "
+                    + "match the merchant window's own layout.", point, point.Steps.Count);
+        }
+
+        private void lstVendors_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            var row = lstVendors.SelectedItem as VendorRow;
+            if (row == null) return;
+            LoadSteps(row.Index);
         }
 
         /// <summary>
-        /// Which vendor point the buttons act on: the one nearest the character, which is the one
-        /// the grind loop would walk to.
+        /// The point the buttons act on: what is selected in the list, else the one nearest the
+        /// character - which is the one the grind loop would walk to.
         /// </summary>
-        private int NearestVendorIndex()
+        private int SelectedVendorIndex()
         {
+            var row = lstVendors.SelectedItem as VendorRow;
+            if (row != null && row.Index >= 0 && row.Index < _vendors.Count) return row.Index;
             if (_vendors.Count == 0) return -1;
             try
             {
@@ -363,6 +452,28 @@ namespace CopilotBuddy.UI
                 // no position: fall back to the first point rather than refusing to show anything
             }
             return 0;
+        }
+
+        /// <summary>The nearest point, ignoring the selection - what the grind loop will use.</summary>
+        private int NearestVendorIndex()
+        {
+            if (_vendors.Count == 0) return -1;
+            try
+            {
+                double x, y;
+                if (ClickAimPositions.TryRead(out x, out y)) return VendorFile.Nearest(_vendors, x, y);
+            }
+            catch
+            {
+                // as above
+            }
+            return 0;
+        }
+
+        private int SelectedStepIndex()
+        {
+            var row = lstSteps.SelectedItem as StepRow;
+            return row == null ? -1 : row.Index;
         }
 
         private static IntPtr GameWindow()
@@ -395,20 +506,112 @@ namespace CopilotBuddy.UI
             lblVendorNote.Text = string.Format(CultureInfo.InvariantCulture,
                 "Saved vendor point {0} at ({1:F0}, {2:F0}, {3:F0}). Now open the merchant window and record "
                 + "the clicks that sell, in the order you would make them.", count, x, y, z);
+            lstVendors.SelectedItem = null;
             LoadVendor();
+            lstVendors.SelectedIndex = count - 1;
+        }
+
+        /// <summary>
+        /// Deletes the selected point and everything recorded under it. Confirmed first: this is a
+        /// whole plan of clicks and there is no undo.
+        /// </summary>
+        private void btnVendorDelete_Click(object sender, RoutedEventArgs e)
+        {
+            int at = SelectedVendorIndex();
+            if (at < 0 || at >= _vendors.Count)
+            {
+                lblVendorNote.Text = "There is no vendor point to delete - press \"Add vendor here\" first.";
+                return;
+            }
+
+            VendorFile.VendorPoint point = _vendors[at];
+            MessageBoxResult answer = System.Windows.MessageBox.Show(
+                "Delete " + point + " and its " + Text(point.Steps.Count) + " step(s)?",
+                "Selling", MessageBoxButton.YesNo, MessageBoxImage.Question);
+            if (answer != MessageBoxResult.Yes) return;
+
+            string error;
+            if (!VendorFile.Remove(at, out error))
+            {
+                lblVendorNote.Text = "The vendor point could not be deleted: " + error;
+                return;
+            }
+
+            lblVendorNote.Text = "Deleted " + point.Name + ". The grind loop walks to the nearest point left.";
+            lstVendors.SelectedItem = null;
+            LoadVendor();
+        }
+
+        private void btnVendorDeleteStep_Click(object sender, RoutedEventArgs e)
+        {
+            int at = SelectedVendorIndex();
+            int step = SelectedStepIndex();
+            if (at < 0)
+            {
+                lblVendorNote.Text = "There is no vendor point yet - press \"Add vendor here\" first.";
+                return;
+            }
+            if (step < 0)
+            {
+                lblVendorNote.Text = "Pick a step in the plan first, then press Delete step.";
+                return;
+            }
+
+            string error;
+            if (!VendorFile.RemoveStep(at, step, out error))
+            {
+                lblVendorNote.Text = "The step could not be deleted: " + error;
+                return;
+            }
+
+            lblVendorNote.Text = "Deleted step " + Text(step + 1) + ". The rest of the plan is unchanged.";
+            LoadVendor();
+            lstVendors.SelectedIndex = at;
+            if (lstSteps.Items.Count > step) lstSteps.SelectedIndex = Math.Min(step, lstSteps.Items.Count - 1);
+        }
+
+        private void btnVendorStepUp_Click(object sender, RoutedEventArgs e)
+        {
+            MoveSelectedStep(-1);
+        }
+
+        private void btnVendorStepDown_Click(object sender, RoutedEventArgs e)
+        {
+            MoveSelectedStep(1);
+        }
+
+        private void MoveSelectedStep(int by)
+        {
+            int at = SelectedVendorIndex();
+            int step = SelectedStepIndex();
+            if (at < 0) { lblVendorNote.Text = "There is no vendor point yet."; return; }
+            if (step < 0) { lblVendorNote.Text = "Pick a step in the plan first."; return; }
+
+            string error;
+            if (!VendorFile.MoveStep(at, step, by, out error))
+            {
+                lblVendorNote.Text = "The step could not be moved: " + error;
+                return;
+            }
+
+            LoadVendor();
+            lstVendors.SelectedIndex = at;
+            int to = Math.Max(0, step + by);
+            if (lstSteps.Items.Count > to) lstSteps.SelectedIndex = to;
         }
 
         private void btnVendorSellNow_Click(object sender, RoutedEventArgs e)
         {
             if (GrindRunner.RequestVendorTrip())
-                lblVendorNote.Text = "Asked the grind loop to sell: it goes as soon as the character is out of combat.";
+                lblVendorNote.Text = "Asked the grind loop to sell: it goes before the next hotspot, as soon as the "
+                                     + "character is out of combat.";
             else
                 lblVendorNote.Text = "No grind run is going. Start the bot first, or record the plan while it runs.";
         }
 
         private void btnVendorClearSteps_Click(object sender, RoutedEventArgs e)
         {
-            int at = NearestVendorIndex();
+            int at = SelectedVendorIndex();
             if (at < 0)
             {
                 lblVendorNote.Text = "There is no vendor point yet - press \"Add vendor here\" first.";
@@ -424,6 +627,7 @@ namespace CopilotBuddy.UI
 
             lblVendorNote.Text = "The sell plan is empty. Nothing will be clicked at the vendor until it is recorded again.";
             LoadVendor();
+            lstVendors.SelectedIndex = at;
         }
 
         private void btnVendorRecordLeft_Click(object sender, RoutedEventArgs e)
@@ -438,7 +642,7 @@ namespace CopilotBuddy.UI
 
         private void btnVendorBagsKey_Click(object sender, RoutedEventArgs e)
         {
-            int at = NearestVendorIndex();
+            int at = SelectedVendorIndex();
             if (at < 0)
             {
                 lblVendorNote.Text = "There is no vendor point yet - press \"Add vendor here\" first.";
@@ -453,6 +657,7 @@ namespace CopilotBuddy.UI
             else
                 lblVendorNote.Text = "The step could not be saved: " + error;
             LoadVendor();
+            lstVendors.SelectedIndex = at;
         }
 
         /// <summary>
@@ -465,7 +670,7 @@ namespace CopilotBuddy.UI
         /// </summary>
         private void RecordVendorClick(bool right)
         {
-            int at = NearestVendorIndex();
+            int at = SelectedVendorIndex();
             if (at < 0)
             {
                 lblVendorNote.Text = "There is no vendor point yet - press \"Add vendor here\" first, "
@@ -514,6 +719,7 @@ namespace CopilotBuddy.UI
                             right ? "right-click" : "left-click", fx, fy)
                         : "The step could not be saved: " + error;
                     LoadVendor();
+                    lstVendors.SelectedIndex = at;
                 }));
             });
         }

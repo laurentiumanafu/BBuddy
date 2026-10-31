@@ -4,8 +4,8 @@
         xmlns:mah="http://metro.mahapps.com/winfx/xaml/controls"
         x:Name="Window"
         Title="Combat settings"
-        Width="560" Height="560"
-        MinWidth="560" MinHeight="520"
+        Width="620" Height="660"
+        MinWidth="560" MinHeight="600"
         TitleCharacterCasing="Normal"
         Background="{DynamicResource WindowBackgroundBrush}"
         GlowBrush="{DynamicResource MahApps.Brushes.Accent}">
@@ -146,63 +146,117 @@
         <TabItem Header="Selling">
             <Grid Margin="12">
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="80"/>
+                    <ColumnDefinition Width="*"/>
                 </Grid.ColumnDefinitions>
                 <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/>  <!-- 0 intro         -->
-                    <RowDefinition Height="Auto"/>  <!-- 1 auto sell     -->
-                    <RowDefinition Height="Auto"/>  <!-- 2 after loots   -->
-                    <RowDefinition Height="Auto"/>  <!-- 3 merchant wait -->
-                    <RowDefinition Height="Auto"/>  <!-- 4 vendor search -->
-                    <RowDefinition Height="Auto"/>  <!-- 5 point buttons -->
-                    <RowDefinition Height="Auto"/>  <!-- 6 record buttons-->
-                    <RowDefinition Height="Auto"/>  <!-- 7 note          -->
-                    <RowDefinition Height="*"/>     <!-- 8 plan          -->
+                    <RowDefinition Height="Auto"/>  <!-- 0 intro          -->
+                    <RowDefinition Height="Auto"/>  <!-- 1 auto sell      -->
+                    <RowDefinition Height="Auto"/>  <!-- 2 after kills    -->
+                    <RowDefinition Height="Auto"/>  <!-- 3 merchant wait  -->
+                    <RowDefinition Height="Auto"/>  <!-- 4 vendor search  -->
+                    <RowDefinition Height="Auto"/>  <!-- 5 note           -->
+                    <RowDefinition Height="*"/>     <!-- 6 the two lists  -->
+                    <RowDefinition Height="Auto"/>  <!-- 7 plan summary   -->
                 </Grid.RowDefinitions>
 
-                <TextBlock Grid.Row="0" Grid.ColumnSpan="2" TextWrapping="Wrap" Margin="0,0,0,10"
-                           Text="The bags cannot be counted on this build, so the bot counts what it has looted: it walks to a vendor after that many bodies. The place to walk to is captured where the character stands, and the clicks that sell the loot are recorded once, here."/>
+                <TextBlock Grid.Row="0" Grid.ColumnSpan="3" TextWrapping="Wrap" Margin="0,0,0,10"
+                           Text="The bags cannot be counted on this build, so the bot counts what it has dealt with: after that many kills or looted bodies it walks to a vendor before taking another hotspot. The place to walk to is captured where the character stands; the clicks that sell the loot are recorded once, below."/>
 
-                <CheckBox x:Name="chkAutoSell" Grid.Row="1" Grid.ColumnSpan="2" Margin="0,0,0,8"
+                <CheckBox x:Name="chkAutoSell" Grid.Row="1" Grid.ColumnSpan="3" Margin="0,0,0,8"
                           Content="Walk to the vendor and sell when the bags are due"/>
 
-                <TextBlock Grid.Row="2" Grid.Column="0" VerticalAlignment="Center" Margin="0,0,8,8"
-                           Text="...after this many looted bodies (0 = only with the button)"/>
-                <TextBox x:Name="txtSellAfter" Grid.Row="2" Grid.Column="1" Margin="0,0,0,8"/>
+                <TextBlock Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2" VerticalAlignment="Center" Margin="0,0,8,8"
+                           Text="...after this many kills or looted bodies"/>
+                <TextBox x:Name="txtSellAfter" Grid.Row="2" Grid.Column="2" HorizontalAlignment="Left"
+                         Width="80" Margin="0,0,0,8"/>
 
-                <TextBlock Grid.Row="3" Grid.Column="0" VerticalAlignment="Center" Margin="0,0,8,8"
+                <TextBlock Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="2" VerticalAlignment="Center" Margin="0,0,8,8"
                            Text="Wait for the merchant window (milliseconds)"/>
-                <TextBox x:Name="txtVendorWait" Grid.Row="3" Grid.Column="1" Margin="0,0,0,8"/>
+                <TextBox x:Name="txtVendorWait" Grid.Row="3" Grid.Column="2" HorizontalAlignment="Left"
+                         Width="80" Margin="0,0,0,8"/>
 
-                <TextBlock Grid.Row="4" Grid.Column="0" VerticalAlignment="Center" Margin="0,0,8,8"
+                <TextBlock Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="2" VerticalAlignment="Center" Margin="0,0,8,8"
                            Text="Look for the vendor NPC within (yards)"/>
-                <TextBox x:Name="txtVendorSearch" Grid.Row="4" Grid.Column="1" Margin="0,0,0,8"/>
+                <TextBox x:Name="txtVendorSearch" Grid.Row="4" Grid.Column="2" HorizontalAlignment="Left"
+                         Width="80" Margin="0,0,0,8"/>
 
-                <WrapPanel Grid.Row="5" Grid.ColumnSpan="2" Margin="0,6,0,4">
-                    <Button Content="Add vendor here" Height="24" Padding="8,0" Click="btnVendorAdd_Click"
-                            ToolTip="Stand at the vendor in town and press this: that spot becomes the place the bot walks to when the bags are full."/>
-                    <Button Content="Sell now" Height="24" Padding="8,0" Margin="8,0,0,0" Click="btnVendorSellNow_Click"
-                            ToolTip="A running grind loop goes to the vendor as soon as nothing is attacking."/>
-                    <Button Content="Clear steps" Height="24" Padding="8,0" Margin="8,0,0,0" Click="btnVendorClearSteps_Click"/>
-                </WrapPanel>
+                <TextBlock x:Name="lblVendorNote" Grid.Row="5" Grid.ColumnSpan="3" TextWrapping="Wrap"
+                           Margin="0,2,0,8" FontSize="11" Opacity="0.9"/>
 
-                <WrapPanel Grid.Row="6" Grid.ColumnSpan="2" Margin="0,0,0,4">
-                    <Button Content="Left click (3 s)" Height="24" Padding="8,0" Click="btnVendorRecordLeft_Click"
-                            ToolTip="Press it, then put the cursor on the thing to click inside three seconds. The merchant window's own options (e.g. Browse goods) are left clicks."/>
-                    <Button Content="Right click (3 s)" Height="24" Padding="8,0" Margin="8,0,0,0" Click="btnVendorRecordRight_Click"
-                            ToolTip="Press it, then put the cursor on an item in the bags inside three seconds: while the merchant window is open, a right-click on an item sells it."/>
-                    <Button Content="Bags key (B)" Height="24" Padding="8,0" Margin="8,0,0,0" Click="btnVendorBagsKey_Click"
-                            ToolTip="Records a press of B, which opens the backpack. It toggles: record it a second time at the end of the plan to close the bags."/>
-                </WrapPanel>
+                <!-- the two lists: vendor points on the left, the plan of the selected one on the right -->
+                <Grid Grid.Row="6" Grid.ColumnSpan="3">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="12"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
 
-                <TextBlock x:Name="lblVendorNote" Grid.Row="7" Grid.ColumnSpan="2" TextWrapping="Wrap"
-                           Margin="0,2,0,6" FontSize="11" Opacity="0.85"/>
+                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Vendor points" Margin="0,0,0,4" FontWeight="SemiBold"/>
+                    <ListView x:Name="lstVendors" Grid.Row="1" Grid.Column="0" Margin="0,0,0,6"
+                              SelectionMode="Single" SelectionChanged="lstVendors_SelectionChanged">
+                        <ListView.View>
+                            <GridView>
+                                <GridViewColumn Header="Where" Width="120" DisplayMemberBinding="{Binding Place}"/>
+                                <GridViewColumn Header="Steps" Width="55" DisplayMemberBinding="{Binding Steps}"/>
+                            </GridView>
+                        </ListView.View>
+                    </ListView>
 
-                <TextBlock x:Name="lblVendorPlan" Grid.Row="8" Grid.ColumnSpan="2" TextWrapping="Wrap"
-                           FontSize="11" Opacity="0.75" VerticalAlignment="Top"/>
+                    <StackPanel Grid.Row="2" Grid.Column="0" Orientation="Horizontal" Margin="0,0,0,4">
+                        <Button Content="Add vendor here" Height="24" Padding="8,0" Click="btnVendorAdd_Click"
+                                ToolTip="Stand at the vendor in town and press this: that spot becomes the place the bot walks to when the bags are due."/>
+                        <Button Content="Delete vendor" Height="24" Padding="8,0" Margin="8,0,0,0"
+                                Click="btnVendorDelete_Click"
+                                ToolTip="Removes the selected point and every step recorded under it."/>
+                    </StackPanel>
+
+                    <TextBlock Grid.Row="0" Grid.Column="2" Text="The sell plan (in order)" Margin="0,0,0,4" FontWeight="SemiBold"/>
+                    <ListView x:Name="lstSteps" Grid.Row="1" Grid.Column="2" Margin="0,0,0,6"
+                              SelectionMode="Single">
+                        <ListView.View>
+                            <GridView>
+                                <GridViewColumn Header="#" Width="30" DisplayMemberBinding="{Binding Number}"/>
+                                <GridViewColumn Header="Step" Width="200" DisplayMemberBinding="{Binding Text}"/>
+                            </GridView>
+                        </ListView.View>
+                    </ListView>
+
+                    <StackPanel Grid.Row="2" Grid.Column="2" Orientation="Horizontal" Margin="0,0,0,4">
+                        <Button Content="Delete step" Height="24" Padding="8,0" Click="btnVendorDeleteStep_Click"/>
+                        <Button Content="Up" Height="24" Padding="8,0" Margin="8,0,0,0" Click="btnVendorStepUp_Click"/>
+                        <Button Content="Down" Height="24" Padding="8,0" Margin="8,0,0,0" Click="btnVendorStepDown_Click"/>
+                        <Button Content="Clear steps" Height="24" Padding="8,0" Margin="8,0,0,0"
+                                Click="btnVendorClearSteps_Click"/>
+                    </StackPanel>
+
+                    <WrapPanel Grid.Row="3" Grid.Column="2" Margin="0,2,0,0">
+                        <Button Content="Left click (3 s)" Height="24" Padding="8,0" Click="btnVendorRecordLeft_Click"
+                                ToolTip="Press it, then put the cursor on the thing to click inside three seconds. The merchant window's own options (e.g. Browse goods) are left clicks."/>
+                        <Button Content="Right click (3 s)" Height="24" Padding="8,0" Margin="8,0,0,0"
+                                Click="btnVendorRecordRight_Click"
+                                ToolTip="Press it, then put the cursor on an item in the bags inside three seconds: while the merchant window is open, a right-click on an item sells it."/>
+                        <Button Content="Bags key (B)" Height="24" Padding="8,0" Margin="8,0,0,0"
+                                Click="btnVendorBagsKey_Click"
+                                ToolTip="Records a press of B, which opens the backpack. It toggles: record it a second time at the end of the plan to close the bags."/>
+                        <Button Content="Sell now" Height="24" Padding="8,0" Margin="8,0,0,0"
+                                Click="btnVendorSellNow_Click"
+                                ToolTip="A running grind loop goes to the vendor before doing anything else, as soon as nothing is attacking."/>
+                    </WrapPanel>
+                </Grid>
+
+                <TextBlock x:Name="lblVendorPlan" Grid.Row="7" Grid.ColumnSpan="3" TextWrapping="Wrap"
+                           Margin="0,6,0,0" FontSize="11" Opacity="0.75" VerticalAlignment="Top"/>
             </Grid>
         </TabItem>
+
         </TabControl>
 
         <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right">

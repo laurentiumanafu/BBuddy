@@ -2085,3 +2085,114 @@ Self-test additions (file round trip, no client): `vendorAdd`, `vendorAddClick`,
 `vendorClearSteps`, `vendorStepsGone`, `vendorReachIsInteractionRange`, `vendorRetryAfterFight`;
 settings: `applyAutoSell`, `applySellAfter`, `applyVendorWait`, `applyVendorSearch`,
 `clampSellAfter`, `clampVendorWait`, `clampVendorSearch`, `vendorDefaults`.
+
+## Five fixes after the first selling run
+
+### 1. "Sell now" now means now
+
+The trigger sat after the fight, after the rest and *after* the hotspot leg - so pressing **Sell
+now** in the window made the bot walk the next leg first, then come back and sell. It is now the
+first decision the loop makes after "is the character alive":
+
+```
+if (PlayerDead()) break;
+if (VendorDue()) { VendorTrip(...); continue; }     <- moved here
+ApplyBuffsIfNeeded(...)
+TryEngage(...)
+RestIfNeeded(...)
+walk the hotspot
+```
+
+A fight still outranks it (`VendorDue()` refuses while `UnderAttack()`), the hotspot index is not
+advanced, so the character returns to the ring it left. The bags are due when **either** half of the
+count says so: `SellAfterLoots` (default 20) **kills** or the same number of **looted bodies**,
+counted separately - an unlootable corpse still fills a slot, and a body cannot be counted twice.
+That is the user's own rule: "if 20 monsters are defeated".
+
+A vendor walk cut short by a fight no longer applies a retry delay; only the *interrupt* is quieted
+(`InterruptRetryMs`), so "fight, then sell" happens instead of "fight, then wait two minutes".
+
+### 2. Combat settings moved under Load Profile
+
+`Settings` has been greyed out for WowB clients for a while (`btnSettings.IsEnabled = !ClickAimUi.IsWowB`),
+and `Combat settings` is the button those users actually press. It now sits in the main column at
+`Margin="0,62,8,0"` - directly under **Load Profile** - and `Settings` moved down to `0,89,8,0`.
+
+### 3. The bag count hunt: `+0x???`, and how it gets found
+
+Asked directly: *can we find the bag count offset?* Not from a table, no: there is no container,
+money or item offset in `WowBOffsets`, `C_Container.GetContainerNumFreeSlots` is Lua (retired - it
+is what crashed the client twice), and the container objects themselves have no unit vtable, no name
+pointer and no level word, so identifying one in the pool is a hunt of its own.
+
+What can be done without calling into the client is the trick that found the loot words: read a
+window of the player's block before and after an event that moves exactly one bag slot, and keep the
+words whose value moves by exactly that much. `Styx/WoWInternals/BagSlotHunt.cs` does that.
+
+* Nine 512-byte windows of the player's data block (`0x0`, `0x1000`, `0x1800`, `0x1A00`, `0x1C00`,
+  `0x1E00`, `0x2000`, `0x2200`, `0x2400`) - 128 dwords each, which is the reader's cap, so the whole
+  sample is 4.5 KB and it happens **once per looted body**, not per tick.
+* A word is a candidate when it moved **down by exactly 1 on every sample where it moved at all** (a
+  free-slot count) or **up by exactly 1** (a used-slot count). Anything else - cooldowns, regen, the
+  pointer to the next thing - moves by something else or not at all, and is not reported.
+* Looting a body and selling at a vendor move the same word in opposite directions, which is the
+  second half of the evidence.
+* Needs three samples before naming anything, and the report says so instead of guessing.
+* `BagSlotHunt = true` in `Settings\clickaim-grind.txt` (default on until the offset is known). The
+  report prints at the end of every run:
+
+```
+[Bag] bag slot hunt over 6 sample(s): 1 word(s) went DOWN by exactly 1 every time it moved, 0 went UP by exactly 1.
+[Bag]   +0x????  down-by-one 5/5  (now 11, started 16)  <- a FREE-SLOT count looks like this
+```
+
+If it comes back with nothing, the verdict line says so and says where the next place to look is
+(the container objects). That is a real result too: it means the count is not in the player's block
+on this build, and the next step is a pool walk over item objects, not a guess at an offset.
+
+**Until then the kill/loot counter stays the trigger**, because a number that means "twenty kills"
+is honest and an offset that was made up is not. Nothing in the loop reads a bag slot yet.
+
+### 4. Stuck in a cactus: the watchdog that measures the character, not the mob
+
+The report was precise: the mob was far away with full health, the character was inside a cactus,
+and it stayed there for sixty seconds; when it was put in range it attacked and carried on.
+
+The cause is structural, not a missing branch: **every** branch of `Fight` measures the distance to
+the *mob*. A chase into a plant leaves that number exactly where it was, so every branch kept
+deciding "one more step toward the mob" from the same spot - for a minute.
+
+`ChaseWatch` + `ChaseStep` now measure the **character's own position**:
+
+1. moved at least `StuckMoveYd` (1 yd) since the last reading → fine, keep walking;
+2. nothing for `StuckMs` (2.5 s) → escape attempt: walk 5 yd **away from the mob** on attempt 1,
+   then **to the right** of it, then **to the left** - steered with the same calibrated keys as every
+   other walk, not a hope;
+3. three escapes without progress → the target is dropped for `UnreachablePauseMs` (90 s) and the
+   fight returns "could not reach ...", the same shape as the existing give-up lines, so the loop
+   takes another target and comes back to that one later.
+
+The mark is a **pause, not a blacklist** (`Unreachable()`), it is consulted by `NearestKillable`,
+`TryCurrentSelection` and `PullWorthTaking`, and it expires - a mob behind a cactus now is a mob
+standing in the open in two minutes.
+
+Self-tests: `stuckWindowIsQuick`, `stuckEscapeIsAStep`, `stuckPauseOutlastsTheEscapes`,
+`stuckMoveIsUnderAStep`.
+
+### 5. Vendors and steps can be edited
+
+`Add vendor here` was write-only: several points could be made and nothing could be corrected. The
+Selling tab is now two lists side by side:
+
+| list | what it is | what can be done |
+|---|---|---|
+| **Vendor points** | every captured point, with the distance from the character | **Add vendor here**, **Delete vendor** (confirmed first - it removes the point and every step under it) |
+| **The sell plan (in order)** | the steps of the selected point, numbered | **Delete step**, **Up**, **Down**, **Clear steps**, plus the recorders |
+
+`VendorFile.Remove`, `RemoveStep` and `MoveStep` are the file operations behind those buttons; moving
+a step rebuilds the order by cloning the element next to its neighbour and removing the original, so
+a half-moved step never exists on disk - order is the whole meaning of a sale.
+
+Self-tests: `vendorRemoveStep`, `vendorRemoveStepTookTheRightOne`, `vendorRemoveStepRejectsBadIndex`,
+`vendorMoveStep`, `vendorMoveStepOrder`, `vendorMoveStepClamps`, `vendorAddSecondPoint`,
+`vendorRemovePoint`, `vendorRemovePointTookTheRightOne`, `vendorRemovePointRejectsBadIndex`.
