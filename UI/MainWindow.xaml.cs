@@ -243,6 +243,8 @@ namespace CopilotBuddy.UI
                                 btnAimOffsets.IsEnabled = true;
                                 btnGatherProbe.Visibility = Visibility.Visible;
                                 btnGatherProbe.IsEnabled = true;
+                                btnCombatProbe.Visibility = Visibility.Visible;
+                                btnCombatProbe.IsEnabled = true;
 
                                 /* Enable the three controls that do something on this client.
                                  * Everything else stays as ToggleButtons(false) left it, because
@@ -1396,6 +1398,21 @@ namespace CopilotBuddy.UI
                 Logging.Write("[Grind] combat settings window failed: " + ex.Message);
                 System.Windows.MessageBox.Show(this, "The combat settings window could not open: " + ex.Message,
                                 "Combat settings", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+        }
+
+        private void btnCombatProbe_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                if (Styx.Logic.Pathing.CombatProbe.Start())
+                    SetStatus("Reading combat sample...");
+                else
+                    SetStatus("Combat probe already running");
+            }
+            catch (Exception ex)
+            {
+                Logging.Write("[Combat probe] could not start: " + ex.Message);
             }
         }
 

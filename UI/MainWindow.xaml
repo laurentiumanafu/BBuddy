@@ -199,6 +199,15 @@
             </Viewbox>
         </Button>
 
+        <Button x:Name="btnCombatProbe" Height="25" Visibility="Hidden"
+                Margin="0,187,136,0" VerticalAlignment="Top" HorizontalAlignment="Right"
+                Width="120" ToolTip="Compare player memory across idle and combat samples; read-only"
+                Click="btnCombatProbe_Click">
+            <Viewbox Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center">
+                <TextBlock Text="Combat probe"/>
+            </Viewbox>
+        </Button>
+
         <!-- Read-only node offset probe; available only on the 64-bit client. -->
         <Button x:Name="btnGatherProbe" Height="25" Visibility="Hidden"
                 Margin="0,213,136,0" VerticalAlignment="Top" HorizontalAlignment="Right"

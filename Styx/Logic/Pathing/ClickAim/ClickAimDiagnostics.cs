@@ -389,6 +389,9 @@ public static class ClickAimDiagnostics
 
         // Profile bands are read from XML and the area is chosen by level: both are pure
         // enough to check here, and both fail silently when they are wrong.
+        try { Logging.Write(GatherProbe.SelfTest()); }
+        catch (Exception ex) { Logging.Write("[Gather probe] self-test threw: " + ex.Message); }
+
         try { Logging.Write(GrindRunner.SelfTest()); }
         catch (Exception ex) { Logging.Write("[Grind] self-test threw: " + ex.Message); }
 
