@@ -48,7 +48,7 @@ public static class ClickAimPilot
     /// caller with no mesh to re-plan on has nothing better to do with the time.
     /// </summary>
     public static bool WalkTo(ClickAimMover mover, WoWPoint goal, double tolerance, int timeoutMs,
-                              bool verbose, bool stopWhenBlocked, bool keepMoving = false)
+                              bool verbose, bool stopWhenBlocked, bool keepMoving = false, Func<bool>? interrupt = null)
     {
         if (mover == null) throw new ArgumentNullException(nameof(mover));
 
@@ -97,6 +97,21 @@ public static class ClickAimPilot
                 return false;
             }
 
+            if (interrupt != null && interrupt())
+            {
+                ClickAimKeySteer.ReleaseHeld();
+                mover.MoveStop();
+                if (verbose) Logging.Write("[ClickAim] route interrupted during the leg");
+                return false;
+            }
+
+            // The callback may have spent time scanning while Stop was pressed.
+            if (ClickAimAbort.Requested)
+            {
+                ClickAimKeySteer.ReleaseHeld();
+                mover.MoveStop();
+                return false;
+            }
             mover.MoveTowards(goal);
 
             if (stopWhenBlocked && mover.Blocked)

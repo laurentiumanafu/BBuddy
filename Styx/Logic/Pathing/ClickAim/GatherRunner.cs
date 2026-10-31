@@ -20,6 +20,8 @@ internal static class GatherRunner
     private static readonly Dictionary<WowBGuid, int> Retry = new Dictionary<WowBGuid, int>();
     private static readonly List<(double X, double Y, double Z, double Radius)> Blackspots = new List<(double, double, double, double)>();
     private static int _lastScan;
+    private static int _lastCombatCheck;
+    private static int _lastSummary;
     private static GatherNodeScanner.Node? _pending;
 
     public static bool Running => _running;
@@ -61,6 +63,9 @@ internal static class GatherRunner
         Retry.Clear();
         _pending = null;
         _lastScan = unchecked(Environment.TickCount - 1500);
+        _lastCombatCheck = unchecked(Environment.TickCount - 500);
+        _lastSummary = unchecked(Environment.TickCount - 15000);
+        GrindRunner.PrepareGatherDefence();
         _running = true;
         try
         {
@@ -106,17 +111,37 @@ internal static class GatherRunner
     private static bool FindNode(out GatherNodeScanner.Node node)
     {
         node = default;
-        if (!GatherNodeScanner.TryCapture(SearchYd, out List<GatherNodeScanner.Node> nodes)) return false;
+        bool scanOk = GatherNodeScanner.TryCapture(SearchYd, out List<GatherNodeScanner.Node> nodes);
+        int eligible = 0, blackspotted = 0, coolingDown = 0, skillExcluded = 0;
         foreach (GatherNodeScanner.Node candidate in nodes)
-            if (Ready(candidate)) { node = candidate; return true; }
-        return false;
+        {
+            if (!GatherNodeScanner.IsEligible(candidate, GatherSettings.Mining, GatherSettings.MiningSkill,
+                                               GatherSettings.Herbalism, GatherSettings.HerbalismSkill)) { skillExcluded++; continue; }
+            if (IsBlackspot(candidate.Position.X, candidate.Position.Y)) { blackspotted++; continue; }
+            if (!Ready(candidate)) { coolingDown++; continue; }
+            if (eligible++ == 0) node = candidate;
+        }
+        if (unchecked(Environment.TickCount - _lastSummary) >= 15000)
+        {
+            _lastSummary = Environment.TickCount;
+            if (!scanOk) Logging.Write("[Gather] node scan failed; no conclusion about nearby resources");
+            else Logging.Write("[Gather] scan within 100 yd: " + nodes.Count + " recognized, " + eligible
+                + " eligible, " + skillExcluded + " profession/skill/blacklist excluded, "
+                + blackspotted + " profile-blackspot excluded, " + coolingDown + " on retry cooldown; "
+                + "an empty scan is not proof no nodes exist");
+        }
+        return scanOk && eligible > 0;
     }
 
     // Called by RouteRunner between mesh points. Never clears a stop.
     private static bool Interrupt(bool checkNodes)
     {
         if (_stop || ClickAimAbort.Requested) return true;
-        if (!GrindRunner.TryReadGatherCombat(out bool fighting) || fighting) return true;
+        if (unchecked(Environment.TickCount - _lastCombatCheck) >= 500)
+        {
+            _lastCombatCheck = Environment.TickCount;
+            if (!GrindRunner.TryReadGatherCombat(out bool fighting) || fighting) return true;
+        }
         if (!checkNodes || unchecked(Environment.TickCount - _lastScan) < 1500) return false;
         _lastScan = Environment.TickCount;
         if (!FindNode(out GatherNodeScanner.Node node)) return false;
@@ -129,8 +154,9 @@ internal static class GatherRunner
         if (_stop || ClickAimAbort.Requested) return false;
         if (!RouteRunner.MeshReady()) { Logging.Write("[Gather] mesh navigation lost; refusing the leg"); return false; }
         RouteRunner.ShouldInterrupt = () => Interrupt(checkNodes);
+        RouteRunner.PollInterruptDuringWalk = true;
         try { return RouteRunner.RunWithinSession(mover, new List<RoutePoint> { point }, 1); }
-        finally { RouteRunner.ShouldInterrupt = null; }
+        finally { RouteRunner.PollInterruptDuringWalk = false; RouteRunner.ShouldInterrupt = null; }
     }
 
     private static void Run(List<RoutePoint> points)
@@ -162,8 +188,9 @@ internal static class GatherRunner
                 {
                     ClickAimKeySteer.ReleaseHeld();
                     try { mover.MoveStop(); } catch { }
-                    Logging.Write("[Gather] combat flag set: holding position. Attacker identity is not known; defend manually.");
-                    ClickAimAbort.Wait(1500); continue;
+                    string defence = GrindRunner.DefendGatherer(hwnd);
+                    if (defence.Length > 0) Logging.Write("[Gather] defence: " + defence);
+                    ClickAimAbort.Wait(1000); continue;
                 }
                 GatherNodeScanner.Node node;
                 if (_pending.HasValue) { node = _pending.Value; _pending = null; }
@@ -207,8 +234,9 @@ internal static class GatherRunner
                 if (!stillHere) { Logging.Write("[Gather] node not observed in reach; no click sent"); Retry[node.Guid] = unchecked(Environment.TickCount + RetryMs); continue; }
                 if (!ClickAimKeySteer.Face(node.Position.X, node.Position.Y, hwnd, 20.0, 6)) { Retry[node.Guid] = unchecked(Environment.TickCount + RetryMs); continue; }
                 if (_stop || ClickAimAbort.Requested) break;
-                bool clicked = GatherInteraction.TryInteract(hwnd, node);
-                if (!clicked) Logging.Write("[Gather] could not confirm the node under the cursor; no right-click was sent");
+                Logging.Write("[Gather] searching the viewport for the node's hover GUID; keep the real mouse still");
+                bool clicked = GatherInteraction.TryInteract(hwnd, node, out string interactionReason);
+                if (!clicked) Logging.Write("[Gather] no right-click sent: " + interactionReason);
                 else Logging.Write("[Gather] one confirmed-node right-click sent; watching for disappearance (not proof of loot)");
                 if (clicked)
                 {
@@ -224,6 +252,13 @@ internal static class GatherRunner
                         }
                     }
                 }
+                // If combat interrupted a hover search, defend first and revisit the node.
+                if (!clicked && !ClickAimAbort.Requested
+                    && (!GrindRunner.TryReadGatherCombat(out bool nowFighting) || nowFighting))
+                {
+                    _pending = node;
+                    continue;
+                }
                 // Failed/unknown or still-present nodes must not pin the route. Revisit later.
                 Retry[node.Guid] = unchecked(Environment.TickCount + RetryMs);
             }
@@ -231,6 +266,7 @@ internal static class GatherRunner
         catch (Exception ex) { Logging.Write("[Gather] stopped on error: " + ex.Message); }
         finally
         {
+            RouteRunner.PollInterruptDuringWalk = false;
             RouteRunner.ShouldInterrupt = null;
             ClickAimKeySteer.ReleaseHeld();
             try { mover.MoveStop(); } catch { }

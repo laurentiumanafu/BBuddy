@@ -77,6 +77,16 @@ internal static class ClickAimInput
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool ScreenToClient(IntPtr hWnd, ref POINT point);
 
+    // Desktop coordinates are used only to detect a human moving the real cursor.
+    // The posted gather messages still go exclusively to the game window.
+    internal static bool TryCursorScreen(out int x, out int y)
+    {
+        x = y = 0;
+        if (!GetCursorPos(out POINT p)) return false;
+        x = p.X; y = p.Y;
+        return true;
+    }
+
     /// <summary>
     /// Where the mouse is right now, as a fraction of the client rectangle.
     ///

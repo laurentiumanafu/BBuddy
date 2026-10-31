@@ -195,3 +195,29 @@ This is not automatic defence. Profile blackspots are used to exclude nodes and
 hotspots and marked costly on the navmesh, but Detour can still route through a
 costly polygon, and loaded-tile marks can be lost. Strict blackspot avoidance
 is not established.
+
+## Follow-up: route polling and defensive combat
+
+The supplied 18:47 log shows the mesh query returning two points and the route
+using its existing short straight-line fallback. The gather interrupt was only
+checked before a route leg or between mesh points: it was not checked while
+that fallback (or a long mesh segment) was being walked. The excerpt alone
+cannot establish that a valid mining node was nearby. Gather now opts into
+polling while those walks run; scans log recognized/eligible/excluded/cooldown
+counts, and hover failures report their stage. A scan is still non-atomic.
+
+The real desktop cursor no longer has to be inside the game; it must remain
+still during the posted-hover search. The hover search uses an additional
+interleaved grid but may still miss a small or obscured object. A right-click
+is sent only after the matching GUID is rechecked; neither the click nor
+absence in a scan proves loot. This remains untested in the live client.
+
+At the user's request, the gatherer now invokes the existing Grind fight
+rotation when the provisional combat flag is set, after TAB changes the
+selection to a nearby live non-player NPC. It stops if combat becomes clear or
+unreadable, or the selection changes. **TAB does not identify the attacker:**
+it can select another hostile NPC, and if TAB retains an existing target the
+bot will hold position rather than assume it is valid. Supervise testing; this
+is not reliable attacker-only defence. The combat candidate remains based on
+one observed idle/combat/idle sample. Previous paragraph describing manual-only
+defence was accurate for the earlier revision, not this one.

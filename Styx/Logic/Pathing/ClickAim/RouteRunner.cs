@@ -96,6 +96,9 @@ public static class RouteRunner
     /// </summary>
     public static Func<bool>? ShouldInterrupt;
 
+    // Opt-in for owners that need detection during a long individual segment.
+    internal static bool PollInterruptDuringWalk;
+
     /// <summary>True when the last <see cref="Run"/> was cut short by <see cref="ShouldInterrupt"/>.</summary>
     public static bool LastRunInterrupted;
 
@@ -248,6 +251,15 @@ public static class RouteRunner
     /// the straight click is still taken - that is the pre-existing behaviour for
     /// open ground, and refusing it would strand a character over a data gap.
     /// </summary>
+    // The fallback and long mesh segments must poll the route owner during a walk,
+    // not only before the next mesh point. The owner throttles its own expensive scans.
+    private static bool InterruptDuringWalk()
+    {
+        if (!PollInterruptDuringWalk || ShouldInterrupt == null || !ShouldInterrupt()) return false;
+        LastRunInterrupted = true;
+        return true;
+    }
+
     private static bool WalkMesh(ClickAimMover mover, RoutePoint target, double leg)
     {
         // One blind detour, then come back here and re-plan instead of spending six
@@ -356,7 +368,8 @@ public static class RouteRunner
                     Logging.Write(string.Format(CultureInfo.InvariantCulture,
                         "[Route] no route on the mesh from ({0:F1}, {1:F1}); the goal is {2:F0} yd "
                         + "away, inside one click, so clicking straight at it", px, py, remaining));
-                    return ClickAimPilot.WalkTo(mover, target.ToWoWPoint(), StepTolerance, LegTimeoutMs, true);
+                    return ClickAimPilot.WalkTo(mover, target.ToWoWPoint(), StepTolerance, LegTimeoutMs,
+                                                true, false, false, InterruptDuringWalk);
                 }
 
                 Logging.Write(string.Format(CultureInfo.InvariantCulture,
@@ -426,7 +439,7 @@ public static class RouteRunner
                     ClickAimKeySteer.ReleaseHeld();
                     try { mover.MoveStop(); } catch { }
                     Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                        "[Route] interrupting the leg at point {0}/{1} - something worth fighting is here",
+                        "[Route] interrupting the leg at point {0}/{1} - the route owner requested a stop",
                         p, follow.Length - 1));
                     return false;
                 }
@@ -442,8 +455,9 @@ public static class RouteRunner
 
                 bool lastPoint = p == follow.Length - 1;
                 if (ClickAimPilot.WalkTo(mover, follow[p], StepTolerance, MeshPointTimeoutMs,
-                                         false, true, !lastPoint))
+                                         false, true, !lastPoint, InterruptDuringWalk))
                     continue;
+                if (LastRunInterrupted || StopRequested || ClickAimAbort.Requested) return false;
 
                 atPoint = p;
                 failed = follow[p];

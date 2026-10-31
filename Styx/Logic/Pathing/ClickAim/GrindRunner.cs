@@ -2854,6 +2854,42 @@ internal static class GrindRunner
         catch { return false; }
     }
 
+    // Gather uses the Grind rotation only while the player combat candidate is set.
+    // TAB confirms a changed selection, not that the selected NPC is the attacker.
+    internal static void PrepareGatherDefence()
+    {
+        _stop = false;
+        _vendorDue = false;
+        _notViable.Clear();
+        _unreachableUntil.Clear();
+        _tabRefusedUntil.Clear();
+        _unverifiedGuid = default(WowBGuid);
+        _gaveUpAt = 0;
+        ClickAimSettings.Load();
+    }
+
+    internal static string DefendGatherer(IntPtr hwnd)
+    {
+        if (_stop || ClickAimAbort.Requested || !TryReadGatherCombat(out bool fighting) || !fighting) return "";
+        WowBReader? reader = ObjectManager.WowB;
+        if (reader == null) return "cannot read a target";
+        WowBGuid before = reader.ReadTargetGuid();
+        ClickAimInput.TapKey(hwnd, TabVk, 40);
+        if (ClickAimAbort.Wait(TabSettleMs)) return "stopped";
+        if (!TryReadGatherCombat(out fighting) || !fighting) return "combat ended or state unreadable";
+        if (!Capture(out WowBWorldSnapshot? snap) || snap == null || !snap.TryGetLocalPlayer(out WowBObservedUnit me)
+            || !snap.TryGetSelectedTarget(out WowBObservedUnit target) || target.Guid == before
+            || target.IsLocalPlayer || target.HasPlayerVtable
+            || !reader.TryGetUnitFields(target.UnitAddress, out WowBReader.WowBUnitFields fields)
+            || fields.Health == 0 || (fields.UnitFlags & NotAFightFlag) != 0
+            || ClickAimMath.Len(target.Location.X - me.Location.X, target.Location.Y - me.Location.Y) > TabReachYd)
+            return "TAB did not change to a live nearby NPC; holding position";
+        Logging.Write("[Gather] combat detected; using Grind rotation on TAB's selected NPC " + target.Guid
+            + ". TAB does not establish whether it is the attacker.");
+        try { return Fight(hwnd, me.Location.X, me.Location.Y, false, true, target.Guid); }
+        finally { ClickAimKeySteer.ReleaseHeld(); }
+    }
+
     private static bool InRealCombat()
     {
         WowBReader? reader = ObjectManager.WowB;
@@ -3301,7 +3337,7 @@ internal static class GrindRunner
     /// key did not cast and falls back to melee. Nothing here is reported as working
     /// because it was sent.
     /// </summary>
-    private static string Fight(IntPtr hwnd, double px, double py, bool unverified)
+    private static string Fight(IntPtr hwnd, double px, double py, bool unverified, bool defenceOnly = false, WowBGuid defenceExpected = default(WowBGuid))
     {
         int started = Environment.TickCount;
         int lastHealth = -1;
@@ -3351,6 +3387,9 @@ internal static class GrindRunner
         if (!Capture(out snap) || snap == null || !snap.TryGetSelectedTarget(out target))
             return "engaged, then lost the target immediately";
 
+        if (defenceOnly && target.Guid != defenceExpected)
+            return "target changed before defence began; not attacking";
+        WowBGuid defenceTarget = target.Guid;
         lastHealth = Health(target);
 
         /* The kill leaves the corpse selected, and TAB keeps a target when there is nothing
@@ -3403,8 +3442,10 @@ internal static class GrindRunner
         string attackWords = AttackWords(target.UnitAddress);
         if (attackWords.Length > 0) Logging.Write("[Grind] target words:" + attackWords);
 
-        while (!_stop && unchecked(Environment.TickCount - started) < EngageTimeoutMs)
+        while (!_stop && !ClickAimAbort.Requested && unchecked(Environment.TickCount - started) < EngageTimeoutMs)
         {
+            if (defenceOnly && (!TryReadGatherCombat(out bool fighting) || !fighting))
+                return "combat ended or state unreadable; ending defence";
             if (!Capture(out snap) || snap == null) break;
             if (!snap.TryGetSelectedTarget(out target))
             {
@@ -3417,6 +3458,8 @@ internal static class GrindRunner
                     : "killed or fled after " + secs + " s; what landed: " + string.Join(", ", worked.ToArray());
             }
 
+            if (defenceOnly && target.Guid != defenceTarget)
+                return "target changed during defence; stopping rather than attacking another unit";
             if (target.HasPlayerVtable)
                 return "the target turned out to be a player - disengaged";
 
@@ -3690,13 +3733,14 @@ internal static class GrindRunner
                 WowBGuid wanted = target.Guid;
                 for (int tries = 0; tries < 4; tries++)
                 {
+                    if (_stop || ClickAimAbort.Requested) return "stopped";
                     WowBWorldSnapshot? back;
                     WowBObservedUnit selected;
                     if (Capture(out back) && back != null && back.TryGetSelectedTarget(out selected)
                         && selected.Guid == wanted)
                         break;
                     ClickAimInput.TapKey(hwnd, TabVk, 40);
-                    Thread.Sleep(TabSettleMs);
+                    if (ClickAimAbort.Wait(TabSettleMs)) return "stopped";
                 }
                 continue;
             }
