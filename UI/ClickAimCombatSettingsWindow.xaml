@@ -142,6 +142,67 @@
                            Text="&quot;(built-in)&quot; removes your setting and goes back to the name table. &quot;Ignore&quot; means the bot never presses that spell."/>
             </Grid>
         </TabItem>
+        <!-- ===================================================== selling ============ -->
+        <TabItem Header="Selling">
+            <Grid Margin="12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="80"/>
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>  <!-- 0 intro         -->
+                    <RowDefinition Height="Auto"/>  <!-- 1 auto sell     -->
+                    <RowDefinition Height="Auto"/>  <!-- 2 after loots   -->
+                    <RowDefinition Height="Auto"/>  <!-- 3 merchant wait -->
+                    <RowDefinition Height="Auto"/>  <!-- 4 vendor search -->
+                    <RowDefinition Height="Auto"/>  <!-- 5 point buttons -->
+                    <RowDefinition Height="Auto"/>  <!-- 6 record buttons-->
+                    <RowDefinition Height="Auto"/>  <!-- 7 note          -->
+                    <RowDefinition Height="*"/>     <!-- 8 plan          -->
+                </Grid.RowDefinitions>
+
+                <TextBlock Grid.Row="0" Grid.ColumnSpan="2" TextWrapping="Wrap" Margin="0,0,0,10"
+                           Text="The bags cannot be counted on this build, so the bot counts what it has looted: it walks to a vendor after that many bodies. The place to walk to is captured where the character stands, and the clicks that sell the loot are recorded once, here."/>
+
+                <CheckBox x:Name="chkAutoSell" Grid.Row="1" Grid.ColumnSpan="2" Margin="0,0,0,8"
+                          Content="Walk to the vendor and sell when the bags are due"/>
+
+                <TextBlock Grid.Row="2" Grid.Column="0" VerticalAlignment="Center" Margin="0,0,8,8"
+                           Text="...after this many looted bodies (0 = only with the button)"/>
+                <TextBox x:Name="txtSellAfter" Grid.Row="2" Grid.Column="1" Margin="0,0,0,8"/>
+
+                <TextBlock Grid.Row="3" Grid.Column="0" VerticalAlignment="Center" Margin="0,0,8,8"
+                           Text="Wait for the merchant window (milliseconds)"/>
+                <TextBox x:Name="txtVendorWait" Grid.Row="3" Grid.Column="1" Margin="0,0,0,8"/>
+
+                <TextBlock Grid.Row="4" Grid.Column="0" VerticalAlignment="Center" Margin="0,0,8,8"
+                           Text="Look for the vendor NPC within (yards)"/>
+                <TextBox x:Name="txtVendorSearch" Grid.Row="4" Grid.Column="1" Margin="0,0,0,8"/>
+
+                <WrapPanel Grid.Row="5" Grid.ColumnSpan="2" Margin="0,6,0,4">
+                    <Button Content="Add vendor here" Height="24" Padding="8,0" Click="btnVendorAdd_Click"
+                            ToolTip="Stand at the vendor in town and press this: that spot becomes the place the bot walks to when the bags are full."/>
+                    <Button Content="Sell now" Height="24" Padding="8,0" Margin="8,0,0,0" Click="btnVendorSellNow_Click"
+                            ToolTip="A running grind loop goes to the vendor as soon as nothing is attacking."/>
+                    <Button Content="Clear steps" Height="24" Padding="8,0" Margin="8,0,0,0" Click="btnVendorClearSteps_Click"/>
+                </WrapPanel>
+
+                <WrapPanel Grid.Row="6" Grid.ColumnSpan="2" Margin="0,0,0,4">
+                    <Button Content="Left click (3 s)" Height="24" Padding="8,0" Click="btnVendorRecordLeft_Click"
+                            ToolTip="Press it, then put the cursor on the thing to click inside three seconds. The merchant window's own options (e.g. Browse goods) are left clicks."/>
+                    <Button Content="Right click (3 s)" Height="24" Padding="8,0" Margin="8,0,0,0" Click="btnVendorRecordRight_Click"
+                            ToolTip="Press it, then put the cursor on an item in the bags inside three seconds: while the merchant window is open, a right-click on an item sells it."/>
+                    <Button Content="Bags key (B)" Height="24" Padding="8,0" Margin="8,0,0,0" Click="btnVendorBagsKey_Click"
+                            ToolTip="Records a press of B, which opens the backpack. It toggles: record it a second time at the end of the plan to close the bags."/>
+                </WrapPanel>
+
+                <TextBlock x:Name="lblVendorNote" Grid.Row="7" Grid.ColumnSpan="2" TextWrapping="Wrap"
+                           Margin="0,2,0,6" FontSize="11" Opacity="0.85"/>
+
+                <TextBlock x:Name="lblVendorPlan" Grid.Row="8" Grid.ColumnSpan="2" TextWrapping="Wrap"
+                           FontSize="11" Opacity="0.75" VerticalAlignment="Top"/>
+            </Grid>
+        </TabItem>
         </TabControl>
 
         <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right">

@@ -1993,3 +1993,95 @@ Two more fixes from the same log:
   combat state — the peon fight ended 0.6 s before the trial's own test would have run.
 
 Self-test: `notAFightMask`.
+
+## The bags were full: original CopilotBuddy's selling procedure, adapted
+
+The report was exact: *"ran pretty well. unfortunately inventory was full, the bot needs to get back
+to town to sell the loot. Original copilotbuddy had a procedure for this."* It did, in
+`Bots/Grind/LevelBot.cs` (~900–1165):
+
+```
+need (Me.FreeNormalBagSlots low / NeedToRepair)
+  -> BotPoi.Current = new BotPoi(vendor, PoiType.Sell)
+  -> the Sell/Repair/Mail POI decorator walks there
+  -> WaitContinue(5, ctx => IsVendorFrameOpen())
+  -> Vendors.SellAllItems()
+  -> MerchantFrame.Instance.Close()
+```
+
+Four of those five steps do not exist on build 70291, and the log for each one is in this document
+already:
+
+| step | why not | what it is instead |
+|---|---|---|
+| `Me.FreeNormalBagSlots` | no container/bag offset in `Styx/Offsets/WowBOffsets.cs`; `GetMoney` was a Lua handler and the Lua route is retired | **the number of bodies looted since the last trip** (`SellAfterLoots`, default 20) plus a **Sell now** button. Labelled a proxy in the settings and in the code: when a container offset is found it replaces the count and nothing else changes. |
+| `<Vendors>` coordinates | this repository ships **no profile XMLs** (only `Protected Items.xml`, `obfuscar.xml`), and a user's profiles are for another client | the point is **captured where the character stands**, exactly like the hotspot list (`Settings\clickaim-vendors.xml`) |
+| `IsVendorFrameOpen()` | the merchant frame is a Lua object | the window is given `VendorWaitMs` (2500) and then the plan runs. Stated as a wait, not a check |
+| `Vendors.SellAllItems()` | it is a Lua call (`UseContainerItem`), and `MerchantFrame`'s addresses are HB 3.3.5a | **right-click the items in the bags**, which is what a player does: recorded once, replayed |
+| `MerchantFrame.Close()` | same | nothing: the merchant window closes by itself when the character walks away, and the backpack key toggles |
+
+What *is* the original procedure: walk to a point, click the NPC, sell, walk back to the ring. The
+trip is taken between fights and never during one — `VendorDue()` refuses while `UnderAttack()`, and
+`RunSellPlan` stops at the first step if something starts hitting.
+
+### The route
+
+```
+VendorDue()                       bags due (or "Sell now"), nothing attacking
+  -> VendorFile.Read()            Settings\clickaim-vendors.xml, nearest point to the character
+  -> RouteRunner.Run(mover, one)  the SAME mesh walk and the SAME fight interrupt a hotspot leg uses
+  -> TryFindVendorNpc()           a unit that CANNOT be fought: (flags & NotAFightFlag) != 0
+  -> walk within VendorReachYd 6  ClickAimKeySteer, then StopAndSettle
+  -> TryClickUnit(mustSelect)     right-click the NPC; the client's own target guid confirms the click
+  -> Thread.Sleep(VendorWaitMs)
+  -> RunSellPlan()                the recorded steps: left click / right click / key / wait
+```
+
+`NotAFightFlag` is the same `0x2 | 0x100 | 0x200` word the fight **refuses** targets with, used the
+other way round: a vendor is precisely what a mob is not. When nothing at the point carries it, one
+living unit within 8 yd is tried as a guess and called a guess in the log.
+
+### Why the sell clicks are recorded instead of computed
+
+A click has to land on an item icon in a bag window. That geometry is UI scale, resolution, addons
+and bag count, and every one of those is a guess that ends with a right-click on an item the
+merchant window never saw — which **uses** the item instead of selling it. So the plan is captured
+from the real thing:
+
+- `Settings\clickaim-vendors.xml` holds, per vendor, the point and a list of `<Step>` elements;
+- a step is a **fraction of the client rectangle** (`FX`, `FY`), never a desktop pixel: the window
+  moves and is resized, the layout does not;
+- `Combat settings -> Selling` has the recorders: **Add vendor here**, **Left click (3 s)**,
+  **Right click (3 s)**, **Bags key (B)**, **Clear steps**, **Sell now**;
+- three seconds is the countdown because the button is under the cursor and the thing to record is
+  in the game window behind it;
+- the backpack key is the client's own default (`B`, VK 0x42) and it toggles: record it a second
+  time at the end of the plan to close the bags.
+
+A recording of a typical vendor is five steps:
+
+```
+1. left click  0.62, 0.44   (the vendor's "Browse goods" gossip option, if it has one)
+2. press B                  (open the backpack)
+3. right click 0.86, 0.63   (item 1)
+4. right click 0.90, 0.63   (item 2)   ... as many as the bag holds
+5. press B                  (close the backpack again)
+```
+
+It is honoured to the letter, and it is the only part of this feature that needs a human for a
+minute. Nothing in the bot invents a position.
+
+### What cannot be claimed
+
+- **The sale is not verified.** There is no money offset and no bag offset, so "sold" means "the
+  recorded clicks were sent". The trip says so in its own log line.
+- **The merchant window is not read.** `VendorWaitMs` is a wait.
+- **Repair is not ported.** `NeedToRepair()` needs `LowestDurabilityPercent` and a repair cost, and
+  neither is readable here. The `PoiType.Repair` half of the original tree is left out on purpose
+  rather than faked.
+
+Self-test additions (file round trip, no client): `vendorAdd`, `vendorAddClick`, `vendorAddKey`,
+`vendorRead`, `vendorReadPoint`, `vendorReadClick`, `vendorReadKey`, `vendorNearest`,
+`vendorClearSteps`, `vendorStepsGone`, `vendorReachIsInteractionRange`, `vendorRetryAfterFight`;
+settings: `applyAutoSell`, `applySellAfter`, `applyVendorWait`, `applyVendorSearch`,
+`clampSellAfter`, `clampVendorWait`, `clampVendorSearch`, `vendorDefaults`.

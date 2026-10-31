@@ -78,6 +78,13 @@ namespace CopilotBuddy.UI
             txtRestMs.Text = Text(ClickAimSettings.RestMs);
             chkDot.IsChecked = ClickAimSettings.UseDamageOverTime;
             chkBuffs.IsChecked = ClickAimSettings.UseBuffs;
+
+            chkAutoSell.IsChecked = ClickAimSettings.AutoSell;
+            txtSellAfter.Text = Text(ClickAimSettings.SellAfterLoots);
+            txtVendorWait.Text = Text(ClickAimSettings.VendorWaitMs);
+            txtVendorSearch.Text = Text(ClickAimSettings.VendorSearchYd);
+
+            LoadVendor();
         }
 
         private static string Text(int value)
@@ -102,6 +109,11 @@ namespace CopilotBuddy.UI
             if (!TryRead(txtDrinkSlot, "Drink slot", out drinkSlot)) return false;
             if (!TryRead(txtRestMs, "Rest time", out restMs)) return false;
 
+            int sellAfter, vendorWait, vendorSearch;
+            if (!TryRead(txtSellAfter, "Sell after looted bodies", out sellAfter)) return false;
+            if (!TryRead(txtVendorWait, "Merchant window wait", out vendorWait)) return false;
+            if (!TryRead(txtVendorSearch, "Vendor search radius", out vendorSearch)) return false;
+
             ClickAimSettings.HealBelowPercent = heal;
             ClickAimSettings.HealMinManaPercent = healMana;
             ClickAimSettings.EatBelowPercent = eat;
@@ -112,6 +124,11 @@ namespace CopilotBuddy.UI
             ClickAimSettings.RestMs = restMs;
             ClickAimSettings.UseDamageOverTime = chkDot.IsChecked == true;
             ClickAimSettings.UseBuffs = chkBuffs.IsChecked == true;
+
+            ClickAimSettings.AutoSell = chkAutoSell.IsChecked == true;
+            ClickAimSettings.SellAfterLoots = sellAfter;
+            ClickAimSettings.VendorWaitMs = vendorWait;
+            ClickAimSettings.VendorSearchYd = vendorSearch;
 
             // Ranges are the loop's, not the form's: 900% is clamped to 100 here so the box shows
             // what will actually be used instead of keeping a number that means nothing.
@@ -291,6 +308,214 @@ namespace CopilotBuddy.UI
         private void btnRefreshSpells_Click(object sender, RoutedEventArgs e)
         {
             LoadSpells();
+        }
+
+        // ---------------------------------------------------------------- selling
+
+        /// <summary>The vendor points, re-read every time the plan has to be shown.</summary>
+        private List<VendorFile.VendorPoint> _vendors = new List<VendorFile.VendorPoint>();
+
+        /// <summary>
+        /// The place to sell and the clicks that do it.
+        ///
+        /// This is the part of original CopilotBuddy's selling procedure that needs a human: the
+        /// vendor's coordinates (there is no <c>&lt;Vendors&gt;</c> in this repository's profiles)
+        /// and the clicks (the merchant frame is a Lua object and the Lua route is retired, so
+        /// selling is right-clicking the items in the bags like a player). Both are captured once
+        /// from the game and replayed by the grind loop - see <c>GrindRunner.VendorTrip</c>.
+        /// </summary>
+        private void LoadVendor()
+        {
+            try { _vendors = VendorFile.Read(); }
+            catch (Exception ex)
+            {
+                _vendors = new List<VendorFile.VendorPoint>();
+                lblVendorPlan.Text = "The vendor file could not be read: " + ex.Message;
+                return;
+            }
+
+            if (_vendors.Count == 0)
+            {
+                lblVendorPlan.Text = "No vendor point yet. Stand at the vendor in town and press "
+                                     + "\"Add vendor here\", then record the clicks that sell.";
+                return;
+            }
+
+            int at = NearestVendorIndex();
+            if (at < 0) at = 0;
+            lblVendorPlan.Text = VendorFile.DescribePlan(_vendors[at]);
+        }
+
+        /// <summary>
+        /// Which vendor point the buttons act on: the one nearest the character, which is the one
+        /// the grind loop would walk to.
+        /// </summary>
+        private int NearestVendorIndex()
+        {
+            if (_vendors.Count == 0) return -1;
+            try
+            {
+                double x, y;
+                if (ClickAimPositions.TryRead(out x, out y)) return VendorFile.Nearest(_vendors, x, y);
+            }
+            catch
+            {
+                // no position: fall back to the first point rather than refusing to show anything
+            }
+            return 0;
+        }
+
+        private static IntPtr GameWindow()
+        {
+            try { return ObjectManager.Wow.WindowHandle; }
+            catch { return IntPtr.Zero; }
+        }
+
+        private void btnVendorAdd_Click(object sender, RoutedEventArgs e)
+        {
+            double x, y;
+            if (!ClickAimPositions.TryRead(out x, out y))
+            {
+                lblVendorNote.Text = "No player position: be in the world, standing at the vendor, and press it again.";
+                return;
+            }
+
+            double z = 0.0;
+            try { z = ClickAimPositions.Z(); } catch { z = 0.0; }
+            if (double.IsNaN(z)) z = 0.0;
+
+            string error;
+            int count = VendorFile.Add(x, y, z, out error);
+            if (count < 0)
+            {
+                lblVendorNote.Text = "The vendor point could not be saved: " + error;
+                return;
+            }
+
+            lblVendorNote.Text = string.Format(CultureInfo.InvariantCulture,
+                "Saved vendor point {0} at ({1:F0}, {2:F0}, {3:F0}). Now open the merchant window and record "
+                + "the clicks that sell, in the order you would make them.", count, x, y, z);
+            LoadVendor();
+        }
+
+        private void btnVendorSellNow_Click(object sender, RoutedEventArgs e)
+        {
+            if (GrindRunner.RequestVendorTrip())
+                lblVendorNote.Text = "Asked the grind loop to sell: it goes as soon as the character is out of combat.";
+            else
+                lblVendorNote.Text = "No grind run is going. Start the bot first, or record the plan while it runs.";
+        }
+
+        private void btnVendorClearSteps_Click(object sender, RoutedEventArgs e)
+        {
+            int at = NearestVendorIndex();
+            if (at < 0)
+            {
+                lblVendorNote.Text = "There is no vendor point yet - press \"Add vendor here\" first.";
+                return;
+            }
+
+            string error;
+            if (!VendorFile.ClearSteps(at, out error))
+            {
+                lblVendorNote.Text = "The plan could not be cleared: " + error;
+                return;
+            }
+
+            lblVendorNote.Text = "The sell plan is empty. Nothing will be clicked at the vendor until it is recorded again.";
+            LoadVendor();
+        }
+
+        private void btnVendorRecordLeft_Click(object sender, RoutedEventArgs e)
+        {
+            RecordVendorClick(false);
+        }
+
+        private void btnVendorRecordRight_Click(object sender, RoutedEventArgs e)
+        {
+            RecordVendorClick(true);
+        }
+
+        private void btnVendorBagsKey_Click(object sender, RoutedEventArgs e)
+        {
+            int at = NearestVendorIndex();
+            if (at < 0)
+            {
+                lblVendorNote.Text = "There is no vendor point yet - press \"Add vendor here\" first.";
+                return;
+            }
+
+            string error;
+            // 0x42 is B, the client's own "open the backpack" binding.
+            if (VendorFile.AddStep(at, new VendorFile.Step { Kind = "Key", Vk = 0x42, WaitMs = 600 }, out error))
+                lblVendorNote.Text = "Recorded a press of B. It toggles the backpack: record it again at the end "
+                                     + "of the plan to close the bags before the bot walks off.";
+            else
+                lblVendorNote.Text = "The step could not be saved: " + error;
+            LoadVendor();
+        }
+
+        /// <summary>
+        /// Captures the cursor as a click in the plan, three seconds from now.
+        ///
+        /// It cannot be instant: the button is under the cursor and the thing to record is in the
+        /// game window behind this one. Three seconds is enough to move the cursor and short
+        /// enough not to lose one's place. What is stored is the cursor as a fraction of the
+        /// client rectangle, never a desktop pixel - see <see cref="VendorFile.Step"/>.
+        /// </summary>
+        private void RecordVendorClick(bool right)
+        {
+            int at = NearestVendorIndex();
+            if (at < 0)
+            {
+                lblVendorNote.Text = "There is no vendor point yet - press \"Add vendor here\" first, "
+                                     + "standing next to the vendor.";
+                return;
+            }
+
+            IntPtr hwnd = GameWindow();
+            if (hwnd == IntPtr.Zero)
+            {
+                lblVendorNote.Text = "The game window was not found, so a cursor position would mean nothing yet.";
+                return;
+            }
+
+            string kind = right ? "RightClick" : "LeftClick";
+            int waitMs = right ? 350 : 700;
+
+            lblVendorNote.Text = right
+                ? "Recording in 3 s: put the cursor on an item in the bags now..."
+                : "Recording in 3 s: put the cursor on the thing to click now...";
+
+            System.Threading.Tasks.Task.Run(() =>
+            {
+                System.Threading.Thread.Sleep(3000);
+
+                double fx, fy;
+                if (!ClickAimInput.TryCursorFraction(hwnd, out fx, out fy))
+                {
+                    Dispatcher.BeginInvoke(new Action(() =>
+                    {
+                        lblVendorNote.Text = "Nothing was recorded: the cursor was not inside the game window. "
+                                             + "Press it again and keep the cursor in the game.";
+                    }));
+                    return;
+                }
+
+                var step = new VendorFile.Step { Kind = kind, Fx = fx, Fy = fy, WaitMs = waitMs };
+                string error;
+                bool ok = VendorFile.AddStep(at, step, out error);
+
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    lblVendorNote.Text = ok
+                        ? string.Format(CultureInfo.InvariantCulture,
+                            "Recorded a {0} at {1:0.000}, {2:0.000} of the client.",
+                            right ? "right-click" : "left-click", fx, fy)
+                        : "The step could not be saved: " + error;
+                    LoadVendor();
+                }));
+            });
         }
 
         // ---------------------------------------------------------------- buttons

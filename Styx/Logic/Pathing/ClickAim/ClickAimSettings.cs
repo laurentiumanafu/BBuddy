@@ -71,6 +71,35 @@ internal static class ClickAimSettings
     /// </summary>
     public static int RestMs = 20000;
 
+    /// <summary>
+    /// Go to a vendor on the bot's own initiative once the bags are full.
+    ///
+    /// The original LevelBot asked <c>Me.FreeNormalBagSlots</c>; this build has no container
+    /// offset, so "full" is counted the only way that can be counted here - bodies looted since
+    /// the last trip (<see cref="SellAfterLoots"/>). It is a proxy and it is labelled as one:
+    /// when a bag-slot offset is found this number is replaced by the real count, and nothing
+    /// else about the trip changes.
+    /// </summary>
+    public static bool AutoSell = true;
+
+    /// <summary>
+    /// Sell after this many looted corpses; 0 means only when the window's "Sell now" button is
+    /// pressed. A level-3 character gets one or two items a body and the backpack holds 16, so
+    /// 20 is a full bag plus a few - the trip is a long walk and doing it twice an hour is
+    /// better than doing it every five minutes.
+    /// </summary>
+    public static int SellAfterLoots = 20;
+
+    /// <summary>
+    /// How long the merchant window is given to appear after the vendor was clicked, before the
+    /// recorded sell clicks are sent (milliseconds). The window is a Lua object on this build and
+    /// cannot be read, so this is a wait, not a check.
+    /// </summary>
+    public static int VendorWaitMs = 2500;
+
+    /// <summary>How far from a vendor point the NPC itself is looked for, in yards.</summary>
+    public static int VendorSearchYd = 25;
+
     private const string FileName = "clickaim-grind.txt";
 
     /// <summary>The folder the calibration file lives in - one folder for every setting.</summary>
@@ -111,6 +140,10 @@ internal static class ClickAimSettings
         DrinkSlot = 0;
         DotRefreshSeconds = 12;
         RestMs = 20000;
+        AutoSell = true;
+        SellAfterLoots = 20;
+        VendorWaitMs = 2500;
+        VendorSearchYd = 25;
     }
 
     /// <summary>
@@ -220,6 +253,26 @@ internal static class ClickAimSettings
             if (hasNumber) RestMs = number;
             return true;
         }
+        if (string.Equals(key, "AutoSell", StringComparison.OrdinalIgnoreCase))
+        {
+            AutoSell = flag;
+            return true;
+        }
+        if (string.Equals(key, "SellAfterLoots", StringComparison.OrdinalIgnoreCase))
+        {
+            if (hasNumber) SellAfterLoots = number;
+            return true;
+        }
+        if (string.Equals(key, "VendorWaitMs", StringComparison.OrdinalIgnoreCase))
+        {
+            if (hasNumber) VendorWaitMs = number;
+            return true;
+        }
+        if (string.Equals(key, "VendorSearchYd", StringComparison.OrdinalIgnoreCase))
+        {
+            if (hasNumber) VendorSearchYd = number;
+            return true;
+        }
         return false;
     }
 
@@ -234,6 +287,9 @@ internal static class ClickAimSettings
         DrinkSlot = Math.Max(0, Math.Min(12, DrinkSlot));
         DotRefreshSeconds = Math.Max(4, Math.Min(60, DotRefreshSeconds));
         RestMs = Math.Max(1000, Math.Min(60000, RestMs));
+        SellAfterLoots = Math.Max(0, Math.Min(500, SellAfterLoots));
+        VendorWaitMs = Math.Max(500, Math.Min(30000, VendorWaitMs));
+        VendorSearchYd = Math.Max(5, Math.Min(100, VendorSearchYd));
     }
 
     private static int ClampPercent(int value)
@@ -268,6 +324,10 @@ internal static class ClickAimSettings
         text.AppendLine("DrinkSlot = " + DrinkSlot.ToString(CultureInfo.InvariantCulture));
         text.AppendLine("DotRefreshSeconds = " + DotRefreshSeconds.ToString(CultureInfo.InvariantCulture));
         text.AppendLine("RestMs = " + RestMs.ToString(CultureInfo.InvariantCulture));
+        text.AppendLine("AutoSell = " + (AutoSell ? "true" : "false"));
+        text.AppendLine("SellAfterLoots = " + SellAfterLoots.ToString(CultureInfo.InvariantCulture));
+        text.AppendLine("VendorWaitMs = " + VendorWaitMs.ToString(CultureInfo.InvariantCulture));
+        text.AppendLine("VendorSearchYd = " + VendorSearchYd.ToString(CultureInfo.InvariantCulture));
 
         try
         {
@@ -289,12 +349,14 @@ internal static class ClickAimSettings
         return string.Format(CultureInfo.InvariantCulture,
             "heal at {0}% (0 = never) and only above {8}% power, eat at {1}%, drink at {2}%, "
             + "damage over time {3}, buffs {4}, food slot {5}, drink slot {6}, "
-            + "{7} spell role(s) set by hand",
+            + "{7} spell role(s) set by hand; selling {9} (after {10} looted bodie(s), {11} ms "
+            + "for the merchant window, vendor NPC looked for within {12} yd)",
             HealBelowPercent, EatBelowPercent, DrinkBelowPercent,
             UseDamageOverTime ? "on" : "off", UseBuffs ? "on" : "off",
             FoodSlot == 0 ? "auto" : FoodSlot.ToString(CultureInfo.InvariantCulture),
             DrinkSlot == 0 ? "auto" : DrinkSlot.ToString(CultureInfo.InvariantCulture),
-            ClickAimCombat.OverrideCount, HealMinManaPercent);
+            ClickAimCombat.OverrideCount, HealMinManaPercent,
+            AutoSell ? "on" : "off", SellAfterLoots, VendorWaitMs, VendorSearchYd);
     }
 
     /// <summary>
@@ -332,7 +394,22 @@ internal static class ClickAimSettings
         check(DrinkBelowPercent == 0, "clampLow");
         check(DotRefreshSeconds == 4, "clampDot");
 
+        check(Apply("AutoSell", "false") && !AutoSell, "applyAutoSell");
+        check(Apply("SellAfterLoots", "7") && SellAfterLoots == 7, "applySellAfter");
+        check(Apply("VendorWaitMs", "900") && VendorWaitMs == 900, "applyVendorWait");
+        check(Apply("VendorSearchYd", "12") && VendorSearchYd == 12, "applyVendorSearch");
+
+        SellAfterLoots = -5;
+        VendorWaitMs = 1;
+        VendorSearchYd = 0;
+        Clamp();
+        check(SellAfterLoots == 0, "clampSellAfter");
+        check(VendorWaitMs == 500, "clampVendorWait");
+        check(VendorSearchYd == 5, "clampVendorSearch");
+
         ResetDefaults();
+        check(AutoSell && SellAfterLoots == 20 && VendorWaitMs == 2500 && VendorSearchYd == 25,
+              "vendorDefaults");
         check(Describe().IndexOf("heal at 60%", StringComparison.Ordinal) >= 0, "describe");
 
         if (fails.Length == 0) return string.Format(CultureInfo.InvariantCulture,

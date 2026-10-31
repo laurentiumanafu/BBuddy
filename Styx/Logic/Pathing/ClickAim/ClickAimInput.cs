@@ -62,6 +62,71 @@ internal static class ClickAimInput
         return width > 0 && height > 0;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct POINT
+    {
+        public int X;
+        public int Y;
+    }
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetCursorPos(out POINT point);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool ScreenToClient(IntPtr hWnd, ref POINT point);
+
+    /// <summary>
+    /// Where the mouse is right now, as a fraction of the client rectangle.
+    ///
+    /// This is how the sell plan in <see cref="VendorFile"/> is recorded: a human puts the
+    /// cursor on the thing to click, presses a button in the bot's window, and what is stored
+    /// is where the cursor was in the client, not on the desktop. A stored desktop pixel would
+    /// be wrong the moment the game window moves; a fraction is wrong only if the layout
+    /// changes, and then it can be recorded again.
+    /// </summary>
+    public static bool TryCursorFraction(IntPtr hWnd, out double fx, out double fy)
+    {
+        fx = 0.0;
+        fy = 0.0;
+
+        int w, h;
+        if (!ClientSize(hWnd, out w, out h)) return false;
+
+        POINT point;
+        if (!GetCursorPos(out point)) return false;
+        if (!ScreenToClient(hWnd, ref point)) return false;
+
+        fx = point.X / (double)w;
+        fy = point.Y / (double)h;
+        return fx > 0.0 && fx < 1.0 && fy > 0.0 && fy < 1.0;
+    }
+
+    /// <summary>
+    /// Clicks at a fraction of the client rectangle - the form <see cref="VendorFile.Step"/>
+    /// stores. <paramref name="right"/> picks the button: a left-click in a bag window picks an
+    /// item up, and a right-click there is what sells it.
+    /// </summary>
+    public static bool ClickFraction(IntPtr hWnd, double fx, double fy, bool right)
+    {
+        int w, h;
+        if (!ClientSize(hWnd, out w, out h)) return false;
+
+        int x = (int)Math.Round(fx * w);
+        int y = (int)Math.Round(fy * h);
+        if (x < 1) x = 1;
+        if (y < 1) y = 1;
+        if (x > w - 2) x = w - 2;
+        if (y > h - 2) y = h - 2;
+
+        int dx = x - w / 2;
+        int dy = y - h / 2;
+        if (right) Click(hWnd, dx, dy);
+        else LeftClick(hWnd, dx, dy);
+        return true;
+    }
+
     /// <summary>Right-click at a client-space pixel offset from the centre.</summary>
     public static void Click(IntPtr hWnd, int dx, int dy)
     {
