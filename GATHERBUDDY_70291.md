@@ -253,3 +253,33 @@ asking TAB again. **Proximity and TAB are heuristics, not attacker identity**;
 a different nearby hostile could still be attacked, a ranged attacker may be
 missed, and F1 must retain its default binding. The combat bit is provisional.
 These changes have not been validated on a live client.
+
+## 20:50 herb observations and 70291-only catalog
+
+The user reports mining with the preceding revision works well. Their herb
+probe identified a hovered object with GUID high `0x2C0118000280C800`, whose
+GUID-derived candidate entry and object `+0x90` both equal `656160`, at 1.8 yd
+with game-object vtable RVA `0x50B1838`. The user says the hovered object is a
+herb; the probe did not test harvesting it. Nearby records with GUID-derived
+entry `656161` shared the vtable, but that entry was not itself hovered or
+checked at object `+0x90` in the supplied log.
+
+For the 70291 scanner only (not the 3.3.5a Gatherbuddy catalog), add these
+candidates as herbs, using a provisional minimum Herbalism skill of 1:
+
+- `656160`: Wilted Peacebloom — name supported by [this external database
+  report](https://github.com/advocaite/TrinityCore/pull/81) and the user's
+  hovered-herb observation.
+- `656161`: Stunted Silverleaf — name supported by the same external report;
+  its in-game type and hover have not yet been independently confirmed here.
+
+A [Forever herbalism guide](https://kami-labs.fr/en/guide-herboristerie-wow-forever/)
+places both starting-herb variants under skill 1. This is a provisional catalog
+value, not a verified 70291 lock/skill offset. Unknown IDs are not automatically
+considered herbs, and the special Cultivation duplicate `657454` mentioned by
+external sources has not been added: its interaction/profession rules here are
+unverified. All normal object validation and final matching-hover checks still
+apply. These additions do not establish a complete catalog, successful herb
+interaction, or herb depletion/loot behavior. Enable Herbalism and enter the
+character's actual skill manually before testing; mining-only settings must
+continue to skip both herbs.

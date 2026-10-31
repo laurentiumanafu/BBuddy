@@ -43,11 +43,24 @@ internal static class GatherNodeScanner
         }
     }
 
+    // 70291 additions are kept separate from the 3.3.5a Gatherbuddy database.
+    // 656160 matched the user's hovered herb and header; 656161 matched a
+    // nearby structural record but has not been hovered in their sample.
+    // Names are externally reported, and skill 1 is a starting-herb estimate;
+    // neither classification proves that a particular object is harvestable.
+    private static readonly GatherableNode[] WowBHerbs =
+    {
+        new GatherableNode(656160U, "Wilted Peacebloom", 1U),
+        new GatherableNode(656161U, "Stunted Silverleaf", 1U),
+    };
+
     private static uint GuidEntry(WowBGuid guid) => (uint)((guid.High >> 6) & 0x7FFFFFUL);
 
-    private static GatherableNode? Classify(uint entry, out bool isHerb)
+    internal static GatherableNode? Classify(uint entry, out bool isHerb)
     {
         isHerb = true;
+        foreach (GatherableNode item in WowBHerbs)
+            if (item.Entry == entry) return item;
         foreach (GatherableNode item in GatherableNodes.Herbs)
             if (item.Entry == entry) return item;
         isHerb = false;
@@ -162,6 +175,26 @@ internal static class GatherNodeScanner
         var copper = new WowBGuid(0x1440UL, 0x2C0118002001B0C0UL);
         var herb = new WowBGuid(0x1282UL, 0x2C01180020019480UL);
         checkFixture(GuidEntry(copper) == 1731 && GuidEntry(herb) == 1618);
+        // Captured 70291 IDs are checked separately from synthetic header tests below.
+        var wiltedGuid = new WowBGuid(0xE5AUL, 0x2C0118000280C800UL);
+        var stuntedGuid = new WowBGuid(0xE5CUL, 0x2C0118000280C840UL);
+        checkFixture(GuidEntry(wiltedGuid) == 656160 && GuidEntry(stuntedGuid) == 656161);
+        GatherableNode? wilted = Classify(656160, out bool wiltedHerb);
+        GatherableNode? stunted = Classify(656161, out bool stuntedHerb);
+        checkFixture(wilted != null && wiltedHerb && wilted.Name == "Wilted Peacebloom");
+        checkFixture(stunted != null && stuntedHerb && stunted.Name == "Stunted Silverleaf");
+        if (wilted != null && stunted != null)
+        {
+            var position = new WoWPoint(0, 0, 0);
+            var wiltedNode = new Node(wiltedGuid, wilted, true, position, 2);
+            var stuntedNode = new Node(stuntedGuid, stunted, true, position, 2);
+            checkFixture(!IsEligible(wiltedNode, true, 1, false, 0));
+            checkFixture(!IsEligible(stuntedNode, true, 1, false, 0));
+            checkFixture(!IsEligible(wiltedNode, false, 0, true, 0));
+            checkFixture(IsEligible(wiltedNode, false, 0, true, 1));
+            checkFixture(IsEligible(stuntedNode, false, 0, true, 1));
+            checkFixture(IsEligible(wiltedNode, true, 1, true, 1));
+        }
         GatherableNode? copperKind = Classify(1731, out bool copperHerb);
         GatherableNode? herbKind = Classify(1618, out bool herbHerb);
         checkFixture(copperKind != null && !copperHerb && herbKind != null && herbHerb);
@@ -193,6 +226,12 @@ internal static class GatherNodeScanner
         checkFixture(!MatchingHeader(data, image, rec, herb, out _));
         Array.Copy(BitConverter.GetBytes(1618u), 0, data, 0x90, 4);
         checkFixture(!MatchingHeader(data, image, rec, copper, out _));
+        Array.Copy(BitConverter.GetBytes(wiltedGuid.Low), 0, data, 16, 8);
+        Array.Copy(BitConverter.GetBytes(wiltedGuid.High), 0, data, 24, 8);
+        Array.Copy(BitConverter.GetBytes(656160u), 0, data, 0x90, 4);
+        checkFixture(MatchingHeader(data, image, rec, wiltedGuid, out uint wiltedEntry) && wiltedEntry == 656160);
+        Array.Copy(BitConverter.GetBytes(656161u), 0, data, 0x90, 4);
+        checkFixture(!MatchingHeader(data, image, rec, wiltedGuid, out _));
         return "[Gather] node scanner self-test " + passed + "/" + total + " (no live-client validation)";
     }
 }

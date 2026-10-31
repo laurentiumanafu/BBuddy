@@ -68,18 +68,19 @@ internal static class GatherProbe
         uint herb = CandidateEntry(new WowBGuid(0x1282UL, 0x2C01180020019480UL));
         bool ok = copper == 1731 && herb == 1618
                   && DescribeCandidate(copper).Contains("Copper Vein")
-                  && DescribeCandidate(herb).Contains("Peacebloom");
+                  && DescribeCandidate(herb).Contains("Peacebloom")
+                  && DescribeCandidate(656160).Contains("Wilted Peacebloom")
+                  && DescribeCandidate(656161).Contains("Stunted Silverleaf");
         return "[Gather probe] captured GUID candidate fixtures: " + (ok ? "pass" : "FAIL")
                + " (does not validate live node types)";
     }
 
     private static string DescribeCandidate(uint entry)
     {
-        foreach (Bots.Gatherbuddy.GatherableNode node in Bots.Gatherbuddy.GatherableNodes.Herbs)
-            if (node.Entry == entry) return "possible herb " + node.Name + " (legacy ID)";
-        foreach (Bots.Gatherbuddy.GatherableNode node in Bots.Gatherbuddy.GatherableNodes.Minerals)
-            if (node.Entry == entry) return "possible ore " + node.Name + " (legacy ID)";
-        return "no legacy herb/ore ID match";
+        Bots.Gatherbuddy.GatherableNode? node = GatherNodeScanner.Classify(entry, out bool herb);
+        if (node == null) return "no recognized herb/ore ID match";
+        return "possible " + (herb ? "herb " : "ore ") + node.Name
+               + " (recognized ID; type and availability not proven)";
     }
 
     private static void PrintNearbyCandidates(WowBReader reader, GreenMagic.Memory memory)
