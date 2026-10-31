@@ -185,6 +185,7 @@ internal static class GatherRunner
     // failed; neither proves success. Bound attempts and revisit rather than spin forever.
     private static void GatherAtNode(IntPtr hwnd, GatherNodeScanner.Node node, Func<bool>? extraSafety = null)
     {
+        int cursorRecoveries = 0;
         for (int attempt = 1; attempt <= MaxGatherAttempts && !_stop && !ClickAimAbort.Requested; attempt++)
         {
             bool fighting;
@@ -197,7 +198,7 @@ internal static class GatherRunner
                           + "; keep the real mouse still");
             if (!MapStillCurrent()) return;
             bool clicked = GatherInteraction.TryInteract(hwnd, node, candidate => MapStillCurrent() && Ready(candidate), extraSafety, out GatherNodeScanner.Node clickedNode,
-                                                          out string reason, out bool hoverMiss);
+                                                          out string reason, out bool hoverMiss, out bool cursorMoved);
             if (clicked && clickedNode.Guid != node.Guid)
             {
                 Logging.Write("[Gather] hovered eligible nearby " + clickedNode.Name + " " + clickedNode.Guid
@@ -262,6 +263,24 @@ internal static class GatherRunner
                 _pending = node;
                 return;
             }
+            if (cursorMoved)
+            {
+                // A moved desktop cursor is not a hover miss or a failed gather. Preserve
+                // the six-second cast wait above, then require a quiet cursor before a
+                // bounded retry with a fresh away transition and all usual validations.
+                if (++cursorRecoveries <= 3 && WaitForQuietCursor(hwnd, extraSafety))
+                {
+                    Logging.Write("[Gather] cursor quiet; restarting the search without consuming a gather attempt");
+                    attempt--;
+                    continue;
+                }
+                if (!_stop && !ClickAimAbort.Requested)
+                {
+                    Retry[node.Guid] = unchecked(Environment.TickCount + InteractionRetryMs);
+                    Logging.Write("[Gather] cursor recovery unavailable or limit reached; deferring this GUID for 20 seconds");
+                }
+                return;
+            }
             Logging.Write("[Gather] node still observed after attempt " + attempt
                           + "; may need another hit or previous interaction may have failed");
         }
@@ -270,6 +289,27 @@ internal static class GatherRunner
             Retry[node.Guid] = unchecked(Environment.TickCount + InteractionRetryMs);
             Logging.Write("[Gather] attempt limit reached; will reconsider this node after 20 seconds");
         }
+    }
+
+    private static bool WaitForQuietCursor(IntPtr hwnd, Func<bool>? extraSafety)
+    {
+        Logging.Write("[Gather] waiting for the desktop cursor to remain still before retrying; source of movement is unknown");
+        int started = Environment.TickCount;
+        int quietSince = started;
+        if (!ClickAimInput.TryCursorScreen(out int anchorX, out int anchorY)) return false;
+        while (unchecked(Environment.TickCount - started) < 15000)
+        {
+            if (ClickAimAbort.Wait(250) || _stop || (extraSafety != null && !extraSafety())) return false;
+            if (ObjectManager.Wow == null || ObjectManager.Wow.WindowHandle != hwnd || !MapStillCurrent()) return false;
+            if (!GrindRunner.TryReadGatherCombat(out bool fighting) || fighting) return false;
+            if (!ClickAimInput.TryCursorScreen(out int x, out int y)) return false;
+            if (Math.Abs((long)x - anchorX) > 3 || Math.Abs((long)y - anchorY) > 3)
+            {
+                anchorX = x; anchorY = y; quietSince = Environment.TickCount;
+            }
+            if (unchecked(Environment.TickCount - quietSince) >= 1500) return true;
+        }
+        return false;
     }
 
     // Grind owns the thread, mover and stop state. This does not start a second bot.

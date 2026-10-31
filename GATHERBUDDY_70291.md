@@ -426,3 +426,11 @@ additional points less than 12 yd away, even in key-steering mode. Both could
 cut across the mesh corridor. Key-steered mesh paths now retain every corner;
 this is a plausible navigation issue but the excerpt alone cannot establish
 that it caused this particular incident.
+
+### 22:06 run follow-up (experimental)
+
+The 22:06 log recorded a Silverleaf (GUID ending `1D3D`) aborting four searches because desktop cursor coordinates changed. No right-button down was posted on those attempts; the source of the coordinate changes is unknown. On revisiting that GUID, the first sampled point matched and button messages were posted; its subsequent absence was observed but loot was not independently checked. This is not evidence of depletion, or proof of who or what moved the cursor. Other herbs included a 34-point search, so small/occluded hover targets may still be slow.
+
+Key-steered walking now checks arrival before turning toward a mesh point that is already in tolerance, and turn adaptation distinguishes a changing target bearing from overshoot. The turn scale is reset conservatively at each mesh point; mesh corners and the fail-closed path requirement remain. Gather sidesteps now require a short ray validated on the current map and terrain layer and poll the route interruption callback, including combat and Stop. Mesh raycasts do not detect dynamic collisions such as unmeshed trees; this is not a guarantee the sidestep is physically clear.
+
+A cursor-coordinate abort still prevents button-down. After the existing six-second possible-cast hold and node recheck, Gather waits for 1.5 seconds of cursor stability (up to 15 seconds, interruptible for combat/Stop) and restarts the search with a fresh away transition and all original GUID, node and cursor checks. These aborts do not consume normal gather attempts; at most three quiet-cursor recoveries are allowed before the exact GUID is deferred briefly. Mouse/cursor failures and hover misses do not prove depletion. Mining uses the same safety recovery, but its hover point order is unchanged. These changes and fixtures require Windows build and live validation.

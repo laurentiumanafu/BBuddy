@@ -424,6 +424,7 @@ public static class RouteRunner
                 }
 
                 bool lastPoint = p == follow.Length - 1;
+                if (mover.KeyMode) ClickAimKeySteer.BeginMeshPoint();
                 if (ClickAimPilot.WalkTo(mover, follow[p], StepTolerance, MeshPointTimeoutMs,
                                          false, true, !lastPoint, InterruptDuringWalk))
                     continue;
@@ -642,6 +643,30 @@ public static class RouteRunner
         return true;
     }
 
+    // A ray proves a short sidestep stays on traversable mesh, not that trees or
+    // other dynamic collisions are absent. Fail closed on an unknown map or layer.
+    internal static bool ValidateGatherSidestep(double px, double py, WoWPoint to)
+    {
+        try
+        {
+            double z = ClickAimPositions.Z();
+            if (!double.IsFinite(z)) return false;
+            uint map = ClickAimDiagnostics.ResolveMap((uint)NavGridStore.MapId, px, py);
+            if (map == uint.MaxValue) return false;
+            var nav = Navigator.TripperNavigator;
+            if (!nav.IsLoaded) return false;
+            var start = new System.Numerics.Vector3((float)px, (float)py, (float)z);
+            var end = new System.Numerics.Vector3(to.X, to.Y, (float)z);
+            if (!nav.FindNearestPolyRef(map, start, 0.5f, 2.0f, out Tripper.Navigation.PolygonReference startPoly, out System.Numerics.Vector3 startSnap)
+                || !startPoly.IsValid || !EndpointNear(startSnap, start, 0.5, 2.0)
+                || !nav.FindNearestPolyRef(map, end, 0.5f, 2.0f, out Tripper.Navigation.PolygonReference endPoly, out System.Numerics.Vector3 endSnap)
+                || !endPoly.IsValid || !EndpointNear(endSnap, end, 0.5, 2.0)) return false;
+            if (!ValidateStraightMeshSegment(nav, map, startSnap, endSnap)) return false;
+            return ClickAimDiagnostics.ResolveMap((uint)NavGridStore.MapId, px, py) == map;
+        }
+        catch { return false; }
+    }
+
     public static string SelfTest()
     {
         var good = Tripper.Navigation.Status.Success;
@@ -651,7 +676,10 @@ public static class RouteRunner
                                         new WoWPoint(2, 2, 0), new WoWPoint(20, 2, 0) }, 15.0);
         bool keptCorners = corners.Length >= 4 && corners[1].X == 2 && corners[1].Y == 0
                            && corners[2].X == 2 && corners[2].Y == 2;
-        bool ok = keptCorners && ValidRayResult(good, 1f, polys, 2, 13UL)
+        bool ok = keptCorners && ClickAimPilot.WithinArrivalRadius(2.5, 2.5)
+               && !ClickAimPilot.WithinArrivalRadius(2.6, 2.5)
+               && !ClickAimPilot.WithinArrivalRadius(double.NaN, 2.5)
+               && ValidRayResult(good, 1f, polys, 2, 13UL)
                && !ValidRayResult(good, 0.5f, polys, 2, 13UL)
                && !ValidRayResult(partial, 1f, polys, 2, 13UL)
                && !ValidRayResult(good, 1f, polys, 2, 14UL)

@@ -73,6 +73,23 @@ internal static class ClickAimKeySteer
     private static double _turnNegRate = 0.15;
     private static double _turnStepScale = 1.0;
     private static double _lastTurnError = double.NaN;
+    private static double _lastTurnBearing = double.NaN;
+
+    // A new mesh point is not an overshoot of the previous one. Keep adaptation
+    // bounded but allow the first turn at a new corner to be meaningful.
+    internal static void BeginMeshPoint()
+    {
+        _lastTurnError = double.NaN;
+        _lastTurnBearing = double.NaN;
+        _turnStepScale = Math.Max(0.45, _turnStepScale);
+    }
+
+    private static bool TurnOvershot(double previousError, double error, double previousBearing, double bearing)
+    {
+        return !double.IsNaN(previousError) && !double.IsNaN(previousBearing)
+            && Math.Abs(ClickAimMath.WrapDeg(bearing - previousBearing)) <= 8.0
+            && (Math.Sign(error) != Math.Sign(previousError) || Math.Abs(error) > Math.Abs(previousError) + 0.5);
+    }
     private static bool _facingIsBearing = true;
     private static double _slope = 1.0;       // d(bearing deg) / d(facing-input)
     private static double _offsetDeg = double.NaN; // bearing = slope*input + offset
@@ -520,14 +537,14 @@ internal static class ClickAimKeySteer
              * So if this tick's error is bigger than last tick's, or has changed sign, the
              * step was too long: halve it. It grows back slowly, so a first tick that was
              * too cautious does not stay that way. */
-            if (!double.IsNaN(_lastTurnError))
-            {
-                bool overshot = Math.Sign(error) != Math.Sign(_lastTurnError)
-                                || Math.Abs(error) > Math.Abs(_lastTurnError) + 0.5;
-                if (overshot) _turnStepScale = Math.Max(0.03, _turnStepScale * 0.5);
-                else _turnStepScale = Math.Min(1.0, _turnStepScale * 1.15);
-            }
+            // An error increase can also mean the bearing changed as we walked past
+            // a close point. Only treat it as overshoot when the bearing stayed stable.
+            if (TurnOvershot(_lastTurnError, error, _lastTurnBearing, wantedBearing))
+                _turnStepScale = Math.Max(0.03, _turnStepScale * 0.5);
+            else if (!double.IsNaN(_lastTurnError))
+                _turnStepScale = Math.Min(1.0, _turnStepScale * 1.15);
             _lastTurnError = error;
+            _lastTurnBearing = wantedBearing;
 
             bool turnUp = error > 0;
             int vk = turnUp ? _turnPosVk : _turnNegVk;
@@ -552,6 +569,7 @@ internal static class ClickAimKeySteer
         }
 
         _lastTurnError = double.NaN;
+        _lastTurnBearing = double.NaN;
         SetForward(hwnd, forward);
         return true;
     }
@@ -888,6 +906,11 @@ internal static class ClickAimKeySteer
             if (ok) passed++;
             else fails.Append(' ').Append(name);
         };
+
+        check("overshootStable", TurnOvershot(30, -5, 90, 91));
+        check("bearingChangeNotOvershoot", !TurnOvershot(30, -50, 90, 180));
+        check("bearingWrapStable", TurnOvershot(30, -5, 179, -179));
+        check("firstTurnNotOvershoot", !TurnOvershot(double.NaN, 40, double.NaN, 90));
 
         // Uncalibrated: the client's facing is taken to be the bearing.
         _calibrated = false;

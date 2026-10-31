@@ -87,6 +87,12 @@ public static class ClickAimPilot
 
         while (unchecked(Environment.TickCount - started) < timeoutMs)
         {
+            // A route-owner interruption can also occur inside a sidestep.
+            if (RouteRunner.RequireMeshDuringSession && RouteRunner.LastRunInterrupted)
+            {
+                mover.MoveStop();
+                return false;
+            }
             /* A stop is immediate: let go of the movement key, stop the mover, and say the walk
              * did not arrive. Everything above this line would otherwise walk the whole leg. */
             if (ClickAimAbort.Requested)
@@ -111,6 +117,20 @@ public static class ClickAimPilot
                 ClickAimKeySteer.ReleaseHeld();
                 mover.MoveStop();
                 return false;
+            }
+            // A resampled mesh corner can already be within the arrival radius when
+            // the previous point completes. Do not steer back toward it first: the
+            // mover's steering tick may stop and turn even though it is already reached.
+            if (mover.KeyMode && ClickAimPositions.TryRead(out double arrivalX, out double arrivalY))
+            {
+                double arrivalDistance = ClickAimMath.Len(goal.X - arrivalX, goal.Y - arrivalY);
+                if (WithinArrivalRadius(arrivalDistance, tolerance))
+                {
+                    if (!keepMoving) mover.MoveStop();
+                    if (verbose) Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                        "[ClickAim] arrived before steering: {0:F2} yd remaining", arrivalDistance));
+                    return true;
+                }
             }
             mover.MoveTowards(goal);
 
@@ -141,7 +161,7 @@ public static class ClickAimPilot
              * has already refused to aim for another twenty-five seconds. */
             if (mover.Blocked && !stopWhenBlocked)
             {
-                if (TrySidestep(mover, goal, ref sidesteps, verbose))
+                if (TrySidestep(mover, goal, ref sidesteps, verbose, interrupt))
                 {
                     lastProgressMs = Environment.TickCount;
                     continue;
@@ -164,7 +184,7 @@ public static class ClickAimPilot
                 lastProgressMs = Environment.TickCount;
             }
             else if (unchecked(Environment.TickCount - lastProgressMs) > SidestepAfterMs
-                     && TrySidestep(mover, goal, ref sidesteps, verbose))
+                     && TrySidestep(mover, goal, ref sidesteps, verbose, interrupt))
             {
                 lastProgressMs = Environment.TickCount;
                 continue;
@@ -221,6 +241,9 @@ public static class ClickAimPilot
         return false;
     }
 
+    internal static bool WithinArrivalRadius(double distance, double tolerance)
+        => double.IsFinite(distance) && double.IsFinite(tolerance) && distance >= 0 && tolerance >= 0 && distance <= tolerance;
+
     /// <summary>How long without two yards of progress before a sidestep is tried.</summary>
     private const int SidestepAfterMs = 8000;
 
@@ -242,18 +265,18 @@ public static class ClickAimPilot
     /// leaves the mover ready to dispatch toward the real goal again. Returns false (and says so
     /// in <c>report</c>) when there is nothing to step from or the sidestep budget is spent.
     /// </summary>
-    private static bool TrySidestep(ClickAimMover mover, WoWPoint goal, ref int sidesteps, bool verbose)
+    private static bool TrySidestep(ClickAimMover mover, WoWPoint goal, ref int sidesteps, bool verbose, Func<bool>? interrupt)
     {
         if (sidesteps >= MaxSidesteps) return false;
         sidesteps++;
 
         string report;
-        bool ok = Sidestep(mover, goal, sidesteps, out report);
-        if (verbose) Logging.Write("[ClickAim] " + report);
+        bool ok = Sidestep(mover, goal, sidesteps, interrupt, out report);
+        if (verbose || RouteRunner.RequireMeshDuringSession) Logging.Write("[ClickAim] " + report);
         return ok;
     }
 
-    private static bool Sidestep(ClickAimMover mover, WoWPoint goal, int attempt, out string report)
+    private static bool Sidestep(ClickAimMover mover, WoWPoint goal, int attempt, Func<bool>? interrupt, out string report)
     {
         report = "";
         double px, py;
@@ -279,6 +302,20 @@ public static class ClickAimPilot
                               (float)(py + dx * side * SidestepYd),
                               goal.Z);
 
+        if (RouteRunner.RequireMeshDuringSession && !RouteRunner.ValidateGatherSidestep(px, py, to))
+        {
+            report = "sidestep " + attempt + " refused: the short segment was not validated on the current mesh";
+            return false;
+        }
+
+        if (ClickAimAbort.Requested || (interrupt != null && interrupt()))
+        {
+            mover.MoveStop();
+            ClickAimKeySteer.ReleaseHeld();
+            report = "sidestep interrupted before movement";
+            return false;
+        }
+
         /* "Cannot get there" was about the last position: forget it, or the mover will not
          * dispatch a click at all. */
         mover.ClearBlock();
@@ -298,15 +335,26 @@ public static class ClickAimPilot
                 ClickAimKeySteer.ReleaseHeld();
                 break;
             }
+            if (interrupt != null && interrupt())
+            {
+                mover.MoveStop();
+                ClickAimKeySteer.ReleaseHeld();
+                report = "sidestep interrupted by route owner";
+                return false;
+            }
+            // Do not steer back to a sidestep point already reached.
+            if (RouteRunner.RequireMeshDuringSession && ClickAimPositions.TryRead(out double sx, out double sy)
+                && ClickAimMath.Len(to.X - sx, to.Y - sy) <= 2.5) break;
             mover.MoveTowards(to);
             if (mover.Blocked) break;
             Thread.Sleep(60);
         }
 
         double left = mover.LastRemaining;
+        if (RouteRunner.RequireMeshDuringSession) mover.MoveStop();
         mover.ClearBlock();
         report = string.Format(CultureInfo.InvariantCulture,
-            "stepped {0:F0} yd to the {1} to get around something in the way (sidestep {2}, {3:F1} yd left of it)",
+            "sidestep aimed {0:F0} yd to the {1} around something in the way (attempt {2}, {3:F1} yd left of it)",
             SidestepYd, side > 0 ? "right" : "left", attempt, left);
         return true;
     }

@@ -75,8 +75,9 @@ internal static class GatherInteraction
         return points;
     }
 
-    private static bool CursorStill(int x, int y, out string reason)
+    private static bool CursorStill(int x, int y, out string reason, out bool moved)
     {
+        moved = false;
         if (!ClickAimInput.TryCursorScreen(out int nowX, out int nowY))
         {
             reason = "desktop cursor position could not be read";
@@ -85,6 +86,7 @@ internal static class GatherInteraction
         if (Math.Abs((long)nowX - x) > 3 || Math.Abs((long)nowY - y) > 3)
         {
             // GetCursorPos cannot tell whether a person, the game or Windows moved it.
+            moved = true;
             reason = "desktop cursor coordinates changed from (" + x + "," + y + ") to ("
                    + nowX + "," + nowY + "); source unknown";
             return false;
@@ -132,10 +134,12 @@ internal static class GatherInteraction
     // node. Cursor/client/stop/read failures are NOT evidence of a depleted node.
     public static bool TryInteract(IntPtr hwnd, GatherNodeScanner.Node node,
                                    Func<GatherNodeScanner.Node, bool> allowed, Func<bool>? extraSafety,
-                                   out GatherNodeScanner.Node clickedNode, out string reason, out bool hoverMiss)
+                                   out GatherNodeScanner.Node clickedNode, out string reason, out bool hoverMiss,
+                                   out bool cursorMoved)
     {
         clickedNode = default;
         hoverMiss = false;
+        cursorMoved = false;
         reason = "game window or desktop cursor unavailable";
         Memory? memory = ObjectManager.Wow;
         if (memory == null || memory.WindowHandle != hwnd || !memory.Is64BitTarget
@@ -163,7 +167,7 @@ internal static class GatherInteraction
             if (extraSafety != null && !extraSafety()) { reason = "Grind safety check interrupted hover search"; return false; }
             if (ObjectManager.Wow != memory) { reason = "attached client changed during hover search"; return false; }
             if (memory.WindowHandle != hwnd) { reason = "game window handle changed during hover search"; return false; }
-            if (!CursorStill(realX, realY, out reason)) return false;
+            if (!CursorStill(realX, realY, out reason, out bool sampleCursorMoved)) { cursorMoved = sampleCursorMoved; return false; }
             if (unchecked(Environment.TickCount - started) >= HoverSearchBudgetMs)
             {
                 hoverMiss = true;
@@ -213,10 +217,12 @@ internal static class GatherInteraction
             reason = "stopped while confirming hover";
             if (ClickAimAbort.Wait(200)) return false;
             string validation = "";
+            bool movedDuringValidation = false;
             bool sent = ClickAimInput.ConfirmedRightClick(hwnd, pixelX, pixelY, width, height, () =>
             {
                 if (ObjectManager.Wow != memory || memory.WindowHandle != hwnd) { validation = "client changed"; return false; }
-                if (!CursorStill(realX, realY, out string cursorReason)) { validation = cursorReason; return false; }
+                if (!CursorStill(realX, realY, out string cursorReason, out bool moved))
+                { validation = cursorReason; movedDuringValidation = moved; return false; }
                 if (!GrindRunner.TryReadGatherCombat(out bool fighting)) { validation = "combat state unreadable"; return false; }
                 if (fighting) { validation = "combat detected"; return false; }
                 if (!GatherNodeScanner.TryCapture(5.0, out List<GatherNodeScanner.Node> fresh))
@@ -230,12 +236,14 @@ internal static class GatherInteraction
                 if (!present) { validation = "eligible node not observed in reach near the intended resource"; return false; }
                 if (!GrindRunner.TryReadGatherCombat(out fighting) || fighting) { validation = "combat detected or unreadable after node scan"; return false; }
                 if (extraSafety != null && !extraSafety()) { validation = "Grind safety check failed before interaction"; return false; }
-                if (!CursorStill(realX, realY, out cursorReason)) { validation = cursorReason; return false; }
+                if (!CursorStill(realX, realY, out cursorReason, out moved))
+                { validation = cursorReason; movedDuringValidation = moved; return false; }
                 if (!ReadHover(memory, out WowBGuid final)) { validation = "final hover read failed"; return false; }
                 if (final != hoveredNode.Guid) { validation = "final hover changed to " + final; return false; }
                 return true;
             }, out string clickReason);
             reason = validation.Length > 0 ? validation : clickReason;
+            cursorMoved = movedDuringValidation;
             if (sent)
             {
                 clickedNode = hoveredNode;
