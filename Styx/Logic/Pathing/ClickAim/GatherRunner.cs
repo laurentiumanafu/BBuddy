@@ -61,15 +61,24 @@ internal static class GatherRunner
     public static bool Start(string profile)
     {
         if (_running) return false;
-        List<RoutePoint> points;
-        try
-        {
-            points = ProfileRoute.Load(profile, 0, false, false);
-            LoadBlackspots(profile);
-        }
-        catch (Exception ex) { Logging.Write("[Gather] profile could not be read: " + ex.Message); return false; }
-        if (points.Count == 0) { Logging.Write("[Gather] profile has no hotspots"); return false; }
         GatherSettings.Load();
+        List<RoutePoint> points = new List<RoutePoint>();
+        MeshRoam? roam = null;
+        if (string.IsNullOrWhiteSpace(profile))
+        {
+            if (!GatherSettings.RoamWithoutProfile || !MeshRoam.TryCreate(out roam) || roam == null) return false;
+            Blackspots.Clear();
+        }
+        else
+        {
+            try
+            {
+                points = ProfileRoute.Load(profile, 0, false, false);
+                LoadBlackspots(profile);
+            }
+            catch (Exception ex) { Logging.Write("[Gather] profile could not be read: " + ex.Message); return false; }
+            if (points.Count == 0) { Logging.Write("[Gather] profile has no hotspots"); return false; }
+        }
         if ((!GatherSettings.Mining || GatherSettings.MiningSkill == 0)
             && (!GatherSettings.Herbalism || GatherSettings.HerbalismSkill == 0))
         {
@@ -94,7 +103,7 @@ internal static class GatherRunner
         _running = true;
         try
         {
-            var thread = new Thread(() => Run(points)) { IsBackground = true, Name = "GatherRunner" };
+            var thread = new Thread(() => Run(points, roam)) { IsBackground = true, Name = "GatherRunner" };
             thread.Start();
             return true;
         }
@@ -339,7 +348,8 @@ internal static class GatherRunner
             if ((!GatherSettings.Mining || GatherSettings.MiningSkill == 0)
                 && (!GatherSettings.Herbalism || GatherSettings.HerbalismSkill == 0))
             { Logging.Write("[Grind gather] no trained profession selected; gathering disabled"); return false; }
-            LoadBlackspots(profile);
+            if (string.IsNullOrWhiteSpace(profile)) Blackspots.Clear();
+            else LoadBlackspots(profile);
             WowBReader? reader = ObjectManager.WowB;
             if (reader == null || !reader.TryReadMapId(out _sessionMap) || ObjectManager.WowB != reader)
             { Logging.Write("[Grind gather] client map ID unreadable; gathering disabled"); return false; }
@@ -426,10 +436,10 @@ internal static class GatherRunner
         finally { mover.QuietKeyStop = oldQuiet; }
     }
 
-    private static void Run(List<RoutePoint> points)
+    private static void Run(List<RoutePoint> points, MeshRoam? roam)
     {
         var mover = new ClickAimMover { QuietKeyStop = true };
-        int index = 0, failures = 0, fastHotspots = 0;
+        int index = 0, failures = 0, fastHotspots = 0, sampleFailures = 0;
         try
         {
             IntPtr hwnd = ObjectManager.Wow?.WindowHandle ?? IntPtr.Zero;
@@ -438,7 +448,8 @@ internal static class GatherRunner
             if (reader == null || !reader.TryReadMapId(out _sessionMap) || ObjectManager.WowB != reader)
             { Logging.Write("[Gather] client map ID unreadable; refusing to guess a map"); return; }
             Logging.Write("[Gather] client map root reports map " + _sessionMap);
-            Logging.Write("[Gather] experimental ground gatherer: " + points.Count + " hotspots; Mining="
+            if (roam != null && !roam.MapCurrent()) { Logging.Write("[Roam] map changed before start; stopping"); return; }
+            Logging.Write("[Gather] experimental ground gatherer: " + (roam == null ? points.Count + " hotspots" : "profile-free local roaming") + "; Mining="
                 + GatherSettings.Mining + " skill=" + GatherSettings.MiningSkill + "; Herbalism="
                 + GatherSettings.Herbalism + " skill=" + GatherSettings.HerbalismSkill
                 + "; these skills are manually configured, not read from the client");
@@ -451,7 +462,7 @@ internal static class GatherRunner
             }
             while (!_stop && !ClickAimAbort.Requested)
             {
-                if (!MapStillCurrent()) break;
+                if (!MapStillCurrent() || (roam != null && !roam.MapCurrent())) break;
                 if (!GrindRunner.TryReadGatherCombat(out bool fighting))
                 {
                     Logging.Write("[Gather] combat state unreadable; holding position");
@@ -475,11 +486,24 @@ internal static class GatherRunner
                 if (_pending.HasValue) { node = _pending.Value; _pending = null; }
                 else if (!FindNode(out node))
                 {
-                    RoutePoint next = points[index % points.Count];
+                    RoutePoint next;
+                    if (roam != null)
+                    {
+                        if (!roam.TryNext(out next))
+                        {
+                            if (!roam.MapCurrent()) { Logging.Write("[Roam] map changed or became unreadable; stopping"); break; }
+                            if (++sampleFailures >= 5) { Logging.Write("[Roam] could not find a local mesh destination after five tries; stopping"); break; }
+                            Logging.Write("[Roam] no local mesh destination found; waiting before retry");
+                            ClickAimAbort.Wait(2000);
+                            continue;
+                        }
+                        sampleFailures = 0;
+                    }
+                    else next = points[index % points.Count];
                     if (IsBlackspot(next.X, next.Y))
                     {
                         Logging.Write("[Gather] hotspot lies inside a profile blackspot; skipping it");
-                        index = (index + 1) % points.Count;
+                        if (roam == null) index = (index + 1) % points.Count;
                         fastHotspots = 0;
                         ClickAimAbort.Wait(1000);
                         continue;
@@ -490,9 +514,9 @@ internal static class GatherRunner
                     if (RouteRunner.LastRunInterrupted) { fastHotspots = 0; continue; }
                     if (walked)
                     {
-                        index = (index + 1) % points.Count;
+                        if (roam == null) index = (index + 1) % points.Count;
                         failures = 0;
-                        if (unchecked(Environment.TickCount - startedHotspot) < FastHotspotMs)
+                        if (roam == null && unchecked(Environment.TickCount - startedHotspot) < FastHotspotMs)
                         {
                             if (ShouldPauseHotspotLoop(++fastHotspots, points.Count))
                             { fastHotspots = 0; ClickAimAbort.Wait(HotspotLoopPauseMs); }

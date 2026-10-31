@@ -1110,7 +1110,7 @@ namespace CopilotBuddy.UI
                 if (Styx.Logic.Pathing.ClickAimUi.Paused)
                 {
                     string resumed = Styx.Logic.Pathing.ClickAimUi.Resume(cmbBotSelector.SelectedItem?.ToString());
-                    item.Header = "Pause";
+                    item.Header = Styx.Logic.Pathing.ClickAimUi.Paused ? "Resume" : "Pause";
                     Logging.Write("{0}", resumed);
                     SetStatus(Styx.Logic.Pathing.ClickAimUi.Running ? "Grinding..." : resumed);
                 }
@@ -1394,7 +1394,12 @@ namespace CopilotBuddy.UI
             if (_clickAimToolsWindow != null) { _clickAimToolsWindow.Activate(); return; }
             var window = new ClickAimToolsWindow(new (string Label, string Tip, Action Action)[]
             {
-                ("Gather settings", "Configure professions, skills and gathering while grinding", () => btnGatherSettings_Click(this, new RoutedEventArgs())),
+                ("Gather settings", "Configure professions, profile-free roaming and gathering while grinding", () => btnGatherSettings_Click(this, new RoutedEventArgs())),
+                ("Clear loaded profile", "Clear the WowB profile so profile-free roaming can start", () => {
+                    if (!Styx.Logic.Pathing.ClickAimUi.IsWowB) { SetStatus("Profile clearing here applies only to wowb.exe"); return; }
+                    string report = Styx.Logic.Pathing.ClickAimUi.ClearProfile();
+                    Logging.Write("{0}", report); SetStatus(report);
+                }),
                 ("Gather hover test", "Test hover tracking without clicking", () => btnGatherHoverTest_Click(this, new RoutedEventArgs())),
                 ("Combat probe", "Compare idle and combat memory samples", () => btnCombatProbe_Click(this, new RoutedEventArgs())),
                 ("Gather probe", "Inspect a hovered herb or ore", () => btnGatherProbe_Click(this, new RoutedEventArgs())),

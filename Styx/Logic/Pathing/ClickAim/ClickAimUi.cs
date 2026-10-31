@@ -111,10 +111,12 @@ internal static class ClickAimUi
         if (Running)
             return "a bot or route is already running";
 
+        GatherSettings.Load();
         if (string.Equals(botName, GatherBotName, StringComparison.OrdinalIgnoreCase))
         {
             string gatherPath = LoadedProfile;
-            if (gatherPath.Length == 0) return "load a profile with hotspots first";
+            if (gatherPath.Length == 0 && !GatherSettings.RoamWithoutProfile)
+                return "load a profile, or enable profile-free roaming in Gather settings";
             if (!GatherRunner.Start(gatherPath)) return "GatherBuddy did not start; see the log";
             return "experimental GatherBuddy started. Set your professions in Gather settings; "
                 + "combat uses the Grind rotation on a nearby TAB-selected NPC; attacker identity remains unverified";
@@ -127,7 +129,12 @@ internal static class ClickAimUi
 
         string path = LoadedProfile;
         if (path.Length == 0)
-            return "no profile is loaded - press Load Profile and choose the .xml to grind";
+        {
+            if (!GatherSettings.RoamWithoutProfile)
+                return "load a profile, or enable profile-free roaming in Gather settings";
+            if (!GrindRunner.StartRoaming()) return "profile-free Grind did not start; see the log";
+            return "profile-free Grind started: local mesh roaming; exact zone borders are unknown";
+        }
 
         /* Two kinds of profile, two kinds of run. A levelling/grind profile has <GrindArea>
          * blocks: circle them and fight, forever. A profile with plain Hotspot/RunTo
@@ -157,12 +164,21 @@ internal static class ClickAimUi
                + "nothing to circle and fight";
     }
 
+    public static string ClearProfile()
+    {
+        if (Running || Paused) return "stop the bot before clearing the profile";
+        _loaded = "";
+        _paused = null;
+        return "profile cleared; enable profile-free roaming in Gather settings to start without one";
+    }
+
     /// <summary>Stops whatever is running. Safe to call when nothing is.</summary>
     public static string Stop()
     {
         /* Requesting the abort is unconditional and comes first. Even with no loop registered as
          * running, a key pressed by the last one can still be held down, and letting go of it is
          * the difference between "stopped" and "walks away from the window". */
+        _paused = null;
         ClickAimAbort.Request();
         ClickAimDiagnostics.RequestStop();
         if (!Running) return "nothing is running";
@@ -180,18 +196,19 @@ internal static class ClickAimUi
         if (!Running) return "nothing to pause";
         string path = LoadedProfile;
         Stop();
-        _paused = path.Length > 0 ? path : null;
-        return _paused == null
-            ? "paused"
-            : "paused - Resume starts \"" + System.IO.Path.GetFileName(_paused) + "\" again";
+        _paused = path; // Empty is a real paused profile-free run; null means not paused.
+        return path.Length == 0
+            ? "paused - Resume restarts profile-free roaming from the current position"
+            : "paused - Resume starts \"" + System.IO.Path.GetFileName(path) + "\" again";
     }
 
     public static string Resume(string? botName)
     {
         if (_paused == null) return Start(botName);
-        _paused = null;
-        if (Running) return "already running";
-        return Start(botName);
+        if (Running) return "the previous run is still stopping; try Resume again";
+        string result = Start(botName);
+        if (Running) _paused = null;
+        return result;
     }
 
     public static bool Paused { get { return _paused != null; } }

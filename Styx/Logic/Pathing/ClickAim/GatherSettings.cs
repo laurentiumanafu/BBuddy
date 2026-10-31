@@ -12,6 +12,9 @@ internal static class GatherSettings
     public static bool Herbalism;
     // Opt-in: legacy settings files do not enable gathering during Grind.
     public static bool GatherWhileGrinding;
+    // Opt-in only when no profile is loaded; normal profiles always take precedence.
+    public static bool RoamWithoutProfile;
+    public static int RoamRadiusYd = 250;
     public static uint MiningSkill = 1;
     public static uint HerbalismSkill = 1;
     private static string PathName => System.IO.Path.Combine(
@@ -30,6 +33,8 @@ internal static class GatherSettings
                 if (key == "Mining" && bool.TryParse(value, out bool m)) Mining = m;
                 else if (key == "Herbalism" && bool.TryParse(value, out bool h)) Herbalism = h;
                 else if (key == "GatherWhileGrinding" && bool.TryParse(value, out bool g)) GatherWhileGrinding = g;
+                else if (key == "RoamWithoutProfile" && bool.TryParse(value, out bool r)) RoamWithoutProfile = r;
+                else if (key == "RoamRadiusYd" && int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int radius) && radius >= 100 && radius <= 3000) RoamRadiusYd = radius;
                 else if (key == "MiningSkill" && uint.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out uint ms) && ms <= 1000) MiningSkill = ms;
                 else if (key == "HerbalismSkill" && uint.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out uint hs) && hs <= 1000) HerbalismSkill = hs;
             }
@@ -45,7 +50,8 @@ internal static class GatherSettings
             Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path) ?? ".");
             File.WriteAllLines(path, new[] { "Mining=" + Mining, "MiningSkill=" + MiningSkill.ToString(CultureInfo.InvariantCulture),
                 "Herbalism=" + Herbalism, "HerbalismSkill=" + HerbalismSkill.ToString(CultureInfo.InvariantCulture),
-                "GatherWhileGrinding=" + GatherWhileGrinding });
+                "GatherWhileGrinding=" + GatherWhileGrinding, "RoamWithoutProfile=" + RoamWithoutProfile,
+                "RoamRadiusYd=" + RoamRadiusYd.ToString(CultureInfo.InvariantCulture) });
             return true;
         }
         catch (Exception ex) { Logging.Write("[Gather] cannot save settings: " + ex.Message); return false; }

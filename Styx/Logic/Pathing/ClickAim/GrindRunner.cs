@@ -547,14 +547,35 @@ internal static class GrindRunner
         RouteRunner.StopRequested = false;
         _running = true;
 
-        var thread = new Thread(() => Run(areas, minutes, profilePath));
+        var thread = new Thread(() => Run(areas, minutes, profilePath, null));
         thread.IsBackground = true;
         thread.Name = "ClickAimGrind";
         thread.Start();
         return true;
     }
 
-    private static void Run(List<ProfileGrindArea> areas, int minutes, string profilePath)
+    internal static bool StartRoaming()
+    {
+        if (_running || !MeshRoam.TryCreate(out MeshRoam? roam) || roam == null) return false;
+        var area = new ProfileGrindArea { Name = "Profile-free local roaming" };
+        // The existing area-selection loop expects at least one hotspot; actual
+        // destinations are generated from the mesh at each step instead.
+        area.Hotspots.Add(new RoutePoint());
+        var areas = new List<ProfileGrindArea> { area };
+        _stop = false;
+        ClickAimAbort.Clear();
+        RouteRunner.StopRequested = false;
+        _running = true;
+        try
+        {
+            var thread = new Thread(() => Run(areas, 0, "", roam)) { IsBackground = true, Name = "ClickAimGrindRoam" };
+            thread.Start();
+            return true;
+        }
+        catch { _running = false; throw; }
+    }
+
+    private static void Run(List<ProfileGrindArea> areas, int minutes, string profilePath, MeshRoam? roam)
     {
         int started = Environment.TickCount;
         int budgetMs = minutes <= 0 ? int.MaxValue : minutes * 60000;
@@ -564,7 +585,7 @@ internal static class GrindRunner
 
         var mover = new ClickAimMover();
         int index = 0;
-        int dead = 0;
+        int dead = 0, roamSampleFailures = 0;
         int kills = 0, fights = 0, hotspots = 0;
         int vendorTrips = 0;
         int switches = 0;
@@ -614,20 +635,27 @@ internal static class GrindRunner
          * 19-SubProfile levelling file is a ladder, and grinding the step below your level is
          * exactly the "wandering on non-viable mobs" this is supposed to avoid. */
         level = PlayerLevel();
-        int chosen = SelectArea(areas, level, out string choice);
-        Logging.Write("[Grind] " + choice);
+        int chosen = 0;
+        if (roam == null)
+        {
+            chosen = SelectArea(areas, level, out string choice);
+            Logging.Write("[Grind] " + choice);
+        }
+        else Logging.Write("[Grind] profile-free mesh roaming; no profile level bands or blackspots, existing combat safety filters still apply");
         ProfileGrindArea area = areas[chosen];
 
         try
         {
-            while (!_stop && unchecked(Environment.TickCount - started) < budgetMs)
+            while (!_stop && !ClickAimAbort.Requested && unchecked(Environment.TickCount - started) < budgetMs)
             {
+                if (roam != null && !roam.MapCurrent())
+                { Logging.Write("[Roam] map changed or became unreadable; stopping"); break; }
                 /* Every LevelCheckMs, read the level again: a grind profile is a ladder, and the
                  * rung below the one you are on stops being worth fighting. One 32-bit read in
                  * the player's data block, and it is the only way this loop can ever climb.
                  * Timed rather than counted, because a loop iteration is a whole hotspot leg,
                  * not a tick. */
-                if (unchecked(Environment.TickCount - lastLevelCheck) >= LevelCheckMs)
+                if (roam == null && unchecked(Environment.TickCount - lastLevelCheck) >= LevelCheckMs)
                 {
                     lastLevelCheck = Environment.TickCount;
                     int now = PlayerLevel();
@@ -723,8 +751,20 @@ internal static class GrindRunner
                 if (gatherDuringGrind && GatherRunner.GatherForGrind(hwnd, mover, GatherAreaSafe)) continue;
                 if (_stop || ClickAimAbort.Requested) break;
 
-                RoutePoint next = area.Hotspots[index % area.Hotspots.Count];
-                index++;
+                RoutePoint next;
+                if (roam != null)
+                {
+                    if (!roam.TryNext(out next))
+                    {
+                        if (!roam.MapCurrent()) { Logging.Write("[Roam] map changed or became unreadable; stopping"); break; }
+                        if (++roamSampleFailures >= 5) { Logging.Write("[Roam] could not find a local mesh destination after five tries; stopping"); break; }
+                        Logging.Write("[Roam] no local mesh destination found; waiting before retry");
+                        ClickAimAbort.Wait(2000);
+                        continue;
+                    }
+                    roamSampleFailures = 0;
+                }
+                else { next = area.Hotspots[index % area.Hotspots.Count]; index++; }
 
                 var one = new List<RoutePoint> { next };
 
@@ -737,9 +777,15 @@ internal static class GrindRunner
                  * this stops for. */
                 bool resourceInterrupt = false;
                 int lastFightCheck = unchecked(Environment.TickCount - 500);
+                int lastRoamMapCheck = unchecked(Environment.TickCount - 500);
                 RouteRunner.ShouldInterrupt = () =>
                 {
-                    if (!gatherDuringGrind || unchecked(Environment.TickCount - lastFightCheck) >= 500)
+                    if (roam != null && unchecked(Environment.TickCount - lastRoamMapCheck) >= 500)
+                    {
+                        lastRoamMapCheck = Environment.TickCount;
+                        if (!roam.MapCurrent()) return true;
+                    }
+                    if ((!gatherDuringGrind && roam == null) || unchecked(Environment.TickCount - lastFightCheck) >= 500)
                     {
                         lastFightCheck = Environment.TickCount;
                         if (FightNeeded(hwnd, SearchYd)) return true;
@@ -748,16 +794,19 @@ internal static class GrindRunner
                     { resourceInterrupt = true; return true; }
                     return false;
                 };
-                RouteRunner.PollInterruptDuringWalk = gatherDuringGrind;
+                RouteRunner.PollInterruptDuringWalk = gatherDuringGrind || roam != null;
+                RouteRunner.RequireMeshDuringSession = roam != null;
                 bool ok = false;
                 try { ok = RouteRunner.RunWithinSession(mover, one, 1); }
-                finally { RouteRunner.ShouldInterrupt = null; RouteRunner.PollInterruptDuringWalk = false; }
+                finally { RouteRunner.ShouldInterrupt = null; RouteRunner.PollInterruptDuringWalk = false; RouteRunner.RequireMeshDuringSession = false; }
 
                 if (!ok && RouteRunner.LastRunInterrupted)
                 {
+                    if (roam != null && !roam.MapCurrent())
+                    { Logging.Write("[Roam] map changed or became unreadable; stopping"); break; }
                     if (resourceInterrupt)
                     {
-                        index--; // resume the same hotspot after the detour, not the next one
+                        if (roam == null) index--; // resume the same profile hotspot after the detour
                         Logging.Write("[Grind] resource in range; pausing the hotspot leg to reconsider combat and gathering");
                         continue;
                     }
