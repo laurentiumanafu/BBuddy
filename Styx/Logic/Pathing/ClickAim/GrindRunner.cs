@@ -2529,10 +2529,21 @@ internal static class GrindRunner
          * come to a stop first - that is the message the user kept seeing in chat. */
         StopAndSettle(hwnd);
 
+        /* What the client thinks this thing is, in its own words where it has any: the level and
+         * the unit flags that the whole target question hinges on. Printing them on every engage
+         * is what will settle the reaction/faction hunt - a wolf and a friendly lazy peon in one
+         * log, same line shape, and the field that differs is the answer. */
+        string targetWords = "";
+        if (reader != null && reader.TryGetUnitFields(target.UnitAddress, out Styx.WoWInternals.WowBReader.WowBUnitFields engaged))
+            targetWords = string.Format(CultureInfo.InvariantCulture,
+                ", level {0}, hp {1}/{2}, flags 0x{3:X}",
+                engaged.Level, engaged.Health, engaged.MaxHealth, engaged.UnitFlags);
+
         Logging.Write(string.Format(CultureInfo.InvariantCulture,
-            "[Grind] engaged at {0:F1} yd (mob health {1}); bar: {2}",
+            "[Grind] engaged at {0:F1} yd (mob health {1}{2}); bar: {3}",
             ClickAimMath.Len(target.Location.X - px, target.Location.Y - py),
             lastHealth >= 0 ? lastHealth.ToString(CultureInfo.InvariantCulture) : "unknown",
+            targetWords,
             ClickAimCombat.Describe(bar)));
 
         while (!_stop && unchecked(Environment.TickCount - started) < EngageTimeoutMs)
