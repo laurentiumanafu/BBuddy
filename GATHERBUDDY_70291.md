@@ -139,3 +139,33 @@ No Lua, process write, movement or combat input is used by either probe.
   off resources and whether posted window mouse moves update it; verify
   interaction/harvest success and depletion; provide profession/skill settings
   and integrate hotspot traversal, mesh routing, defence and blackspots.
+
+
+## Copper harvested in the 18:24 observation
+
+Before manual mining, the scanner found copper GUID
+`2C0118002001B0C0:0000000000001295` at 2.0 yd and Peacebloom GUID
+`2C01180020019480:0000000000001282` at 43.3 yd. After the user mined and
+looted the copper, the next scan found the Peacebloom but not that copper
+GUID. Mouseover on the former copper location was zero. This supports pool
+disappearance as **one** observed depletion signal; a failed/partial scan,
+streaming, or phase changes can also make a GUID disappear. A missing GUID
+does not by itself prove a successful harvest. Herb depletion and partially
+mined multi-use veins have not been measured.
+
+The character has **Mining only**, not Herbalism. Resource-selection groundwork
+now takes explicit profession/skill values and applies the legacy default
+blacklist; mining-only must reject the nearby Peacebloom. Profession offsets
+remain unknown, and those options are not yet connected to an autonomous bot.
+
+## Window-only hover experiment
+
+`Gather hover test` is an opt-in window button. With the bot stopped, press it,
+hover a nearby resource within 8 yd, and keep the actual cursor still during
+the test. It posts an away and a return `WM_MOUSEMOVE` to the game window and
+logs the candidate GUID before, away and returned. It sends no mouse buttons,
+keys or process writes, and does not move the desktop cursor. A clear
+resource → different GUID → same resource transition is useful evidence that
+window-only hover can identify a pixel before any right-click; without that
+transition, the implementation must not assume a click will hit the resource.
+The check remains non-atomic, and a transition does not prove harvesting.

@@ -199,6 +199,15 @@
             </Viewbox>
         </Button>
 
+        <Button x:Name="btnGatherHoverTest" Height="25" Visibility="Hidden"
+                Margin="0,161,136,0" VerticalAlignment="Top" HorizontalAlignment="Right"
+                Width="120" ToolTip="Test window-only hover tracking; no clicks, keys, or movement"
+                Click="btnGatherHoverTest_Click">
+            <Viewbox Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center">
+                <TextBlock Text="Gather hover test"/>
+            </Viewbox>
+        </Button>
+
         <Button x:Name="btnCombatProbe" Height="25" Visibility="Hidden"
                 Margin="0,187,136,0" VerticalAlignment="Top" HorizontalAlignment="Right"
                 Width="120" ToolTip="Compare player memory across idle and combat samples; read-only"

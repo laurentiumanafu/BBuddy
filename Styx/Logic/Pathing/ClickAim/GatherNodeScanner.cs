@@ -56,6 +56,20 @@ internal static class GatherNodeScanner
         return null;
     }
 
+    /// <summary>
+    /// Explicit user-provided profession and skill settings; this does not read the
+    /// character's professions and cannot prove the node is available for gathering.
+    /// Unknown/untrained skill must be supplied as zero. Default-blacklisted entries
+    /// are never eligible.
+    /// </summary>
+    public static bool IsEligible(Node node, bool mining, uint miningSkill, bool herbalism, uint herbalismSkill)
+    {
+        if (node.DefaultBlacklisted) return false;
+        return node.IsHerb
+            ? herbalism && herbalismSkill > 0 && node.RequiredSkill <= herbalismSkill
+            : mining && miningSkill > 0 && node.RequiredSkill <= miningSkill;
+    }
+
     // Demand independent GUID and object-entry agreement, known vtable and backpointer.
     // A match is only an observation, never proof of harvestability.
     private static bool MatchingHeader(byte[]? header, ulong imageBase, ulong record, WowBGuid guid,
@@ -152,6 +166,21 @@ internal static class GatherNodeScanner
         GatherableNode? herbKind = Classify(1618, out bool herbHerb);
         checkFixture(copperKind != null && !copperHerb && herbKind != null && herbHerb);
         checkFixture(Classify(0, out _) == null);
+        if (copperKind != null && herbKind != null)
+        {
+            Node copperNode = new Node(copper, copperKind, false, new WoWPoint(0, 0, 0), 2);
+            Node herbNode = new Node(herb, herbKind, true, new WoWPoint(0, 0, 0), 2);
+            checkFixture(IsEligible(copperNode, true, 1, false, 0));
+            checkFixture(!IsEligible(herbNode, true, 1, false, 0));
+            checkFixture(!IsEligible(copperNode, true, 0, false, 0));
+            checkFixture(IsEligible(herbNode, false, 0, true, 1));
+            var highOre = new GatherableNode(324U, "Small Thorium Vein", 200U);
+            Node highNode = new Node(copper, highOre, false, new WoWPoint(0, 0, 0), 2);
+            checkFixture(!IsEligible(highNode, true, 199, false, 0));
+            var excluded = new GatherableNode(1610U, "Incendicite Mineral Vein", 50U);
+            Node excludedNode = new Node(copper, excluded, false, new WoWPoint(0, 0, 0), 2);
+            checkFixture(!IsEligible(excludedNode, true, 300, false, 0));
+        }
         const ulong image = 0x100000UL, rec = 0x200000UL;
         byte[] data = new byte[HeaderSize];
         Array.Copy(BitConverter.GetBytes(image + NodeVtableCandidate), 0, data, 0, 8);

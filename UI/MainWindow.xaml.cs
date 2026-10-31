@@ -245,6 +245,8 @@ namespace CopilotBuddy.UI
                                 btnGatherProbe.IsEnabled = true;
                                 btnCombatProbe.Visibility = Visibility.Visible;
                                 btnCombatProbe.IsEnabled = true;
+                                btnGatherHoverTest.Visibility = Visibility.Visible;
+                                btnGatherHoverTest.IsEnabled = true;
 
                                 /* Enable the three controls that do something on this client.
                                  * Everything else stays as ToggleButtons(false) left it, because
@@ -1398,6 +1400,21 @@ namespace CopilotBuddy.UI
                 Logging.Write("[Grind] combat settings window failed: " + ex.Message);
                 System.Windows.MessageBox.Show(this, "The combat settings window could not open: " + ex.Message,
                                 "Combat settings", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+        }
+
+        private void btnGatherHoverTest_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                if (Styx.Logic.Pathing.GatherHoverTest.Start())
+                    SetStatus("Hover a nearby node and keep the mouse still...");
+                else
+                    SetStatus("Stop the bot first, or wait for the current hover test");
+            }
+            catch (Exception ex)
+            {
+                Logging.Write("[Gather hover test] could not start: " + ex.Message);
             }
         }
 

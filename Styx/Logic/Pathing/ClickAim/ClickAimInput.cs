@@ -104,6 +104,22 @@ internal static class ClickAimInput
     }
 
     /// <summary>
+    /// Posts only a mouse-move message to the game window. It does not move the desktop
+    /// cursor, press a button or issue a movement command. Returns false for out-of-window
+    /// coordinates or an unsuccessful post.
+    /// </summary>
+    public static bool PostMouseMoveFraction(IntPtr hWnd, double fx, double fy)
+    {
+        if (!double.IsFinite(fx) || !double.IsFinite(fy) || fx <= 0 || fx >= 1 || fy <= 0 || fy >= 1)
+            return false;
+        if (!ClientSize(hWnd, out int w, out int h)) return false;
+        int x = (int)Math.Round(fx * (w - 1));
+        int y = (int)Math.Round(fy * (h - 1));
+        if (x < 1 || x >= w - 1 || y < 1 || y >= h - 1) return false;
+        return PostMessageInternal(hWnd, WM_MOUSEMOVE, IntPtr.Zero, Lp(x, y));
+    }
+
+    /// <summary>
     /// Clicks at a fraction of the client rectangle - the form <see cref="VendorFile.Step"/>
     /// stores. <paramref name="right"/> picks the button: a left-click in a bag window picks an
     /// item up, and a right-click there is what sells it.
