@@ -788,6 +788,9 @@ internal static class GrindRunner
     private static bool TryEngage(IntPtr hwnd, out string report)
     {
         report = "";
+        /* Cleared on entry, not only on the scan below: a failed read must not leave a stale
+         * "the area is clear" behind for the hotspot loop to act on. */
+        _scanWasClear = false;
 
         WowBWorldSnapshot? snap;
         if (!Capture(out snap) || snap == null)
