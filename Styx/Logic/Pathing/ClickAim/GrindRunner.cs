@@ -117,19 +117,7 @@ internal static class GrindRunner
     private const int UnreachablePauseMs = 90000;
 
     // ---- attacking ---------------------------------------------------------
-    /// <summary>
-    /// <c>UnitFlags</c> bit 0x800, which the three 2026-10-30 dumps agree means IN COMBAT:
-    ///
-    ///   15:57  player 0x80808 while fighting     mob being fought 0x80800   idle mobs 0x800 / 0x0
-    ///   16:42  player 0x808  while fighting      the mob it fought 0x80800
-    ///   17:22  player 0x8    standing in town, fighting nothing
-    ///
-    /// It is NOT reaction: the player carries it too. But as "this unit is fighting right now"
-    /// it is exactly what a grind loop needs, and it is what replaces the untargeted
-    /// right-click: on 2026-10-30 17:22 that clicked a friendly townsman at 3.6 yd and the
-    /// "fight" was against the town.
-    /// </summary>
-    private const uint InCombatFlag = 0x800;
+    // 0x800 occurs on idle units too; it is not a verified combat indicator.
 
     /// <summary>
     /// <c>UnitFlags</c> bits that mean "this is not something to fight", read from the dword at
@@ -374,9 +362,6 @@ internal static class GrindRunner
     /// <summary>When a refused pull was last explained, so the log is not one line per probe.</summary>
     private static int _pullQuietAt;
 
-    /// <summary>Last time the "in combat with nothing to fight" note was printed.</summary>
-    private static int _combatQuietAt;
-
     /// <summary>Last time the "TAB has a target out of range" note was printed.</summary>
     private static int _farQuietAt;
 
@@ -391,13 +376,11 @@ internal static class GrindRunner
     private static volatile bool _vendorDue;
 
     // ---- "is this character really fighting?" -------------------------------
-    /// <summary>Health as last sampled by <see cref="InRealCombat"/>; -1 while out of combat.</summary>
-    private static int _lastHpSeen = -1;
-
-    /// <summary>When the health bar last went DOWN. Damage needs no flags to be believed.</summary>
+    // Recent damage is evidence, not a verified combat-state offset. Use raw health rather
+    // than rounded percent so even one point of damage is observable.
+    private static uint? _lastHpSeen;
     private static int _lastHurtAt;
-
-    /// <summary>Throttles the "the flag is stale" line to once per 15 s.</summary>
+    private static bool _hasHurtEvidence;
     private static int _realCombatQuietAt;
 
     /// <summary>Throttles the "not eating next to that" line to once per 15 s.</summary>
@@ -604,7 +587,6 @@ internal static class GrindRunner
         _clearQuietAt = 0;
         _poolQuietAt = 0;
         _scanWasClear = false;
-        _combatQuietAt = 0;
         _farQuietAt = 0;
         _notViable.Clear();
         _tabMisses.Clear();
@@ -623,6 +605,10 @@ internal static class GrindRunner
         _killsSinceTrip = 0;
         _sellClicks = 0;
         _unreachableUntil.Clear();
+        _lastHpSeen = null;
+        _lastHurtAt = 0;
+        _hasHurtEvidence = false;
+        _realCombatQuietAt = 0;
 
         /* What the client can be asked without Lua: level, health, the stored action bar
          * and what is standing around. It is printed once because it is the answer to
@@ -1124,20 +1110,6 @@ internal static class GrindRunner
         }
         _scanWasClear = false;
 
-        /* Turn toward whatever is actually fighting before asking: TAB only considers
-         * enemies in FRONT of the character (the 16:07 run logged "behind the camera" for
-         * two and a half minutes because of that). */
-        WowBObservedUnit aim;
-        double aimYd;
-        if (NearestFighting(snap, px, py, SearchYd, out aim, out aimYd))
-        {
-            ClickAimKeySteer.Face(aim.Location.X, aim.Location.Y, hwnd, 20.0, 6);
-            if (!Capture(out snap) || snap == null) return false;
-            if (!snap.TryGetLocalPlayer(out player)) return false;
-            px = player.Location.X;
-            py = player.Location.Y;
-        }
-
         /* TAB only considers what is in FRONT of the character (the 16:07 run logged
          * "behind the camera" for two and a half minutes because of that). The pool knows where
          * the nearest live unit is, so turn onto it before asking - a turn costs no walk, and it
@@ -1339,7 +1311,7 @@ internal static class GrindRunner
          * something eats you" - and the 17:26 run turned it into exactly that: the fight
          * gave up at 22 yd, the mob kept hitting, and every 0.3 s the loop interrupted the
          * walk for a target it then refused to fight. The character stood rooted for 40 s. */
-        if (Refused(target.Guid) && !(PlayerInCombat() && TargetIsFighting(target)))
+        if (Refused(target.Guid) && !InRealCombat())
         {
             report = string.Format(CultureInfo.InvariantCulture,
                 "the only target in reach is the one given up on {0:F0} s ago - walking on to the next hotspot",
@@ -1517,45 +1489,8 @@ internal static class GrindRunner
         if (!Capture(out snap) || snap == null) return false;
         if (!snap.TryGetLocalPlayer(out WowBObservedUnit me)) return false;
 
-        WowBObservedUnit unit;
-        double d;
-
-        /* Being attacked is the strongest reason to stop walking, and it needs no hostility
-         * guess: our own flags say so. But the flag alone is NOT enough to stop for - the
-         * 17:45 run had the player at 0x808 for minutes while TAB considered the whole area
-         * empty (3 nearby units, all corpses), so every leg was interrupted after two points
-         * and the character never left the first field. Stop only when there is something to
-         * stop FOR. */
-        Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
-        Styx.WoWInternals.WowBReader.WowBUnitFields mine;
-        bool inCombat = reader != null && reader.TryGetUnitFields(me.UnitAddress, out mine)
-                        && (mine.UnitFlags & InCombatFlag) != 0;
-
-        if (inCombat)
-        {
-            if (NearestFighting(snap, me.Location.X, me.Location.Y, radius, out unit, out d))
-            {
-                Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                    "[Grind] {0} is {1:F1} yd away and in combat - stopping the walk to deal with it",
-                    unit.Guid, d));
-                return true;
-            }
-
-            if (unchecked(Environment.TickCount - _combatQuietAt) > 15000)
-            {
-                _combatQuietAt = Environment.TickCount;
-                Logging.Write("[Grind] the character reads as in combat but nothing nearby is fighting - "
-                              + "walking on (the flag alone is not a reason to stop)");
-            }
-            return false;
-        }
-
-        if (NearestFighting(snap, me.Location.X, me.Location.Y, radius, out unit, out d))
-        {
-            Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                "[Grind] {0} is {1:F1} yd away and in combat - stopping the walk to deal with it", unit.Guid, d));
-            return true;
-        }
+        // A nearby unit's 0x800 bit is also present on idle units. It cannot identify
+        // an attacker, and must not block the ordinary TAB/pool search.
 
         /* Nothing is fighting us - but that is not the same as "nothing here worth killing",
          * and treating the two as one is why the character walked past mobs on every leg and
@@ -2016,13 +1951,12 @@ internal static class GrindRunner
             {
                 int live2, unread2;
                 if (NearestKillable(around, here.Location.X, here.Location.Y, RestSafeYd,
-                                    out near, out nearYd, out live2, out unread2)
-                    && unchecked(Environment.TickCount - _restHeldQuietAt) > 15000)
+                                    out near, out nearYd, out live2, out unread2))
                 {
+                    if (unchecked(Environment.TickCount - _restHeldQuietAt) <= 15000) return "";
                     _restHeldQuietAt = Environment.TickCount;
                     return string.Format(CultureInfo.InvariantCulture,
-                        "eating and drinking can wait: something killable is {0:F0} yd away, and a meal "
-                        + "with that on the character is a meal that gets interrupted", nearYd);
+                        "eating and drinking can wait: something potentially attackable is {0:F0} yd away", nearYd);
                 }
             }
         }
@@ -2900,198 +2834,50 @@ internal static class GrindRunner
     }
 
     /// <summary>
-    /// The nearest unit that is IN COMBAT right now - the only hostility signal this build
-    /// offers (<see cref="InCombatFlag"/>) - or false when there is none.
-    ///
-    /// Used for two things: turning toward the thing attacking us before TAB (which only
-    /// looks in front), and deciding whether a hotspot leg should be cut short. A friendly
-    /// NPC standing in a town is not in combat, which is exactly why it is not used as a
-    /// target any more.
+    /// Recent health loss is a conservative fallback, not a verified combat flag. Unknown
+    /// health blocks rest/vendor actions; a readable unchanged value is not combat evidence.
+    /// The window also catches damage while the client flag is clear. Absorbed attacks,
+    /// full heals between samples, and an initial hit before the first sample can be missed.
     /// </summary>
-    private static bool NearestFighting(WowBWorldSnapshot snap, double px, double py, double radius,
-                                        out WowBObservedUnit unit, out double yards)
+    private static bool CombatEvidence(uint? health, int now, ref uint? previous,
+                                       ref int hurtAt, ref bool hasHurtEvidence)
     {
-        Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
-        int myLevel = PlayerLevel();
-
-        unit = default(WowBObservedUnit);
-        yards = double.MaxValue;
-        bool found = false;
-
-        for (int i = 0; i < snap.Units.Count; i++)
+        if (!health.HasValue) return true;
+        if (previous.HasValue && health.Value < previous.Value)
         {
-            WowBObservedUnit candidate = snap.Units[i];
-            if (candidate.IsLocalPlayer) continue;
-            if (candidate.HasPlayerVtable) continue;
-            if (Refused(candidate.Guid)) continue;
-            if (_notViable.Contains(candidate.Guid)) continue;
-
-            double d = ClickAimMath.Len(candidate.Location.X - px, candidate.Location.Y - py);
-            if (d <= 0.5 || d > radius || d >= yards) continue;
-
-            bool fighting = false;
-            if (reader != null && reader.TryGetUnitFields(candidate.UnitAddress,
-                    out Styx.WoWInternals.WowBReader.WowBUnitFields f))
-            {
-                if (f.Health == 0) continue;
-                if (!LevelViable(f.Level, myLevel)) continue;
-                fighting = (f.UnitFlags & InCombatFlag) != 0;
-            }
-            if (!fighting) continue;
-
-            unit = candidate;
-            yards = d;
-            found = true;
+            hurtAt = now;
+            hasHurtEvidence = true;
         }
-        return found;
+        previous = health;
+        return hasHurtEvidence && unchecked((uint)(now - hurtAt)) < CombatEvidenceMs;
     }
 
-    /// <summary>
-    /// Whether a unit is FIGHTING within <paramref name="radius"/> - any level, any reaction, no
-    /// bookkeeping filters. This is not a target scan: it answers "is a fight happening next to
-    /// this character", which is what the client's own in-combat flag is supposed to mean.
-    /// <see cref="NearestFighting"/> cannot answer it, because that one throws away everything the
-    /// current level band would not fight - and a level-8 mob beating on a level-4 character is
-    /// still a fight, however unwise.
-    /// </summary>
-    private static bool AnyFighting(WowBWorldSnapshot snap, double px, double py, double radius,
-                                    out WowBObservedUnit unit, out double yards)
-    {
-        Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
-        unit = default(WowBObservedUnit);
-        yards = double.MaxValue;
-        if (reader == null) return false;
-
-        bool found = false;
-        for (int i = 0; i < snap.Units.Count; i++)
-        {
-            WowBObservedUnit candidate = snap.Units[i];
-            if (candidate.IsLocalPlayer) continue;
-
-            double d = ClickAimMath.Len(candidate.Location.X - px, candidate.Location.Y - py);
-            if (d <= 0.5 || d > radius || d >= yards) continue;
-
-            Styx.WoWInternals.WowBReader.WowBUnitFields f;
-            if (!reader.TryGetUnitFields(candidate.UnitAddress, out f)) continue;
-            if (f.Health == 0) continue;
-            if ((f.UnitFlags & InCombatFlag) == 0) continue;
-
-            unit = candidate;
-            yards = d;
-            found = true;
-        }
-        return found;
-    }
-
-    /// <summary>
-    /// Whether this character is REALLY in a fight, as opposed to the client's in-combat flag
-    /// still being set.
-    ///
-    /// The 2026-10-31 15:50 run is why this exists. For the whole walk to the vendor the log
-    /// repeated "the character reads as in combat but nothing nearby is fighting - walking on",
-    /// and that stale flag is what kept the character from eating and drinking: both the rest and
-    /// the vendor check asked <see cref="PlayerInCombat"/>, which is one word in one block, and it
-    /// stayed set for about a minute after the last kill.
-    ///
-    /// So the flag is now only the question, never the answer:
-    ///
-    ///   * not set              -> out of combat, nothing more to look at;
-    ///   * set, health falling  -> in combat: damage is the proof that needs no flags;
-    ///   * set, something inside <see cref="InterruptYd"/> is fighting -> in combat;
-    ///   * set, neither         -> out of combat, and the log says so once in a while.
-    ///
-    /// The third case is what makes this safe to use for eating and selling: a mob that is on the
-    /// character is flagged as fighting, and it is inside 18 yd long before it is a threat.
-    /// </summary>
     private static bool InRealCombat()
     {
-        if (!PlayerInCombat())
-        {
-            _lastHurtAt = 0;
-            _lastHpSeen = -1;
-            return false;
-        }
-
-        /* Damage is the proof no flag can fake. Sampled here because this runs between fights,
-         * where a health bar that is not full and not rising is a bar being hit. */
-        int hp = HealthPercent();
-        if (hp >= 0)
-        {
-            if (_lastHpSeen >= 0 && hp < _lastHpSeen) _lastHurtAt = Environment.TickCount;
-            _lastHpSeen = hp;
-        }
-        if (_lastHurtAt != 0 && unchecked(Environment.TickCount - _lastHurtAt) < CombatEvidenceMs)
-            return true;
-
-        WowBWorldSnapshot? snap;
-        if (!Capture(out snap) || snap == null) return true;      // cannot look: believe the flag
-        WowBObservedUnit me;
-        if (!snap.TryGetLocalPlayer(out me)) return true;
-
-        WowBObservedUnit unit;
-        double d;
-        if (AnyFighting(snap, me.Location.X, me.Location.Y, InterruptYd, out unit, out d))
-            return true;
-
-        if (unchecked(Environment.TickCount - _realCombatQuietAt) > 15000)
-        {
-            _realCombatQuietAt = Environment.TickCount;
-            Logging.Write("[Grind] the in-combat flag is still set but nothing within "
-                          + InterruptYd.ToString("F0", CultureInfo.InvariantCulture)
-                          + " yd is fighting and the health bar is not falling - treating the character "
-                          + "as out of combat (so eating, drinking and selling can happen)");
-        }
-        return false;
-    }
-
-    /// <summary>
-    /// Whether something is actually on the character: the in-combat flag AND a unit that is
-    /// fighting within 25 yd. The flag alone lags for seconds after a kill, which would have
-    /// made every loot trip wait for a combat state that is already over.
-    /// </summary>
-    private static bool UnderAttack()
-    {
-        /* One verdict for the whole class. It used to be its own scan, with two problems the
-         * 15:50 run made visible: it threw away the units outside the current level band (so a
-         * level-8 mob on a level-4 character was "not a fight"), and it could not tell a stale
-         * flag from a real one. */
-        return InRealCombat();
-    }
-
-    /// <summary>
-    /// Whether the local player's own <c>UnitFlags</c> say "in combat". This is the one read
-    /// that answers "are we being attacked" without guessing at hostility: it was 0x808 at
-    /// 16:42 while a mob was on the character and 0x8 at 17:22 while standing in town.
-    /// </summary>
-    private static bool PlayerInCombat()
-    {
         Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
-        if (reader == null) return false;
+        WowBWorldSnapshot? snap;
+        WowBObservedUnit me;
+        Styx.WoWInternals.WowBReader.WowBUnitFields fields;
+        uint? hp = null;
         try
         {
-            WowBWorldSnapshot? snap;
-            if (!reader.TryCaptureWorldSnapshot(out snap) || snap == null) return false;
-            WowBObservedUnit me;
-            if (!snap.TryGetLocalPlayer(out me)) return false;
-            Styx.WoWInternals.WowBReader.WowBUnitFields f;
-            if (!reader.TryGetUnitFields(me.UnitAddress, out f)) return false;
-            return (f.UnitFlags & InCombatFlag) != 0;
+            if (reader != null && Capture(out snap) && snap != null && snap.TryGetLocalPlayer(out me)
+                && reader.TryGetUnitFields(me.UnitAddress, out fields) && fields.MaxHealth > 0)
+                hp = fields.Health;
         }
-        catch { return false; }
+        catch { /* An interrupted or failed read is unknown, not safe. */ }
+
+        bool fighting = CombatEvidence(hp, Environment.TickCount, ref _lastHpSeen,
+                                       ref _lastHurtAt, ref _hasHurtEvidence);
+        if (!hp.HasValue && unchecked(Environment.TickCount - _realCombatQuietAt) > 15000)
+        {
+            _realCombatQuietAt = Environment.TickCount;
+            Logging.Write("[Grind] cannot read health; holding rest and vendor actions until it reads again");
+        }
+        return fighting;
     }
 
-    /// <summary>
-    /// Whether the unit is fighting right now, from its own <c>UnitFlags</c> bit. Used to
-    /// decide that a target the last fight gave up on is nevertheless the thing attacking
-    /// us, in which case not fighting it is not an option.
-    /// </summary>
-    private static bool TargetIsFighting(WowBObservedUnit unit)
-    {
-        Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
-        if (reader == null) return false;
-        Styx.WoWInternals.WowBReader.WowBUnitFields f;
-        return reader.TryGetUnitFields(unit.UnitAddress, out f) && (f.UnitFlags & InCombatFlag) != 0;
-    }
+    private static bool UnderAttack() { return InRealCombat(); }
 
     /// <summary>True while the target a fight gave up on is still off limits.</summary>
     private static bool Refused(WowBGuid guid)
@@ -3731,14 +3517,14 @@ internal static class GrindRunner
                 && unchecked(Environment.TickCount - lastHealthDropMs) >= PoolVerifyMs
                 && lastAttackPressMs != 0
                 && unchecked(Environment.TickCount - lastAttackPressMs) >= MeleeSwingQuietMs
-                && !PlayerInCombat())
+                && !InRealCombat())
             {
                 WowBGuid dead = target.Guid;
                 _notViable.Add(dead);
                 if (_notViable.Count > 256) _notViable.Clear();
                 return string.Format(CultureInfo.InvariantCulture,
                     "{0} has taken no damage for {1} s, Attack was pressed at arm's length and the client "
-                    + "never put the character in combat - it is not something this character can fight "
+                    + "showed no recent player damage - it may not be something this character can fight "
                     + "(friendly NPC, or blocked); ignoring it and taking the next target",
                     dead, PoolVerifyMs / 1000);
             }
@@ -4522,6 +4308,23 @@ internal static class GrindRunner
             /* Which mobs are worth attacking, from the level word the 15:57 dump confirmed:
              * a level-2 character fighting level 3 and 4 mobs is inside the band, level 9 is
              * not, and a level that did not read is allowed rather than skipped. */
+            // No unverified unit flag can keep this verdict true. Unknown reads are not
+            // mistaken for safety, and damage remains evidence for the timeout window.
+            uint? previousHp = null;
+            int hurtAt = 0;
+            bool hurtEvidence = false;
+            check("combatUnknown", CombatEvidence(null, 100, ref previousHp, ref hurtAt, ref hurtEvidence));
+            check("combatInitialIdle", !CombatEvidence(100, 200, ref previousHp, ref hurtAt, ref hurtEvidence));
+            check("combatIdle", !CombatEvidence(100, 16000, ref previousHp, ref hurtAt, ref hurtEvidence));
+            check("combatDamage", CombatEvidence(99, 16100, ref previousHp, ref hurtAt, ref hurtEvidence));
+            check("combatDamageRecent", CombatEvidence(99, 17000, ref previousHp, ref hurtAt, ref hurtEvidence));
+            check("combatDamageExpires", !CombatEvidence(99, 24100, ref previousHp, ref hurtAt, ref hurtEvidence));
+            check("combatUnreadAfterIdle", CombatEvidence(null, 25000, ref previousHp, ref hurtAt, ref hurtEvidence));
+            previousHp = 100;
+            hurtEvidence = false;
+            check("combatTickWrapDamage", CombatEvidence(99, int.MaxValue - 100, ref previousHp, ref hurtAt, ref hurtEvidence));
+            check("combatTickWrapRecent", CombatEvidence(99, int.MinValue + 100, ref previousHp, ref hurtAt, ref hurtEvidence));
+
             check("viableSameLevel", LevelViable(2, 2));
             check("viableTheDumpedMobs", LevelViable(3, 2) && LevelViable(4, 2));
             check("viableTooHigh", !LevelViable(9, 2));
