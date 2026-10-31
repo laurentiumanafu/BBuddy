@@ -130,7 +130,7 @@ public static class RouteRunner
         }
         if (mesh)
         {
-            Logging.Write("[Route] navmesh available: every leg is routed on the mmaps (Navigator.FindPath), then followed point by point");
+            Logging.Write("[Route] navmesh loaded: attempting an mmap path for this leg");
         }
         else
         {
@@ -344,7 +344,15 @@ public static class RouteRunner
             lastPx = px;
             lastPy = py;
 
+            uint mapBefore = ClickAimDiagnostics.ResolveMap((uint)NavGridStore.MapId, px, py);
+            if (mapBefore == uint.MaxValue) { Logging.Write("[Route] client map ID unavailable; refusing the leg"); return false; }
             WoWPoint[]? path = TryMeshPath(px, py, target);
+            uint mapAfter = ClickAimDiagnostics.ResolveMap((uint)NavGridStore.MapId, px, py);
+            if (mapAfter != mapBefore)
+            {
+                Logging.Write("[Route] client map ID changed or became unreadable while planning; refusing the leg");
+                return false;
+            }
 
             /* A two-point path is Detour's way of saying it FAILED.
              *
@@ -374,7 +382,7 @@ public static class RouteRunner
                 {
                     Logging.Write(string.Format(CultureInfo.InvariantCulture,
                         "[Route] no route on the mesh from ({0:F1}, {1:F1}); the goal is {2:F0} yd "
-                        + "away, inside one click, so clicking straight at it", px, py, remaining));
+                        + "away, so falling back to a straight key-steered walk (not mesh-routed)", px, py, remaining));
                     return ClickAimPilot.WalkTo(mover, target.ToWoWPoint(), StepTolerance, LegTimeoutMs,
                                                 true, false, false, InterruptDuringWalk);
                 }
@@ -504,8 +512,9 @@ public static class RouteRunner
                 atPoint, follow.Length - 1, plan + 1, failed.X, failed.Y,
                 ClickAimMath.Len(failed.X - sx, failed.Y - sy)));
 
-            if (MeshBlackspots.Mark(Navigator.TripperNavigator,
-                    ClickAimDiagnostics.ResolveMap((uint)NavGridStore.MapId, sx, sy),
+            uint stuckMap = ClickAimDiagnostics.ResolveMap((uint)NavGridStore.MapId, sx, sy);
+            if (stuckMap == uint.MaxValue) return false;
+            if (MeshBlackspots.Mark(Navigator.TripperNavigator, stuckMap,
                     sx, sy, sz, BlackspotRadius) == 0 && plan == MaxReplans)
             {
                 Logging.Write("[Route] the stuck spot is off the mesh, so re-planning cannot help");
@@ -651,10 +660,10 @@ public static class RouteRunner
             Tripper.Navigation.Navigator nav = Navigator.TripperNavigator;
             if (!nav.IsLoaded) return null;
 
-            /* The map id is a constant (1). When the character is somewhere else the
-             * tile for this position belongs to a different map, every query comes
-             * back empty, and it looks like the mesh is broken. Ask the position. */
+            // Prefer the client's map ID; coordinate-based tile guessing cannot
+            // distinguish Eastern Kingdoms from Kalimdor where the tiles overlap.
             uint mapId = ClickAimDiagnostics.ResolveMap((uint)NavGridStore.MapId, px, py);
+            if (mapId == uint.MaxValue) return null;
             var from = new System.Numerics.Vector3((float)px, (float)py, fromZ);
             var to = new System.Numerics.Vector3((float)target.X, (float)target.Y, (float)target.Z);
 

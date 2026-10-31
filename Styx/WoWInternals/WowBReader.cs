@@ -67,6 +67,56 @@ namespace Styx.WoWInternals
             }
         }
 
+        /// <summary>
+        /// Build 70291 map root +0x28. Map 0 is valid. Re-read root and value
+        /// so a map transition or failed read is not mistaken for map zero.
+        /// </summary>
+        public bool TryReadMapId(out uint mapId)
+        {
+            mapId = 0;
+            try
+            {
+                using var uncached = _memory.TemporaryCacheState(false);
+                ulong address = Abs(WowBOffsets.MapRoot);
+                byte[]? p = _memory.ReadBytes64(address, 8);
+                if (p == null || p.Length != 8) return false;
+                ulong root = BitConverter.ToUInt64(p, 0);
+                if (root <= 0x10000UL || root >= 0x00007FFFFFFFF000UL || (root & 3UL) != 0) return false;
+                byte[]? first = _memory.ReadBytes64(root + WowBOffsets.MapIdOffset, 4);
+                byte[]? second = _memory.ReadBytes64(root + WowBOffsets.MapIdOffset, 4);
+                byte[]? after = _memory.ReadBytes64(address, 8);
+                return DecodeMapSamples(root, first, second, after, out mapId);
+            }
+            catch { return false; }
+        }
+
+        private static bool DecodeMapSamples(ulong root, byte[]? first, byte[]? second, byte[]? after, out uint mapId)
+        {
+            mapId = 0;
+            if (root <= 0x10000UL || root >= 0x00007FFFFFFFF000UL || (root & 3UL) != 0
+                || first == null || second == null || after == null || first.Length != 4 || second.Length != 4 || after.Length != 8
+                || BitConverter.ToUInt64(after, 0) != root) return false;
+            uint value = BitConverter.ToUInt32(first, 0);
+            if (value != BitConverter.ToUInt32(second, 0) || value > 100000U) return false;
+            mapId = value;
+            return true;
+        }
+
+        public static string MapIdSelfTest()
+        {
+            const ulong root = 0x20000UL;
+            byte[] rootBytes = BitConverter.GetBytes(root);
+            byte[] zero = BitConverter.GetBytes(0U), one = BitConverter.GetBytes(1U);
+            bool ok = DecodeMapSamples(root, zero, zero, rootBytes, out uint map0) && map0 == 0
+                   && DecodeMapSamples(root, one, one, rootBytes, out uint map1) && map1 == 1
+                   && !DecodeMapSamples(root, null, zero, rootBytes, out _)
+                   && !DecodeMapSamples(root, zero, one, rootBytes, out _)
+                   && !DecodeMapSamples(root, zero, zero, BitConverter.GetBytes(root + 4), out _)
+                   && !DecodeMapSamples(root + 1, zero, zero, rootBytes, out _)
+                   && !DecodeMapSamples(root, BitConverter.GetBytes(100001U), BitConverter.GetBytes(100001U), rootBytes, out _);
+            return "[Mesh] client map sample fixtures: " + (ok ? "pass" : "FAIL") + " (not a live offset test)";
+        }
+
         // ------------------------------------------------------------------
         // GUIDs (128-bit)
         // ------------------------------------------------------------------

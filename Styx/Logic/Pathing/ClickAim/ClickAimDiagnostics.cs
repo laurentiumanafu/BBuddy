@@ -376,6 +376,9 @@ public static class ClickAimDiagnostics
         catch (Exception ex) { report = "[ClickAim] self-test threw: " + ex.Message; }
         Logging.Write(report);
 
+        try { Logging.Write(WowBReader.MapIdSelfTest()); }
+        catch (Exception ex) { Logging.Write("[Mesh] map self-test threw: " + ex.Message); }
+
         try { Logging.Write(NavGridStore.SelfTest()); }
         catch (Exception ex) { Logging.Write("[NavGrid] self-test threw: " + ex.Message); }
 
@@ -391,6 +394,9 @@ public static class ClickAimDiagnostics
         // enough to check here, and both fail silently when they are wrong.
         try { Logging.Write(GatherNodeScanner.SelfTest()); }
         catch (Exception ex) { Logging.Write("[Gather] node scanner self-test threw: " + ex.Message); }
+
+        try { Logging.Write(GatherInteraction.SelfTest()); }
+        catch (Exception ex) { Logging.Write("[Gather] hover self-test threw: " + ex.Message); }
 
         try { Logging.Write(GatherProbe.SelfTest()); }
         catch (Exception ex) { Logging.Write("[Gather probe] self-test threw: " + ex.Message); }
@@ -535,18 +541,37 @@ public static class ClickAimDiagnostics
     }
 
     /// <summary>
-    /// The map id to route on, given a position.
-    ///
-    /// <see cref="NavGridStore.MapId"/> is a constant that nothing sets from the
-    /// client, so it is right for Kalimdor and wrong everywhere else. This returns it
-    /// unchanged when its tile exists, and otherwise the first map in the mmaps
-    /// folder that does have a tile for the position - which is right for a character
-    /// standing in the Eastern Kingdoms while the bot still thinks "map 1".
+    /// The map id to route on. Prefer the validated 70291 client map root;
+    /// X/Y tile coverage alone cannot distinguish overlapping continents. If the
+    /// client read fails on 70291, return uint.MaxValue (unknown); 32-bit
+    /// clients keep their legacy tile heuristic.
     /// </summary>
+    private static uint? _reportedLiveMap;
+    private static bool _reportedMapUnavailable;
+
     internal static uint ResolveMap(uint mapId, double x, double y)
     {
         try
         {
+            WowBReader? reader = ObjectManager.WowB;
+            if (reader != null && reader.TryReadMapId(out uint liveMap) && ObjectManager.WowB == reader)
+            {
+                if (_reportedLiveMap != liveMap)
+                {
+                    _reportedLiveMap = liveMap;
+                    Logging.Write("[Mesh] client map root reports map " + liveMap + "; using that map, not coordinate guessing");
+                }
+                _reportedMapUnavailable = false;
+                return liveMap;
+            }
+            if (reader != null || ObjectManager.Wow?.Is64BitTarget == true)
+            {
+                if (!_reportedMapUnavailable)
+                    Logging.Write("[Mesh] client map id unreadable; refusing to guess a map from overlapping tiles");
+                _reportedMapUnavailable = true;
+                _reportedLiveMap = null;
+                return uint.MaxValue;
+            }
             int tileX, tileY;
             try
             {
@@ -566,7 +591,8 @@ public static class ClickAimDiagnostics
         }
         catch
         {
-            return mapId;
+            // Never turn an unreadable 64-bit client map into a guessed map.
+            return ObjectManager.WowB != null || ObjectManager.Wow?.Is64BitTarget == true ? uint.MaxValue : mapId;
         }
     }
 
@@ -691,7 +717,7 @@ public static class ClickAimDiagnostics
             else
             {
                 Logging.Write("[MeshProbe] point on mesh: no; no polygon within the search box - "
-                              + "the character is standing where the mesh has a hole");
+                              + "check the selected map, tile data, and player position before diagnosing a mesh hole");
             }
         }
         catch (Exception ex)
@@ -721,7 +747,12 @@ public static class ClickAimDiagnostics
                 return;
             }
 
-            uint mapId = (uint)NavGridStore.MapId;
+            uint configuredMap = (uint)NavGridStore.MapId;
+            uint mapId = ResolveMap(configuredMap, x, y);
+            if (mapId == uint.MaxValue) { Logging.Write("[MeshProbe] skipped: client map ID unreadable"); return; }
+            bool liveMapKnown = ObjectManager.WowB != null;
+            Logging.Write(liveMapKnown ? "[MeshProbe] client map root reports map " + mapId
+                : "[MeshProbe] client map id unreadable; map " + mapId + " is a tile-based guess");
             double z = ClickAimPositions.Z();
             bool zKnown = !double.IsNaN(z);
             if (!zKnown) z = 0.0;
@@ -756,14 +787,13 @@ public static class ClickAimDiagnostics
                 mapId.ToString("000"), tileX.ToString("00"), tileY.ToString("00"),
                 gridX, gridY, zKnown ? "" : " (z unreadable, probing at 0)"));
 
-            // Does the map the bot believes it is on actually have this tile? If some
-            // other map does, that is the answer and the map id is the bug.
+            // Tile coverage is diagnostic only: several maps can overlap at X/Y.
             string mmapsDir = System.IO.Path.Combine(AppContext.BaseDirectory, "mmaps");
             List<uint> covering = MapsCoveringTile(mmapsDir, tileX, tileY);
             bool currentCovered = covering.Contains(mapId);
             Logging.Write("[MeshProbe] tile (" + tileX + "," + tileY + ") exists for map(s): "
                           + (covering.Count == 0 ? "none" : string.Join(", ", covering.ConvertAll(v => v.ToString(CultureInfo.InvariantCulture)).ToArray())));
-            if (!currentCovered && covering.Count > 0)
+            if (!liveMapKnown && !currentCovered && covering.Count > 0)
             {
                 Logging.Write("[MeshProbe] the bot was using map " + mapId
                               + ", which has no tile here; probing map " + covering[0]
@@ -831,9 +861,8 @@ public static class ClickAimDiagnostics
                 {
                     Logging.Write(string.Format(CultureInfo.InvariantCulture,
                         "[MeshProbe] {0:F0} yd: NO PATH (status {1}) - tile {2}{3}{4}.mmtile for map "
-                        + "{5} is loaded, so read the polygon report above: 'none' means the mesh is "
-                        + "empty here (rebuild), a large snap correction means the Z was wrong, and "
-                        + "'blackspot' polygons mean an earlier walk marked this ground bad",
+                        + "{5}; check map identity, tile data, height and the polygon report before deciding "
+                        + "whether any mesh rebuild is needed",
                         leg, result == null ? "null" : result.Status.ToString(),
                         mapId.ToString("000"), tileX.ToString("00"), tileY.ToString("00"), mapId));
                     continue;
@@ -1024,6 +1053,7 @@ public static class ClickAimDiagnostics
             }
 
             uint mapId = ResolveMap((uint)NavGridStore.MapId, x, y);
+            if (mapId == uint.MaxValue) { Logging.Write("[Route] cannot plan without the client map ID"); return; }
             var from = new System.Numerics.Vector3((float)x, (float)y, (float)z);
             var to = new System.Numerics.Vector3((float)parts[0], (float)parts[1],
                                                  (float)(parts.Length > 2 ? parts[2] : 0.0));
@@ -1453,6 +1483,7 @@ public static class ClickAimDiagnostics
             if (double.IsNaN(z)) z = 0.0;
 
             uint mapId = ResolveMap((uint)NavGridStore.MapId, px, py);
+            if (mapId == uint.MaxValue) { Logging.Write("[Point] client map ID unreadable; nothing will be walked"); return; }
             var target = new System.Numerics.Vector3((float)x, (float)y, 0f);
             nav.EnsureTilesAroundPosition(mapId, target, Navigator.LoadTilesAroundRadius);
 

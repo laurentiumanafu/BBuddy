@@ -30,6 +30,7 @@ internal static class GatherRunner
     private static int _lastCombatCheck;
     private static int _lastSummary;
     private static GatherNodeScanner.Node? _pending;
+    private static uint _sessionMap;
 
     public static bool Running => _running;
 
@@ -147,6 +148,7 @@ internal static class GatherRunner
         if (unchecked(Environment.TickCount - _lastCombatCheck) >= 500)
         {
             _lastCombatCheck = Environment.TickCount;
+            if (!MapStillCurrent()) return true;
             if (!GrindRunner.TryReadGatherCombat(out bool fighting) || fighting) return true;
         }
         if (!checkNodes || unchecked(Environment.TickCount - _lastScan) < 1500) return false;
@@ -154,6 +156,16 @@ internal static class GatherRunner
         if (!FindNode(out GatherNodeScanner.Node node)) return false;
         _pending = node;
         return true;
+    }
+
+    private static bool MapStillCurrent()
+    {
+        WowBReader? reader = ObjectManager.WowB;
+        if (reader != null && reader.TryReadMapId(out uint map) && ObjectManager.WowB == reader && map == _sessionMap)
+            return true;
+        Logging.Write("[Gather] client map changed or became unreadable; stopping rather than walking on a guessed map");
+        _stop = true;
+        return false;
     }
 
     private static bool Walk(ClickAimMover mover, RoutePoint point, bool checkNodes)
@@ -181,7 +193,16 @@ internal static class GatherRunner
             }
             Logging.Write("[Gather] hover search attempt " + attempt + "/" + MaxGatherAttempts
                           + "; keep the real mouse still");
-            bool clicked = GatherInteraction.TryInteract(hwnd, node, out string reason, out bool hoverMiss);
+            if (!MapStillCurrent()) return;
+            bool clicked = GatherInteraction.TryInteract(hwnd, node, candidate => MapStillCurrent() && Ready(candidate), out GatherNodeScanner.Node clickedNode,
+                                                          out string reason, out bool hoverMiss);
+            if (clicked && clickedNode.Guid != node.Guid)
+            {
+                Logging.Write("[Gather] hovered eligible nearby " + clickedNode.Name + " " + clickedNode.Guid
+                              + " instead of " + node.Guid + "; deferring the original GUID for 30 seconds");
+                Retry[node.Guid] = unchecked(Environment.TickCount + 30000);
+                node = clickedNode;
+            }
             Logging.Write(clicked ? "[Gather] node interaction: " + reason
                                   : "[Gather] no right-button down sent: " + reason);
             if (ClickAimAbort.Requested || _stop) return;
@@ -256,6 +277,10 @@ internal static class GatherRunner
         {
             IntPtr hwnd = ObjectManager.Wow?.WindowHandle ?? IntPtr.Zero;
             if (hwnd == IntPtr.Zero) { Logging.Write("[Gather] no game window"); return; }
+            WowBReader? reader = ObjectManager.WowB;
+            if (reader == null || !reader.TryReadMapId(out _sessionMap) || ObjectManager.WowB != reader)
+            { Logging.Write("[Gather] client map ID unreadable; refusing to guess a map"); return; }
+            Logging.Write("[Gather] client map root reports map " + _sessionMap);
             Logging.Write("[Gather] experimental ground gatherer: " + points.Count + " hotspots; Mining="
                 + GatherSettings.Mining + " skill=" + GatherSettings.MiningSkill + "; Herbalism="
                 + GatherSettings.Herbalism + " skill=" + GatherSettings.HerbalismSkill
@@ -263,11 +288,13 @@ internal static class GatherRunner
             foreach (var spot in Blackspots)
             {
                 if (_stop || ClickAimAbort.Requested) break;
-                MeshBlackspots.Mark(Navigator.TripperNavigator, ClickAimDiagnostics.ResolveMap((uint)NavGridStore.MapId, spot.X, spot.Y),
-                                    spot.X, spot.Y, spot.Z, (float)spot.Radius);
+                uint map = ClickAimDiagnostics.ResolveMap((uint)NavGridStore.MapId, spot.X, spot.Y);
+                if (map == uint.MaxValue || map != _sessionMap) { Logging.Write("[Gather] client map changed or became unreadable; stopping"); return; }
+                MeshBlackspots.Mark(Navigator.TripperNavigator, map, spot.X, spot.Y, spot.Z, (float)spot.Radius);
             }
             while (!_stop && !ClickAimAbort.Requested)
             {
+                if (!MapStillCurrent()) break;
                 if (!GrindRunner.TryReadGatherCombat(out bool fighting))
                 {
                     Logging.Write("[Gather] combat state unreadable; holding position");

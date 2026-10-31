@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using GreenMagic;
+using Styx.Helpers;
 using Styx.Offsets;
 using Styx.WoWInternals;
 
@@ -38,10 +39,41 @@ internal static class GatherInteraction
         return true;
     }
 
+    private static bool Near(GatherNodeScanner.Node a, GatherNodeScanner.Node b)
+    {
+        double dx = a.Position.X - b.Position.X, dy = a.Position.Y - b.Position.Y, dz = a.Position.Z - b.Position.Z;
+        return dx * dx + dy * dy + dz * dz <= 16.0;
+    }
+
+    private static bool MaySubstitute(GatherNodeScanner.Node requested, GatherNodeScanner.Node candidate,
+                                      WowBGuid hover, WowBGuid away, Func<GatherNodeScanner.Node, bool> allowed)
+        => !hover.IsEmpty && hover != away && hover != requested.Guid && candidate.Guid == hover
+           && candidate.Distance <= 5.0 && Near(requested, candidate) && allowed(candidate);
+
+    public static string SelfTest()
+    {
+        var kind = new Bots.Gatherbuddy.GatherableNode(656160U, "fixture", 1U);
+        var a = new WowBGuid(1, 2); var b = new WowBGuid(3, 4);
+        var node = new GatherNodeScanner.Node(a, kind, true, new WoWPoint(0, 0, 0), 2);
+        var near = new GatherNodeScanner.Node(b, kind, true, new WoWPoint(0, 0, 0), 2);
+        var far = new GatherNodeScanner.Node(b, kind, true, new WoWPoint(0, 0, 4.1f), 2);
+        var outOfReach = new GatherNodeScanner.Node(b, kind, true, new WoWPoint(0, 0, 0), 5.1);
+        bool ok = MaySubstitute(node, near, b, default, _ => true)
+               && !MaySubstitute(node, near, b, b, _ => true)
+               && !MaySubstitute(node, near, a, default, _ => true)
+               && !MaySubstitute(node, near, b, default, _ => false)
+               && !MaySubstitute(node, far, b, default, _ => true)
+               && !MaySubstitute(node, outOfReach, b, default, _ => true);
+        return "[Gather] hover substitute fixtures: " + (ok ? "pass" : "FAIL") + " (not a live interaction test)";
+    }
+
     // hoverMiss is only set after the bounded grid search really failed to find the
     // node. Cursor/client/stop/read failures are NOT evidence of a depleted node.
-    public static bool TryInteract(IntPtr hwnd, GatherNodeScanner.Node node, out string reason, out bool hoverMiss)
+    public static bool TryInteract(IntPtr hwnd, GatherNodeScanner.Node node,
+                                   Func<GatherNodeScanner.Node, bool> allowed,
+                                   out GatherNodeScanner.Node clickedNode, out string reason, out bool hoverMiss)
     {
+        clickedNode = default;
         hoverMiss = false;
         reason = "game window or desktop cursor unavailable";
         Memory? memory = ObjectManager.Wow;
@@ -64,6 +96,7 @@ internal static class GatherInteraction
         double[] ys = { 0.45, 0.50, 0.40, 0.55, 0.35, 0.60, 0.30, 0.65, 0.25 };
         int started = Environment.TickCount;
         int sampled = 0;
+        bool loggedOther = false;
         for (int pass = 0; pass < 2; pass++)
         foreach (double baseY in ys)
         foreach (double baseX in xs)
@@ -89,7 +122,31 @@ internal static class GatherInteraction
             sampled++;
             reason = "hover GUID could not be read during search";
             if (!ReadHover(memory, out WowBGuid hover)) return false;
-            if (hover != node.Guid) continue;
+            GatherNodeScanner.Node hoveredNode = node;
+            if (hover != node.Guid)
+            {
+                if (!hover.IsEmpty && !loggedOther)
+                {
+                    loggedOther = true;
+                    Logging.Write("[Gather] hover observed another GUID " + hover + " while searching for " + node.Guid
+                                  + "; a GUID alone does not prove it is an eligible resource");
+                }
+                // Distinct objects can occupy the same position. The GUID under the
+                // cursor may be a different eligible node, never a generic object.
+                // Require an actual away transition for the substitute as well.
+                if (hover.IsEmpty || hover == away
+                    || GatherNodeScanner.Classify((uint)((hover.High >> 6) & 0x7FFFFFUL), out _) == null
+                    || !GatherNodeScanner.TryCapture(5.0, out List<GatherNodeScanner.Node> others)) continue;
+                bool match = false;
+                foreach (var candidate in others)
+                {
+                    if (!MaySubstitute(node, candidate, hover, away, allowed)) continue;
+                    hoveredNode = candidate;
+                    match = true;
+                    break;
+                }
+                if (!match) continue;
+            }
             int pixelX = (int)Math.Round(x * (width - 1));
             int pixelY = (int)Math.Round(y * (height - 1));
             // The first GUID match may be transient. Let it settle, without posting
@@ -106,15 +163,20 @@ internal static class GatherInteraction
                 if (!GatherNodeScanner.TryCapture(5.0, out List<GatherNodeScanner.Node> fresh))
                 { validation = "final resource scan failed"; return false; }
                 bool present = false;
-                foreach (var item in fresh) if (item.Guid == node.Guid) { present = true; break; }
-                if (!present) { validation = "node not observed within 5 yd"; return false; }
+                foreach (var item in fresh)
+                {
+                    if (item.Guid != hoveredNode.Guid || !allowed(item)) continue;
+                    if (item.Distance <= 5.0 && Near(node, item)) { present = true; break; }
+                }
+                if (!present) { validation = "eligible node not observed in reach near the intended resource"; return false; }
                 if (!GrindRunner.TryReadGatherCombat(out fighting) || fighting) { validation = "combat detected or unreadable after node scan"; return false; }
                 if (!CursorStill(realX, realY, out cursorReason)) { validation = cursorReason; return false; }
                 if (!ReadHover(memory, out WowBGuid final)) { validation = "final hover read failed"; return false; }
-                if (final != node.Guid) { validation = "final hover changed to " + final; return false; }
+                if (final != hoveredNode.Guid) { validation = "final hover changed to " + final; return false; }
                 return true;
             }, out string clickReason);
             reason = validation.Length > 0 ? validation : clickReason;
+            if (sent) clickedNode = hoveredNode;
             return sent;
         }
         hoverMiss = true;

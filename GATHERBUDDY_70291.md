@@ -318,3 +318,39 @@ The log also shows navmesh queries finding a polygon hundreds of yards below the
 character and falling back to a direct short walk. The navmesh was therefore not
 actually used for those specific legs; the map/tile/layer mismatch is not fixed
 by this change.
+
+## 21:11 overlapping herbs and map mismatch
+
+The user reports that the bot eventually harvested nodes, with visible hover
+flashing, and that they moved the mouse once when returning to the game. The
+linked file `2026-10-31_2111_11476.log` is a log, not a video. In it the bot
+searched for Wilted Peacebloom GUID ending `109C` for 45 seconds without a
+match, then found Stunted Silverleaf GUID ending `109D` at the same logged
+position `(-6264.5,179.1,416.6)` and posted an interaction. The overlapping
+positions are evidence of a plausible explanation for the flashing, not proof
+which GUID was under the mouse during every flash. Other searches were cancelled
+when Windows cursor coordinates changed; the log cannot identify who or what
+moved them. The user independently confirms successful harvests.
+
+The hover search may now accept a *different* eligible, structurally validated
+node within 4 yd of the intended node, but only when its GUID is actually under
+the posted cursor and differs from the initial away reading. Profession/skill,
+blacklist and cooldown checks apply; player-to-node distance must be within
+5 yd; the full GUID and eligibility are checked again immediately before the
+right-button down. The originally intended GUID is deferred briefly after a
+substitute click, not declared depleted. Unknown game objects and untrained
+herbs are never accepted as substitutes. Hover search remains visible, can miss
+nodes, and a posted interaction is not independent proof of loot.
+
+MeshProbe reported tiles for maps 0 and 1 at the same X/Y and queried map 1,
+then found only polygons hundreds of yards below the character. The loaded
+profile is labelled Elwynn Forest, but the log did not independently record a
+live map ID, so the wrong-map explanation is strongly suggested, not proven.
+The client has a previously observed 70291 map root at RVA `0x7B7B4F8`, with
+map ID at root `+0x28`. The code now prefers a stable, uncached live map-ID
+read (zero is valid) for routing, blackspot marking and MeshProbe instead of
+choosing map 1 merely because its tile exists. If that read fails on 70291, routing refuses to guess from overlapping tiles;
+the legacy 32-bit map heuristic remains unchanged. Navmesh pathing can
+still fail if the correct map has missing/outdated tiles or different terrain;
+a short straight key-steered fallback is not a mesh path. The new reader and
+routing behavior have not been validated against the live client.
