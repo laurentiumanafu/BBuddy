@@ -33,7 +33,7 @@ internal static class ClickAimAbort
         /* The forward key is held by a PostMessage, so nothing lets it up by itself. Releasing it
          * here is what turns "the loop stops in a tick" into "the character stops walking". */
         try { ClickAimKeySteer.ReleaseHeld(); } catch { }
-        try { ClickAimKeySteer.ReleaseArrows(null); } catch { }
+        try { ClickAimKeySteer.ReleaseArrows(IntPtr.Zero); } catch { }
     }
 
     /// <summary>A new run: nothing is aborted any more.</summary>

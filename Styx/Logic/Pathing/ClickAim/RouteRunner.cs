@@ -575,13 +575,6 @@ public static class RouteRunner
             int steps = (int)Math.Ceiling(length / maxStep);
             for (int s = 1; s <= steps; s++)
             {
-                // A stop is immediate, even in the middle of a segment.
-                if (StopRequested || ClickAimAbort.Requested)
-                {
-                    ClickAimKeySteer.ReleaseHeld();
-                    return false;
-                }
-
                 double t = (double)s / steps;
                 outPoints.Add(new WoWPoint((float)(from.X + (to.X - from.X) * t),
                                            (float)(from.Y + (to.Y - from.Y) * t),
