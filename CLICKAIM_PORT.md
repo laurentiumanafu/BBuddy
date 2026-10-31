@@ -2289,3 +2289,23 @@ stop that arrives between runs cannot abort the next one.
 
 It is still not a pre-emption of the client: a key that is already down is released, a click that
 has already been sent is already sent. What it is now is one tick, not nine seconds.
+
+## Grind: rejected TAB selections and moving on
+
+A TAB selection is now checked against the same live-unit, flag, level, distance,
+refusal and reachability filters as an existing selection. Grind cycles through its
+bounded TAB attempts rather than repeatedly accepting the first unsuitable live unit;
+its nearest-pool fallback and unverified-hostility safeguards remain in place. A pool
+click is tracked as unverified even if the following snapshot fails or the target
+changes. Out-of-level units are not permanently blacklisted: their level is checked
+again as the player levels up.
+
+If the attempts and pool fallback produce no acceptable target, an out-of-combat
+hotspot dwell can end and let the route continue. The brief futile-pull quiet period
+never suppresses a known or potentially unreadable combat state. A still-selected,
+unsuitable live target may be moved off by F1 **after** TAB cycling, only when combat
+is verifiably absent and its GUID is unchanged. The bot checks that F1 actually
+selected the player; it does not claim the target was cleared, use Escape, or click
+an old empty-screen coordinate. F1 must retain the client's self-target binding for
+this to work. If verification fails, the selection is still excluded from fighting.
+These changes have static diagnostics but require an in-client test.

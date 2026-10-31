@@ -424,6 +424,10 @@ internal static class GrindRunner
     /// can stop waiting at a hotspot without guessing from the report text.
     /// </summary>
     private static bool _scanWasClear;
+    // A bounded TAB cycle encountered an unsuitable live selection and found no
+    // fight. Dwell can move on rather than retrying it for the full timeout.
+    private static bool _lastEngageRejected;
+    private static int _rejectedQuietAt;
 
     /// <summary>
     /// The longest distance the client's own targeting has been seen to offer a target: the
@@ -604,6 +608,8 @@ internal static class GrindRunner
         _clearQuietAt = 0;
         _poolQuietAt = 0;
         _scanWasClear = false;
+        _lastEngageRejected = false;
+        _rejectedQuietAt = unchecked(Environment.TickCount - 15001);
         _farQuietAt = 0;
         _notViable.Clear();
         _tabMisses.Clear();
@@ -1099,6 +1105,7 @@ internal static class GrindRunner
     private static bool TryEngage(IntPtr hwnd, out string report)
     {
         report = "";
+        _lastEngageRejected = false;
         /* Cleared on entry, not only on the scan below: a failed read must not leave a stale
          * "the area is clear" behind for the hotspot loop to act on. */
         _scanWasClear = false;
@@ -1164,6 +1171,12 @@ internal static class GrindRunner
                                           out live, out unread);
         if (!haveNearest && unread == 0)
         {
+            // Even a clear pool can leave an unsuitable live target selected by a
+            // previous walk/TAB. Move off it only when it is still the same GUID.
+            WowBReader? clearReader = ObjectManager.WowB;
+            if (snap.TryGetSelectedTarget(out WowBObservedUnit selected)
+                && IsDismissibleSelection(selected, clearReader))
+                DismissRejectedSelection(hwnd, clearReader, player.Guid, selected.Guid);
             _scanWasClear = true;
             if (unchecked(Environment.TickCount - _clearQuietAt) > 15000)
             {
@@ -1202,23 +1215,32 @@ internal static class GrindRunner
                 ClickAimMath.Len(target.Location.X - px, target.Location.Y - py)));
         }
 
-        for (int i = 0; i < TabTries && !have; i++)
+        WowBGuid rejectedGuid = default(WowBGuid);
+        for (int i = 0; i < TabTries && !have && !_stop && !ClickAimAbort.Requested; i++)
         {
+            WowBGuid beforeTab = default(WowBGuid);
+            try { if (selReader != null) beforeTab = selReader.ReadTargetGuid(); }
+            catch { /* Unknown pre-TAB target cannot confirm a pool pick. */ }
             ClickAimInput.TapKey(hwnd, TabVk, 40);
-            Thread.Sleep(TabSettleMs);
-            if (!Capture(out snap)) return false;
-            if (!snap.TryGetSelectedTarget(out target)) continue;
-
-            /* Keep cycling past a corpse. Straight after a kill the body is still selected
-             * and TAB is what moves off it; accepting it here is what made the 17:36 run
-             * fight the same dead mob three times. */
-            Styx.WoWInternals.WowBReader.WowBUnitFields sel;
-            if (selReader != null && selReader.TryGetUnitFields(target.UnitAddress, out sel)
-                && sel.Health == 0)
+            if (ClickAimAbort.Wait(TabSettleMs) || _stop) return false;
+            if (!Capture(out snap) || snap == null) return false;
+            if (!TryCurrentSelection(snap, selReader, px, py, out target))
+            {
+                // TAB can keep selecting the same low-level, refused or otherwise
+                // unsuitable unit. Do not let it block cycling or the pool fallback.
+                if (IsDismissibleSelection(target, selReader))
+                {
+                    rejectedGuid = target.Guid;
+                    _lastEngageRejected = true;
+                }
                 continue;
-
+            }
             have = true;
+            // An unchanged pool pick is not proof that TAB confirmed hostility.
+            poolPick = !_unverifiedGuid.IsEmpty && target.Guid == _unverifiedGuid
+                       && (beforeTab.IsEmpty || beforeTab == target.Guid);
         }
+        if (_stop || ClickAimAbort.Requested) return false;
 
         /* ---- step 3: the pool, then let the client settle it ----
          *
@@ -1249,7 +1271,18 @@ internal static class GrindRunner
             int fx, fy;
             string how;
             bool selected = FindUnitPixel(hwnd, nearest, px, py, out fx, out fy, out how);
-            if (selected && Capture(out snap) && snap != null && snap.TryGetSelectedTarget(out target))
+            // A pool click, including an incidental hit on another unit, is never
+            // evidence of hostility. Remember the selection even if the following
+            // snapshot/read fails, so the next attempt cannot mistake it for TAB.
+            if (selected) _unverifiedGuid = nearest.Guid;
+            try
+            {
+                WowBGuid afterPool = poolReader == null ? default(WowBGuid) : poolReader.ReadTargetGuid();
+                if (!afterPool.IsEmpty && afterPool != player.Guid) _unverifiedGuid = afterPool;
+            }
+            catch { /* The confirmed nearest GUID above remains unverified. */ }
+            if (selected && Capture(out snap) && snap != null
+                && TryCurrentSelection(snap, poolReader, px, py, out target) && target.Guid == nearest.Guid)
             {
                 have = true;
                 poolPick = true;
@@ -1262,7 +1295,7 @@ internal static class GrindRunner
             }
             else
             {
-                if (!_poolMisses.Add(nearest.Guid))
+                if (!selected && !_poolMisses.Add(nearest.Guid))
                 {
                     _notViable.Add(nearest.Guid);
                     if (_notViable.Count > 256) _notViable.Clear();
@@ -1271,8 +1304,9 @@ internal static class GrindRunner
                 {
                     _poolQuietAt = Environment.TickCount;
                     Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                        "[Grind] the pool has {0} alive at {1:F1} yd (level {2}) and the left-click search "
-                        + "could not put the cursor on it: {3}", nearest.Guid, nearestYd, nearestLevel,
+                        "[Grind] the pool has {0} alive at {1:F1} yd (level {2}); {3}: {4}",
+                        nearest.Guid, nearestYd, nearestLevel,
+                        selected ? "the selection changed or could not be rechecked" : "the left-click search did not select it",
                         how));
                 }
             }
@@ -1314,6 +1348,19 @@ internal static class GrindRunner
 
         if (!have)
         {
+            if (_lastEngageRejected && TryReadGatherCombat(out bool currentlyFighting) && !currentlyFighting)
+            {
+                // Let the route make progress after a bounded search; combat is never
+                // suppressed, and the normal pool fallback above remains available.
+                _interruptQuietUntil = unchecked(Environment.TickCount + InterruptRetryMs);
+                DismissRejectedSelection(hwnd, selReader, player.Guid, rejectedGuid);
+                if (unchecked(Environment.TickCount - _rejectedQuietAt) >= 15000)
+                {
+                    _rejectedQuietAt = Environment.TickCount;
+                    Logging.Write("[Grind] TAB offered an unsuitable or previously refused live target "
+                        + rejectedGuid + "; tried other targets and will move on if none can be selected");
+                }
+            }
             /* Nothing LIVE came up. If the client still has a corpse selected - which is what
              * a kill leaves behind, and what TAB with nowhere to go leaves alone - clear it,
              * so the next attempt starts from nothing instead of from a body. */
@@ -1405,8 +1452,10 @@ internal static class GrindRunner
                 "TAB selected a level-{0} unit and this character is level {1} (viable: {2}-{3}) - "
                 + "not attacking, walking on",
                 tf.Level, myLevel, Math.Max(1, myLevel - LevelBelowPlayer), myLevel + LevelAbovePlayer);
-            _notViable.Add(target.Guid);
-            if (_notViable.Count > 256) _notViable.Clear();   // a long session on a crowded map
+            // A level can become viable after the player levels up; do not put this
+            // GUID on the session-long refusal list. It is rechecked on every scan.
+            _lastEngageRejected = true;
+            DismissRejectedSelection(hwnd, esp, player.Guid, target.Guid);
             return false;
         }
 
@@ -1496,16 +1545,11 @@ internal static class GrindRunner
         target = default(WowBObservedUnit);
         if (reader == null) return false;
         if (!snap.TryGetSelectedTarget(out target)) return false;
-        if (target.IsLocalPlayer) return false;
+        if (target.IsLocalPlayer || target.HasPlayerVtable || target.Guid.IsEmpty) return false;
 
         Styx.WoWInternals.WowBReader.WowBUnitFields f;
         if (!reader.TryGetUnitFields(target.UnitAddress, out f)) return false;
-        if (f.Health == 0) return false;
-
-        /* A unit the flags say cannot be fought is not a target, whoever selected it. The 14:23
-         * peon sat at 1.3 yd with 0x200 on it and was taken as "the target already selected" four
-         * fights in a row. */
-        if ((f.UnitFlags & NotAFightFlag) != 0) return false;
+        if (!SelectionFieldsValid(f.Health, f.UnitFlags, f.Level, PlayerLevel())) return false;
 
         /* A unit this run has already given up on must not come back through the selection.
          * The 14:23 run is that bug: the fight refused the friendly peon four times in a row -
@@ -1513,6 +1557,7 @@ internal static class GrindRunner
          * 1.3 yd, forever - because the refusal list was only consulted for pool picks. */
         if (_notViable.Contains(target.Guid)) return false;
         if (Unreachable(target.Guid)) return false;
+        if (Refused(target.Guid) && !InRealCombat()) return false;
         int refusedUntil;
         if (_tabRefusedUntil.TryGetValue(target.Guid, out refusedUntil)
             && unchecked(Environment.TickCount - refusedUntil) < 0)
@@ -1520,6 +1565,50 @@ internal static class GrindRunner
 
         double d = ClickAimMath.Len(target.Location.X - px, target.Location.Y - py);
         return d <= PullYd;
+    }
+
+    private static bool SelectionFieldsValid(uint health, uint flags, uint mobLevel, int myLevel)
+        => health > 0 && (flags & NotAFightFlag) == 0 && LevelViable(mobLevel, myLevel);
+
+    // Do not treat a failed read or a corpse as a rejected live target. In
+    // particular, the corpse path still gets its existing single loot handling.
+    private static bool IsDismissibleSelection(WowBObservedUnit target, WowBReader? reader)
+    {
+        if (reader == null || target.Guid.IsEmpty || target.IsLocalPlayer
+            || !reader.TryGetUnitFields(target.UnitAddress, out WowBReader.WowBUnitFields fields)
+            || fields.Health == 0) return false;
+        if (target.HasPlayerVtable || !SelectionFieldsValid(fields.Health, fields.UnitFlags, fields.Level, PlayerLevel())) return true;
+        if (_notViable.Contains(target.Guid) || Unreachable(target.Guid)) return true;
+        if (Refused(target.Guid) && !InRealCombat()) return true;
+        return _tabRefusedUntil.TryGetValue(target.Guid, out int until)
+            && unchecked(Environment.TickCount - until) < 0;
+    }
+
+    // F1 is the client's default self-target key, not ESC (which opens the menu).
+    // Confirm both the rejected GUID immediately before the key and the player GUID
+    // afterwards; if F1 is rebound, we cannot claim that the selection was changed.
+    // Never interfere with a possible fight or with an unreadable combat state.
+    private static void DismissRejectedSelection(IntPtr hwnd, WowBReader? reader, WowBGuid player, WowBGuid rejected)
+    {
+        if (_stop || ClickAimAbort.Requested || hwnd == IntPtr.Zero || reader == null
+            || player.IsEmpty || rejected.IsEmpty || rejected == player || _vendorDue) return;
+        try
+        {
+            GreenMagic.Memory? memory = ObjectManager.Wow;
+            if (memory == null) return;
+            using var uncached = memory.TemporaryCacheState(false);
+            if (ObjectManager.WowB != reader || reader.ReadTargetGuid() != rejected
+                || !TryReadGatherCombat(out bool fighting) || fighting || _stop || ClickAimAbort.Requested
+                || ObjectManager.Wow != memory || ObjectManager.WowB != reader
+                || reader.ReadTargetGuid() != rejected) return;
+            ClickAimInput.TapKey(hwnd, 0x70, 40);
+            if (ClickAimAbort.Wait(TabSettleMs) || _stop) return;
+            if (ObjectManager.Wow == memory && ObjectManager.WowB == reader && reader.ReadTargetGuid() == player)
+                Logging.Write("[Grind] moved selection off rejected " + rejected + " to self (F1 verified)");
+            else
+                Logging.Write("[Grind] F1 did not confirm self-target; rejected selection remains excluded from combat");
+        }
+        catch { Logging.Write("[Grind] could not verify the rejected target was dismissed"); }
     }
 
     /// <summary>
@@ -1549,7 +1638,12 @@ internal static class GrindRunner
          * The 17:26 run logged 130 interrupt/refuse pairs in 40 s and the character never
          * took a step; this is the brake. */
         if (_interruptQuietUntil != 0 && unchecked(Environment.TickCount - _interruptQuietUntil) < 0)
+        {
+            // This quiet period is only for avoiding a repeated futile pull. It
+            // must not suppress a new attack (or an unreadable combat state).
+            if (!TryReadGatherCombat(out bool fighting) || fighting) return true;
             return false;
+        }
 
         WowBWorldSnapshot? snap;
         if (!Capture(out snap) || snap == null) return false;
@@ -1681,7 +1775,9 @@ internal static class GrindRunner
 
         Styx.WoWInternals.WowBReader.WowBUnitFields f;
         if (!reader.TryGetUnitFields(candidate.UnitAddress, out f)) return false;
-        if (f.Health == 0) return false;                       // a corpse: never worth a walk
+        if (f.Health == 0 || (f.UnitFlags & NotAFightFlag) != 0) return false;
+        if (_tabRefusedUntil.TryGetValue(candidate.Guid, out int refusedUntil)
+            && unchecked(Environment.TickCount - refusedUntil) < 0) return false;
 
         yards = ClickAimMath.Len(candidate.Location.X - me.Location.X,
                                  candidate.Location.Y - me.Location.Y);
@@ -1729,6 +1825,11 @@ internal static class GrindRunner
                 continue;
             }
             if (report.Length > 0) Logging.Write("[Grind] " + report);
+            if (_lastEngageRejected && TryReadGatherCombat(out bool fighting) && !fighting)
+            {
+                Logging.Write("[Grind] no acceptable target after TAB and pool checks; leaving this hotspot");
+                break;
+            }
 
             /* "_scanWasClear" is the pool's own answer, not a string match: it is set only when
              * the snapshot had nothing alive and level-viable inside the radius. Walk on the
@@ -1741,8 +1842,9 @@ internal static class GrindRunner
                 break;
             }
             if (!_scanWasClear) clearScans = 0;
-            Thread.Sleep(AreaRescanMs);
+            if (ClickAimAbort.Wait(AreaRescanMs)) break;
         }
+        if (_stop || ClickAimAbort.Requested) return "";
 
         /* Anything left lying around while standing here is worth the walk - unless a trip is
          * waiting, in which case the bodies keep and the vendor does not. */
@@ -4564,6 +4666,13 @@ internal static class GrindRunner
             check("viableTooHigh", !LevelViable(9, 2));
             check("viableGrey", !LevelViable(1, 9));
             check("viableUnknownLevel", LevelViable(0, 2) && LevelViable(4, 0));
+            check("selectionRejectsGrey", !SelectionFieldsValid(10, 0, 1, 7));
+            check("selectionAcceptsOther", SelectionFieldsValid(10, 0, 5, 7));
+            check("selectionRechecksAfterLevel", !SelectionFieldsValid(10, 0, 11, 7)
+                                                && SelectionFieldsValid(10, 0, 11, 8));
+            check("selectionRejectsDead", !SelectionFieldsValid(0, 0, 5, 7));
+            check("selectionRejectsFlagged", !SelectionFieldsValid(10, 0x200, 5, 7));
+            check("selectionUnknownLevel", SelectionFieldsValid(10, 0, 0, 7));
 
             /* The distances have to nest: melee reach &lt; the melee chase &lt; casting range &lt;
              * the point at which a fight gives up &lt; the radius units are searched in. Getting
