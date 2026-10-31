@@ -27,6 +27,7 @@ internal static class ClickAimUi
 {
     /// <summary>The one bot that has a 64-bit implementation: <c>Bots/Grind/LevelBot.cs</c>.</summary>
     public const string GrindBotName = "Grind";
+    public const string GatherBotName = "GatherBuddy";
 
     /// <summary>True when the attached client is the 64-bit one this port exists for.</summary>
     public static bool IsWowB
@@ -95,7 +96,7 @@ internal static class ClickAimUi
     /// <summary>True while anything is moving: the grind loop or a profile walk.</summary>
     public static bool Running
     {
-        get { return GrindRunner.Running || ClickAimDiagnostics.RouteRunning; }
+        get { return GrindRunner.Running || GatherRunner.Running || ClickAimDiagnostics.RouteRunning; }
     }
 
     /// <summary>
@@ -107,14 +108,21 @@ internal static class ClickAimUi
         if (!IsWowB)
             return "the attached client is not wowb.exe; the normal bot loop handles it";
 
-        if (GrindRunner.Running)
-            return "already grinding";
+        if (Running)
+            return "a bot or route is already running";
+
+        if (string.Equals(botName, GatherBotName, StringComparison.OrdinalIgnoreCase))
+        {
+            string gatherPath = LoadedProfile;
+            if (gatherPath.Length == 0) return "load a profile with hotspots first";
+            if (!GatherRunner.Start(gatherPath)) return "GatherBuddy did not start; see the log";
+            return "experimental GatherBuddy started. Set your professions in Gather settings; "
+                + "defend manually if attacked: attacker identification is not yet available";
+        }
 
         if (!string.Equals(botName, GrindBotName, StringComparison.OrdinalIgnoreCase))
         {
-            return "on wowb.exe only the \"" + GrindBotName + "\" bot does anything - select it "
-                   + "in the bot list and press Start again. \"" + (botName ?? "nothing")
-                   + "\" needs the object model this client does not expose.";
+            return "on wowb.exe select Grind or GatherBuddy; the other bots need the legacy object model.";
         }
 
         string path = LoadedProfile;
@@ -158,6 +166,7 @@ internal static class ClickAimUi
         ClickAimAbort.Request();
         ClickAimDiagnostics.RequestStop();
         if (!Running) return "nothing is running";
+        GatherRunner.Stop();
         GrindRunner.Stop();
         return "stopped: the walk and the turn loop end on this tick";
     }

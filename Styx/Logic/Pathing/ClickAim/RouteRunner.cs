@@ -102,7 +102,13 @@ public static class RouteRunner
     public static bool Run(ClickAimMover mover, IList<RoutePoint> route, int maxLegs)
     {
         StopRequested = false;
-        ClickAimAbort.Clear();          // a new run is not the one that was stopped
+        ClickAimAbort.Clear();
+        return RunWithinSession(mover, route, maxLegs);
+    }
+
+    // A running bot owns its stop state; never clear a stop between its legs.
+    internal static bool RunWithinSession(ClickAimMover mover, IList<RoutePoint> route, int maxLegs)
+    {
         LastRunInterrupted = false;
         if (mover == null) throw new ArgumentNullException(nameof(mover));
         if (route == null || route.Count == 0)
@@ -168,6 +174,7 @@ public static class RouteRunner
             {
                 Logging.Write(string.Format(CultureInfo.InvariantCulture,
                     "[Route] waypoint {0}/{1} {2} is already here ({3:F1} yd)", i + 1, route.Count, target, leg));
+                walked++;
                 continue;
             }
 

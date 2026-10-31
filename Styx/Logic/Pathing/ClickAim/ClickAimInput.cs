@@ -143,6 +143,23 @@ internal static class ClickAimInput
         return true;
     }
 
+    // Only press the button if the caller still confirms the hovered object after
+    // the final mouse move. Always send button-up, including when Stop is pressed.
+    internal static bool ConfirmedRightClick(IntPtr hWnd, int dx, int dy, Func<bool> confirm)
+    {
+        if (ClickAimAbort.Requested || !ClientSize(hWnd, out int w, out int h)) return false;
+        int x = w / 2 + dx, y = h / 2 + dy;
+        if (x <= 0 || x >= w - 1 || y <= 0 || y >= h - 1) return false;
+        if (!PostMessageInternal(hWnd, WM_MOUSEMOVE, IntPtr.Zero, Lp(x, y))) return false;
+        if (ClickAimAbort.Wait(100) || !confirm() || ClickAimAbort.Requested) return false;
+        if (!PostMessageInternal(hWnd, WM_RBUTTONDOWN, new IntPtr(MK_RBUTTON), Lp(x, y))) return false;
+        Thread.Sleep(45);
+        PostMessageInternal(hWnd, WM_RBUTTONUP, IntPtr.Zero, Lp(x, y));
+        Thread.Sleep(5);
+        PostMessageInternal(hWnd, WM_RBUTTONUP, IntPtr.Zero, Lp(x, y));
+        return true;
+    }
+
     /// <summary>Right-click at a client-space pixel offset from the centre.</summary>
     public static void Click(IntPtr hWnd, int dx, int dy)
     {

@@ -2835,6 +2835,25 @@ internal static class GrindRunner
         return !flags.HasValue || (flags.Value & PlayerCombatFlagCandidate) != 0;
     }
 
+    internal static bool TryReadGatherCombat(out bool fighting)
+    {
+        fighting = false;
+        WowBReader? reader = ObjectManager.WowB;
+        GreenMagic.Memory? memory = ObjectManager.Wow;
+        try
+        {
+            if (reader == null || memory == null) return false;
+            using var uncached = memory.TemporaryCacheState(false);
+            if (!Capture(out WowBWorldSnapshot? snap) || snap == null
+                || !snap.TryGetLocalPlayer(out WowBObservedUnit player)
+                || !reader.TryGetUnitFields(player.UnitAddress, out WowBReader.WowBUnitFields fields)
+                || ObjectManager.Wow != memory || ObjectManager.WowB != reader) return false;
+            fighting = (fields.UnitFlags & PlayerCombatFlagCandidate) != 0;
+            return true;
+        }
+        catch { return false; }
+    }
+
     private static bool InRealCombat()
     {
         WowBReader? reader = ObjectManager.WowB;

@@ -247,6 +247,8 @@ namespace CopilotBuddy.UI
                                 btnCombatProbe.IsEnabled = true;
                                 btnGatherHoverTest.Visibility = Visibility.Visible;
                                 btnGatherHoverTest.IsEnabled = true;
+                                btnGatherSettings.Visibility = Visibility.Visible;
+                                btnGatherSettings.IsEnabled = true;
 
                                 /* Enable the three controls that do something on this client.
                                  * Everything else stays as ToggleButtons(false) left it, because
@@ -261,6 +263,7 @@ namespace CopilotBuddy.UI
                                      * and it is the only entry the list needs. */
                                     cmbBotSelector.Items.Clear();
                                     cmbBotSelector.Items.Add(Styx.Logic.Pathing.ClickAimUi.GrindBotName);
+                                    cmbBotSelector.Items.Add(Styx.Logic.Pathing.ClickAimUi.GatherBotName);
                                     cmbBotSelector.SelectedIndex = 0;
                                     cmbBotSelector.IsEnabled = true;
                                 }
@@ -993,7 +996,8 @@ namespace CopilotBuddy.UI
                 btnLoadProfile.IsEnabled = false;
                 cmbBotSelector.IsEnabled = false;
                 btnSettings.IsEnabled = false;
-                SetStatus("Grinding...");
+                SetStatus(string.Equals(chosen, Styx.Logic.Pathing.ClickAimUi.GatherBotName, StringComparison.OrdinalIgnoreCase)
+                    ? "Gathering (experimental)..." : "Grinding...");
                 return;
             }
 
@@ -1123,14 +1127,14 @@ namespace CopilotBuddy.UI
             {
                 if (Styx.Logic.Pathing.ClickAimUi.Paused)
                 {
-                    string resumed = Styx.Logic.Pathing.ClickAimUi.Resume(BotManager.Current?.Name);
+                    string resumed = Styx.Logic.Pathing.ClickAimUi.Resume(cmbBotSelector.SelectedItem?.ToString());
                     item.Header = "Pause";
                     Logging.Write("{0}", resumed);
                     SetStatus(Styx.Logic.Pathing.ClickAimUi.Running ? "Grinding..." : resumed);
                 }
                 else
                 {
-                    string paused = Styx.Logic.Pathing.ClickAimUi.Pause(BotManager.Current?.Name);
+                    string paused = Styx.Logic.Pathing.ClickAimUi.Pause(cmbBotSelector.SelectedItem?.ToString());
                     item.Header = "Resume";
                     Logging.Write("{0}", paused);
                     SetStatus("Paused");
@@ -1400,6 +1404,21 @@ namespace CopilotBuddy.UI
                 Logging.Write("[Grind] combat settings window failed: " + ex.Message);
                 System.Windows.MessageBox.Show(this, "The combat settings window could not open: " + ex.Message,
                                 "Combat settings", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+        }
+
+        private void btnGatherSettings_Click(object sender, RoutedEventArgs e)
+        {
+            if (Styx.Logic.Pathing.ClickAimUi.Running) { SetStatus("Stop the bot before changing gather settings"); return; }
+            try
+            {
+                var window = new GatherSettingsWindow { Owner = this };
+                if (window.ShowDialog() == true) SetStatus("Gather settings saved");
+            }
+            catch (Exception ex)
+            {
+                Logging.Write("[Gather] settings window failed: " + ex.Message);
+                System.Windows.MessageBox.Show(this, "Gather settings could not open: " + ex.Message);
             }
         }
 

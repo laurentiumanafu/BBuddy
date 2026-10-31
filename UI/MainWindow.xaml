@@ -199,6 +199,15 @@
             </Viewbox>
         </Button>
 
+        <Button x:Name="btnGatherSettings" Height="25" Visibility="Hidden"
+                Margin="0,135,136,0" VerticalAlignment="Top" HorizontalAlignment="Right"
+                Width="120" ToolTip="Select trained professions and manually enter your skill levels"
+                Click="btnGatherSettings_Click">
+            <Viewbox Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center">
+                <TextBlock Text="Gather settings"/>
+            </Viewbox>
+        </Button>
+
         <Button x:Name="btnGatherHoverTest" Height="25" Visibility="Hidden"
                 Margin="0,161,136,0" VerticalAlignment="Top" HorizontalAlignment="Right"
                 Width="120" ToolTip="Test window-only hover tracking; no clicks, keys, or movement"

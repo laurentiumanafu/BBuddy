@@ -169,3 +169,29 @@ resource → different GUID → same resource transition is useful evidence that
 window-only hover can identify a pixel before any right-click; without that
 transition, the implementation must not assume a click will hit the resource.
 The check remains non-atomic, and a transition does not prove harvesting.
+
+## 2026-10-31: hover transition and experimental loop
+
+A user test on Copper Vein entry 1731 (2.4 yd) saw the candidate hover GUID
+change from the node to zero on a posted mouse move away, then back to the same
+node on a posted move to the recorded client coordinate. This supports a
+window-only hover search; it does not show that a posted right-click gathers,
+that auto-loot completes, or that herbs disappear when gathered.
+
+The experimental 70291 GatherBuddy uses manually configured professions and
+skills, searches the node pool at and between mesh-routed hotspots, and tries a
+bounded window-only hover search before a single right-click. It rechecks the
+same GUID immediately before button-down and refuses the click if combat or
+memory state is unknown. Keep the real mouse inside the game and still during
+hover searches. Nodes missed by the search or still present are retried after a
+cooldown; disappearance from a non-atomic scan is not proof of loot. It is not
+yet tested on the live client. The old bot's loot, bag-full, vendor, flight,
+and automatic profession/skill functions are not implemented here.
+
+**Combat limitation:** the candidate player combat flag does not identify the
+attacker. The loop stops moving and holds position when it sees that flag;
+defend manually. It does not select an arbitrary nearby unit as the attacker.
+This is not automatic defence. Profile blackspots are used to exclude nodes and
+hotspots and marked costly on the navmesh, but Detour can still route through a
+costly polygon, and loaded-tile marks can be lost. Strict blackspot avoidance
+is not established.
