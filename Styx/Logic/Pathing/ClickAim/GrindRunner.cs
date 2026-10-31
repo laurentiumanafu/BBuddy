@@ -869,6 +869,27 @@ internal static class GrindRunner
             for (int i = 0; i < bar.Count; i++) Logging.Write("[Grind]   " + bar[i]);
         }
 
+        /* Whether the eat/drink rules have anything to press, said at the top of the log.
+         * "It never ate or drank, even with food on the bar" is a question a user should not have
+         * to answer by searching a 200-line log for a line that is not there. The bags cannot be
+         * searched on this build (there is no container offset in WowBOffsets), so a hotbar slot
+         * - auto-detected by item id, or the slot number from Combat settings - is the way in,
+         * and this line says which of the two answered. */
+        try
+        {
+            List<ClickAimAction> hotbar = ClickAimCombat.ReadBar(reader);
+            Logging.Write("[Grind] eating and drinking: "
+                + DescribeRestItem("food", ClickAimCombat.FindFood(hotbar, ClickAimSettings.FoodSlot),
+                                   ClickAimSettings.EatBelowPercent)
+                + "; "
+                + DescribeRestItem("drink", ClickAimCombat.FindDrink(hotbar, ClickAimSettings.DrinkSlot),
+                                   ClickAimSettings.DrinkBelowPercent));
+        }
+        catch (Exception ex)
+        {
+            Logging.Write("[Grind] the eat/drink check could not read the action bar: " + ex.Message);
+        }
+
         WowBWorldSnapshot? snap;
         if (Capture(out snap) && snap != null)
         {
@@ -1691,7 +1712,9 @@ internal static class GrindRunner
          * mobs walk past. Two scans a second and a bit apart cannot both miss the same wolf. */
         int clearScans = 0;
 
-        while (!_stop && unchecked(Environment.TickCount - dwellStart) < HotspotDwellMs)
+        /* _vendorDue ends the stay as well: the window's "Sell now" is a person watching a
+         * character stand in a field, and a dwell is thirty seconds of exactly that. */
+        while (!_stop && !_vendorDue && unchecked(Environment.TickCount - dwellStart) < HotspotDwellMs)
         {
             string report;
             if (TryEngage(hwnd, out report))
@@ -1720,8 +1743,14 @@ internal static class GrindRunner
             Thread.Sleep(AreaRescanMs);
         }
 
-        /* Anything left lying around while standing here is worth the walk. */
-        string loot = LootNearby(hwnd, 3);
+        /* Anything left lying around while standing here is worth the walk - unless a trip is
+         * waiting, in which case the bodies keep and the vendor does not. */
+        string loot = "";
+        if (_vendorDue)
+            Logging.Write("[Grind] leaving the hotspot with a vendor trip waiting: the bodies stay put, "
+                          + "the trip goes first");
+        else
+            loot = LootNearby(hwnd, 3);
 
         if (fought == 0 && loot.Length == 0) return "";
         if (fought == 0) return loot;
@@ -1923,6 +1952,22 @@ internal static class GrindRunner
 
         int percent = (int)Math.Round(f.Power * 100.0 / max);
         return percent > 100 ? 100 : percent;
+    }
+
+    /// <summary>
+    /// One half of the "eating and drinking:" line: what will be pressed, and why not if nothing
+    /// will be. A slot the user set is honoured whatever is in it (<see
+    /// cref="ClickAimCombat.FindItem"/>), so "I put the key in the settings" is a complete answer.
+    /// </summary>
+    private static string DescribeRestItem(string what, ClickAimAction? item, int belowPercent)
+    {
+        if (belowPercent <= 0) return what + " rule is off (0%)";
+        if (item == null)
+            return what + " NOT found on the action bar - put an item on a slot, or set its slot "
+                   + "number in Combat settings (a slot number alone is enough)";
+        return what + " '" + item.Name + "' in slot " + item.Slot.ToString(CultureInfo.InvariantCulture)
+               + " (key " + ClickAimCombat.KeyLabel(item.KeyVk) + "), taken at "
+               + belowPercent.ToString(CultureInfo.InvariantCulture) + "% or less";
     }
 
     /// <summary>

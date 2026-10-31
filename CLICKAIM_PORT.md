@@ -2251,7 +2251,20 @@ Two more guards came out of the same run:
 * **"Sell now" pre-empts the corpse, too.** The 8 s between the request and the walk in this log
   were two right-clicks on bodies. With a trip waiting, the body is left on the ground (it keeps;
   the vendor does not go anywhere) and `TryEngage` refuses to pick up a new fight, so the walk
-  starts on the next tick.
+  starts on the next tick. `DwellAtHotspot` ends its thirty seconds on the same flag, so a button
+  pressed while the character is standing in a field cannot wait for the dwell to run out.
+* **The log says what will be pressed.** Every run now prints one line before the first fight:
+
+```
+[Grind] eating and drinking: food 'Tough Jerky' in slot 12 (key 0xBB), taken at 55% or less;
+        drink 'Refreshing Spring Water' in slot 11 (key 0xBD), taken at 35% or less
+```
+
+  or `food NOT found on the action bar - put an item on a slot, or set its slot number in Combat
+  settings (a slot number alone is enough)`. That is the honest answer to "can the bot find food
+  in the bags": it cannot, because `WowBOffsets` has no container offset on this build and the
+  container objects are a hunt of their own (see the bag-slot section above); a hotbar slot is
+  the contract, and a slot number set by hand is honoured whatever item is in it.
 
 ### 3. Stop is a hand on the wheel
 
