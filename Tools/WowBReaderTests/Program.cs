@@ -428,6 +428,7 @@ Require(reader.TryCaptureWorldSnapshot(out snapshot) && snapshot!.Units.Count ==
 mem.U64(0x40000000 + WowBOffsets.UnitObjectBackPtrOffset, 0);
 Require(!reader.TryCaptureWorldSnapshot(out snapshot) && snapshot == null, "fail closed without local player");
 ProbeTests.Run();
+CursorProbeTests.Run();
 Console.WriteLine("WowBReader snapshot tests passed");
 
 void Add(uint slot, ulong rec, ulong unit, WowBGuid guid, ulong vtRva, float x, float y, float z)
@@ -474,6 +475,7 @@ namespace GreenMagic
     {
         private readonly Dictionary<ulong, byte> bytes = new();
         public bool Is64BitTarget => true;
+        public IntPtr WindowHandle { get; set; } = new IntPtr(1);
         public ulong LastStringReadAddress { get; private set; }
         public Action<ulong, int>? OnRead { get; set; }
         public bool CacheEnabled { get; private set; }

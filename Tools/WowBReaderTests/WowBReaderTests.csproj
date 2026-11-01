@@ -9,6 +9,7 @@
   <ItemGroup>
     <Compile Include="../../Styx/Offsets/WowBOffsets.cs" Link="WowBOffsets.cs" />
     <Compile Include="../../Styx/Logic/Pathing/ClickAim/WowBReactionProbe.cs" Link="WowBReactionProbe.cs" />
+    <Compile Include="../../Styx/Logic/Pathing/ClickAim/WowBCursorProbe.cs" Link="WowBCursorProbe.cs" />
     <Compile Include="../../Styx/WoWInternals/WowBGuid.cs" Link="WowBGuid.cs" />
     <Compile Include="../../Styx/WoWInternals/WowBReader.cs" Link="WowBReader.cs" />
     <Compile Include="../../Styx/WoWInternals/WowBFactionDbSnapshotLayout.cs" Link="WowBFactionDbSnapshotLayout.cs" />

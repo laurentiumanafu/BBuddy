@@ -11,10 +11,14 @@ namespace Styx.Helpers
 }
 namespace Styx.Logic.Pathing
 {
+    internal static class ClickAimInput
+    {
+        public static bool TryCursorFraction(System.IntPtr hwnd, out double x, out double y) { x = y = 0; return false; }
+    }
     internal static class ClickAimUi
     {
-        public static bool Running => false;
-        public static bool Paused => false;
+        public static bool Running { get; set; }
+        public static bool Paused { get; set; }
     }
 }
 namespace Styx.WoWInternals

@@ -76,3 +76,6 @@ Tools/CascAdt/*.o
 build-last.log
 # Read-only live unit captures can contain character and world identifiers
 wowb-reaction-samples.jsonl
+
+# Cursor probe records player and target GUIDs; share only privately
+wowb-cursor-samples.jsonl
