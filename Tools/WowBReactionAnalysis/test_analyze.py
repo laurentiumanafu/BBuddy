@@ -37,7 +37,7 @@ class CorrelationTests(unittest.TestCase):
 
     def test_load_and_reject_duplicate_chunks(self):
         obj = {'schema': 1, 'diagnosticSignature': SIGNATURE, 'label': 'friendly',
-               'targetGuid': '0x' + '1' * 32, 'targetEntryHint': 4,
+               'targetGuid': '0x' + '1' * 32, 'playerGuid': '0x' + '2' * 32, 'targetEntryHint': 4,
                'targetChunks': [{'offset': 0, 'bytes': base64.b64encode(bytes(CHUNK)).decode()}]}
         with tempfile.NamedTemporaryFile(mode='w+', encoding='utf-8') as f:
             f.write(json.dumps(obj) + '\n')
@@ -57,6 +57,12 @@ class CorrelationTests(unittest.TestCase):
         result = template_observations(self.samples)
         self.assertEqual(result['friendly'], {0, 57})
         self.assertEqual(result['neutral_attackable'], set())
+
+    def test_different_players_not_pooled(self):
+        one = dict(self.samples[0], player="A")
+        two = dict(self.samples[1], player="B")
+        with self.assertRaisesRegex(ValueError, 'different player characters'):
+            correlations([one, two])
 
     def test_hint_diversity_required(self):
         for s in self.samples:

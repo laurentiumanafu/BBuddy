@@ -24,9 +24,11 @@ def load(path):
                 if obj.get("schema") != 1 or obj.get("diagnosticSignature") != SIGNATURE or obj.get("label") not in LABELS:
                     raise ValueError("unknown schema, signature or label")
                 guid = obj["targetGuid"]
-                if not isinstance(guid, str) or len(guid) != 34 or not guid.startswith("0x"):
-                    raise ValueError("invalid target GUID")
-                int(guid[2:], 16)
+                player = obj["playerGuid"]
+                for name, value in (("target", guid), ("player", player)):
+                    if not isinstance(value, str) or len(value) != 34 or not value.lower().startswith("0x"):
+                        raise ValueError(f"invalid {name} GUID")
+                    int(value[2:], 16)
                 data = {}
                 for chunk in obj["targetChunks"]:
                     offset = chunk["offset"]
@@ -36,7 +38,7 @@ def load(path):
                     if len(raw) != CHUNK:
                         raise ValueError("invalid chunk size")
                     data[offset] = raw
-                samples.append({"label": obj["label"], "guid": guid.upper(),
+                samples.append({"label": obj["label"], "guid": guid.upper(), "player": player.upper(),
                                 "hint": obj.get("targetEntryHint"), "chunks": data})
             except (ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
                 raise ValueError(f"line {number}: {exc}") from exc
@@ -54,6 +56,9 @@ def template_observations(samples):
 
 
 def correlations(samples, minimum=3):
+    players = {s.get("player") for s in samples}
+    if len(players) > 1:
+        raise ValueError("different player characters must be analyzed separately")
     # Conflicting labels make this object unusable, even if the reason is an
     # actual reputation/phase change. A GUID is never split into train/test.
     guid_labels = collections.defaultdict(set)
@@ -90,9 +95,22 @@ def correlations(samples, minimum=3):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("file", help="wowb-reaction-samples.jsonl")
+    parser.add_argument("--player", help="full player GUID to analyze when multiple characters are present")
     args = parser.parse_args()
     try:
         samples = load(args.file)
+        players = collections.Counter(s["player"] for s in samples)
+        if args.player:
+            player = args.player.upper()
+            samples = [s for s in samples if s["player"] == player]
+            if not samples:
+                raise ValueError("no samples match --player")
+        elif len(players) > 1:
+            print("Samples span multiple player characters; do not pool their reactions:")
+            for player, count in sorted(players.items()):
+                print(f"  {player}: {count} samples")
+            print("Re-run with --player and one full GUID. Reputation and phase can still vary within a character.")
+            return 0
         counts, hints, conflicts, words, bits = correlations(samples)
     except (OSError, ValueError) as exc:
         print(f"Cannot analyze: {exc}", file=sys.stderr)

@@ -35,6 +35,34 @@ Require(localView.CandidateHealth.HasValue && localView.CandidateHealth.Value.Cu
 Require(targetView.CandidateHealth.HasValue && targetView.CandidateHealth.Value.MaximumLow32 == 10, "selected target health candidate");
 Require(snapshot.TryGetUnit(sameLow, out var otherHealth) && !otherHealth.CandidateHealth.HasValue, "other units not sampled for candidate health");
 Require(reader.TryGetUnitStats(0x30000000, out var legacyStats) && legacyStats.Health == 5, "complete diagnostic stats");
+// Bounded table diagnostics: no process memory is read by this layout test.
+byte[] dbRoot = new byte[0x220], dbStorage = new byte[0x100];
+BitConverter.GetBytes(0x210000UL).CopyTo(dbRoot, 0x10);
+BitConverter.GetBytes(7UL).CopyTo(dbRoot, 0x18);
+BitConverter.GetBytes(0x220000UL).CopyTo(dbRoot, 0x28);
+BitConverter.GetBytes(7UL).CopyTo(dbRoot, 0x30);
+BitConverter.GetBytes(0x230000UL).CopyTo(dbStorage, 8);
+BitConverter.GetBytes(7U).CopyTo(dbStorage, 0x38);
+BitConverter.GetBytes(440U).CopyTo(dbStorage, 0x48);
+BitConverter.GetBytes(0x240000UL).CopyTo(dbStorage, 0xB0);
+BitConverter.GetBytes(453UL).CopyTo(dbStorage, 0xB8);
+Require(WowBFactionDbSnapshotLayout.TryCreate(dbRoot, dbStorage, out var dbLayout) &&
+    dbLayout.RowsLength == 3080 && dbLayout.IndexLength == 1812 && dbLayout.FieldsLength == 168, "bounded faction table regions");
+BitConverter.GetBytes(8U).CopyTo(dbStorage, 0x38);
+Require(WowBFactionDbSnapshotLayout.TryCreate(dbRoot, dbStorage, out var changedLayout) &&
+    !dbLayout.SameRegions(changedLayout), "changed faction layout rejected");
+BitConverter.GetBytes(7U).CopyTo(dbStorage, 0x38);
+BitConverter.GetBytes(ulong.MaxValue).CopyTo(dbStorage, 0xB8);
+Require(!WowBFactionDbSnapshotLayout.TryCreate(dbRoot, dbStorage, out _), "oversized faction index rejected");
+BitConverter.GetBytes(453UL).CopyTo(dbStorage, 0xB8);
+BitConverter.GetBytes(0x7FFFFFFFFFF0UL).CopyTo(dbStorage, 8);
+Require(!WowBFactionDbSnapshotLayout.TryCreate(dbRoot, dbStorage, out _), "overflowing faction row address rejected");
+byte[] paletteFixture = new byte[24];
+BitConverter.GetBytes(0x250000UL).CopyTo(paletteFixture, 0);
+BitConverter.GetBytes(8UL).CopyTo(paletteFixture, 8);
+Require(WowBFactionDbSnapshotLayout.TryPalette(paletteFixture, 0, out ulong palAddr, out int palSize) && palAddr == 0x250000UL && palSize == 32, "bounded palette");
+BitConverter.GetBytes(4097UL).CopyTo(paletteFixture, 8);
+Require(!WowBFactionDbSnapshotLayout.TryPalette(paletteFixture, 0, out _, out _), "oversized palette rejected");
 // Faction-template ID is diagnostic, not a reaction or attackability result.
 mem.U32(0x40001000 + WowBOffsets.UnitDataFactionTemplateOffset, 189);
 Require(reader.TryReadFactionTemplateId(0x40001000, out uint factionId) && factionId == 189, "faction template ID");

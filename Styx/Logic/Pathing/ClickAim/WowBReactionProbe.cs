@@ -16,6 +16,7 @@ internal static class WowBReactionProbe
     private const ulong HealthHandlerRva = 0x1D63190;
     private const string ExpectedHealthSignature = "488BC4554157488D68A14881ECB80000";
     private const ulong FactionLookupSiteRva = 0x27EE18D;
+    private const ulong FactionStorageVtableRva = 0x4E480A8;
     private const string FactionLookupSignature = "488D0DCC553505E8F7A7E6FD8B935C1E0000";
 
     public static string PathName => Path.Combine(Logging.ApplicationPath, "Settings", "wowb-reaction-samples.jsonl");
@@ -69,7 +70,7 @@ internal static class WowBReactionProbe
             string path = PathName;
             Directory.CreateDirectory(Path.GetDirectoryName(path) ?? ".");
             File.AppendAllText(path, JsonSerializer.Serialize(sample) + Environment.NewLine);
-            string result = "Saved " + label + " NPC " + target.Guid + " (" + targetBytes.Count + "/" + (WindowSize / ChunkSize) + " chunks; table diagnostic " + (dbProbe == null ? "unavailable" : "included") + ") to " + path;
+            string result = "Saved " + label + " NPC " + target.Guid + " (" + targetBytes.Count + "/" + (WindowSize / ChunkSize) + " chunks; table diagnostic " + (dbProbe == null ? "unavailable" : "included" + (dbProbe.rowBytes == null ? ", rows unavailable" : ", bounded rows included")) + ") to " + path;
             Logging.Write("[Reaction probe] " + result + ". Labels are supplied by the user; no classification is inferred.");
             return result;
         }
@@ -99,13 +100,48 @@ internal static class WowBReactionProbe
             byte[]? after = ReadBounded(memory, root, 0x220);
             if (after == null || BitConverter.ToUInt64(after, 8) != meta ||
                 BitConverter.ToUInt64(after, 0x160) != storage) return null;
-            return new DbDiagnostic
+            var diagnostic = new DbDiagnostic
             {
                 root = root.ToString("X"), rootBytes = Convert.ToBase64String(head),
                 metadata = meta.ToString("X"), metadataBytes = Encode(metaBytes),
                 storage = storage.ToString("X"), storageBytes = Encode(storageBytes),
                 storageVtable = table.ToString("X"), storageVtableBytes = Encode(vtableBytes)
             };
+            // Follow only the observed 70291 storage layout, with strict size/address caps.
+            // Two reads of each region and pre/post headers reduce, but cannot eliminate,
+            // inconsistent snapshots (including changes away and back).
+            if (table != memory.GetAbsolute64(FactionStorageVtableRva) ||
+                !WowBFactionDbSnapshotLayout.TryCreate(head, storageBytes, out var layout)) return diagnostic;
+            byte[]? fields = ReadStable(memory, layout.Fields, layout.FieldsLength);
+            byte[]? palettes = ReadStable(memory, layout.Palettes, layout.PalettesLength);
+            byte[]? rows = ReadStable(memory, layout.Rows, layout.RowsLength);
+            byte[]? index = ReadStable(memory, layout.Index, layout.IndexLength);
+            if (fields == null || palettes == null || rows == null || index == null) return diagnostic;
+            var paletteData = new List<string?>();
+            for (int i = 0; i < palettes.Length / 24; i++)
+            {
+                if (WowBFactionDbSnapshotLayout.TryPalette(palettes, i, out ulong address, out int length))
+                    paletteData.Add(Encode(ReadStable(memory, address, length)));
+                else paletteData.Add(null);
+            }
+            byte[]? finalRoot = ReadBounded(memory, root, 0x220);
+            byte[]? finalStorage = ReadBounded(memory, storage, 0x100);
+            if (finalRoot == null || finalStorage == null ||
+                BitConverter.ToUInt64(finalRoot, 8) != meta || BitConverter.ToUInt64(finalRoot, 0x160) != storage ||
+                BitConverter.ToUInt64(finalStorage, 0) != table ||
+                !WowBFactionDbSnapshotLayout.TryCreate(finalRoot, finalStorage, out var finalLayout) ||
+                !layout.SameRegions(finalLayout) || !SameRange(storageBytes!, finalStorage, 0x38, 0x20) ||
+                !SameRange(head, finalRoot, 0x10, 0x30) ||
+                !SameBytes(fields, ReadBounded(memory, layout.Fields, layout.FieldsLength)) ||
+                !SameBytes(palettes, ReadBounded(memory, layout.Palettes, layout.PalettesLength)) ||
+                !SameBytes(rows, ReadBounded(memory, layout.Rows, layout.RowsLength)) ||
+                !SameBytes(index, ReadBounded(memory, layout.Index, layout.IndexLength))) return diagnostic;
+            diagnostic.fieldDescriptorBytes = Encode(fields);
+            diagnostic.paletteDescriptorBytes = Encode(palettes);
+            diagnostic.paletteBytes = paletteData;
+            diagnostic.rowBytes = Encode(rows);
+            diagnostic.indexBytes = Encode(index);
+            return diagnostic;
         }
         catch { return null; }
     }
@@ -115,6 +151,23 @@ internal static class WowBReactionProbe
         if (address <= 0x10000UL || address >= 0x00007FFFFFFFFFFFUL - (ulong)count) return null;
         byte[]? bytes = memory.ReadBytes64(address, count);
         return bytes != null && bytes.Length == count ? bytes : null;
+    }
+
+    private static byte[]? ReadStable(GreenMagic.Memory memory, ulong address, int count)
+    {
+        byte[]? a = ReadBounded(memory, address, count);
+        byte[]? b = ReadBounded(memory, address, count);
+        return a != null && b != null && SameRange(a, b, 0, count) ? a : null;
+    }
+
+    private static bool SameBytes(byte[] a, byte[]? b)
+        => b != null && a.Length == b.Length && SameRange(a, b, 0, a.Length);
+
+    private static bool SameRange(byte[] a, byte[] b, int offset, int count)
+    {
+        if (offset < 0 || count < 0 || offset > a.Length - count || offset > b.Length - count) return false;
+        for (int i = offset; i < offset + count; i++) if (a[i] != b[i]) return false;
+        return true;
     }
 
     private static string? Encode(byte[]? bytes) => bytes == null ? null : Convert.ToBase64String(bytes);
@@ -129,6 +182,11 @@ internal static class WowBReactionProbe
         public string? storageBytes { get; set; }
         public string storageVtable { get; set; } = "";
         public string? storageVtableBytes { get; set; }
+        public string? fieldDescriptorBytes { get; set; }
+        public string? paletteDescriptorBytes { get; set; }
+        public List<string?>? paletteBytes { get; set; }
+        public string? rowBytes { get; set; }
+        public string? indexBytes { get; set; }
     }
 
     private static List<Chunk> ReadChunks(GreenMagic.Memory memory, ulong address)

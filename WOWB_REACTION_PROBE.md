@@ -72,6 +72,48 @@ layout, not a row decoder or gameplay classifier. It may disclose addresses and
 other process data and should only be shared privately. Older samples without
 this optional `dbProbe` remain readable.
 
+## 2026-11-01: more samples and bounded table snapshot
+
+The four additional user-labeled neutral observations (Drive file
+`16rF0iX6jkIBPE-m_vLpjzUDTXR-cq2cl`, MD5
+`8b12645acc9ddb689bc21f979fb80068`) have four entry hints: 69 and 299
+with template key 32, 250873 with key 7, and 251169 with key 634. They were
+captured on **two other player characters**, not the original character:
+those players have observed template keys 1 and 3629 respectively, while the
+original player's key was 3. This is useful diversity but does **not** supply
+three independent neutral types for the original player. Player faction and
+other context confound pooled comparisons. The analyzer now requires one player
+at a time. Reputation and other context can also change for one player.
+
+All four new samples include the previous optional `dbProbe`; that probe did
+not capture the heap-resident rows or index. In those snapshots the table root
+at RVA `0x7B43760` has seven 24-byte field descriptors at `+0x10` and seven
+24-byte palette descriptors at `+0x28`. Storage vtable RVA `0x4E480A8`, method
+`+8` (RVA `0x678180`), reads the index pointer at storage `+0xB0` and count
+at `+0xB8`, with four-byte entries. It checks key range at `+0x40/+0x44`, then
+uses a 16-bit row index and, for primary rows, base pointer `+0x08`, stride
+**dword `+0x38` = 7**, and count **word `+0x48` = 440**. The observed primary
+row region is 3,080 bytes, not 18,040: the latter mistakenly uses the secondary
+stride at `+0x3C` (41). The secondary pointer and count are zero in these four
+snapshots. The map has 453 entries (1,812 bytes). These are observations, not
+constants to hardcode into the classifier. Special index values, secondary
+rows, external/hotfix overlay and compressed fields need separate handling.
+
+The probe can now include bounded primary row/index bytes, field/palette
+headers and bounded palette data after matching both partial signatures and the
+observed storage vtable RVA. It caps every derived read, rejects unsafe
+pointers and sizes, double-reads data and rechecks key headers and main regions.
+Any failed or changing read leaves the affected details absent; even a successful
+capture is not atomic and does not detect every change-away-and-back. There is
+no client call, Lua, row decoder or gameplay classifier. These additional raw
+heap bytes can contain process data: share the sample privately, not publicly.
+
+To obtain the missing table evidence, after rebuilding select one living NPC on
+the **original player character** and capture one correctly labeled sample;
+share the updated JSONL privately. The UI should report "bounded rows included".
+If it reports rows unavailable, share the result as-is; don't assume a decode.
+This does not require recollecting all existing samples.
+
 ## Collect labeled observations
 
 1. Build and attach the x64 application. Stop Grind, GatherBuddy and routes.
@@ -98,11 +140,12 @@ To inspect locally with Python 3, from the checkout run:
 
 ```
 python Tools/WowBReactionAnalysis/analyze.py "path/to/wowb-reaction-samples.jsonl"
+# If multiple players are listed, re-run with --player FULL_GUID
 python -m unittest discover -s Tools/WowBReactionAnalysis -v
 ```
 
-The analyzer refuses to rank with fewer than three distinct GUIDs **and three
-unverified GUID entry hints** per label, excludes full GUIDs with conflicting
+The analyzer refuses to pool different player characters, or rank with fewer
+than three distinct GUIDs **and three unverified GUID entry hints** per label, excludes full GUIDs with conflicting
 labels, and skips words missing from any sample. It prints dword/bit
 correlations only; they can reflect identity, level, type, distance, location,
 health, pointers, etc. Even perfect correlation is not an offset proof. Use
