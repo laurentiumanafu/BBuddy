@@ -88,6 +88,26 @@ window configurations. In particular, it does not validate the highlighted
 close-range dagger or multiple friendly-NPC cursors in this mode. No gameplay
 selection, failsafe, vendor or combat change follows from this result.
 
+## Friendly background control (2026-11-01)
+
+A user-labeled friendly town NPC produced the same mouseover-candidate transition
+(selected GUID → empty → selected GUID). Its Windows cursor fingerprint changed
+from the user-observed friendly cursor to the same off-target glove fingerprint
+seen in the earlier trial, then back to that same friendly fingerprint. The
+friendly fingerprint differs from both known dagger fingerprints. All three
+cursor images were shown and readable; handles again differed between phases.
+The analyzer independently verifies each reported hover match against the full
+selected and hover GUIDs before summarizing the transition.
+
+These two background trials support the feasibility of the hover idea in this
+setup, but do not validate every friendly cursor, different UI/window conditions,
+or live attackability. The user requested skipping the additional close-range
+roaming boar test; the bright dagger was observed in foreground tests, but its
+background behavior is **not measured** here. The offline analyzer can report
+only the two previously observed dagger-image *hints*, with all other shapes
+`unknown`; a hint is not an action authorization, and unknown does not mean
+friendly. No targeting or combat changes were made.
+
 ## Background posted-hover experiment
 
 This is a **separate opt-in test**, not part of normal bot operation. It posts

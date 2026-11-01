@@ -1,13 +1,14 @@
 import unittest
-from analyze_posted import summarize
+from analyze_posted import DAGGER_IMAGES, summarize
 
 
 def obs(match, fingerprint='A' * 64, visible=True):
-    return {'matchesTarget': match, 'cursorShowing': visible, 'cursorFingerprint': fingerprint}
+    hover = None if match is None else ('0x' + '1' * 32 if match else '0x' + '0' * 32)
+    return {'matchesTarget': match, 'hoverGuid': hover, 'cursorShowing': visible, 'cursorFingerprint': fingerprint}
 
 
 def sample():
-    return {'schema': 1, 'foregroundFingerprint': 'A' * 64,
+    return {'schema': 1, 'targetGuid': '0x' + '1' * 32, 'foregroundFingerprint': 'A' * 64,
             'before': obs(True), 'away': obs(False, 'B' * 64), 'returned': obs(True),
             'candidateAwayThenTarget': True}
 
@@ -38,14 +39,40 @@ class PostedAnalysisTests(unittest.TestCase):
         self.assertFalse(summarize(data)['same_target_pattern'])
         data = sample()
         data['before']['matchesTarget'] = None
+        data['before']['hoverGuid'] = None
         self.assertFalse(summarize(data)['same_target_pattern'])
         data = sample()
         data['returned']['cursorFingerprint'] = 'C' * 64
         self.assertFalse(summarize(data)['same_target_pattern'])
         data = sample()
         data['away']['matchesTarget'] = True
+        data['away']['hoverGuid'] = data['targetGuid']
         data['candidateAwayThenTarget'] = False
         self.assertFalse(summarize(data)['same_target_pattern'])
+
+    def test_only_two_known_images_are_positive_hints(self):
+        dark = next(h for h, name in DAGGER_IMAGES.items() if name == 'dark_dagger_hint')
+        bright = next(h for h, name in DAGGER_IMAGES.items() if name == 'highlighted_dagger_hint')
+        data = sample()
+        data['before']['cursorFingerprint'] = dark
+        data['returned']['cursorFingerprint'] = bright
+        self.assertEqual(summarize(data)['dagger_hints'], ['dark_dagger_hint', 'unknown', 'highlighted_dagger_hint'])
+        data['returned']['cursorShowing'] = False
+        self.assertEqual(summarize(data)['dagger_hints'][-1], 'unknown')
+
+    def test_guid_verdict_is_independently_checked(self):
+        data = sample()
+        data['away']['hoverGuid'] = data['targetGuid']
+        with self.assertRaisesRegex(ValueError, 'disagree'):
+            summarize(data)
+        data = sample()
+        data['before']['hoverGuid'] = None
+        with self.assertRaisesRegex(ValueError, 'missing hover'):
+            summarize(data)
+        data = sample()
+        data['targetGuid'] = '0x' + '0' * 32
+        with self.assertRaisesRegex(ValueError, 'selected target'):
+            summarize(data)
 
     def test_rejects_inconsistent_and_non_bool_values(self):
         data = sample()
