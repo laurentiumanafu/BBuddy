@@ -2341,3 +2341,25 @@ nearer pool candidate merely because TAB kept it selected. The heal loop no
 longer disables healing solely because net health failed to rise when power was
 spent; incoming damage and healing cannot be separated by that observation.
 The STOP check now interrupts the heal verification wait as well.
+
+## Grind defence and the normal pull level band
+
+Normal voluntary Grind pulls retain the `player level - 4` through `player
+level + 3` band (unknown levels still pass the existing check). Combat defence
+no longer applies that band: a level-5 NPC can be considered for defence of a
+level-10 player. This is independent of the optional pool dagger gate, which is
+not a defence gate. Both Grind and Gather defence still require readable active
+combat, a nearby live NPC without the existing exclusion flags, and a fresh
+changed TAB selection of that candidate; Grind also retains its prior
+session-refusal check. These heuristics do **not** establish attacker identity or
+friendliness, so they may still fail to defend or choose the wrong nearby NPC.
+
+If no candidate is eligible, the defence log reports nearby, unreadable, dead,
+flagged and previously refused counts instead of claiming no live NPC was
+nearby. Those counts apply only to non-player NPCs in the captured snapshot
+within 12 yards; a missing unit is not counted. The provisional combat bit,
+unit flags, TAB behavior, and the results of actual combat remain unverified in
+any particular live encounter. Use a supervised test and STOP if behavior is
+unexpected. Run `python Tools/WowBDefenceTests/run.py` with a .NET 10 SDK for
+stubbed integration fixtures using the extracted real defence method; this is
+not a full Windows application build or a live game test.

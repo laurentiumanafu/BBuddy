@@ -1,0 +1,147 @@
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using Styx.WoWInternals;
+using Styx.Helpers;
+
+namespace Styx.Helpers
+{
+    static class Logging { public static void Write(string message) { } }
+}
+namespace Styx.WoWInternals
+{
+    readonly struct WowBGuid : IEquatable<WowBGuid>
+    {
+        private readonly int value;
+        public WowBGuid(int value) { this.value = value; }
+        public bool IsEmpty => value == 0;
+        public bool Equals(WowBGuid other) => value == other.value;
+        public override bool Equals(object? obj) => obj is WowBGuid other && Equals(other);
+        public override int GetHashCode() => value;
+        public static bool operator ==(WowBGuid a, WowBGuid b) => a.Equals(b);
+        public static bool operator !=(WowBGuid a, WowBGuid b) => !a.Equals(b);
+        public override string ToString() => value.ToString();
+    }
+    struct Location { public double X, Y; }
+    struct WowBObservedUnit
+    {
+        public WowBGuid Guid;
+        public bool IsLocalPlayer, HasPlayerVtable;
+        public Location Location;
+        public ulong UnitAddress;
+    }
+    sealed class WowBReader
+    {
+        public struct WowBUnitFields { public uint Health, UnitFlags, Level; }
+        public Dictionary<ulong, WowBUnitFields> Fields = new();
+        public WowBGuid Selected;
+        public bool TryGetUnitFields(ulong address, out WowBUnitFields fields) => Fields.TryGetValue(address, out fields);
+        public WowBGuid ReadTargetGuid() => Selected;
+    }
+    sealed class WowBWorldSnapshot
+    {
+        public List<WowBObservedUnit> Units = new();
+        public WowBObservedUnit Player;
+        public WowBReader Reader = null!;
+        public bool TryGetLocalPlayer(out WowBObservedUnit player) { player = Player; return !player.Guid.IsEmpty; }
+        public bool TryGetSelectedTarget(out WowBObservedUnit target)
+        {
+            foreach (var unit in Units) if (unit.Guid == Reader.Selected) { target = unit; return true; }
+            target = default; return false;
+        }
+    }
+    static class ObjectManager { public static WowBReader? WowB; }
+}
+namespace Styx.Logic.Pathing
+{
+    static class ClickAimAbort { public static bool Requested; public static bool Wait(int ms) => Requested; }
+    static class ClickAimMath { public static double Len(double x, double y) => Math.Sqrt(x*x + y*y); }
+    static class ClickAimKeySteer
+    {
+        public static bool Face(double x, double y, IntPtr hwnd, double angle, int attempts) => true;
+        public static void ReleaseHeld() { }
+    }
+    static class ClickAimInput
+    {
+        public static bool F1Works = true, TabWorks = true, CombatEndsOnTab, TargetDiesOnTab, StopOnTap;
+        public static WowBGuid TabTarget = Harness.TargetGuid;
+        public static int Keys;
+        public static void TapKey(IntPtr hwnd, int key, int ms)
+        {
+            Keys++;
+            if (StopOnTap) ClickAimAbort.Requested = true;
+            var reader = ObjectManager.WowB!;
+            if (key == 0x70 && F1Works) reader.Selected = Harness.PlayerGuid;
+            if (key == 0x09)
+            {
+                if (TabWorks) reader.Selected = TabTarget;
+                if (CombatEndsOnTab) Harness.Combat = false;
+                if (TargetDiesOnTab)
+                {
+                    var fields = reader.Fields[2]; fields.Health = 0; reader.Fields[2] = fields;
+                }
+            }
+        }
+    }
+    static class Harness
+    {
+        private const uint NotAFightFlag = 0x2 | 0x100 | 0x200;
+        private const double GatherDefenceRadius = 12.0;
+        private const int TabVk = 0x09, TabSettleMs = 250;
+        private const int LevelAbovePlayer = 3, LevelBelowPlayer = 4;
+        private static bool _stop;
+        private static readonly HashSet<WowBGuid> _notViable = new();
+        private static WowBWorldSnapshot snapshot = null!;
+        internal static bool Combat, CombatReadable;
+        internal static readonly WowBGuid PlayerGuid = new(1), TargetGuid = new(2);
+        private static int fightCalls;
+        private static bool TryReadGatherCombat(out bool fighting) { fighting = Combat; return CombatReadable; }
+        private static bool Capture(out WowBWorldSnapshot? result) { result = snapshot; return true; }
+        private static string Fight(IntPtr hwnd, double px, double py, bool unverified, bool defenceOnly, WowBGuid expected)
+        {
+            if (!defenceOnly || unverified || expected != TargetGuid) throw new Exception("invalid defence fight arguments");
+            fightCalls++; return "fight";
+        }
+
+        // __PRODUCTION_METHODS__
+
+        private static void Setup(uint level, uint health = 100, uint flags = 0, double distance = 3)
+        {
+            var reader = new WowBReader();
+            ObjectManager.WowB = reader;
+            reader.Fields[2] = new WowBReader.WowBUnitFields { Health = health, UnitFlags = flags, Level = level };
+            var player = new WowBObservedUnit { Guid = PlayerGuid, IsLocalPlayer = true, UnitAddress = 1 };
+            var target = new WowBObservedUnit { Guid = TargetGuid, UnitAddress = 2, Location = new Location { X = distance } };
+            snapshot = new WowBWorldSnapshot { Reader = reader, Player = player, Units = new() { player, target } };
+            _stop = false; ClickAimAbort.Requested = false; Combat = true; CombatReadable = true; fightCalls = 0;
+            ClickAimInput.Keys = 0; ClickAimInput.F1Works = true; ClickAimInput.TabWorks = true;
+            ClickAimInput.CombatEndsOnTab = false; ClickAimInput.TargetDiesOnTab = false; ClickAimInput.StopOnTap = false; ClickAimInput.TabTarget = TargetGuid;
+            _notViable.Clear();
+        }
+        private static void Require(bool condition, string name) { if (!condition) throw new Exception(name); }
+        private static string Defend(bool grind = true) => DefendNearby(new IntPtr(1), grind, out _);
+        public static void Run()
+        {
+            Require(!LevelViable(5, 10) && LevelViable(6, 10) && LevelViable(13, 10) && !LevelViable(14, 10), "normal pull band");
+            Setup(5); Require(Defend() == "fight" && fightCalls == 1, "level-5 bear defends a level-10 player");
+            Setup(14); Require(Defend() == "fight" && fightCalls == 1, "high level defence");
+            Setup(5, health: 0); Require(Defend().Contains("dead 1") && fightCalls == 0 && ClickAimInput.Keys == 0, "dead candidate rejected");
+            Setup(5, flags: 0x200); Require(Defend().Contains("excluded flags 1") && fightCalls == 0, "excluded flags rejected");
+            Setup(5); _notViable.Add(TargetGuid); Require(Defend().Contains("previously refused 1") && fightCalls == 0, "Grind prior refusal preserved");
+            Setup(5); _notViable.Add(TargetGuid); Require(Defend(false) == "fight" && fightCalls == 1, "Gather does not use Grind refusal list");
+            Setup(5); ObjectManager.WowB!.Fields.Clear(); Require(Defend().Contains("unreadable 1") && fightCalls == 0, "unreadable fields rejected");
+            Setup(5, distance: 13); Require(Defend().Contains("nearby 0") && fightCalls == 0, "outside defence radius rejected");
+            Setup(5); ClickAimInput.TabWorks = false; Require(Defend().Contains("no nearby candidate confirmed") && fightCalls == 0, "unchanged TAB is not confirmation");
+            Setup(5); ClickAimInput.TabTarget = new WowBGuid(3); Require(Defend().Contains("no nearby candidate confirmed") && fightCalls == 0, "different TAB target is not confirmation");
+            Setup(5); ObjectManager.WowB!.Selected = TargetGuid; Require(Defend() == "fight" && ClickAimInput.Keys == 2, "already selected requires verified F1 then TAB");
+            Setup(5); ObjectManager.WowB!.Selected = TargetGuid; ClickAimInput.F1Works = false; Require(fightCalls == 0 && Defend().Contains("no nearby candidate confirmed") && fightCalls == 0, "rebound F1 fails closed");
+            Setup(5); ClickAimInput.CombatEndsOnTab = true; Require(Defend().Contains("combat ended") && fightCalls == 0, "combat ending blocks fight");
+            Setup(5); ClickAimInput.TargetDiesOnTab = true; Require(Defend().Contains("no nearby candidate confirmed") && fightCalls == 0, "target fields rechecked after TAB");
+            Setup(5); ClickAimInput.StopOnTap = true; Require(Defend() == "stopped" && fightCalls == 0 && ClickAimInput.Keys == 1, "STOP during TAB blocks fight");
+            Setup(5); CombatReadable = false; Require(Defend() == "" && fightCalls == 0 && ClickAimInput.Keys == 0, "unreadable combat blocks defence input");
+            Setup(5); ClickAimAbort.Requested = true; Require(Defend() == "" && fightCalls == 0 && ClickAimInput.Keys == 0, "STOP blocks defence input");
+            Console.WriteLine("Grind defence synthetic integration fixtures passed");
+        }
+    }
+}
+class Program { static void Main() => Styx.Logic.Pathing.Harness.Run(); }

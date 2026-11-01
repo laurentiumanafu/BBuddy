@@ -289,8 +289,9 @@ internal static class GrindRunner
     /// <summary>
     /// A mob's level, from <c>data+0x1E40</c>, against mine. Above +3 is a corpse run and
     /// more than 4 below is grey (no experience, no loot worth the walk). Outside that band
-    /// the mob is skipped, which is the "do not wander at non-viable mobs" rule. An
-    /// unreadable level (0) is allowed through: a wrong offset must not skip every mob.
+    /// the mob is skipped for voluntary pulls (not combat defence), which is the
+    /// "do not wander at non-viable mobs" rule. An unreadable level (0) is allowed
+    /// through: a wrong offset must not skip every mob.
     /// </summary>
     private const int LevelAbovePlayer = 3;
     private const int LevelBelowPlayer = 4;
@@ -3250,7 +3251,12 @@ internal static class GrindRunner
     internal static string DefendGatherer(IntPtr hwnd)
         => DefendNearby(hwnd, false, out _);
 
-    private static string DefendNearby(IntPtr hwnd, bool levelRestricted, out bool engaged)
+    // Levels are deliberately absent: while combat is active, a grey or high-level
+    // attacker is still a threat. This is not a hostility/attacker predicate.
+    private static bool DefenceFieldsValid(uint health, uint flags, bool previouslyRefused)
+        => health > 0 && (flags & NotAFightFlag) == 0 && !previouslyRefused;
+
+    private static string DefendNearby(IntPtr hwnd, bool grindMode, out bool engaged)
     {
         engaged = false;
         if (_stop || ClickAimAbort.Requested || !TryReadGatherCombat(out bool fighting) || !fighting) return "";
@@ -3258,19 +3264,31 @@ internal static class GrindRunner
         if (reader == null || !Capture(out WowBWorldSnapshot? snap) || snap == null
             || !snap.TryGetLocalPlayer(out WowBObservedUnit player)) return "cannot read nearby units";
         var nearby = new List<WowBObservedUnit>();
+        int inRange = 0, unreadable = 0, dead = 0, flagged = 0, refused = 0;
         foreach (WowBObservedUnit unit in snap.Units)
         {
             if (unit.IsLocalPlayer || unit.HasPlayerVtable || unit.Guid.IsEmpty) continue;
             double d = ClickAimMath.Len(unit.Location.X - player.Location.X, unit.Location.Y - player.Location.Y);
             if (d > GatherDefenceRadius) continue;
-            if (!reader.TryGetUnitFields(unit.UnitAddress, out WowBReader.WowBUnitFields fields)
-                || fields.Health == 0 || (fields.UnitFlags & NotAFightFlag) != 0
-                || (levelRestricted && (!LevelViable(fields.Level, PlayerLevel()) || _notViable.Contains(unit.Guid)))) continue;
+            inRange++;
+            if (!reader.TryGetUnitFields(unit.UnitAddress, out WowBReader.WowBUnitFields fields))
+            { unreadable++; continue; }
+            bool wasRefused = grindMode && _notViable.Contains(unit.Guid);
+            if (!DefenceFieldsValid(fields.Health, fields.UnitFlags, wasRefused))
+            {
+                if (fields.Health == 0) dead++;
+                else if ((fields.UnitFlags & NotAFightFlag) != 0) flagged++;
+                else refused++;
+                continue;
+            }
             nearby.Add(unit);
         }
         nearby.Sort((a, b) => ClickAimMath.Len(a.Location.X - player.Location.X, a.Location.Y - player.Location.Y)
             .CompareTo(ClickAimMath.Len(b.Location.X - player.Location.X, b.Location.Y - player.Location.Y)));
-        if (nearby.Count == 0) return "no live NPC within 12 yd; holding position (attacker may be ranged)";
+        if (nearby.Count == 0)
+            return string.Format(CultureInfo.InvariantCulture,
+                "no eligible live NPC within 12 yd; holding position (nearby {0}, unreadable {1}, dead {2}, excluded flags {3}, previously refused {4}; attacker may be ranged or missing from the snapshot)",
+                inRange, unreadable, dead, flagged, refused);
         int candidates = Math.Min(nearby.Count, 6);
         for (int i = 0; i < candidates && !_stop && !ClickAimAbort.Requested; i++)
         {
@@ -3299,11 +3317,10 @@ internal static class GrindRunner
                     || selected.Guid == before || selected.Guid != candidate.Guid
                     || selected.IsLocalPlayer || selected.HasPlayerVtable
                     || !reader.TryGetUnitFields(selected.UnitAddress, out WowBReader.WowBUnitFields current)
-                    || current.Health == 0 || (current.UnitFlags & NotAFightFlag) != 0
-                    || (levelRestricted && (!LevelViable(current.Level, PlayerLevel()) || _notViable.Contains(selected.Guid)))
+                    || !DefenceFieldsValid(current.Health, current.UnitFlags, grindMode && _notViable.Contains(selected.Guid))
                     || ClickAimMath.Len(selected.Location.X - player.Location.X, selected.Location.Y - player.Location.Y) > GatherDefenceRadius)
                     continue;
-                Logging.Write((levelRestricted ? "[Grind]" : "[Gather]")
+                Logging.Write((grindMode ? "[Grind]" : "[Gather]")
                     + " combat: rotation on nearby TAB-selected NPC " + selected.Guid
                     + "; proximity and TAB do not prove it is the attacker");
                 engaged = true;
@@ -4823,6 +4840,13 @@ internal static class GrindRunner
             check("viableTooHigh", !LevelViable(9, 2));
             check("viableGrey", !LevelViable(1, 9));
             check("viableUnknownLevel", LevelViable(0, 2) && LevelViable(4, 0));
+            // Voluntary pulls stay level-limited, but defence must not ignore
+            // a level-5 bear attacking a level-10 player (or a high-level attacker).
+            check("greyNotPulledButEligibleForDefence", !LevelViable(5, 10) && DefenceFieldsValid(100, 0, false));
+            check("highNotPulledButEligibleForDefence", !LevelViable(14, 10) && DefenceFieldsValid(100, 0, false));
+            check("defenceStillRejectsDead", !DefenceFieldsValid(0, 0, false));
+            check("defenceStillRejectsFlags", !DefenceFieldsValid(100, 0x200, false));
+            check("defenceStillRejectsRefused", !DefenceFieldsValid(100, 0, true));
             check("selectionRejectsGrey", !SelectionFieldsValid(10, 0, 1, 7));
             check("selectionAcceptsOther", SelectionFieldsValid(10, 0, 5, 7));
             check("selectionRechecksAfterLevel", !SelectionFieldsValid(10, 0, 11, 7)
