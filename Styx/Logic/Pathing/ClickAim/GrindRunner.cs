@@ -514,6 +514,11 @@ internal static class GrindRunner
             return false;
         }
 
+        if (!WowBGrindFactions.PrepareForGrind(out string factionError))
+        { Logging.Write("[Grind] faction filter could not start: " + factionError); return false; }
+        if (GrindFactionSettings.Rules.Enabled)
+            Logging.Write("[Grind] optional faction-template pull filter enabled: " + GrindFactionSettings.Rules.KeyText + "; this is not proof of hostility");
+
         List<ProfileGrindArea> areas = ProfileRoute.LoadGrindAreas(profilePath);
         if (areas.Count == 0)
         {
@@ -549,7 +554,12 @@ internal static class GrindRunner
 
     internal static bool StartRoaming()
     {
-        if (_running || !MeshRoam.TryCreate(out MeshRoam? roam) || roam == null) return false;
+        if (_running) return false;
+        if (!WowBGrindFactions.PrepareForGrind(out string factionError))
+        { Logging.Write("[Grind] faction filter could not start: " + factionError); return false; }
+        if (GrindFactionSettings.Rules.Enabled)
+            Logging.Write("[Grind] optional faction-template pull filter enabled: " + GrindFactionSettings.Rules.KeyText + "; this is not proof of hostility");
+        if (!MeshRoam.TryCreate(out MeshRoam? roam) || roam == null) return false;
         var area = new ProfileGrindArea { Name = "Profile-free local roaming" };
         // The existing area-selection loop expects at least one hotspot; actual
         // destinations are generated from the mesh at each step instead.
@@ -1201,8 +1211,8 @@ internal static class GrindRunner
             {
                 _clearQuietAt = Environment.TickCount;
                 report = string.Format(CultureInfo.InvariantCulture,
-                    "nothing alive and level-viable within {0:F0} yd of the character ({1} unit(s) in the pool "
-                    + "inside that radius, none of them a fight) - the area is clear", SearchYd, near);
+                    "no eligible pull candidates within {0:F0} yd of the character ({1} unit(s) in the pool "
+                    + "inside that radius) - continuing the route; this is not a hostility verdict", SearchYd, near);
             }
             return false;
         }
@@ -1550,7 +1560,7 @@ internal static class GrindRunner
         if (!TryReadGatherCombat(out bool beforeFightCombat) || beforeFightCombat)
         { _combatHold = true; ClickAimKeySteer.ReleaseHeld(); return false; }
         int fightStarted = Environment.TickCount;
-        report = Fight(hwnd, px, py, poolPick);
+        report = Fight(hwnd, px, py, poolPick, expectedPull: target);
 
         /* A fight that ended inside a second and a half never pressed anything: it gave up
          * (or lost) immediately. Remember the target so the next iteration walks instead of
@@ -1617,6 +1627,7 @@ internal static class GrindRunner
         Styx.WoWInternals.WowBReader.WowBUnitFields f;
         if (!reader.TryGetUnitFields(target.UnitAddress, out f)) return false;
         if (!SelectionFieldsValid(f.Health, f.UnitFlags, f.Level, PlayerLevel())) return false;
+        if (!WowBGrindFactions.AllowsPull(reader, target, out _)) return false;
 
         /* A unit this run has already given up on must not come back through the selection.
          * The 14:23 run is that bug: the fight refused the friendly peon four times in a row -
@@ -1632,6 +1643,16 @@ internal static class GrindRunner
 
         double d = ClickAimMath.Len(target.Location.X - px, target.Location.Y - py);
         return d <= PullYd;
+    }
+
+    // A fresh selected target must still be exactly the unit admitted by the
+    // voluntary-pull policy. Defence intentionally does not call this gate.
+    private static bool FactionPullStillAllowed(WowBReader? reader, WowBObservedUnit expected, WowBObservedUnit actual)
+    {
+        if (!GrindFactionSettings.Rules.Enabled) return true;
+        return !expected.Guid.IsEmpty && !actual.IsLocalPlayer && !actual.HasPlayerVtable &&
+            actual.Guid == expected.Guid && actual.RecordAddress == expected.RecordAddress &&
+            actual.UnitAddress == expected.UnitAddress && WowBGrindFactions.AllowsPull(reader, actual, out _);
     }
 
     private static bool ShouldApproachPoolCandidate(bool hasSelection, bool hasCandidate, double distance)
@@ -1652,6 +1673,7 @@ internal static class GrindRunner
             || !reader.TryGetUnitFields(target.UnitAddress, out WowBReader.WowBUnitFields fields)
             || fields.Health == 0) return false;
         if (target.HasPlayerVtable || !SelectionFieldsValid(fields.Health, fields.UnitFlags, fields.Level, PlayerLevel())) return true;
+        if (!WowBGrindFactions.AllowsPull(reader, target, out _)) return true;
         if (_notViable.Contains(target.Guid) || Unreachable(target.Guid)) return true;
         if (Refused(target.Guid) && !InRealCombat()) return true;
         return _tabRefusedUntil.TryGetValue(target.Guid, out int until)
@@ -1785,7 +1807,7 @@ internal static class GrindRunner
             if (PullWorthTaking(current, me, out selectedWhy, out selectedYd))
             {
                 Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                    "[Grind] {0} is {1:F1} yd off the path and attackable - stopping the walk to pull it",
+                    "[Grind] {0} is {1:F1} yd off the path and selected as a potential pull - stopping the walk",
                     current.Guid, selectedYd));
                 return true;
             }
@@ -1820,7 +1842,7 @@ internal static class GrindRunner
         }
 
         Logging.Write(string.Format(CultureInfo.InvariantCulture,
-            "[Grind] {0} is {1:F1} yd off the path and attackable - stopping the walk to pull it",
+            "[Grind] {0} is {1:F1} yd off the path and selected as a potential pull - stopping the walk",
             candidate.Guid, d));
         return true;
     }
@@ -1847,6 +1869,8 @@ internal static class GrindRunner
         Styx.WoWInternals.WowBReader.WowBUnitFields f;
         if (!reader.TryGetUnitFields(candidate.UnitAddress, out f)) return false;
         if (f.Health == 0 || (f.UnitFlags & NotAFightFlag) != 0) return false;
+        if (!WowBGrindFactions.AllowsPull(reader, candidate, out bool factionUnknown))
+        { why = factionUnknown ? "faction key unreadable or changed" : "faction key is not on the allowed list"; return false; }
         if (_tabRefusedUntil.TryGetValue(candidate.Guid, out int refusedUntil)
             && unchecked(Environment.TickCount - refusedUntil) < 0) return false;
 
@@ -2194,7 +2218,7 @@ internal static class GrindRunner
             }
             int live2, unread2;
             bool threat = NearestKillable(around, here.Location.X, here.Location.Y, RestSafeYd,
-                                          out near, out nearYd, out live2, out unread2);
+                                          out near, out nearYd, out live2, out unread2, null, false);
             if (threat || unread2 > 0)
             {
                 if (unchecked(Environment.TickCount - _restHeldQuietAt) <= 15000) return "";
@@ -3019,7 +3043,7 @@ internal static class GrindRunner
     /// </summary>
     private static bool NearestKillable(WowBWorldSnapshot snap, double px, double py, double radius,
                                         out WowBObservedUnit unit, out double yards,
-                                        out int live, out int unread, int? playerLevel = null)
+                                        out int live, out int unread, int? playerLevel = null, bool applyFactionFilter = true)
     {
         unit = default(WowBObservedUnit);
         yards = double.MaxValue;
@@ -3062,6 +3086,8 @@ internal static class GrindRunner
             if (f.Health == 0) continue;                       // a corpse is not a monster
             if ((f.UnitFlags & NotAFightFlag) != 0) continue;
             if (!LevelViable(f.Level, myLevel)) continue;
+            if (applyFactionFilter && !WowBGrindFactions.AllowsPull(reader, candidate, out bool factionUnknown))
+            { if (factionUnknown) unread++; continue; }
 
             live++;
             if (d > 0.4 && d < yards)
@@ -3703,6 +3729,7 @@ internal static class GrindRunner
                     candidate.UnitAddress != initial.UnitAddress || candidate.IsLocalPlayer || candidate.HasPlayerVtable ||
                     !reader.TryGetUnitFields(candidate.UnitAddress, out WowBReader.WowBUnitFields fields) ||
                     !SelectionFieldsValid(fields.Health, fields.UnitFlags, fields.Level, approachLevel) ||
+                    !WowBGrindFactions.AllowsPull(reader, candidate, out _) ||
                     _notViable.Contains(candidate.Guid) || Refused(candidate.Guid) || Unreachable(candidate.Guid))
                 {
                     ClickAimAbort.Wait(150);
@@ -3784,7 +3811,7 @@ internal static class GrindRunner
     /// key did not cast and falls back to melee. Nothing here is reported as working
     /// because it was sent.
     /// </summary>
-    private static string Fight(IntPtr hwnd, double px, double py, bool unverified, bool defenceOnly = false, WowBGuid defenceExpected = default(WowBGuid))
+    private static string Fight(IntPtr hwnd, double px, double py, bool unverified, bool defenceOnly = false, WowBGuid defenceExpected = default(WowBGuid), WowBObservedUnit expectedPull = default(WowBObservedUnit))
     {
         int started = Environment.TickCount;
         int lastHealth = -1;
@@ -3836,6 +3863,8 @@ internal static class GrindRunner
 
         if (defenceOnly && target.Guid != defenceExpected)
             return "target changed before defence began; not attacking";
+        if (!defenceOnly && !FactionPullStillAllowed(ObjectManager.WowB, expectedPull, target))
+            return "target or faction key changed before the pull; not attacking";
         WowBGuid defenceTarget = target.Guid;
         lastHealth = Health(target);
 
@@ -3913,6 +3942,8 @@ internal static class GrindRunner
             int health = Health(target);
             if (health >= 0 && lastHealth > 0 && health == 0)
                 return "killed" + (worked.Count == 0 ? "" : " with " + string.Join(", ", worked.ToArray()));
+            if (!defenceOnly && !FactionPullStillAllowed(reader, expectedPull, target))
+            { ClickAimKeySteer.ReleaseHeld(); return "faction key or unit identity became unavailable during pull; stopping"; }
 
             WowBObservedUnit me;
             if (!snap.TryGetLocalPlayer(out me)) break;

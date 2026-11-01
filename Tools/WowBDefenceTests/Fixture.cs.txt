@@ -111,6 +111,12 @@ namespace Styx.Logic.Pathing
             }
         }
     }
+    static class GrindFactionSettings { public static class Rules { public static bool Enabled; } }
+    static class WowBGrindFactions
+    {
+        public static bool Allowed = true;
+        public static bool AllowsPull(WowBReader? reader, WowBObservedUnit unit, out bool unknown) { unknown = !Allowed; return Allowed; }
+    }
     static class Harness
     {
         // __PRODUCTION_LEVEL_CONSTANTS__
@@ -120,6 +126,8 @@ namespace Styx.Logic.Pathing
         internal static int PathQueries;
         private static bool stopOnStep, combatOnStep, vendorOnStep, nearerOnStep;
         private static readonly HashSet<WowBGuid> _notViable = new();
+        private static readonly Dictionary<WowBGuid, int> _tabRefusedUntil = new();
+        private static bool InRealCombat() => Combat;
         private static WowBWorldSnapshot snapshot = null!;
         internal static bool Combat, CombatReadable;
         internal static readonly WowBGuid PlayerGuid = new(1), TargetGuid = new(2);
@@ -148,22 +156,6 @@ namespace Styx.Logic.Pathing
                 ObjectManager.WowB!.Fields[3] = new WowBReader.WowBUnitFields { Health = 100, Level = 5 };
             }
         }
-        private static bool NearestKillable(WowBWorldSnapshot snap, double px, double py, double radius,
-            out WowBObservedUnit unit, out double yards, out int live, out int unread, int? playerLevel = null)
-        {
-            unit = default; yards = double.MaxValue; live = unread = 0;
-            foreach (var item in snap.Units)
-            {
-                if (item.IsLocalPlayer || item.HasPlayerVtable || item.Guid.IsEmpty) continue;
-                double d = ClickAimMath.Len(item.Location.X - px, item.Location.Y - py);
-                if (d > radius) continue;
-                if (!snap.Reader.TryGetUnitFields(item.UnitAddress, out var fields)) { unread++; continue; }
-                if (!SelectionFieldsValid(fields.Health, fields.UnitFlags, fields.Level, playerLevel ?? PlayerLevel()) || _notViable.Contains(item.Guid)) continue;
-                live++;
-                if (d > 0.4 && d < yards) { unit = item; yards = d; }
-            }
-            return live > 0 && yards < double.MaxValue;
-        }
         private static string Fight(IntPtr hwnd, double px, double py, bool unverified, bool defenceOnly, WowBGuid expected)
         {
             if (!defenceOnly || unverified || expected != TargetGuid) throw new Exception("invalid defence fight arguments");
@@ -185,8 +177,9 @@ namespace Styx.Logic.Pathing
             _stop = false; ClickAimAbort.Requested = false; Combat = true; CombatReadable = true; fightCalls = 0;
             ClickAimInput.Keys = 0; ClickAimInput.F1Works = true; ClickAimInput.TabWorks = true;
             ClickAimInput.CombatEndsOnTab = false; ClickAimInput.TargetDiesOnTab = false; ClickAimInput.StopOnTap = false; ClickAimInput.TabTarget = TargetGuid;
-            _notViable.Clear(); _vendorDue = false; _combatHold = false; steps = 0; dropped = 0;
+            _notViable.Clear(); _tabRefusedUntil.Clear(); _vendorDue = false; _combatHold = false; steps = 0; dropped = 0;
             NoPath = CombatOnPlan = StopOnPlan = VendorOnPlan = false; PathQueries = 0;
+            WowBGrindFactions.Allowed = true; GrindFactionSettings.Rules.Enabled = false;
             stopOnStep = combatOnStep = vendorOnStep = nearerOnStep = false;
             ClickAimKeySteer.Releases = 0;
         }
@@ -198,6 +191,22 @@ namespace Styx.Logic.Pathing
             Require(SelectionFieldsValid(100, 0, 4, 10) && !SelectionFieldsValid(100, 0, 3, 10), "normal selection uses six-below boundary");
             Require(!SelectionFieldsValid(0, 0, 4, 10) && !SelectionFieldsValid(100, 0x200, 4, 10), "normal selection still rejects dead or flagged");
             Require(LevelViable(0, 10) && LevelViable(5, 0), "unknown levels preserve existing behavior");
+            Setup(5); Combat = false; ObjectManager.WowB!.Selected = TargetGuid;
+            Require(TryCurrentSelection(snapshot, ObjectManager.WowB, 0, 0, out _) && PullWorthTaking(snapshot.Units[1], snapshot.Player, out _, out _), "allowed selected and TAB targets accepted");
+            WowBGrindFactions.Allowed = false;
+            Require(!TryCurrentSelection(snapshot, ObjectManager.WowB, 0, 0, out _) && !PullWorthTaking(snapshot.Units[1], snapshot.Player, out _, out _) && IsDismissibleSelection(snapshot.Units[1], ObjectManager.WowB), "unknown faction filtered from selection and TAB");
+            Require(!NearestKillable(snapshot, 0, 0, 100, out _, out _, out _, out int unknown) && unknown == 1, "unknown excluded from pool");
+            Require(NearestKillable(snapshot, 0, 0, 100, out _, out _, out _, out _, null, false), "rest threat scan bypasses allowlist");
+            Setup(5); var expected = snapshot.Units[1]; var changed = expected; changed.Guid = new WowBGuid(9);
+            Require(FactionPullStillAllowed(ObjectManager.WowB, expected, changed), "disabled fight filter preserves existing behavior");
+            GrindFactionSettings.Rules.Enabled = true;
+            Require(FactionPullStillAllowed(ObjectManager.WowB, expected, expected) && !FactionPullStillAllowed(ObjectManager.WowB, expected, changed), "selected GUID checked before and during pull");
+            changed = expected; changed.UnitAddress++;
+            Require(!FactionPullStillAllowed(ObjectManager.WowB, expected, changed), "changed object identity rejected");
+            WowBGrindFactions.Allowed = false;
+            Require(!FactionPullStillAllowed(ObjectManager.WowB, expected, expected), "unreadable or changed faction stops further pull actions");
+            Setup(5); WowBGrindFactions.Allowed = false;
+            Require(Defend() == "fight" && fightCalls == 1, "combat defence bypasses allowlist");
             Setup(5); Require(Defend() == "fight" && fightCalls == 1, "level-5 bear defends a level-10 player");
             Setup(3); Require(Defend() == "fight" && fightCalls == 1, "seven-below target still eligible in defence");
             Setup(14); Require(Defend() == "fight" && fightCalls == 1, "high level defence");
@@ -264,6 +273,8 @@ namespace Styx.Logic.Pathing
             Require(ApproachPoolCandidate(new IntPtr(1), snapshot.Units[1]).Contains("unreadable") && steps == 0 && _combatHold, "nearby unreadable unit pauses approach");
             Setup(5, distance: 100); Combat = false; ObjectManager.WowB!.Fields.Remove(1);
             Require(ApproachPoolCandidate(new IntPtr(1), snapshot.Units[1]).Contains("player fields unreadable") && steps == 0 && _combatHold, "unreadable player fields pause approach");
+            Setup(5, distance: 100); Combat = false; WowBGrindFactions.Allowed = false;
+            Require(ApproachPoolCandidate(new IntPtr(1), snapshot.Units[1]).Contains("ineligible") && steps == 0 && PathQueries == 0, "disallowed faction not approached");
             Setup(5, distance: 100); Combat = false; var stale = snapshot.Units[1]; stale.RecordAddress = 42;
             Require(ApproachPoolCandidate(new IntPtr(1), stale).Contains("changed identity") && steps == 0 && dropped == 0, "stale identity aborts approach");
             Setup(3, distance: 100); Combat = false;

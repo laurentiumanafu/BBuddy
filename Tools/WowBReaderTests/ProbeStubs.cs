@@ -11,6 +11,8 @@ namespace Styx.Helpers
 }
 namespace Styx.Logic.Pathing
 {
+    internal static class ClickAimCalibration { public static string DefaultPath => System.IO.Path.Combine(Styx.Helpers.Logging.ApplicationPath, "Settings", "clickaim-cal.txt"); }
+    internal static class ClickAimMath { public static double Len(double x, double y) => System.Math.Sqrt(x * x + y * y); }
     internal static class ClickAimInput
     {
         public static bool TryCursorFraction(System.IntPtr hwnd, out double x, out double y) { x = y = 0; return false; }

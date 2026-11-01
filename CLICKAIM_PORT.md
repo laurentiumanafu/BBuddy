@@ -2400,3 +2400,11 @@ a 20-second temporary deferral rather than permanently labelling a unit
 unviable; the separate existing TAB-miss cooldown may last longer. This does
 not establish that a target is friendly or unattackable.
 These changes need a Windows build and supervised live validation.
+
+### Optional Grind faction-template allowlist (70291)
+
+Under **Gather & tools → Grind faction filter**, stop the bot and use **Scan nearby NPC factions (100 yd)**. The scan reads the nearby unit pool without selecting or interacting with NPCs and lists each readable key, horizontal distance, observed health state and GUID. It is a non-atomic snapshot; unloaded, unrecognised or changing units may be missed, and NPC names are not available. Two observed client signatures are checked, but do not constitute complete build verification. Keys and identities are read more than once; zero, failed and changing reads are omitted and counted as unknown.
+
+Optionally enter decimal template IDs separated by commas or whitespace, check **Only pull listed faction-template IDs**, and save. Off by default; existing Grind behavior is unchanged unless enabled. Settings are saved separately in `Settings/clickaim-factions.txt` and loaded at each profile or roaming Grind start. Invalid settings or failed 70291 signature checks refuse Grind startup; unknown/changed/disallowed keys do not authorize voluntary pulls, pool approaches or TAB picks. The policy is frozen during a run and checked again before and during a voluntary fight. Defence and rest safety are not narrowed by the list, and the existing 10-second pool verification is still in force. The scan and settings are only intended for use while stopped, not paused.
+
+**These are template IDs, not reliable names or live friendliness, aggression or attackability. Friendly and hostile units can share an ID; reputation and other context can change reactions.** A list cannot guarantee avoiding friendly NPCs. Use only IDs you have verified, supervise the bot, and use STOP if needed. Non-atomic process reads and the client's independent combat/auto-attack state cannot be perfectly controlled by this filter. For example, observed Crag Boar samples used 189, but that does not prove every NPC with key 189 is safe to attack.

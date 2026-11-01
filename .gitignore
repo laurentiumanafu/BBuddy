@@ -82,3 +82,6 @@ wowb-cursor-samples.jsonl
 
 # Background hover diagnostics include player and target GUIDs
 wowb-posted-hover-samples.jsonl
+
+# Per-user manual faction allowlist
+Settings/clickaim-factions.txt

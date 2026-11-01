@@ -76,6 +76,7 @@ internal static class ProbeTests
         Styx.Helpers.Logging.ApplicationPath = temp;
         try
         {
+            FactionTests.Run(memory, player, npc, npcUnit, npcRecord);
             string result = WowBReactionProbe.Capture("friendly");
             Check(result.Contains("target→player 4, player→target 4") && result.Contains("NOT live reaction"), "base comparison displayed");
             string path = WowBReactionProbe.PathName;
