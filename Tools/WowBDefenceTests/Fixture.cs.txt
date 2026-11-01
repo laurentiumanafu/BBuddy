@@ -88,7 +88,7 @@ namespace Styx.Logic.Pathing
         private const uint NotAFightFlag = 0x2 | 0x100 | 0x200;
         private const double GatherDefenceRadius = 12.0;
         private const int TabVk = 0x09, TabSettleMs = 250;
-        private const int LevelAbovePlayer = 3, LevelBelowPlayer = 4;
+        // __PRODUCTION_LEVEL_CONSTANTS__
         private static bool _stop;
         private static readonly HashSet<WowBGuid> _notViable = new();
         private static WowBWorldSnapshot snapshot = null!;
@@ -122,8 +122,12 @@ namespace Styx.Logic.Pathing
         private static string Defend(bool grind = true) => DefendNearby(new IntPtr(1), grind, out _);
         public static void Run()
         {
-            Require(!LevelViable(5, 10) && LevelViable(6, 10) && LevelViable(13, 10) && !LevelViable(14, 10), "normal pull band");
+            Require(!LevelViable(3, 10) && LevelViable(4, 10) && LevelViable(5, 10) && LevelViable(13, 10) && !LevelViable(14, 10), "normal pull band: -6 through +3 inclusive");
+            Require(SelectionFieldsValid(100, 0, 4, 10) && !SelectionFieldsValid(100, 0, 3, 10), "normal selection uses six-below boundary");
+            Require(!SelectionFieldsValid(0, 0, 4, 10) && !SelectionFieldsValid(100, 0x200, 4, 10), "normal selection still rejects dead or flagged");
+            Require(LevelViable(0, 10) && LevelViable(5, 0), "unknown levels preserve existing behavior");
             Setup(5); Require(Defend() == "fight" && fightCalls == 1, "level-5 bear defends a level-10 player");
+            Setup(3); Require(Defend() == "fight" && fightCalls == 1, "seven-below target still eligible in defence");
             Setup(14); Require(Defend() == "fight" && fightCalls == 1, "high level defence");
             Setup(5, health: 0); Require(Defend().Contains("dead 1") && fightCalls == 0 && ClickAimInput.Keys == 0, "dead candidate rejected");
             Setup(5, flags: 0x200); Require(Defend().Contains("excluded flags 1") && fightCalls == 0, "excluded flags rejected");

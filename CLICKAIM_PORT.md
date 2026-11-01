@@ -1021,6 +1021,9 @@ to spend mana or remove mob health, and both are printed with the numbers (`mana
 
 ### Choosing what to fight
 
+This section describes the historical behavior at that time; the current pull
+band and defence exception are documented at the end of this file.
+
 `TryClickAttack` now reads the same fields before clicking: a corpse is skipped
 (`health == 0`), a unit outside the level band `player-4 … player+3` is skipped
 (`data+0x1E40`), and `UnitFlags & 0x800` makes a unit *preferred* over a nearer
@@ -2344,10 +2347,10 @@ The STOP check now interrupts the heal verification wait as well.
 
 ## Grind defence and the normal pull level band
 
-Normal voluntary Grind pulls retain the `player level - 4` through `player
+Normal voluntary Grind pulls use the inclusive `player level - 6` through `player
 level + 3` band (unknown levels still pass the existing check). Combat defence
-no longer applies that band: a level-5 NPC can be considered for defence of a
-level-10 player. This is independent of the optional pool dagger gate, which is
+no longer applies that band: even a level-3 NPC can be considered for defence
+of a level-10 player. This is independent of the optional pool dagger gate, which is
 not a defence gate. Both Grind and Gather defence still require readable active
 combat, a nearby live NPC without the existing exclusion flags, and a fresh
 changed TAB selection of that candidate; Grind also retains its prior
@@ -2363,3 +2366,9 @@ any particular live encounter. Use a supervised test and STOP if behavior is
 unexpected. Run `python Tools/WowBDefenceTests/run.py` with a .NET 10 SDK for
 stubbed integration fixtures using the extracted real defence method; this is
 not a full Windows application build or a live game test.
+
+For example, a level-10 character may voluntarily select levels 4 through 13;
+level 3 is outside the pull band. The independent defence routine can still
+consider that level-3 attacker in combat. The limits do not change the profile
+subprofile selection rules, the pool verification, or the experimental cursor
+gate. Unknown level values remain allowed by the existing policy.

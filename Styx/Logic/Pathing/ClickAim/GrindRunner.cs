@@ -287,14 +287,13 @@ internal static class GrindRunner
     private static bool _emptyPixelKnown;
 
     /// <summary>
-    /// A mob's level, from <c>data+0x1E40</c>, against mine. Above +3 is a corpse run and
-    /// more than 4 below is grey (no experience, no loot worth the walk). Outside that band
-    /// the mob is skipped for voluntary pulls (not combat defence), which is the
-    /// "do not wander at non-viable mobs" rule. An unreadable level (0) is allowed
-    /// through: a wrong offset must not skip every mob.
+    /// Voluntary pulls use the level at <c>data+0x1E40</c>: up to three levels
+    /// above and six levels below the player, inclusive. Combat defence does not
+    /// use this band. A zero (unknown) level is allowed through by the existing
+    /// policy; this band is not a claim about the client's experience colours.
     /// </summary>
     private const int LevelAbovePlayer = 3;
-    private const int LevelBelowPlayer = 4;
+    private const int LevelBelowPlayer = 6;
 
     /// <summary>Units this run has looked at and refused; capped so it cannot grow forever.</summary>
     private static readonly HashSet<WowBGuid> _notViable = new HashSet<WowBGuid>();
@@ -4840,14 +4839,18 @@ internal static class GrindRunner
             check("viableTooHigh", !LevelViable(9, 2));
             check("viableGrey", !LevelViable(1, 9));
             check("viableUnknownLevel", LevelViable(0, 2) && LevelViable(4, 0));
+            check("viableSixBelow", LevelViable(4, 10) && LevelViable(5, 10));
+            check("notViableSevenBelow", !LevelViable(3, 10));
+            check("viableThreeAbove", LevelViable(13, 10) && !LevelViable(14, 10));
             // Voluntary pulls stay level-limited, but defence must not ignore
-            // a level-5 bear attacking a level-10 player (or a high-level attacker).
-            check("greyNotPulledButEligibleForDefence", !LevelViable(5, 10) && DefenceFieldsValid(100, 0, false));
+            // an out-of-band attacker (below or above the normal pull range).
+            check("lowNotPulledButEligibleForDefence", !LevelViable(3, 10) && DefenceFieldsValid(100, 0, false));
             check("highNotPulledButEligibleForDefence", !LevelViable(14, 10) && DefenceFieldsValid(100, 0, false));
             check("defenceStillRejectsDead", !DefenceFieldsValid(0, 0, false));
             check("defenceStillRejectsFlags", !DefenceFieldsValid(100, 0x200, false));
             check("defenceStillRejectsRefused", !DefenceFieldsValid(100, 0, true));
-            check("selectionRejectsGrey", !SelectionFieldsValid(10, 0, 1, 7));
+            check("selectionRejectsTooLow", !SelectionFieldsValid(10, 0, 1, 8));
+            check("selectionAcceptsSixBelow", SelectionFieldsValid(10, 0, 4, 10));
             check("selectionAcceptsOther", SelectionFieldsValid(10, 0, 5, 7));
             check("selectionRechecksAfterLevel", !SelectionFieldsValid(10, 0, 11, 7)
                                                 && SelectionFieldsValid(10, 0, 11, 8));
