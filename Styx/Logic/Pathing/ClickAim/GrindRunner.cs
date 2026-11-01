@@ -1180,6 +1180,10 @@ internal static class GrindRunner
          * - the pool cannot tell a wolf from a peon - so the fight that takes it also has to
          * settle it (see the TAB verdict in Fight). */
         bool poolPick = false;
+        bool poolCursorVerified = false;
+        // This experimental 70291 path must not affect the legacy 3.3.5a client.
+        bool usePoolCursorGate = GatherSettings.RequireDaggerForPoolPull &&
+                                 ObjectManager.Wow?.Is64BitTarget == true && ObjectManager.WowB != null;
 
         /* What the pool says, before any key is pressed. A radius with nothing alive and
          * level-viable in it is the user's "if no monsters are around THEN move to next
@@ -1332,6 +1336,27 @@ internal static class GrindRunner
             if (selected && Capture(out snap) && snap != null
                 && TryCurrentSelection(snap, poolReader, px, py, out target) && target.Guid == nearest.Guid)
             {
+                if (usePoolCursorGate)
+                {
+                    bool dagger = WowBCursorProbe.TryGrindDaggerHover(hwnd, target, fx, fy, () =>
+                    {
+                        if (_stop || ClickAimAbort.Requested || _vendorDue) return true;
+                        if (unchecked(Environment.TickCount - poolCombatCheckAt) < 200) return false;
+                        poolCombatCheckAt = Environment.TickCount;
+                        poolCombatInterrupted = !TryReadGatherCombat(out bool fighting) || fighting;
+                        return poolCombatInterrupted;
+                    }, out string cursorReason);
+                    if (_stop || ClickAimAbort.Requested) return false;
+                    if (poolCombatInterrupted || !TryReadGatherCombat(out bool cursorCombat) || cursorCombat)
+                    { _combatHold = true; ClickAimKeySteer.ReleaseHeld(); return false; }
+                    if (!dagger)
+                    {
+                        DeferUnconfirmedPoolCursor(hwnd, poolReader, player.Guid, target.Guid, cursorReason);
+                        return false;
+                    }
+                    poolCursorVerified = true;
+                    Logging.Write("[Grind] pool cursor beta: " + cursorReason + "; existing pool failsafe remains active");
+                }
                 have = true;
                 poolPick = true;
                 _unverifiedGuid = target.Guid;
@@ -1465,6 +1490,36 @@ internal static class GrindRunner
             return false;
         }
 
+        // A previous pool selection or an unchanged TAB result has no fresh
+        // verified pixel in this iteration. Do not let it bypass the opt-in gate.
+        // A newly gated pool selection reaches here only after the check above.
+        if (WowBCursorProbe.PoolNeedsCursorGate(usePoolCursorGate, poolPick, poolCursorVerified))
+        {
+            DeferUnconfirmedPoolCursor(hwnd, ObjectManager.WowB, player.Guid, target.Guid,
+                "no fresh cursor confirmation for this previously selected pool unit");
+            return false;
+        }
+
+        if (poolCursorVerified)
+        {
+            // The hover check takes time. Refresh both units and the normal
+            // level/flags/range filters instead of fighting the stale snapshot.
+            WowBGuid gatedGuid = target.Guid;
+            ulong gatedRecord = target.RecordAddress, gatedUnit = target.UnitAddress;
+            if (!Capture(out WowBWorldSnapshot? fresh) || fresh == null ||
+                !fresh.TryGetLocalPlayer(out WowBObservedUnit freshPlayer) ||
+                !TryCurrentSelection(fresh, ObjectManager.WowB, freshPlayer.Location.X, freshPlayer.Location.Y,
+                                     out WowBObservedUnit freshTarget) ||
+                freshTarget.Guid != gatedGuid || freshTarget.RecordAddress != gatedRecord || freshTarget.UnitAddress != gatedUnit)
+            {
+                Logging.Write("[Grind] pool cursor beta: target or normal eligibility changed after hover; not pulling");
+                return false;
+            }
+            player = freshPlayer;
+            target = freshTarget;
+            px = freshPlayer.Location.X; py = freshPlayer.Location.Y;
+        }
+
         /* It is the mob the last fight gave up on: selecting it again would repeat that
          * decision every third of a second. Walk to the next hotspot instead.
          *
@@ -1533,7 +1588,7 @@ internal static class GrindRunner
         if (!TryReadGatherCombat(out bool beforeFightCombat) || beforeFightCombat)
         { _combatHold = true; ClickAimKeySteer.ReleaseHeld(); return false; }
         int fightStarted = Environment.TickCount;
-        report = Fight(hwnd, px, py, poolPick);
+        report = Fight(hwnd, px, py, poolPick, expectedPool: poolCursorVerified ? target.Guid : default(WowBGuid));
 
         /* A fight that ended inside a second and a half never pressed anything: it gave up
          * (or lost) immediately. Remember the target so the next iteration walks instead of
@@ -1615,6 +1670,19 @@ internal static class GrindRunner
 
         double d = ClickAimMath.Len(target.Location.X - px, target.Location.Y - py);
         return d <= PullYd;
+    }
+
+    // Unknown cursor is not a friendly verdict. Temporarily defer the pool pick,
+    // without session-blacklisting it or suppressing combat defence.
+    private static void DeferUnconfirmedPoolCursor(IntPtr hwnd, WowBReader? reader, WowBGuid player, WowBGuid target, string reason)
+    {
+        if (_stop || ClickAimAbort.Requested || _vendorDue || target.IsEmpty || !TryReadGatherCombat(out bool fighting) || fighting) return;
+        if (_tabRefusedUntil.Count > 256) _tabRefusedUntil.Clear();
+        _tabRefusedUntil[target] = unchecked(Environment.TickCount + 20000);
+        _interruptQuietUntil = unchecked(Environment.TickCount + InterruptRetryMs);
+        Logging.Write("[Grind] pool cursor beta: unconfirmed (" + reason + "); deferring " + target +
+                      " for 20 s, not classifying it friendly. Combat defence remains available.");
+        DismissRejectedSelection(hwnd, reader, player, target);
     }
 
     private static bool PreferNearerPoolCandidate(bool unverified, bool haveNearest, bool same,
@@ -3688,7 +3756,7 @@ internal static class GrindRunner
     /// key did not cast and falls back to melee. Nothing here is reported as working
     /// because it was sent.
     /// </summary>
-    private static string Fight(IntPtr hwnd, double px, double py, bool unverified, bool defenceOnly = false, WowBGuid defenceExpected = default(WowBGuid))
+    private static string Fight(IntPtr hwnd, double px, double py, bool unverified, bool defenceOnly = false, WowBGuid defenceExpected = default(WowBGuid), WowBGuid expectedPool = default(WowBGuid))
     {
         int started = Environment.TickCount;
         int lastHealth = -1;
@@ -3740,6 +3808,8 @@ internal static class GrindRunner
 
         if (defenceOnly && target.Guid != defenceExpected)
             return "target changed before defence began; not attacking";
+        if (!WowBCursorProbe.ExpectedPoolTargetMatches(expectedPool, target.Guid))
+            return "pool target changed after cursor verification; not attacking";
         WowBGuid defenceTarget = target.Guid;
         lastHealth = Health(target);
 

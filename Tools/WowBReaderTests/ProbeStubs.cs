@@ -17,7 +17,7 @@ namespace Styx.Logic.Pathing
         public static bool ClientSize(System.IntPtr hwnd, out int width, out int height) { width = height = 0; return false; }
         public static bool PostMouseMoveFraction(System.IntPtr hwnd, double x, double y) => false;
     }
-    internal static class ClickAimAbort { public static int Generation { get; set; } }
+    internal static class ClickAimAbort { public static int Generation { get; set; } public static bool Requested { get; set; } public static bool Wait(int ms) => Requested; }
     internal static class ClickAimUi
     {
         public static bool Running { get; set; }

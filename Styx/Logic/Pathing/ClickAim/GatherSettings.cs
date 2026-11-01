@@ -12,6 +12,8 @@ internal static class GatherSettings
     public static bool Herbalism;
     // Opt-in: legacy settings files do not enable gathering during Grind.
     public static bool GatherWhileGrinding;
+    // Experimental, opt-in and fail-closed for new pool pulls only.
+    public static bool RequireDaggerForPoolPull;
     // Opt-in only when no profile is loaded; normal profiles always take precedence.
     public static bool RoamWithoutProfile;
     public static int RoamRadiusYd = 250;
@@ -33,6 +35,7 @@ internal static class GatherSettings
                 if (key == "Mining" && bool.TryParse(value, out bool m)) Mining = m;
                 else if (key == "Herbalism" && bool.TryParse(value, out bool h)) Herbalism = h;
                 else if (key == "GatherWhileGrinding" && bool.TryParse(value, out bool g)) GatherWhileGrinding = g;
+                else if (key == "RequireDaggerForPoolPull" && bool.TryParse(value, out bool d)) RequireDaggerForPoolPull = d;
                 else if (key == "RoamWithoutProfile" && bool.TryParse(value, out bool r)) RoamWithoutProfile = r;
                 else if (key == "RoamRadiusYd" && int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int radius) && radius >= 100 && radius <= 3000) RoamRadiusYd = radius;
                 else if (key == "MiningSkill" && uint.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out uint ms) && ms <= 1000) MiningSkill = ms;
@@ -50,7 +53,8 @@ internal static class GatherSettings
             Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path) ?? ".");
             File.WriteAllLines(path, new[] { "Mining=" + Mining, "MiningSkill=" + MiningSkill.ToString(CultureInfo.InvariantCulture),
                 "Herbalism=" + Herbalism, "HerbalismSkill=" + HerbalismSkill.ToString(CultureInfo.InvariantCulture),
-                "GatherWhileGrinding=" + GatherWhileGrinding, "RoamWithoutProfile=" + RoamWithoutProfile,
+                "GatherWhileGrinding=" + GatherWhileGrinding, "RequireDaggerForPoolPull=" + RequireDaggerForPoolPull,
+                "RoamWithoutProfile=" + RoamWithoutProfile,
                 "RoamRadiusYd=" + RoamRadiusYd.ToString(CultureInfo.InvariantCulture) });
             return true;
         }
