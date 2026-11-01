@@ -1,7 +1,6 @@
 using System;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Input;
 using Styx.Logic.Pathing;
 using Button = System.Windows.Controls.Button;
 using TextBlock = System.Windows.Controls.TextBlock;
@@ -53,12 +52,12 @@ namespace CopilotBuddy.UI
             Content = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = panel };
         }
 
-        private void OnProbeKeyDown(object sender, KeyEventArgs args)
+        private void OnProbeKeyDown(object sender, System.Windows.Input.KeyEventArgs args)
         {
             // Window-local shortcuts: never install a system-wide hook or send keys to the game.
-            if (Keyboard.Modifiers != ModifierKeys.None) return;
-            bool first = args.Key == Key.D1 || args.Key == Key.NumPad1;
-            bool second = args.Key == Key.D2 || args.Key == Key.NumPad2;
+            if (System.Windows.Input.Keyboard.Modifiers != System.Windows.Input.ModifierKeys.None) return;
+            bool first = args.Key == System.Windows.Input.Key.D1 || args.Key == System.Windows.Input.Key.NumPad1;
+            bool second = args.Key == System.Windows.Input.Key.D2 || args.Key == System.Windows.Input.Key.NumPad2;
             if (!first && !second) return;
             args.Handled = true;
             if (!args.IsRepeat) StartPosted(first);
