@@ -43,6 +43,16 @@ def load(path):
     return samples
 
 
+def template_observations(samples):
+    """Return values observed at +0x1E5C; missing bytes remain unknown."""
+    result = {label: set() for label in LABELS}
+    for sample in samples:
+        chunk = sample["chunks"].get(0x1E00)
+        if chunk is not None:
+            result[sample["label"]].add(struct.unpack_from("<I", chunk, 0x5C)[0])
+    return result
+
+
 def correlations(samples, minimum=3):
     # Conflicting labels make this object unusable, even if the reason is an
     # actual reputation/phase change. A GUID is never split into train/test.
@@ -92,6 +102,10 @@ def main():
         print(f"  {label}: {counts[label]} / {hints[label]}")
     print(f"Excluded {len(conflicts)} GUID(s) with conflicting labels.")
     print("Hints are not proven NPC entry IDs. Repeated samples are not independent NPCs.")
+    print("Observed +0x1E5C FactionTemplate keys (user labels are not game-computed reactions):")
+    for label, values in template_observations(samples).items():
+        print(f"  {label}: " + (", ".join(str(v) for v in sorted(values)) if values else "unreadable"))
+    print("Template IDs alone do not determine reaction, reputation, attackability or aggressiveness.")
     if any(counts[label] < 3 or hints[label] < 3 for label in LABELS):
         print("Insufficient independent examples: collect at least 3 distinct GUIDs and 3 distinct entry hints per label.")
         return 0

@@ -953,12 +953,8 @@ internal static class GrindRunner
                 else
                     Logging.Write("[Grind] memory: the player's unit fields did not read at 0x" + me.UnitAddress.ToString("X"));
 
-                /* Who is around, straight out of the pool and BEFORE any key is pressed. This is
-                 * the line that answers "do we have a memory offset so the bot sees the monsters
-                 * around it": position and distance come from the snapshot, level, health and
-                 * flags from each unit's data block. What is missing - and what this census is
-                 * meant to help find - is a reaction word: compare a wolf and a guard in the same
-                 * list and the field that differs is the faction/reaction candidate. */
+                /* A faction-template ID is useful for diagnosis but is not itself
+                 * reaction, reputation, attackability or proof of a hostile target. */
                 int shown = 0;
                 for (int i = 0; i < snap.Units.Count && shown < 10; i++)
                 {
@@ -969,9 +965,12 @@ internal static class GrindRunner
                     Styx.WoWInternals.WowBReader.WowBUnitFields uf;
                     if (!reader.TryGetUnitFields(u.UnitAddress, out uf)) continue;
                     shown++;
+                    uint templateId;
+                    string templateText = reader.TryReadFactionTemplateId(u.UnitAddress, out templateId)
+                        ? templateId.ToString(CultureInfo.InvariantCulture) : "unreadable";
                     Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                        "[Grind]   in the pool {0:F1} yd away: level {1}, hp {2}/{3}, flags 0x{4:X}",
-                        d, uf.Level, uf.Health, uf.MaxHealth, uf.UnitFlags));
+                        "[Grind]   in the pool {0:F1} yd away: level {1}, hp {2}/{3}, flags 0x{4:X}, faction template ID {5} (not reaction)",
+                        d, uf.Level, uf.Health, uf.MaxHealth, uf.UnitFlags, templateText));
                 }
                 if (shown == 0)
                     Logging.Write(string.Format(CultureInfo.InvariantCulture,

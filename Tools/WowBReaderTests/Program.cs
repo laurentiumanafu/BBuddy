@@ -35,6 +35,14 @@ Require(localView.CandidateHealth.HasValue && localView.CandidateHealth.Value.Cu
 Require(targetView.CandidateHealth.HasValue && targetView.CandidateHealth.Value.MaximumLow32 == 10, "selected target health candidate");
 Require(snapshot.TryGetUnit(sameLow, out var otherHealth) && !otherHealth.CandidateHealth.HasValue, "other units not sampled for candidate health");
 Require(reader.TryGetUnitStats(0x30000000, out var legacyStats) && legacyStats.Health == 5, "complete diagnostic stats");
+// Faction-template ID is diagnostic, not a reaction or attackability result.
+mem.U32(0x40001000 + WowBOffsets.UnitDataFactionTemplateOffset, 189);
+Require(reader.TryReadFactionTemplateId(0x40001000, out uint factionId) && factionId == 189, "faction template ID");
+mem.U32(0x40001000 + WowBOffsets.UnitDataFactionTemplateOffset, 0);
+Require(reader.TryReadFactionTemplateId(0x40001000, out factionId) && factionId == 0, "readable zero faction ID");
+mem.Remove(0x40001000 + WowBOffsets.UnitDataFactionTemplateOffset + 1);
+Require(!reader.TryReadFactionTemplateId(0x40001000, out _), "unreadable faction ID");
+Require(!reader.TryReadFactionTemplateId(0, out _) && !reader.TryReadFactionTemplateId(ulong.MaxValue, out _), "invalid faction pointers");
 mem.Remove(0x40000000 + WowBOffsets.UnitDataPowerOffset + 1);
 Require(!reader.TryGetUnitStats(0x30000000, out _), "failed diagnostic stat read is unavailable");
 mem.U32(0x40000000 + WowBOffsets.UnitDataPowerOffset, 30);

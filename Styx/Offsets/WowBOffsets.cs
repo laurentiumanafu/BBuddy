@@ -323,6 +323,12 @@ namespace Styx.Offsets
 		/// bit and hostility has to come from the client's own target filter (TAB) instead.
 		/// The word is still read and printed, because it may yet identify in-combat state.</summary>
 		public const ulong UnitDataUnitFlagsOffset = 0x1E60; // [V] u32 unit flags (not reaction)
+        // 70291 UnitReaction's normal path uses this dword as the key for the
+        // FactionTemplate table. Twelve user-labeled units corroborate it; it is
+        // an ID, not a reaction or proof of attackability (see WOWB_REACTION_PROBE.md).
+        public const ulong UnitDataFactionTemplateOffset = 0x1E5C;
+        // Static table-instance lead, for bounded read-only diagnostics only.
+        public const ulong FactionTemplateTableRva = 0x7B43760;
 		/// <summary>[V-ish] hunt31 §6: level. Player 2 / NPC 5 in the live
 		/// sample, and the two neighbouring qwords (+0x1E48/+0x1E50) carry
 		/// the same value on the NPC (effective level / scaling level).

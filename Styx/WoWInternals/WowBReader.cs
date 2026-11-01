@@ -843,6 +843,23 @@ namespace Styx.WoWInternals
             return true;
         }
 
+        /// <summary>
+        /// Reads the 70291 faction-template key at unit +0x1E5C. This is a
+        /// diagnostic only: it does not resolve reputation, reaction, or attackability.
+        /// The caller must validate object identity; the read itself is non-atomic.
+        /// A readable zero is returned as zero, never as a failed read.
+        /// </summary>
+        public bool TryReadFactionTemplateId(ulong unitPtr, out uint factionTemplateId)
+        {
+            factionTemplateId = 0;
+            if (unitPtr <= 0x10000UL || unitPtr >= 0x00007FFFFFFFFFFFUL - WowBOffsets.UnitDataFactionTemplateOffset - 4UL)
+                return false;
+            byte[]? raw = _memory.ReadBytes64(unitPtr + WowBOffsets.UnitDataFactionTemplateOffset, 4);
+            if (raw == null || raw.Length != 4) return false;
+            factionTemplateId = BitConverter.ToUInt32(raw, 0);
+            return true;
+        }
+
         /// <summary>The local player's level from memory, or 0 when it cannot be read.</summary>
         public int ReadPlayerLevel()
         {

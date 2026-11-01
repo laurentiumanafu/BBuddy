@@ -16,6 +16,62 @@ sections). The one 16-byte UnitHealth signature used by the probe rules out
 some mismatched clients but is **not** complete build verification. Nothing
 in this change calls client functions or uses Lua.
 
+## 2026-11-01: identified faction-template key, not reaction
+
+The user's 12 labeled samples (Drive file `1JmI9h6dS0FXY7k1-DO9VOetAVivTfiQ7`,
+MD5 `a6c6ccbd567117e34557e8660dacc3c6`) include five friendly NPC GUIDs,
+three neutral attackable NPC GUIDs, and four aggressive NPC GUIDs. They show:
+
+| User label | Distinct GUIDs / entry hints | Unit `+0x1E5C` values |
+|---|---:|---|
+| Friendly | 5 / 3 | 55, 57 |
+| Neutral attackable | 3 / 1 | 189 |
+| Aggressive | 4 / 3 | 24, 44, 66 |
+
+All three neutral observations share the same NPC entry hint and the same raw
+unit `+0x90` value (1125), so they do not provide evidence of three distinct
+NPC types. In all 12 observations the hint matches `+0x90`; its exact semantics
+still require validation. Labels and reactions are not independently confirmed
+by the probe. The selected friendly units with template 57 and all
+sampled aggressive units have `+0x1E60 == 0`, a direct counterexample to treating
+zero flags as proof of hostility.
+
+Read-only Capstone disassembly of the user's decoded image (Drive
+`1cipD5-ylc1p_sdGxOzSirH57GbrHIURE`, MD5
+`5a137c8a11e9dee6581d4244a97c2546`) gives an independent static link:
+
+* UnitReaction's two-unit path calls `0x27EDBC0`; its normal branch at
+  `0x27EE022` loads dword `[firstUnit+0x1E5C]` and calls `0x27EE160`.
+  At `0x27EE199` that helper loads dword `[secondUnit+0x1E5C]`; both keys
+  go to the same table lookup at `0x658990` using image RVA `0x7B43760`.
+* At `0x1BF044`, the image passes metadata RVA `0x4D68AA0` and table RVA
+  `0x7B43760` to the same initializer. Metadata begins with a pointer to the
+  string `FactionTemplate` at RVA `0x52A0318`. These RVAs are from this image,
+  not safe callable APIs or proof that all other clients share the offsets.
+* The relevant lookup site at `0x27EE18D` begins with bytes
+  `488D0DCC553505E8F7A7E6FD8B935C1E0000`. The probe checks these and the
+  existing UnitHealth signature before collecting a limited table diagnostic;
+  two partial signatures still are not full build verification.
+
+This supports `+0x1E5C` as the **FactionTemplate key**, not a direct
+friend/foe/neutral value. The routine also consults additional flags, lookup
+records, player control, standing and special-case paths. A template can
+change relation because of reputation or state. Do not hardcode the observed
+IDs as hostile/friendly or assume all neutral units are attackable. The existing
+Grind failsafe and selection behavior have not been altered by this finding.
+`TryReadFactionTemplateId` and the startup census expose the key for diagnostics
+only; the caller must already have validated the unit pointer, and reads are
+non-atomic.
+
+The upgraded probe additionally captures bounded raw bytes from the identified
+FactionTemplate table instance, metadata pointer, storage object and storage
+vtable, but only when both diagnostic signatures match. Pointers are checked,
+failed reads remain absent, and table metadata/storage pointers are rechecked;
+the observation remains non-atomic. This is for reconstructing the table
+layout, not a row decoder or gameplay classifier. It may disclose addresses and
+other process data and should only be shared privately. Older samples without
+this optional `dbProbe` remain readable.
+
 ## Collect labeled observations
 
 1. Build and attach the x64 application. Stop Grind, GatherBuddy and routes.
@@ -33,8 +89,9 @@ in this change calls client functions or uses Lua.
    but observations are non-atomic and a change-away-and-back can be missed.
 3. Share `Settings\wowb-reaction-samples.jsonl` from the application's output
    directory. It appends to the same file each time. It contains full player
-   and target GUIDs, unit addresses, map IDs and raw unit bytes; inspect before
-   sharing, as it can disclose character/world identifiers. It is gitignored.
+   and target GUIDs, unit addresses, map IDs, raw unit bytes, and limited table
+   diagnostic bytes/addresses; inspect before sharing, as it can disclose
+   character/world identifiers. It is gitignored.
    Do not share publicly or include an unrelated full memory dump.
 
 To inspect locally with Python 3, from the checkout run:

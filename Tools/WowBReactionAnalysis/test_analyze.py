@@ -2,7 +2,7 @@ import base64
 import json
 import tempfile
 import unittest
-from analyze import LABELS, CHUNK, SIGNATURE, correlations, load
+from analyze import LABELS, CHUNK, SIGNATURE, correlations, load, template_observations
 
 
 def sample(label, i, value):
@@ -50,6 +50,13 @@ class CorrelationTests(unittest.TestCase):
             f.flush()
             with self.assertRaisesRegex(ValueError, 'repeated chunk'):
                 load(f.name)
+
+    def test_template_observations_missing_and_zero(self):
+        self.samples[0]['chunks'][0x1E00] = bytes(CHUNK)
+        self.samples[1]['chunks'][0x1E00] = bytes(0x5C) + (57).to_bytes(4, 'little') + bytes(CHUNK - 0x60)
+        result = template_observations(self.samples)
+        self.assertEqual(result['friendly'], {0, 57})
+        self.assertEqual(result['neutral_attackable'], set())
 
     def test_hint_diversity_required(self):
         for s in self.samples:
