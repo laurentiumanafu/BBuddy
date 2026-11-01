@@ -281,11 +281,6 @@ internal static class GrindRunner
     /// <summary>Set once the corpse word-diff has been printed; it is a discovery aid, not a log line.</summary>
     private static bool _lootProbed;
 
-    /// <summary>A pixel a left-click probe proved is empty ground - the safe way to deselect.</summary>
-    private static int _emptyPixelX;
-    private static int _emptyPixelY;
-    private static bool _emptyPixelKnown;
-
     /// <summary>
     /// Voluntary pulls use the level at <c>data+0x1E40</c>: up to three levels
     /// above and six levels below the player, inclusive. Combat defence does not
@@ -423,18 +418,21 @@ internal static class GrindRunner
     /// <summary>
     /// The longest distance the client's own targeting has been seen to offer a target: the
     /// 13:23 log has "TAB has a target 48 yd away", and the 13:46 run engaged one at 45 yd.
-    /// Inside this radius a TAB refusal MEANS something ("the client does not consider this an
-    /// enemy"); beyond it a refusal only means "too far for TAB". That is the difference between
-    /// blacklisting a friendly peon and blacklisting a wolf.
+    /// A TAB miss at any range is inconclusive: facing, reach, UI and other
+    /// conditions can prevent selection. It is never proof of friendliness.
     /// </summary>
     private const double TabReachYd = 45.0;
 
+    // Close to the user-requested 40 yd before relying on TAB for a distant
+    // pool observation. The pool itself does not identify hostile units.
+    private const double PoolApproachYd = 40.0;
+    private const int PoolApproachTimeoutMs = 45000;
+    private static bool _poolApproachHandled;
+
     /// <summary>
     /// Units the pool can see inside <see cref="TabReachYd"/> that TAB refused to select, and
-    /// when. TAB is the client's own enemy filter, so a refusal is the client saying "not an
-    /// enemy" - which is what a friendly NPC is. This exists because the 13:46 run walked up to a
-    /// friendly lazy peon and spent twenty seconds casting at it: the old pool fallback selected
-    /// it by left-click, and the pool cannot tell a peon from a wolf.
+    /// when. These misses support a temporary cooldown, not a friendly verdict:
+    /// the client can fail to select even an attackable unit.
     /// </summary>
     private static readonly Dictionary<WowBGuid, int> _tabMisses = new Dictionary<WowBGuid, int>();
 
@@ -451,6 +449,7 @@ internal static class GrindRunner
 
     /// <summary>Minimum spacing between two pool selections (a left-click search costs seconds).</summary>
     private const int PoolSelectMs = 2500;
+    private const int PoolPixelMissPauseMs = 20000;
 
     /// <summary>
     /// How long a target the POOL picked may show no damage at all, while it is inside TAB's
@@ -473,9 +472,8 @@ internal static class GrindRunner
     private static WowBGuid _unverifiedGuid;
 
     /// <summary>
-    /// Pool units whose left-click selection failed. One miss is bad luck (the body can be behind
-    /// the character's own model for a frame); the second means it cannot be clicked from here and
-    /// it is set aside, so a hotspot can still become clear.
+    /// Pool units whose pixel selection failed once. A second miss starts a
+    /// temporary cooldown; it does not prove the unit cannot be attacked.
     /// </summary>
     private static readonly HashSet<WowBGuid> _poolMisses = new HashSet<WowBGuid>();
 
@@ -601,6 +599,7 @@ internal static class GrindRunner
         _scanWasClear = false;
         _lastEngageRejected = false;
         _combatHold = false;
+        _poolApproachHandled = false;
         _combatHoldLogAt = unchecked(Environment.TickCount - 15001);
         _rejectedQuietAt = unchecked(Environment.TickCount - 15001);
         _farQuietAt = 0;
@@ -613,7 +612,6 @@ internal static class GrindRunner
         _looted.Clear();
         _loots = 0;
         _lootProbed = false;
-        _emptyPixelKnown = false;
         _vendorDue = false;
         _vendorImpossible = false;
         _vendorRetryAt = 0;
@@ -739,7 +737,7 @@ internal static class GrindRunner
                 }
 
                 if (combatReport.Length > 0) Logging.Write("[Grind] " + combatReport);
-                if (_combatHold) continue;
+                if (_combatHold || _poolApproachHandled) continue;
 
                 /* Between fights, with nothing on us: eat and drink if the user's percentages say
                  * so. This is the cheapest place in the loop to sit - the next thing it would do
@@ -1100,6 +1098,7 @@ internal static class GrindRunner
         report = "";
         _lastEngageRejected = false;
         _combatHold = false;
+        _poolApproachHandled = false;
         /* Cleared on entry, not only on the scan below: a failed read must not leave a stale
          * "the area is clear" behind for the hotspot loop to act on. */
         _scanWasClear = false;
@@ -1152,27 +1151,25 @@ internal static class GrindRunner
         WowBObservedUnit player;
         if (!snap.TryGetLocalPlayer(out player)) return false;
 
+        // A loot right-click can leave a corpse selected. F1 is verified as
+        // self-target before TAB is asked again; never use an old ground pixel.
+        WowBReader? deadReader = ObjectManager.WowB;
+        if (deadReader != null && snap.TryGetSelectedTarget(out WowBObservedUnit deadSelected) &&
+            !deadSelected.IsLocalPlayer && !deadSelected.HasPlayerVtable &&
+            deadReader.TryGetUnitFields(deadSelected.UnitAddress, out WowBReader.WowBUnitFields deadFields) && deadFields.Health == 0)
+        {
+            DismissRejectedSelection(hwnd, deadReader, player.Guid, deadSelected.Guid);
+            if (_stop || ClickAimAbort.Requested) return false;
+            if (!Capture(out snap) || snap == null || !snap.TryGetLocalPlayer(out player)) return false;
+        }
+        if (_stop || ClickAimAbort.Requested || _vendorDue) return false;
         double px = player.Location.X, py = player.Location.Y;
         int near = CountNear(snap, px, py, SearchYd);
 
-        /* Two ways to choose a target, and TAB is the last word:
-         *
-         *   1. what is already selected (the walk asks once, TAB costs a key);
-         *   2. TAB - the client's own enemy filter, the only thing on this build that knows
-         *      who is an enemy.
-         *
-         * The unit pool in memory does not select anything any more. It has the units, their
-         * positions, levels and unit flags - everything needed to answer "is anything alive
-         * within 100 yd, and which way is it" - but no reaction (friendly/hostile) word, and the
-         * 13:46 run is what that costs: a left-click pool fallback selected a friendly lazy peon
-         * and the bot cast Shadow Bolt at it for twenty seconds. The pool is used for the scan,
-         * for turning onto the nearest unit before asking TAB (TAB only looks in front), and for
-         * stopping the walk beside a mob. TAB decides.
-         *
-         * The right-CLICK fallback stays gone too: it cannot tell a mob from a guard, and on
-         * 2026-10-30 17:22 it walked up to a friendly townsman 3.6 yd away and right-clicked
-         * him - a right-click is "attack and walk to it", so the "fight" was against the town.
-         * */
+        /* Try the current target and TAB, then the existing unverified pool
+         * left-click fallback. Pool coordinates, level and flags do not establish
+         * hostility; TAB also does not prove that a selected unit is an attacker.
+         * The pool pick must retain the existing TAB/damage failsafe in Fight. */
         WowBObservedUnit target = default(WowBObservedUnit);
         bool have = false;
 
@@ -1180,10 +1177,6 @@ internal static class GrindRunner
          * - the pool cannot tell a wolf from a peon - so the fight that takes it also has to
          * settle it (see the TAB verdict in Fight). */
         bool poolPick = false;
-        bool poolCursorVerified = false;
-        // This experimental 70291 path must not affect the legacy 3.3.5a client.
-        bool usePoolCursorGate = GatherSettings.RequireDaggerForPoolPull &&
-                                 ObjectManager.Wow?.Is64BitTarget == true && ObjectManager.WowB != null;
 
         /* What the pool says, before any key is pressed. A radius with nothing alive and
          * level-viable in it is the user's "if no monsters are around THEN move to next
@@ -1245,7 +1238,7 @@ internal static class GrindRunner
         }
 
         WowBGuid rejectedGuid = default(WowBGuid);
-        for (int i = 0; i < TabTries && !have && !_stop && !ClickAimAbort.Requested; i++)
+        for (int i = 0; i < TabTries && !have && !_stop && !ClickAimAbort.Requested && !_vendorDue; i++)
         {
             if (!TryReadGatherCombat(out bool tabCombat) || tabCombat)
             { _combatHold = true; ClickAimKeySteer.ReleaseHeld(); return false; }
@@ -1280,9 +1273,19 @@ internal static class GrindRunner
             }
             have = true;
         }
-        if (_stop || ClickAimAbort.Requested) return false;
+        if (_stop || ClickAimAbort.Requested || _vendorDue) return false;
         if (!TryReadGatherCombat(out bool beforePoolCombat) || beforePoolCombat)
         { _combatHold = true; ClickAimKeySteer.ReleaseHeld(); return false; }
+
+        // Do not waste dozens of pixel clicks on an unselected unit near the
+        // edge of the 100 yd pool. Approach on a strictly validated mesh and
+        // retry normal TAB/pool selection once a candidate is within 40 yd.
+        if (ShouldApproachPoolCandidate(have, haveNearest, nearestYd))
+        {
+            _poolApproachHandled = true;
+            report = ApproachPoolCandidate(hwnd, nearest);
+            return false;
+        }
 
         /* ---- step 3: the pool, then let the client settle it ----
          *
@@ -1316,6 +1319,7 @@ internal static class GrindRunner
             int poolCombatCheckAt = unchecked(Environment.TickCount - 250);
             bool selected = FindUnitPixel(hwnd, nearest, px, py, out fx, out fy, out how, () =>
             {
+                if (_stop || ClickAimAbort.Requested || _vendorDue) return true;
                 if (unchecked(Environment.TickCount - poolCombatCheckAt) < 200) return false;
                 poolCombatCheckAt = Environment.TickCount;
                 poolCombatInterrupted = !TryReadGatherCombat(out bool fighting) || fighting;
@@ -1331,34 +1335,15 @@ internal static class GrindRunner
                 if (!afterPool.IsEmpty && afterPool != player.Guid) _unverifiedGuid = afterPool;
             }
             catch { /* The confirmed nearest GUID above remains unverified. */ }
+            if (_stop || ClickAimAbort.Requested || _vendorDue) return false;
             if (poolCombatInterrupted || !TryReadGatherCombat(out bool afterPoolCombat) || afterPoolCombat)
             { _combatHold = true; ClickAimKeySteer.ReleaseHeld(); return false; }
             if (selected && Capture(out snap) && snap != null
                 && TryCurrentSelection(snap, poolReader, px, py, out target) && target.Guid == nearest.Guid)
             {
-                if (usePoolCursorGate)
-                {
-                    bool dagger = WowBCursorProbe.TryGrindDaggerHover(hwnd, target, fx, fy, () =>
-                    {
-                        if (_stop || ClickAimAbort.Requested || _vendorDue) return true;
-                        if (unchecked(Environment.TickCount - poolCombatCheckAt) < 200) return false;
-                        poolCombatCheckAt = Environment.TickCount;
-                        poolCombatInterrupted = !TryReadGatherCombat(out bool fighting) || fighting;
-                        return poolCombatInterrupted;
-                    }, out string cursorReason);
-                    if (_stop || ClickAimAbort.Requested) return false;
-                    if (poolCombatInterrupted || !TryReadGatherCombat(out bool cursorCombat) || cursorCombat)
-                    { _combatHold = true; ClickAimKeySteer.ReleaseHeld(); return false; }
-                    if (!dagger)
-                    {
-                        DeferUnconfirmedPoolCursor(hwnd, poolReader, player.Guid, target.Guid, cursorReason);
-                        return false;
-                    }
-                    poolCursorVerified = true;
-                    Logging.Write("[Grind] pool cursor beta: " + cursorReason + "; existing pool failsafe remains active");
-                }
                 have = true;
                 poolPick = true;
+                _poolMisses.Remove(nearest.Guid);
                 _unverifiedGuid = target.Guid;
                 Logging.Write(string.Format(CultureInfo.InvariantCulture,
                     "[Grind] TAB offered nothing live, so the pool was used: {0} is alive at {1:F1} yd "
@@ -1368,10 +1353,17 @@ internal static class GrindRunner
             }
             else
             {
-                if (!selected && !_poolMisses.Add(nearest.Guid))
+                if (!selected)
                 {
-                    _notViable.Add(nearest.Guid);
-                    if (_notViable.Count > 256) _notViable.Clear();
+                    if (_poolMisses.Count > 256) _poolMisses.Clear();
+                    if (!_poolMisses.Add(nearest.Guid))
+                    {
+                        _poolMisses.Remove(nearest.Guid);
+                        if (_tabRefusedUntil.Count > 256) _tabRefusedUntil.Clear();
+                        _tabRefusedUntil[nearest.Guid] = unchecked(Environment.TickCount + PoolPixelMissPauseMs);
+                        Logging.Write("[Grind] two pixel searches missed " + nearest.Guid +
+                            "; temporarily deferring it for 20 s, not classifying it friendly or unattackable");
+                    }
                 }
                 if (unchecked(Environment.TickCount - _poolQuietAt) > 15000)
                 {
@@ -1406,9 +1398,8 @@ internal static class GrindRunner
                 {
                     _poolQuietAt = now;
                     Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                        "[Grind] {0} is {1:F1} yd away and TAB has refused it twice in a row - the client "
-                        + "does not consider it an enemy, so it is left out of the scan for {2} s "
-                        + "(a friendly NPC looks exactly like this)", nearest.Guid, nearestYd,
+                        "[Grind] {0} is {1:F1} yd away; TAB did not confirm this candidate twice, "
+                        + "so it is left out of the scan for {2} s (not a friendly verdict)", nearest.Guid, nearestYd,
                         TabRefusePauseMs / 1000));
                 }
             }
@@ -1490,36 +1481,6 @@ internal static class GrindRunner
             return false;
         }
 
-        // A previous pool selection or an unchanged TAB result has no fresh
-        // verified pixel in this iteration. Do not let it bypass the opt-in gate.
-        // A newly gated pool selection reaches here only after the check above.
-        if (WowBCursorProbe.PoolNeedsCursorGate(usePoolCursorGate, poolPick, poolCursorVerified))
-        {
-            DeferUnconfirmedPoolCursor(hwnd, ObjectManager.WowB, player.Guid, target.Guid,
-                "no fresh cursor confirmation for this previously selected pool unit");
-            return false;
-        }
-
-        if (poolCursorVerified)
-        {
-            // The hover check takes time. Refresh both units and the normal
-            // level/flags/range filters instead of fighting the stale snapshot.
-            WowBGuid gatedGuid = target.Guid;
-            ulong gatedRecord = target.RecordAddress, gatedUnit = target.UnitAddress;
-            if (!Capture(out WowBWorldSnapshot? fresh) || fresh == null ||
-                !fresh.TryGetLocalPlayer(out WowBObservedUnit freshPlayer) ||
-                !TryCurrentSelection(fresh, ObjectManager.WowB, freshPlayer.Location.X, freshPlayer.Location.Y,
-                                     out WowBObservedUnit freshTarget) ||
-                freshTarget.Guid != gatedGuid || freshTarget.RecordAddress != gatedRecord || freshTarget.UnitAddress != gatedUnit)
-            {
-                Logging.Write("[Grind] pool cursor beta: target or normal eligibility changed after hover; not pulling");
-                return false;
-            }
-            player = freshPlayer;
-            target = freshTarget;
-            px = freshPlayer.Location.X; py = freshPlayer.Location.Y;
-        }
-
         /* It is the mob the last fight gave up on: selecting it again would repeat that
          * decision every third of a second. Walk to the next hotspot instead.
          *
@@ -1585,10 +1546,11 @@ internal static class GrindRunner
 
         /* The fight presses the action bar and right-clicks the SELECTED target, and the
          * verdict comes from the mob's health and my own mana in memory. No Lua anywhere. */
+        if (_stop || ClickAimAbort.Requested || _vendorDue) return false;
         if (!TryReadGatherCombat(out bool beforeFightCombat) || beforeFightCombat)
         { _combatHold = true; ClickAimKeySteer.ReleaseHeld(); return false; }
         int fightStarted = Environment.TickCount;
-        report = Fight(hwnd, px, py, poolPick, expectedPool: poolCursorVerified ? target.Guid : default(WowBGuid));
+        report = Fight(hwnd, px, py, poolPick);
 
         /* A fight that ended inside a second and a half never pressed anything: it gave up
          * (or lost) immediately. Remember the target so the next iteration walks instead of
@@ -1672,18 +1634,8 @@ internal static class GrindRunner
         return d <= PullYd;
     }
 
-    // Unknown cursor is not a friendly verdict. Temporarily defer the pool pick,
-    // without session-blacklisting it or suppressing combat defence.
-    private static void DeferUnconfirmedPoolCursor(IntPtr hwnd, WowBReader? reader, WowBGuid player, WowBGuid target, string reason)
-    {
-        if (_stop || ClickAimAbort.Requested || _vendorDue || target.IsEmpty || !TryReadGatherCombat(out bool fighting) || fighting) return;
-        if (_tabRefusedUntil.Count > 256) _tabRefusedUntil.Clear();
-        _tabRefusedUntil[target] = unchecked(Environment.TickCount + 20000);
-        _interruptQuietUntil = unchecked(Environment.TickCount + InterruptRetryMs);
-        Logging.Write("[Grind] pool cursor beta: unconfirmed (" + reason + "); deferring " + target +
-                      " for 20 s, not classifying it friendly. Combat defence remains available.");
-        DismissRejectedSelection(hwnd, reader, player, target);
-    }
+    private static bool ShouldApproachPoolCandidate(bool hasSelection, bool hasCandidate, double distance)
+        => !hasSelection && hasCandidate && double.IsFinite(distance) && distance > PoolApproachYd && distance <= SearchYd;
 
     private static bool PreferNearerPoolCandidate(bool unverified, bool haveNearest, bool same,
                                                    double selectedYd, double nearestYd)
@@ -1726,9 +1678,9 @@ internal static class GrindRunner
             ClickAimInput.TapKey(hwnd, 0x70, 40);
             if (ClickAimAbort.Wait(TabSettleMs) || _stop) return;
             if (ObjectManager.Wow == memory && ObjectManager.WowB == reader && reader.ReadTargetGuid() == player)
-                Logging.Write("[Grind] moved selection off rejected " + rejected + " to self (F1 verified)");
+                Logging.Write("[Grind] moved selection off " + rejected + " to self (F1 verified)");
             else
-                Logging.Write("[Grind] F1 did not confirm self-target; rejected selection remains excluded from combat");
+                Logging.Write("[Grind] F1 did not confirm self-target; selection was not cleared");
         }
         catch { Logging.Write("[Grind] could not verify the rejected target was dismissed"); }
     }
@@ -1780,15 +1732,13 @@ internal static class GrindRunner
          * definition, and the level band and the distance are checked here. */
         if (TryPullOnTheWay(hwnd, me)) return true;
 
-        /* TAB can only offer what is in front of the character, so a mob beside or behind it
-         * leaves the walk running. The unit pool has no such blind spot: if something alive and
-         * level-viable is standing inside TAB's reach, stop the walk and let the main loop face
-         * it and ask TAB - a unit further out than TAB can see is not worth stopping for, because
-         * the walk itself is closing that distance. */
+        /* The pool has no facing blind spot. Stop for a level-viable observation
+         * within the search radius; the main loop can approach distant candidates
+         * on a validated mesh before asking TAB. This does not establish hostility. */
         WowBObservedUnit poolUnit;
         double poolYd;
         int poolLive, poolUnread;
-        if (NearestKillable(snap, me.Location.X, me.Location.Y, TabReachYd, out poolUnit, out poolYd,
+        if (NearestKillable(snap, me.Location.X, me.Location.Y, radius, out poolUnit, out poolYd,
                             out poolLive, out poolUnread))
         {
             if (unchecked(Environment.TickCount - _poolQuietAt) > 5000)
@@ -1797,7 +1747,7 @@ internal static class GrindRunner
                 Logging.Write(string.Format(CultureInfo.InvariantCulture,
                     "[Grind] the pool has {0} alive and level-viable {1:F1} yd away ({2} in the pool inside "
                     + "{3:F0} yd, {4} of them unreadable) - stopping the walk to deal with it",
-                    poolUnit.Guid, poolYd, poolLive, TabReachYd, poolUnread));
+                    poolUnit.Guid, poolYd, poolLive, radius, poolUnread));
             }
             return true;
         }
@@ -1946,7 +1896,7 @@ internal static class GrindRunner
                 continue;
             }
             if (report.Length > 0) Logging.Write("[Grind] " + report);
-            if (_combatHold) { clearScans = 0; continue; }
+            if (_combatHold || _poolApproachHandled) { clearScans = 0; continue; }
             if (_lastEngageRejected && TryReadGatherCombat(out bool fighting) && !fighting)
             {
                 Logging.Write("[Grind] no acceptable target after TAB and pool checks; leaving this hotspot");
@@ -2901,7 +2851,7 @@ internal static class GrindRunner
         int result = 0;
         for (int waited = 0; waited < LootSettleMs && !_stop; waited += 300)
         {
-            ClickAimAbort.Wait(300);
+            if (ClickAimAbort.Wait(300) || _stop) break;
             if (!BodyStillThere(corpse.Guid))
             {
                 result = 1;
@@ -2919,24 +2869,15 @@ internal static class GrindRunner
             "[Loot] the right-click on {0} landed ({1}); {2}", corpse.Guid, how,
             result > 0 ? "the body is gone, so the client took it" : "the body is still in the pool as bones"));
 
-        /* Leave the screen the way a player would: nothing targeted. The body is still selected
-         * by the loot click, and a left-click on ground the search already proved empty clears
-         * the target without moving, attacking, or opening anything. */
-        DeselectIfPossible(hwnd);
+        // Loot can leave the corpse selected. Do not click a stale screen pixel:
+        // if it is still selected and combat is clear, F1 targets self and is verified.
+        WowBReader? afterLootReader = ObjectManager.WowB;
+        if (!_stop && !ClickAimAbort.Requested && afterLootReader != null &&
+            Capture(out WowBWorldSnapshot? afterLoot) && afterLoot != null &&
+            afterLoot.TryGetLocalPlayer(out WowBObservedUnit afterLootPlayer))
+            DismissRejectedSelection(hwnd, afterLootReader, afterLootPlayer.Guid, corpse.Guid);
 
         return result;
-    }
-
-    /// <summary>
-    /// Clears the current target with a left-click on a pixel a probe found to be empty ground.
-    /// A left-click there deselects and does nothing else; there is no ESC in this client that
-    /// does not open the Game Menu.
-    /// </summary>
-    private static void DeselectIfPossible(IntPtr hwnd)
-    {
-        if (!_emptyPixelKnown) return;
-        ClickAimInput.LeftClick(hwnd, _emptyPixelX, _emptyPixelY);
-        Thread.Sleep(120);
     }
 
     /// <summary>The click found no point on the body at all.</summary>
@@ -3078,7 +3019,7 @@ internal static class GrindRunner
     /// </summary>
     private static bool NearestKillable(WowBWorldSnapshot snap, double px, double py, double radius,
                                         out WowBObservedUnit unit, out double yards,
-                                        out int live, out int unread)
+                                        out int live, out int unread, int? playerLevel = null)
     {
         unit = default(WowBObservedUnit);
         yards = double.MaxValue;
@@ -3086,7 +3027,7 @@ internal static class GrindRunner
         unread = 0;
 
         Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
-        int myLevel = PlayerLevel();
+        int myLevel = playerLevel ?? PlayerLevel();
 
         for (int i = 0; i < snap.Units.Count; i++)
         {
@@ -3574,14 +3515,6 @@ internal static class GrindRunner
                 WowBGuid after = reader.ReadTargetGuid();
                 if (after != unit.Guid)
                 {
-                    /* Nothing selected after the click: that pixel is ground (or blank UI), which
-                     * makes it a safe place to deselect later - see DeselectIfPossible. */
-                    if (after.IsEmpty && !_emptyPixelKnown)
-                    {
-                        _emptyPixelX = dx;
-                        _emptyPixelY = dy;
-                        _emptyPixelKnown = true;
-                    }
                     continue;
                 }
 
@@ -3651,7 +3584,7 @@ internal static class GrindRunner
     // ticks keep checking combat/STOP between steps. Re-plan for moving targets.
     // Count stalled replans for the whole chase, not position changes from walking
     // backwards: the old watchdog repeatedly reset "attempt 1" at the same wall.
-    private static bool ChaseStep(IntPtr hwnd, ChaseWatch watch, WowBObservedUnit target, out string why)
+    private static bool ChaseStep(IntPtr hwnd, ChaseWatch watch, WowBObservedUnit target, out string why, bool approachOnly = false)
     {
         why = "";
         if (_stop || ClickAimAbort.Requested) { why = "stopped"; return false; }
@@ -3717,11 +3650,90 @@ internal static class GrindRunner
         }
         if (!ClickAimKeySteer.TryReadFacing(out double facing) || !double.IsFinite(facing))
         { ClickAimKeySteer.ReleaseHeld(); why = "facing unreadable for mesh-point steering"; return false; }
+        if (approachOnly && (_stop || ClickAimAbort.Requested || _vendorDue ||
+            !TryReadGatherCombat(out bool approachCombat) || approachCombat))
+        { ClickAimKeySteer.ReleaseHeld(); why = "pool approach interrupted before steering"; return false; }
         double remaining;
         if (!ClickAimKeySteer.Steer(point.X, point.Y, hwnd, true, out remaining, true))
         { ClickAimKeySteer.ReleaseHeld(); why = "mesh-point steering failed"; return false; }
         ClickAimAbort.Wait(90);
         return true;
+    }
+
+    // A pool unit's position is only a navigation lead, not proof that it is
+    // hostile. No click or attack is sent here; normal TAB/pool handling resumes
+    // after any eligible unit comes within the requested 40 yd radius.
+    private static string ApproachPoolCandidate(IntPtr hwnd, WowBObservedUnit initial)
+    {
+        int started = Environment.TickCount;
+        var watch = new ChaseWatch(started);
+        WowBReader? reader = ObjectManager.WowB;
+        GreenMagic.Memory? memory = ObjectManager.Wow;
+        if (reader == null || memory == null || initial.Guid.IsEmpty) return "cannot read distant pool candidate";
+        Logging.Write("[Grind] approaching distant pool candidate " + initial.Guid +
+            " on a validated mesh; hostility is unknown, TAB will be retried within 40 yd");
+        try
+        {
+            while (!_stop && !ClickAimAbort.Requested && !_vendorDue)
+            {
+                if (ObjectManager.Wow != memory || ObjectManager.WowB != reader)
+                    return "client attachment changed during pool approach";
+                if (!TryReadGatherCombat(out bool fighting) || fighting)
+                {
+                    _combatHold = true;
+                    return "combat or unreadable combat state interrupted the pool approach";
+                }
+                if (!Capture(out WowBWorldSnapshot? current) || current == null ||
+                    !current.TryGetLocalPlayer(out WowBObservedUnit me))
+                {
+                    ClickAimAbort.Wait(300);
+                    return "cannot refresh player position during pool approach";
+                }
+                // Reuse the local player from this snapshot for the level checks;
+                // PlayerLevel() would capture the entire pool twice more per step.
+                if (!reader.TryGetUnitFields(me.UnitAddress, out WowBReader.WowBUnitFields playerFields))
+                {
+                    _combatHold = true;
+                    ClickAimAbort.Wait(300);
+                    return "player fields unreadable; pausing the pool approach";
+                }
+                int approachLevel = playerFields.Level <= 100 ? (int)playerFields.Level : 0;
+                if (!current.TryGetUnit(initial.Guid, out WowBObservedUnit candidate) ||
+                    candidate.Guid != initial.Guid || candidate.RecordAddress != initial.RecordAddress ||
+                    candidate.UnitAddress != initial.UnitAddress || candidate.IsLocalPlayer || candidate.HasPlayerVtable ||
+                    !reader.TryGetUnitFields(candidate.UnitAddress, out WowBReader.WowBUnitFields fields) ||
+                    !SelectionFieldsValid(fields.Health, fields.UnitFlags, fields.Level, approachLevel) ||
+                    _notViable.Contains(candidate.Guid) || Refused(candidate.Guid) || Unreachable(candidate.Guid))
+                {
+                    ClickAimAbort.Wait(150);
+                    return "distant pool candidate disappeared, changed identity or became ineligible; reconsidering targets";
+                }
+
+                double distance = ClickAimMath.Len(candidate.Location.X - me.Location.X, candidate.Location.Y - me.Location.Y);
+                if (!double.IsFinite(distance) || distance > GiveUpYd)
+                    return DropUnreachable(candidate, "candidate moved outside the search margin");
+                if (NearestKillable(current, me.Location.X, me.Location.Y, PoolApproachYd,
+                                    out _, out _, out _, out int unreadNearby, approachLevel))
+                    return "a level-eligible pool candidate is within 40 yd; stopping to retry TAB";
+                if (unreadNearby > 0)
+                {
+                    _combatHold = true;
+                    ClickAimAbort.Wait(300);
+                    return "nearby unit fields are unreadable; pausing the pool approach";
+                }
+                if (unchecked(Environment.TickCount - started) >= PoolApproachTimeoutMs)
+                    return DropUnreachable(candidate, "pool approach exceeded its 45-second limit");
+                if (!ChaseStep(hwnd, watch, candidate, out string why, true))
+                {
+                    if (_stop || ClickAimAbort.Requested || _vendorDue) return "pool approach stopped";
+                    if (!TryReadGatherCombat(out bool interrupted) || interrupted)
+                    { _combatHold = true; return "combat interrupted the pool approach"; }
+                    return DropUnreachable(candidate, why);
+                }
+            }
+            return _vendorDue ? "vendor trip interrupted the pool approach" : "pool approach stopped";
+        }
+        finally { ClickAimKeySteer.ReleaseHeld(); }
     }
 
     /// <summary>
@@ -3772,7 +3784,7 @@ internal static class GrindRunner
     /// key did not cast and falls back to melee. Nothing here is reported as working
     /// because it was sent.
     /// </summary>
-    private static string Fight(IntPtr hwnd, double px, double py, bool unverified, bool defenceOnly = false, WowBGuid defenceExpected = default(WowBGuid), WowBGuid expectedPool = default(WowBGuid))
+    private static string Fight(IntPtr hwnd, double px, double py, bool unverified, bool defenceOnly = false, WowBGuid defenceExpected = default(WowBGuid))
     {
         int started = Environment.TickCount;
         int lastHealth = -1;
@@ -3824,8 +3836,6 @@ internal static class GrindRunner
 
         if (defenceOnly && target.Guid != defenceExpected)
             return "target changed before defence began; not attacking";
-        if (!WowBCursorProbe.ExpectedPoolTargetMatches(expectedPool, target.Guid))
-            return "pool target changed after cursor verification; not attacking";
         WowBGuid defenceTarget = target.Guid;
         lastHealth = Health(target);
 
@@ -4857,6 +4867,10 @@ internal static class GrindRunner
             check("selectionRejectsDead", !SelectionFieldsValid(0, 0, 5, 7));
             check("selectionRejectsFlagged", !SelectionFieldsValid(10, 0x200, 5, 7));
             check("selectionUnknownLevel", SelectionFieldsValid(10, 0, 0, 7));
+            check("approachAt100", ShouldApproachPoolCandidate(false, true, 100));
+            check("approachBoundary", !ShouldApproachPoolCandidate(false, true, 40) && ShouldApproachPoolCandidate(false, true, 40.01));
+            check("approachNotOutsideOrUnknown", !ShouldApproachPoolCandidate(false, true, 100.01) && !ShouldApproachPoolCandidate(false, true, double.NaN));
+            check("approachRequiresCandidateAndNoSelection", !ShouldApproachPoolCandidate(false, false, 90) && !ShouldApproachPoolCandidate(true, true, 90));
             check("preferNearerUnverified", PreferNearerPoolCandidate(true, true, false, 93.9, 67.4));
             check("keepTabConfirmed", !PreferNearerPoolCandidate(false, true, false, 93.9, 67.4));
             check("keepNearUnverified", !PreferNearerPoolCandidate(true, true, false, 75, 67.4));

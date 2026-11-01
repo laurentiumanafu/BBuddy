@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise the actual Grind defence method against deterministic game/input stubs.
+"""Exercise actual Grind defence, approach and dismissal against deterministic stubs.
 
 Requires a .NET 10 SDK. No game, native input, or production project build is used.
 """
@@ -15,13 +15,25 @@ fixture = (Path(__file__).parent / "Fixture.cs.txt").read_text(encoding="utf-8")
 level = source[source.index("    private static bool LevelViable("):source.index("    /// <summary>\n    /// Whether the walk should stop here.")]
 defence = source[source.index("    private static bool DefenceFieldsValid("):source.index("    private static bool InRealCombat()")]
 selection = source[source.index("    private static bool SelectionFieldsValid("):source.index("    // Do not treat a failed read or a corpse")]
+approach_policy = source[source.index("    private static bool ShouldApproachPoolCandidate("):source.index("    private static bool PreferNearerPoolCandidate(")]
+approach = source[source.index("    private static string ApproachPoolCandidate("):source.index("    /// <summary>\n    /// Drops a target the fight could not walk to")]
+dismiss = source[source.index("    private static void DismissRejectedSelection("):source.index("    /// <summary>\n    /// Whether a mob of")]
+chase = source[source.index("    private sealed class ChaseWatch"):source.index("    // A pool unit's position is only a navigation lead")]
+# Guard the control-flow wiring as well: approach is before pixel search and
+# both outer loops retry after it, rather than treating movement as a fight.
+engage = source[source.index("    private static bool TryEngage("):source.index("    private static bool TryCurrentSelection(")]
+assert engage.index("ShouldApproachPoolCandidate(have, haveNearest, nearestYd)") < engage.index("FindUnitPixel(")
+assert "report = ApproachPoolCandidate(hwnd, nearest);" in engage
+assert source.count("_combatHold || _poolApproachHandled") == 2
 assert fixture.count("// __PRODUCTION_METHODS__") == 1
-fixture = fixture.replace("// __PRODUCTION_METHODS__", level + "\n" + selection + "\n" + defence)
-# Read constants from the same production file so these boundary tests cannot
-# accidentally pass against a stale copy of the level limits.
+fixture = fixture.replace("// __PRODUCTION_METHODS__", level + "\n" + selection + "\n" + approach_policy + "\n" + defence + "\n" + approach + "\n" + dismiss + "\n" + chase)
+# Read constants from production so boundary and movement tests cannot pass
+# against stale copies of the thresholds or watchdog limits.
 constants = []
-for name in ("LevelAbovePlayer", "LevelBelowPlayer"):
-    matches = re.findall(r"^\s*private const int " + name + r"\s*=\s*\d+;", source, re.MULTILINE)
+for name in ("LevelAbovePlayer", "LevelBelowPlayer", "SearchYd", "GiveUpYd", "PoolApproachYd",
+             "PoolApproachTimeoutMs", "GatherDefenceRadius", "TabVk", "TabSettleMs", "NotAFightFlag",
+             "StuckMoveYd", "StuckMs", "StuckEscapes", "ChaseNoClosingMs"):
+    matches = re.findall(r"^\s*private const (?:int|uint|double) " + name + r"\s*=[^;\r\n]+;", source, re.MULTILINE)
     if len(matches) != 1:
         raise ValueError("Expected exactly one production constant " + name)
     constants.append(matches[0].strip())

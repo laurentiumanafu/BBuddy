@@ -52,20 +52,6 @@ namespace Styx.Logic.Pathing
             Check(WowBCursorProbe.ActorChangeReason(actor, far, true).Contains("selected NPC moved"), "target movement reason");
             Check(WowBCursorProbe.ActorChangeReason(actor, bad, false).Contains("player moved"), "player unreadable position reason");
             Check(!WowBCursorProbe.StartPosted(true, _ => { }), "posted probe requires attachment");
-            Check(!WowBCursorProbe.PoolNeedsCursorGate(false, true, false), "opt-out keeps legacy behavior");
-            Check(!WowBCursorProbe.PoolNeedsCursorGate(true, false, false), "TAB and other paths not gated");
-            Check(WowBCursorProbe.PoolNeedsCursorGate(true, true, false), "unconfirmed pool selection deferred");
-            Check(!WowBCursorProbe.PoolNeedsCursorGate(true, true, true), "fresh hint proceeds to existing pool failsafe");
-            var expectedGuid = new WowBGuid(123, 456);
-            Check(WowBCursorProbe.ExpectedPoolTargetMatches(default, expectedGuid), "legacy fight not subject to pool identity gate");
-            Check(WowBCursorProbe.ExpectedPoolTargetMatches(expectedGuid, expectedGuid), "confirmed full GUID stays selected");
-            Check(!WowBCursorProbe.ExpectedPoolTargetMatches(expectedGuid, new WowBGuid(123, 457)), "same low GUID with different high rejected");
-            Check(!WowBCursorProbe.TryGrindDaggerHover(IntPtr.Zero, default, 0, 0, () => false, out _), "unattached pool hover rejected before native input");
-            bool cancelCalled = false;
-            ClickAimAbort.Requested = true;
-            Check(!WowBCursorProbe.TryGrindDaggerHover(IntPtr.Zero, default, 0, 0, () => { cancelCalled = true; return false; }, out _) &&
-                  !cancelCalled, "STOP short-circuits pool hover before native input");
-            ClickAimAbort.Requested = false;
             var targetGuid = new WowBGuid(11, 22); var otherGuid = new WowBGuid(33, 44);
             Check(WowBCursorProbe.DaggerTransition(targetGuid, otherGuid, targetGuid, new string('B', 64), bright), "bright dagger transition");
             Check(WowBCursorProbe.DaggerTransition(targetGuid, default, targetGuid, new string('B', 64), dark), "dark dagger transition");

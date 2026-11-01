@@ -2350,9 +2350,8 @@ The STOP check now interrupts the heal verification wait as well.
 Normal voluntary Grind pulls use the inclusive `player level - 6` through `player
 level + 3` band (unknown levels still pass the existing check). Combat defence
 no longer applies that band: even a level-3 NPC can be considered for defence
-of a level-10 player. This is independent of the optional pool dagger gate, which is
-not a defence gate. Both Grind and Gather defence still require readable active
-combat, a nearby live NPC without the existing exclusion flags, and a fresh
+of a level-10 player. The former optional pool dagger gate is removed from
+gameplay. Both Grind and Gather defence still require readable active combat, a nearby live NPC without the existing exclusion flags, and a fresh
 changed TAB selection of that candidate; Grind also retains its prior
 session-refusal check. These heuristics do **not** establish attacker identity or
 friendliness, so they may still fail to defend or choose the wrong nearby NPC.
@@ -2370,5 +2369,34 @@ not a full Windows application build or a live game test.
 For example, a level-10 character may voluntarily select levels 4 through 13;
 level 3 is outside the pull band. The independent defence routine can still
 consider that level-3 attacker in combat. The limits do not change the profile
-subprofile selection rules, the pool verification, or the experimental cursor
-gate. Unknown level values remain allowed by the existing policy.
+subprofile selection rules or the existing pool verification. Unknown level
+values remain allowed by the existing policy.
+
+
+## Distant pool approach and corpse selection
+
+The experimental dagger gate and checkbox have been removed; old saved values
+are ignored. The cursor tools remain diagnostic only. A failure to select a
+pixel at 97 yd while the beta was disabled does not establish that the cursor
+gate caused that failure.
+
+If no candidate is selected and the nearest eligible pool observation is more
+than 40 yd away (within the 100 yd search), Grind now approaches it in short
+steps using the validated combat mesh path, then retries the normal TAB and
+existing pool fallback once a candidate is within 40 yd. The pool cannot
+identify friendly NPCs, and a changed TAB target is not proof of attacker
+identity. This may approach a friendly unit; do not use unattended in a town.
+There is no direct-walk fallback if path validation fails. The approach checks
+STOP, attachment, identity, current eligibility, combat, vendor request, nearby
+candidates and progress; timeout or path/stall failure temporarily defers the
+candidate. Missing/unreadable data and moving targets can still interrupt or
+prevent the approach. Profile blackspots are mesh costs, not absolute barriers.
+
+A selected corpse is now moved off with the existing guarded, verified F1
+self-target mechanism after looting and before a new search, rather than clicking
+an old screen pixel. F1 must be bound to select self; if it is rebound the code
+cannot verify clearing. No ESC is sent. Two failed pool-pixel searches now cause
+a 20-second temporary deferral rather than permanently labelling a unit
+unviable; the separate existing TAB-miss cooldown may last longer. This does
+not establish that a target is friendly or unattackable.
+These changes need a Windows build and supervised live validation.

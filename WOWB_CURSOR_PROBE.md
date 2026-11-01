@@ -15,8 +15,8 @@ do not send mouse or keyboard messages. A separate, explicitly started
 background experiment posts two mouse-move messages, as described below; it
 sends no mouse clicks or keyboard messages. Neither mode calls client functions,
 uses Lua, writes game memory, interacts, selects or attacks. Both diagnostics are disabled
-while the bot is running or paused. A separate **opt-in Grind pool gate** is
-described below; it does not alter selling or the existing pool failsafe.
+while the bot is running or paused. The experimental Grind pool gate has been
+removed from gameplay; the diagnostics remain separate.
 
 ## First sample set (2026-11-01)
 
@@ -54,9 +54,7 @@ The diagnostic now reports `observed_highlighted_dagger` or
 matches the candidate, and the fingerprint equals one of the two images from
 this installation. Off-target controls and everything else report `unknown`,
 **never friendly**. These hints can fail under other resolutions, client or
-cursor settings, and the candidate can be stale. The diagnostics do not authorize input. The separately opted-in Grind beta
-uses the same fingerprints as a conservative pool gate, not proof of a live
-attack predicate; see below.
+cursor settings, and the candidate can be stale. The diagnostics do not authorize gameplay input or establish a live attack predicate.
 
 A further obstacle remains: these observations are of the real Windows desktop
 cursor while the user manually hovered a foreground game. Grind's existing
@@ -64,8 +62,8 @@ pool-selection search uses posted mouse messages, often with the game in the
 background. Whether that changes the Windows cursor in the same way, and ties it
 to the intended game object reliably, is not established. Treating a current desktop
 cursor as the result of a posted hover could associate the wrong NPC and is
-unsafe. The separate, explicitly opted-in test below investigates this; its
-limited results motivated the opt-in pool gate described below.
+unsafe. The separate, explicitly opted-in test below investigates this as a
+diagnostic only.
 
 ## First background posted-hover result (2026-11-01)
 
@@ -109,49 +107,13 @@ only the two previously observed dagger-image *hints*, with all other shapes
 `unknown`; a hint is not an action authorization, and unknown does not mean
 friendly. The diagnostic itself does not make targeting or combat decisions.
 
-## Opt-in Grind pool gate (beta)
+## Grind pool gate removed
 
-In **Gather & tools → Gather settings**, enable **Grind beta: require a dagger
-for pool picks**, then Save while the bot is stopped. It is disabled by default
-and applies to the 70291 x64 Grind pool fallback, not legacy 3.3.5a. It does not add a cursor check to TAB selection, already-selected non-pool
-targets, combat defence, gathering, vendor behavior, level bands, mesh
-navigation, or the existing
-10-second pool verification/damage failsafe. Consequently it is **not a general
-guarantee that no friendly NPC can ever be selected or attacked**.
-
-After the existing left-click pool search has selected a live NPC at a verified
-pixel, the beta posts a move away and a move back, waits for the client, and
-requires a fresh candidate mouseover transition from a different GUID to the
-full selected GUID. It also requires a visible, stable Windows cursor image on
-both points, a change in the image, and an on-target fingerprint equal to either
-of the two user-observed dagger images. It rechecks the selected unit's GUID,
-addresses and health, attachment, partial 70291 signature, window layout,
-foreground window, physical mouse button state, desktop pointer position, STOP,
-and the provisional player combat state. STOP or combat interrupts the check.
-These reads and posted messages are non-atomic; changes-away-and-back cannot be
-ruled out. A dagger is only an additional hint and does not replace the existing
-pool verification or establish live attackability.
-
-If the gate cannot confirm a dagger—including unknown images, foreground/focus
-changes, stale GUID, movement, hidden cursor, screen/UI occlusion, moving NPC,
-client settings, or read failure—the pool target is **temporarily deferred for
-20 seconds**, not classified as friendly or session-blacklisted. This uses the
-existing temporary refusal list, so that same GUID may also be skipped if TAB
-offers it during the pause. Grind tries other targets and its regular defensive
-behavior still applies. Actual monsters
-can therefore be skipped; the close-range dagger has not been tested in the
-background. The fingerprint may vary across machines, cursor settings, DPI or
-client versions. Press STOP if behavior is unexpected and uncheck the beta to
-return to existing pool behavior. Logs beginning `[Grind] pool cursor beta:`
-report whether a hint was observed or why it was unconfirmed. Do not use this as
-an automated vendor/friend classifier or while relying on unattended safety.
-
-For a first supervised test, start near friendly NPCs and an appropriate-level
-monster, in windowed or borderless mode. Enable the beta and run Grind briefly;
-verify whether unconfirmed pool picks are deferred, whether the monster is
-picked, and whether STOP works. Share the resulting normal Grind log privately.
-A TAB-selected target does not pass through this pool gate, so an absence of
-beta log lines can mean TAB handled selection rather than that the check failed.
+The experimental dagger gate was removed from Grind at the user's request. An
+old `RequireDaggerForPoolPull` value in a settings file is ignored; there is no
+checkbox and no cursor-based gameplay gate. The existing pool selection and
+TAB/damage failsafe remain. The diagnostics below are still available while the
+bot is stopped; their samples and fingerprints do not establish hostility.
 
 ## Background posted-hover experiment
 
@@ -216,7 +178,7 @@ Windows reports the cursor of the actual foreground desktop, which may be the bo
 window rather than the background game; even matching a foreground dagger hash
 can be a stale or unrelated desktop cursor. Bitmap stability and identity checks
 are non-atomic, and the partial build signature is not full build verification.
-The diagnostic makes no gameplay decisions; the optional Grind pool gate is separate.
+The diagnostic makes no gameplay decisions; the former Grind pool gate is disabled.
 
 ## How to collect one controlled set
 

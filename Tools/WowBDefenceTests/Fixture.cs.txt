@@ -4,9 +4,10 @@ using System.Globalization;
 using Styx.WoWInternals;
 using Styx.Helpers;
 
+namespace GreenMagic { sealed class Memory { public IDisposable TemporaryCacheState(bool enabled) => new Scope(); private sealed class Scope : IDisposable { public void Dispose() { } } } }
 namespace Styx.Helpers
 {
-    static class Logging { public static void Write(string message) { } }
+    static class Logging { public static string Last = ""; public static void Write(string message) { Last = message; } }
 }
 namespace Styx.WoWInternals
 {
@@ -22,13 +23,13 @@ namespace Styx.WoWInternals
         public static bool operator !=(WowBGuid a, WowBGuid b) => !a.Equals(b);
         public override string ToString() => value.ToString();
     }
-    struct Location { public double X, Y; }
+    struct Location { public double X, Y, Z; }
     struct WowBObservedUnit
     {
         public WowBGuid Guid;
         public bool IsLocalPlayer, HasPlayerVtable;
         public Location Location;
-        public ulong UnitAddress;
+        public ulong UnitAddress, RecordAddress;
     }
     sealed class WowBReader
     {
@@ -44,22 +45,49 @@ namespace Styx.WoWInternals
         public WowBObservedUnit Player;
         public WowBReader Reader = null!;
         public bool TryGetLocalPlayer(out WowBObservedUnit player) { player = Player; return !player.Guid.IsEmpty; }
+        public bool TryGetUnit(WowBGuid guid, out WowBObservedUnit found)
+        {
+            foreach (var unit in Units) if (unit.Guid == guid) { found = unit; return true; }
+            found = default; return false;
+        }
         public bool TryGetSelectedTarget(out WowBObservedUnit target)
         {
             foreach (var unit in Units) if (unit.Guid == Reader.Selected) { target = unit; return true; }
             target = default; return false;
         }
     }
-    static class ObjectManager { public static WowBReader? WowB; }
+    static class ObjectManager { public static WowBReader? WowB; public static GreenMagic.Memory? Wow; }
 }
 namespace Styx.Logic.Pathing
 {
     static class ClickAimAbort { public static bool Requested; public static bool Wait(int ms) => Requested; }
     static class ClickAimMath { public static double Len(double x, double y) => Math.Sqrt(x*x + y*y); }
+    struct WoWPoint { public double X, Y, Z; public WoWPoint(double x, double y, double z) { X=x; Y=y; Z=z; } }
+    sealed class RoutePoint { public double X, Y, Z; public string Kind = ""; }
+    static class NavGridStore { public static int MapId = 1; }
+    static class ClickAimDiagnostics { public static uint ResolveMap(uint map, double x, double y) => map; }
+    static class ClickAimPositions { public static bool TryRead(out double x, out double y) { x = Harness.X; y = 0; return true; } }
+    static class RouteRunner
+    {
+        public static WoWPoint[]? TryCombatMeshPath(double x, double y, RoutePoint goal)
+        {
+            Harness.PathQueries++;
+            if (Harness.CombatOnPlan) Harness.Combat = true;
+            if (Harness.StopOnPlan) ClickAimAbort.Requested = true;
+            if (Harness.VendorOnPlan) Harness.RequestVendor();
+            if (Harness.NoPath) return null;
+            return new[] { new WoWPoint(x, y, 0), new WoWPoint(goal.X, goal.Y, goal.Z) };
+        }
+    }
     static class ClickAimKeySteer
     {
         public static bool Face(double x, double y, IntPtr hwnd, double angle, int attempts) => true;
-        public static void ReleaseHeld() { }
+        public static int Releases;
+        public static void ReleaseHeld() { Releases++; }
+        public static void BeginMeshPoint() { }
+        public static bool TryReadFacing(out double facing) { facing = 0; return true; }
+        public static bool Steer(double x, double y, IntPtr hwnd, bool keep, out double remaining, bool mesh)
+        { remaining = 0; if (!mesh) throw new Exception("non-mesh steering"); Harness.Step(); return true; }
     }
     static class ClickAimInput
     {
@@ -85,11 +113,12 @@ namespace Styx.Logic.Pathing
     }
     static class Harness
     {
-        private const uint NotAFightFlag = 0x2 | 0x100 | 0x200;
-        private const double GatherDefenceRadius = 12.0;
-        private const int TabVk = 0x09, TabSettleMs = 250;
         // __PRODUCTION_LEVEL_CONSTANTS__
-        private static bool _stop;
+        private static bool _stop, _vendorDue, _combatHold;
+        private static int steps, dropped;
+        internal static bool NoPath, CombatOnPlan, StopOnPlan, VendorOnPlan;
+        internal static int PathQueries;
+        private static bool stopOnStep, combatOnStep, vendorOnStep, nearerOnStep;
         private static readonly HashSet<WowBGuid> _notViable = new();
         private static WowBWorldSnapshot snapshot = null!;
         internal static bool Combat, CombatReadable;
@@ -97,6 +126,44 @@ namespace Styx.Logic.Pathing
         private static int fightCalls;
         private static bool TryReadGatherCombat(out bool fighting) { fighting = Combat; return CombatReadable; }
         private static bool Capture(out WowBWorldSnapshot? result) { result = snapshot; return true; }
+        private static int PlayerLevel() => 10;
+        private static bool Refused(WowBGuid guid) => false;
+        private static bool Unreachable(WowBGuid guid) => false;
+        private static string DropUnreachable(WowBObservedUnit unit, string why) { dropped++; return "deferred: " + why; }
+        internal static double X => snapshot.Player.Location.X;
+        internal static void RequestVendor() { _vendorDue = true; }
+        internal static void Step()
+        {
+            steps++;
+            snapshot.Player = new WowBObservedUnit { Guid = PlayerGuid, IsLocalPlayer = true, UnitAddress = 1,
+                Location = new Location { X = snapshot.Player.Location.X + 20 } };
+            if (combatOnStep) Combat = true;
+            if (stopOnStep) ClickAimAbort.Requested = true;
+            if (vendorOnStep) _vendorDue = true;
+            if (nearerOnStep)
+            {
+                var near = new WowBObservedUnit { Guid = new WowBGuid(3), UnitAddress = 3, RecordAddress = 30,
+                    Location = new Location { X = snapshot.Player.Location.X + 5 } };
+                snapshot.Units.Add(near);
+                ObjectManager.WowB!.Fields[3] = new WowBReader.WowBUnitFields { Health = 100, Level = 5 };
+            }
+        }
+        private static bool NearestKillable(WowBWorldSnapshot snap, double px, double py, double radius,
+            out WowBObservedUnit unit, out double yards, out int live, out int unread, int? playerLevel = null)
+        {
+            unit = default; yards = double.MaxValue; live = unread = 0;
+            foreach (var item in snap.Units)
+            {
+                if (item.IsLocalPlayer || item.HasPlayerVtable || item.Guid.IsEmpty) continue;
+                double d = ClickAimMath.Len(item.Location.X - px, item.Location.Y - py);
+                if (d > radius) continue;
+                if (!snap.Reader.TryGetUnitFields(item.UnitAddress, out var fields)) { unread++; continue; }
+                if (!SelectionFieldsValid(fields.Health, fields.UnitFlags, fields.Level, playerLevel ?? PlayerLevel()) || _notViable.Contains(item.Guid)) continue;
+                live++;
+                if (d > 0.4 && d < yards) { unit = item; yards = d; }
+            }
+            return live > 0 && yards < double.MaxValue;
+        }
         private static string Fight(IntPtr hwnd, double px, double py, bool unverified, bool defenceOnly, WowBGuid expected)
         {
             if (!defenceOnly || unverified || expected != TargetGuid) throw new Exception("invalid defence fight arguments");
@@ -109,14 +176,19 @@ namespace Styx.Logic.Pathing
         {
             var reader = new WowBReader();
             ObjectManager.WowB = reader;
+            ObjectManager.Wow = new GreenMagic.Memory();
+            reader.Fields[1] = new WowBReader.WowBUnitFields { Health = 100, Level = 10 };
             reader.Fields[2] = new WowBReader.WowBUnitFields { Health = health, UnitFlags = flags, Level = level };
             var player = new WowBObservedUnit { Guid = PlayerGuid, IsLocalPlayer = true, UnitAddress = 1 };
-            var target = new WowBObservedUnit { Guid = TargetGuid, UnitAddress = 2, Location = new Location { X = distance } };
+            var target = new WowBObservedUnit { Guid = TargetGuid, UnitAddress = 2, RecordAddress = 20, Location = new Location { X = distance } };
             snapshot = new WowBWorldSnapshot { Reader = reader, Player = player, Units = new() { player, target } };
             _stop = false; ClickAimAbort.Requested = false; Combat = true; CombatReadable = true; fightCalls = 0;
             ClickAimInput.Keys = 0; ClickAimInput.F1Works = true; ClickAimInput.TabWorks = true;
             ClickAimInput.CombatEndsOnTab = false; ClickAimInput.TargetDiesOnTab = false; ClickAimInput.StopOnTap = false; ClickAimInput.TabTarget = TargetGuid;
-            _notViable.Clear();
+            _notViable.Clear(); _vendorDue = false; _combatHold = false; steps = 0; dropped = 0;
+            NoPath = CombatOnPlan = StopOnPlan = VendorOnPlan = false; PathQueries = 0;
+            stopOnStep = combatOnStep = vendorOnStep = nearerOnStep = false;
+            ClickAimKeySteer.Releases = 0;
         }
         private static void Require(bool condition, string name) { if (!condition) throw new Exception(name); }
         private static string Defend(bool grind = true) => DefendNearby(new IntPtr(1), grind, out _);
@@ -144,7 +216,61 @@ namespace Styx.Logic.Pathing
             Setup(5); ClickAimInput.StopOnTap = true; Require(Defend() == "stopped" && fightCalls == 0 && ClickAimInput.Keys == 1, "STOP during TAB blocks fight");
             Setup(5); CombatReadable = false; Require(Defend() == "" && fightCalls == 0 && ClickAimInput.Keys == 0, "unreadable combat blocks defence input");
             Setup(5); ClickAimAbort.Requested = true; Require(Defend() == "" && fightCalls == 0 && ClickAimInput.Keys == 0, "STOP blocks defence input");
-            Console.WriteLine("Grind defence synthetic integration fixtures passed");
+            Setup(5); Combat = false; ObjectManager.WowB!.Selected = TargetGuid;
+            DismissRejectedSelection(new IntPtr(1), ObjectManager.WowB, PlayerGuid, TargetGuid);
+            Require(ObjectManager.WowB.Selected == PlayerGuid && ClickAimInput.Keys == 1 && Logging.Last.Contains("F1 verified"), "selected corpse is moved to verified self target");
+            Setup(5); Combat = false; ObjectManager.WowB!.Selected = TargetGuid; ClickAimInput.F1Works = false;
+            DismissRejectedSelection(new IntPtr(1), ObjectManager.WowB, PlayerGuid, TargetGuid);
+            Require(ObjectManager.WowB.Selected == TargetGuid && ClickAimInput.Keys == 1 && Logging.Last.Contains("not confirm"), "rebound F1 not falsely reported cleared");
+            Setup(5); ObjectManager.WowB!.Selected = TargetGuid;
+            DismissRejectedSelection(new IntPtr(1), ObjectManager.WowB, PlayerGuid, TargetGuid);
+            Require(ClickAimInput.Keys == 0, "no corpse deselection in combat");
+            Setup(5); Combat = false; _vendorDue = true; ObjectManager.WowB!.Selected = TargetGuid;
+            DismissRejectedSelection(new IntPtr(1), ObjectManager.WowB, PlayerGuid, TargetGuid);
+            Require(ClickAimInput.Keys == 0, "no corpse deselection during vendor request");
+            Setup(5); Combat = false; ObjectManager.WowB!.Selected = PlayerGuid;
+            DismissRejectedSelection(new IntPtr(1), ObjectManager.WowB, PlayerGuid, TargetGuid);
+            Require(ClickAimInput.Keys == 0, "changed target blocks deselection");
+            Setup(5); Combat = false; CombatReadable = false; ObjectManager.WowB!.Selected = TargetGuid;
+            DismissRejectedSelection(new IntPtr(1), ObjectManager.WowB, PlayerGuid, TargetGuid);
+            Require(ClickAimInput.Keys == 0, "unreadable combat blocks deselection");
+            Setup(5); Combat = false; ClickAimAbort.Requested = true; ObjectManager.WowB!.Selected = TargetGuid;
+            DismissRejectedSelection(new IntPtr(1), ObjectManager.WowB, PlayerGuid, TargetGuid);
+            Require(ClickAimInput.Keys == 0, "STOP blocks deselection");
+
+            Require(ShouldApproachPoolCandidate(false, true, 100) && ShouldApproachPoolCandidate(false, true, 40.01), "distant candidates enter approach");
+            Require(!ShouldApproachPoolCandidate(false, true, 40) && !ShouldApproachPoolCandidate(false, true, 100.01) && !ShouldApproachPoolCandidate(false, true, double.NaN), "approach range boundaries");
+            Require(!ShouldApproachPoolCandidate(false, false, 90) && !ShouldApproachPoolCandidate(true, true, 90), "no approach without candidate or with a selected target");
+            Setup(5, distance: 100); Combat = false;
+            Require(ApproachPoolCandidate(new IntPtr(1), snapshot.Units[1]).Contains("within 40 yd") && steps == 3 && PathQueries > 0 && ClickAimInput.Keys == 0 && fightCalls == 0 && ClickAimKeySteer.Releases > 0, "100 yd approach uses stepper, stops at 40 and sends no targeting/attack input");
+            Setup(5, distance: 100); Combat = false; NoPath = true;
+            Require(ApproachPoolCandidate(new IntPtr(1), snapshot.Units[1]).Contains("no complete validated mesh") && PathQueries == 1 && steps == 0 && dropped == 1 && ClickAimKeySteer.Releases > 0, "failed path deferred without direct walk");
+            Setup(5, distance: 100); Combat = false; combatOnStep = true;
+            Require(ApproachPoolCandidate(new IntPtr(1), snapshot.Units[1]).Contains("combat") && steps == 1 && _combatHold && dropped == 0, "combat interrupts approach");
+            Setup(5, distance: 100); Combat = false; stopOnStep = true;
+            Require(ApproachPoolCandidate(new IntPtr(1), snapshot.Units[1]).Contains("stopped") && steps == 1 && dropped == 0, "STOP interrupts approach");
+            Setup(5, distance: 100); Combat = false; vendorOnStep = true;
+            Require(ApproachPoolCandidate(new IntPtr(1), snapshot.Units[1]).Contains("vendor") && steps == 1 && dropped == 0, "vendor interrupts approach");
+            Setup(5, distance: 100); Combat = false; VendorOnPlan = true;
+            Require(ApproachPoolCandidate(new IntPtr(1), snapshot.Units[1]).Contains("stopped") && steps == 0 && dropped == 0, "vendor request during mesh planning blocks steering");
+            Setup(5, distance: 100); Combat = false; CombatOnPlan = true;
+            Require(ApproachPoolCandidate(new IntPtr(1), snapshot.Units[1]).Contains("combat") && steps == 0 && dropped == 0 && _combatHold, "combat during mesh planning blocks steering");
+            Setup(5, distance: 100); Combat = false; StopOnPlan = true;
+            Require(ApproachPoolCandidate(new IntPtr(1), snapshot.Units[1]).Contains("stopped") && steps == 0 && dropped == 0, "STOP during mesh planning blocks steering");
+            Setup(5, distance: 100); Combat = false; nearerOnStep = true;
+            Require(ApproachPoolCandidate(new IntPtr(1), snapshot.Units[1]).Contains("within 40 yd") && steps == 1, "nearer candidate interrupts approach");
+            Setup(5, distance: 100); Combat = false;
+            snapshot.Units.Add(new WowBObservedUnit { Guid = new WowBGuid(4), UnitAddress = 4, Location = new Location { X = 5 } });
+            Require(ApproachPoolCandidate(new IntPtr(1), snapshot.Units[1]).Contains("unreadable") && steps == 0 && _combatHold, "nearby unreadable unit pauses approach");
+            Setup(5, distance: 100); Combat = false; ObjectManager.WowB!.Fields.Remove(1);
+            Require(ApproachPoolCandidate(new IntPtr(1), snapshot.Units[1]).Contains("player fields unreadable") && steps == 0 && _combatHold, "unreadable player fields pause approach");
+            Setup(5, distance: 100); Combat = false; var stale = snapshot.Units[1]; stale.RecordAddress = 42;
+            Require(ApproachPoolCandidate(new IntPtr(1), stale).Contains("changed identity") && steps == 0 && dropped == 0, "stale identity aborts approach");
+            Setup(3, distance: 100); Combat = false;
+            Require(ApproachPoolCandidate(new IntPtr(1), snapshot.Units[1]).Contains("ineligible") && steps == 0, "out of band not approached");
+            Setup(5, distance: 100); Combat = false; CombatReadable = false;
+            Require(ApproachPoolCandidate(new IntPtr(1), snapshot.Units[1]).Contains("unreadable combat") && steps == 0 && _combatHold, "unknown combat blocks approach");
+            Console.WriteLine("Grind defence and distant approach synthetic fixtures passed");
         }
     }
 }
