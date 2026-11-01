@@ -21,6 +21,10 @@ internal static class WowBCursorProbe
     private const ulong HealthHandlerRva = 0x1D63190;
     private const string HealthSignature = "488BC4554157488D68A14881ECB80000";
     private const int WaitMilliseconds = 8000;
+    // Observed on one user's 70291 installation. These are *positive diagnostic
+    // hints only*, never proof of attackability, hostility, range or input authority.
+    private const string ObservedHighlightedDagger = "A3672FD4057306DCC48DADA960AE5F4BA98C0D111FC1D5A733B67F36F9FA1587";
+    private const string ObservedDarkDagger = "90D89DC029CDCC1BD699CA22E46676485C43AEEF015EBC476FB539E5613039E3";
     private static int _active;
     public static string PathName => Path.Combine(Logging.ApplicationPath, "Settings", "wowb-cursor-samples.jsonl");
 
@@ -123,6 +127,16 @@ internal static class WowBCursorProbe
     internal static bool SameCursor(uint flagsA, long handleA, int xA, int yA, uint flagsB, long handleB, int xB, int yB)
         => flagsA == flagsB && handleA == handleB && Math.Abs((long)xA - xB) <= 2 && Math.Abs((long)yA - yB) <= 2;
 
+    internal static string DaggerHint(string label, bool visible, bool candidateMatches, string? fingerprint)
+    {
+        // An off-target control or unmatched/hidden/unreadable cursor is never
+        // evidence for a dagger over the selection. Unknown is NOT friendly.
+        if (label == "off_target_control" || !visible || !candidateMatches || fingerprint == null) return "unknown";
+        if (fingerprint == ObservedHighlightedDagger) return "observed_highlighted_dagger";
+        if (fingerprint == ObservedDarkDagger) return "observed_dark_dagger";
+        return "unknown";
+    }
+
     private static void Run(string label, Action<string> done, Memory memory, WowBReader reader, IntPtr hwnd)
     {
         string result;
@@ -173,14 +187,17 @@ internal static class WowBCursorProbe
             targetAfter.RecordAddress != target.RecordAddress || targetAfter.UnitAddress != target.UnitAddress || !Attached(memory, reader, hwnd))
             return "Player, target or client changed during capture; no cursor sample saved.";
         bool matchesSelected = hoverRead && !hover.IsEmpty && hover == target.Guid;
+        bool cursorShowing = (first.Flags & 1) != 0 && (first.Flags & 2) == 0;
+        string daggerHint = DaggerHint(label, cursorShowing, matchesSelected, image?.fingerprint);
         var sample = new
         {
             schema = 1, utc = DateTime.UtcNow.ToString("O"), label,
             playerGuid = player.Guid.ToString(), targetGuid = target.Guid.ToString(),
             targetEntryHint = (target.Guid.High >> 6) & 0x7FFFFFUL,
             hoverGuid = hoverRead ? hover.ToString() : null, matchesSelected,
-            cursorFlags = first.Flags, cursorShowing = (first.Flags & 1) != 0 && (first.Flags & 2) == 0,
+            cursorFlags = first.Flags, cursorShowing,
             cursorHandle = first.Cursor.ToInt64().ToString("X"), cursorImage = image,
+            daggerHint,
             // A label is supplied by the user; no game-computed attackability is recorded.
             warning = "desktop cursor and mouseover candidate are not proven attackability"
         };
@@ -189,7 +206,8 @@ internal static class WowBCursorProbe
         File.AppendAllText(path, JsonSerializer.Serialize(sample) + Environment.NewLine);
         return "Saved " + label + "; hover " + (matchesSelected ? "matches selected GUID (candidate only; may be stale)" : (label == "off_target_control" ? "did NOT match selected GUID" : "did NOT match selected GUID (inconclusive)")) +
                "; Windows cursor " + (((first.Flags & 1) != 0 && (first.Flags & 2) == 0) ? "shown" : "hidden or suppressed") +
-               "; image fingerprint " + (image == null ? "unavailable" : image.fingerprint) + ". Saved to " + path;
+               "; image fingerprint " + (image == null ? "unavailable" : image.fingerprint) +
+               "; experimental dagger hint " + daggerHint + " (not an attackability verdict). Saved to " + path;
     }
 
     private sealed class CursorImage

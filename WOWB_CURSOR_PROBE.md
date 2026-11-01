@@ -29,6 +29,40 @@ cursor appearance was not independently recorded. There was no off-target
 control, no repeat of the same target, and only one target per category. No
 classifier or gameplay change follows from these results.
 
+## Follow-up: user-observed dagger and glove
+
+The user reports that the aggressive example was a dark dagger because it was
+far away, while the yellow boar showed a highlighted dagger close up. They
+also report a glove when not hovering the boar, and that friendly NPCs have
+multiple cursor shapes. Thus the two observed dagger images are **not** a way
+to distinguish aggressive from neutral, nor is an arbitrary other image proof
+of friendliness.
+
+A second file has one highlighted-dagger boar observation with the same image
+fingerprint as the first boar, but a different selected boar and cursor handle.
+It also has one user-reported off-target glove observation with a different
+fingerprint and an empty mouseover candidate. Both Windows cursors were shown.
+The control's selected boar was **not the same GUID** as the hovered boar, so
+this is not a same-target before/after comparison. User visual reports are not
+independently captured by the probe. The dark dagger still has one observation.
+
+The diagnostic now reports `observed_highlighted_dagger` or
+`observed_dark_dagger` only when the cursor is visible, the selected GUID
+matches the candidate, and the fingerprint equals one of the two images from
+this installation. Off-target controls and everything else report `unknown`,
+**never friendly**. These hints can fail under other resolutions, client or
+cursor settings, and the candidate can be stale. They do not authorize input
+or change Grind, the existing failsafe, navigation or selling.
+
+A further obstacle remains: these observations are of the real Windows desktop
+cursor while the user manually hovered a foreground game. Grind's existing
+pool-selection search uses posted mouse messages, often with the game in the
+background. Whether that changes the Windows cursor in the same way, and ties it
+to the intended game object, is not established. Treating a current desktop
+cursor as the result of a posted hover could associate the wrong NPC and is
+unsafe. A separate, explicitly opted-in test is required before considering any
+gameplay integration.
+
 ## How to collect one controlled set
 
 1. Build, attach, stop the bot and routes. In game, select a living friendly

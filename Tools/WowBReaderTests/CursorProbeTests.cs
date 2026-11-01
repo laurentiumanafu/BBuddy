@@ -25,6 +25,16 @@ namespace Styx.Logic.Pathing
             Check(fingerprint != WowBCursorProbe.Fingerprint(2, 2, 2, 2, mask, 1, 1, color), "hotspot affects fingerprint");
             color[0] = 99;
             Check(fingerprint != WowBCursorProbe.Fingerprint(1, 2, 2, 2, mask, 1, 1, color), "pixels affect fingerprint");
+            const string bright = "A3672FD4057306DCC48DADA960AE5F4BA98C0D111FC1D5A733B67F36F9FA1587";
+            const string dark = "90D89DC029CDCC1BD699CA22E46676485C43AEEF015EBC476FB539E5613039E3";
+            Check(WowBCursorProbe.DaggerHint("neutral_attackable", true, true, bright) == "observed_highlighted_dagger", "bright known hint");
+            Check(WowBCursorProbe.DaggerHint("aggressive", true, true, dark) == "observed_dark_dagger", "dark known hint");
+            Check(WowBCursorProbe.DaggerHint("friendly", true, true, dark) == "observed_dark_dagger", "hint does not trust labels");
+            Check(WowBCursorProbe.DaggerHint("off_target_control", true, true, dark) == "unknown", "off target cannot prove dagger on selection");
+            Check(WowBCursorProbe.DaggerHint("aggressive", false, true, dark) == "unknown", "hidden cursor");
+            Check(WowBCursorProbe.DaggerHint("aggressive", true, false, dark) == "unknown", "mouseover mismatch");
+            Check(WowBCursorProbe.DaggerHint("aggressive", true, true, null) == "unknown", "missing image");
+            Check(WowBCursorProbe.DaggerHint("friendly", true, true, new string('A', 64)) == "unknown", "other cursor is not classified friendly");
             Check(!WowBCursorProbe.Start("other", _ => { }), "unknown label not started");
             Check(!WowBCursorProbe.Start("friendly", _ => { }), "no attachment not started");
             ClickAimUi.Running = true;
