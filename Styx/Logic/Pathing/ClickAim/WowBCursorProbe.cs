@@ -13,8 +13,9 @@ namespace Styx.Logic.Pathing;
 
 /// <summary>
 /// Opt-in observation of the desktop cursor while the user hovers a selected NPC.
-/// Never sends mouse/keyboard input or alters targeting. A Windows cursor may not
-/// be the cursor drawn by the game and the mouseover address is a candidate only.
+/// Passive capture never sends input. A separate opt-in background experiment posts
+/// only mouse moves, never clicks or keys. Neither mode alters targeting. A Windows
+/// cursor may not be game-drawn and the mouseover address is a candidate only.
 /// </summary>
 internal static class WowBCursorProbe
 {
@@ -208,6 +209,236 @@ internal static class WowBCursorProbe
                "; Windows cursor " + (((first.Flags & 1) != 0 && (first.Flags & 2) == 0) ? "shown" : "hidden or suppressed") +
                "; image fingerprint " + (image == null ? "unavailable" : image.fingerprint) +
                "; experimental dagger hint " + daggerHint + " (not an attackability verdict). Saved to " + path;
+    }
+
+    // A prepared point is private to this process and expires quickly. It is never
+    // a click coordinate or an authorization to attack.
+    private sealed class PostedSetup
+    {
+        public Memory Memory = null!;
+        public WowBReader Reader = null!;
+        public IntPtr Hwnd;
+        public int Width, Height, OriginX, OriginY, X, Y, PreparedAt, StopGeneration;
+        public WowBObservedUnit Player, Target;
+        public string ForegroundFingerprint = "";
+    }
+    private static PostedSetup? _postedSetup;
+    public static string PostedPathName => Path.Combine(Logging.ApplicationPath, "Settings", "wowb-posted-hover-samples.jsonl");
+
+    [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool ScreenToClient(IntPtr hwnd, ref Point point);
+    [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool ClientToScreen(IntPtr hwnd, ref Point point);
+    [DllImport("user32.dll")] private static extern short GetAsyncKeyState(int key);
+
+    private static bool MouseButtonsUp()
+        => (GetAsyncKeyState(0x01) & 0x8000) == 0 && (GetAsyncKeyState(0x02) & 0x8000) == 0 &&
+           (GetAsyncKeyState(0x04) & 0x8000) == 0 && (GetAsyncKeyState(0x05) & 0x8000) == 0 &&
+           (GetAsyncKeyState(0x06) & 0x8000) == 0;
+
+    private static bool SameLocation(WowBObservedUnit a, WowBObservedUnit b)
+    {
+        double dx = a.Location.X - b.Location.X, dy = a.Location.Y - b.Location.Y, dz = a.Location.Z - b.Location.Z;
+        return double.IsFinite(dx) && double.IsFinite(dy) && double.IsFinite(dz) && dx * dx + dy * dy + dz * dz <= 0.25;
+    }
+
+    internal static bool SameActor(WowBObservedUnit a, WowBObservedUnit b)
+        => a.Guid == b.Guid && a.RecordAddress == b.RecordAddress && a.UnitAddress == b.UnitAddress && SameLocation(a, b);
+
+    private static bool Layout(PostedSetup setup)
+    {
+        var origin = new Point();
+        return ClickAimInput.ClientSize(setup.Hwnd, out int w, out int h) && w == setup.Width && h == setup.Height &&
+            ClientToScreen(setup.Hwnd, ref origin) && origin.X == setup.OriginX && origin.Y == setup.OriginY;
+    }
+
+    private static bool SameWorld(PostedSetup setup)
+    {
+        if (ClickAimAbort.Generation != setup.StopGeneration || !Attached(setup.Memory, setup.Reader, setup.Hwnd) || !Layout(setup) ||
+            !setup.Reader.TryCaptureWorldSnapshot(out WowBWorldSnapshot? snap) || snap == null ||
+            !snap.TryGetLocalPlayer(out WowBObservedUnit player) || !snap.TryGetSelectedTarget(out WowBObservedUnit target) ||
+            !SameActor(setup.Player, player) || !SameActor(setup.Target, target) || target.IsLocalPlayer || target.HasPlayerVtable ||
+            !float.IsFinite(player.Facing) || !float.IsFinite(setup.Player.Facing) || Math.Abs(player.Facing - setup.Player.Facing) > 0.02 ||
+            !setup.Reader.TryGetUnitFields(target.UnitAddress, out WowBReader.WowBUnitFields fields) || fields.Health == 0 ||
+            !setup.Reader.TryGetUnitFields(player.UnitAddress, out WowBReader.WowBUnitFields self) || self.Health == 0 ||
+            (self.UnitFlags & 0x00080000U) != 0)
+            return false;
+        return ClickAimAbort.Generation == setup.StopGeneration && Attached(setup.Memory, setup.Reader, setup.Hwnd);
+    }
+
+    // These two operations deliberately share _active with the passive probe.
+    // Only the second operation posts WM_MOUSEMOVE, and only after explicit consent.
+    public static bool StartPosted(bool prepare, Action<string> done)
+    {
+        if (done == null || ClickAimUi.Running || ClickAimUi.Paused || Interlocked.CompareExchange(ref _active, 1, 0) != 0)
+            return false;
+        try
+        {
+            Memory? memory = ObjectManager.Wow;
+            WowBReader? reader = ObjectManager.WowB;
+            if (memory == null || reader == null || !memory.Is64BitTarget || memory.WindowHandle == IntPtr.Zero)
+            {
+                Interlocked.Exchange(ref _active, 0);
+                return false;
+            }
+            if (prepare) _postedSetup = null;
+            IntPtr hwnd = memory.WindowHandle;
+            int stopGeneration = ClickAimAbort.Generation;
+            var worker = new Thread(() => RunPosted(prepare, done, memory, reader, hwnd, stopGeneration))
+                { IsBackground = true, Name = "WowBPostedHoverProbe" };
+            worker.Start();
+            return true;
+        }
+        catch { Interlocked.Exchange(ref _active, 0); throw; }
+    }
+
+    private static void RunPosted(bool prepare, Action<string> done, Memory memory, WowBReader reader, IntPtr hwnd, int stopGeneration)
+    {
+        string result;
+        try
+        {
+            Thread.Sleep(prepare ? WaitMilliseconds : 3000);
+            using var uncached = memory.TemporaryCacheState(false);
+            byte[]? sig = memory.ReadBytes64(memory.GetAbsolute64(HealthHandlerRva), 16);
+            if (ClickAimAbort.Generation != stopGeneration || !Attached(memory, reader, hwnd) || sig == null || Convert.ToHexString(sig) != HealthSignature)
+                result = "Stop requested, client changed, bot started, or 70291 signature mismatch; test cancelled.";
+            else result = prepare ? PreparePosted(memory, reader, hwnd, stopGeneration) : RunPostedBackground(memory, reader, hwnd);
+        }
+        catch (Exception ex) { result = "Posted-hover test stopped: " + ex.Message; }
+        finally { Interlocked.Exchange(ref _active, 0); }
+        Logging.Write("[NPC posted-hover probe] " + result);
+        try { done(result); } catch { }
+    }
+
+    private static string PreparePosted(Memory memory, WowBReader reader, IntPtr hwnd, int stopGeneration)
+    {
+        if (!TryCursor(hwnd, out CursorInfo first) || !MouseButtonsUp() ||
+            !reader.TryCaptureWorldSnapshot(out WowBWorldSnapshot? snap) || snap == null ||
+            !snap.TryGetLocalPlayer(out WowBObservedUnit player) || !snap.TryGetSelectedTarget(out WowBObservedUnit target) ||
+            target.IsLocalPlayer || target.HasPlayerVtable ||
+            !reader.TryGetUnitFields(player.UnitAddress, out WowBReader.WowBUnitFields self) || self.Health == 0 ||
+            (self.UnitFlags & 0x00080000U) != 0 ||
+            !reader.TryGetUnitFields(target.UnitAddress, out WowBReader.WowBUnitFields fields) || fields.Health == 0 ||
+            !ReadHover(memory, out WowBGuid hover) || hover != target.Guid || hover.IsEmpty)
+            return "Preparation failed: stop the bot, avoid combat, select a living NPC, foreground the game and hover that same NPC with buttons released.";
+        if (!ClickAimInput.ClientSize(hwnd, out int w, out int h) || w < 10 || h < 10) return "Game client size unavailable.";
+        var origin = new Point();
+        var point = first.Position;
+        if (!ClientToScreen(hwnd, ref origin) || !ScreenToClient(hwnd, ref point) ||
+            point.X < 2 || point.Y < 2 || point.X >= w - 2 || point.Y >= h - 2) return "Hover point is outside the game client.";
+        CursorImage? image = ReadCursorImage(first.Cursor);
+        Thread.Sleep(250);
+        if (!Attached(memory, reader, hwnd) || !TryCursor(hwnd, out CursorInfo last) || !MouseButtonsUp() ||
+            !SameCursor(first.Flags, first.Cursor.ToInt64(), first.Position.X, first.Position.Y,
+                        last.Flags, last.Cursor.ToInt64(), last.Position.X, last.Position.Y) ||
+            !ReadHover(memory, out WowBGuid lastHover) || lastHover != target.Guid)
+            return "Foreground hover changed; prepare again and hold still.";
+        CursorImage? imageAfter = ReadCursorImage(last.Cursor);
+        if ((first.Flags & 1) == 0 || (first.Flags & 2) != 0 || image == null || imageAfter == null || image.fingerprint != imageAfter.fingerprint)
+            return "Foreground Windows cursor is hidden, unavailable or changing; prepare again.";
+        var setup = new PostedSetup { Memory = memory, Reader = reader, Hwnd = hwnd, Width = w, Height = h,
+            OriginX = origin.X, OriginY = origin.Y, X = point.X, Y = point.Y, Player = player, Target = target,
+            PreparedAt = Environment.TickCount, StopGeneration = stopGeneration, ForegroundFingerprint = image.fingerprint };
+        if (!SameWorld(setup) || !TryCursor(hwnd, out CursorInfo final) ||
+            !SameCursor(first.Flags, first.Cursor.ToInt64(), first.Position.X, first.Position.Y,
+                        final.Flags, final.Cursor.ToInt64(), final.Position.X, final.Position.Y))
+            return "Target, player, window or cursor changed; prepare again.";
+        _postedSetup = setup;
+        return "Foreground hover prepared. Without moving the character, camera, NPC or game window, return here and press step 2 within two minutes.";
+    }
+
+    private sealed class PostedObservation
+    {
+        public string? hoverGuid { get; set; }
+        public bool? matchesTarget { get; set; }
+        public uint cursorFlags { get; set; }
+        public bool cursorShowing { get; set; }
+        public string cursorHandle { get; set; } = "";
+        public string? cursorFingerprint { get; set; }
+    }
+
+    private static bool BackgroundGuard(PostedSetup setup, IntPtr foreground, Point start)
+    {
+        var cursor = new CursorInfo { Size = Marshal.SizeOf<CursorInfo>() };
+        return foreground != IntPtr.Zero && foreground != setup.Hwnd && GetForegroundWindow() == foreground &&
+            MouseButtonsUp() && GetCursorInfo(ref cursor) &&
+            Math.Abs((long)cursor.Position.X - start.X) <= 2 && Math.Abs((long)cursor.Position.Y - start.Y) <= 2 &&
+            unchecked(Environment.TickCount - setup.PreparedAt) >= 0 && unchecked(Environment.TickCount - setup.PreparedAt) <= 120000 &&
+            SameWorld(setup) && GetForegroundWindow() == foreground && MouseButtonsUp() &&
+            GetCursorInfo(ref cursor) && Math.Abs((long)cursor.Position.X - start.X) <= 2 &&
+            Math.Abs((long)cursor.Position.Y - start.Y) <= 2 && ClickAimAbort.Generation == setup.StopGeneration;
+    }
+
+    private static bool ObservePosted(PostedSetup setup, IntPtr foreground, Point start, out PostedObservation observation)
+    {
+        observation = new PostedObservation();
+        if (!BackgroundGuard(setup, foreground, start)) return false;
+        var cursor = new CursorInfo { Size = Marshal.SizeOf<CursorInfo>() };
+        if (!GetCursorInfo(ref cursor)) return false;
+        bool read = ReadHover(setup.Memory, out WowBGuid hover);
+        CursorImage? image = ReadCursorImage(cursor.Cursor);
+        Thread.Sleep(100);
+        var last = new CursorInfo { Size = Marshal.SizeOf<CursorInfo>() };
+        if (!BackgroundGuard(setup, foreground, start) || !GetCursorInfo(ref last) ||
+            !SameCursor(cursor.Flags, cursor.Cursor.ToInt64(), cursor.Position.X, cursor.Position.Y,
+                        last.Flags, last.Cursor.ToInt64(), last.Position.X, last.Position.Y)) return false;
+        CursorImage? lastImage = ReadCursorImage(last.Cursor);
+        if (!ReadHover(setup.Memory, out WowBGuid lastHover) || !read || lastHover != hover) read = false;
+        var final = new CursorInfo { Size = Marshal.SizeOf<CursorInfo>() };
+        if (!BackgroundGuard(setup, foreground, start) || !GetCursorInfo(ref final) ||
+            !SameCursor(cursor.Flags, cursor.Cursor.ToInt64(), cursor.Position.X, cursor.Position.Y,
+                        final.Flags, final.Cursor.ToInt64(), final.Position.X, final.Position.Y)) return false;
+        observation = new PostedObservation { hoverGuid = read ? hover.ToString() : null,
+            matchesTarget = read ? hover == setup.Target.Guid : (bool?)null,
+            cursorFlags = cursor.Flags, cursorShowing = (cursor.Flags & 1) != 0 && (cursor.Flags & 2) == 0,
+            cursorHandle = cursor.Cursor.ToInt64().ToString("X"),
+            cursorFingerprint = image != null && lastImage != null && image.fingerprint == lastImage.fingerprint ? image.fingerprint : null };
+        return true;
+    }
+
+    internal static bool CandidateTransition(bool? awayMatches, bool? returnedMatches)
+        => awayMatches == false && returnedMatches == true;
+
+    private static string RunPostedBackground(Memory memory, WowBReader reader, IntPtr hwnd)
+    {
+        PostedSetup? setup = _postedSetup;
+        _postedSetup = null; // one explicit click per attempt, even on failure
+        if (setup == null || setup.Memory != memory || setup.Reader != reader || setup.Hwnd != hwnd)
+            return "No prepared foreground hover for this client. Run step 1 first.";
+        IntPtr foreground = GetForegroundWindow();
+        var cursor = new CursorInfo { Size = Marshal.SizeOf<CursorInfo>() };
+        if (!GetCursorInfo(ref cursor) || !BackgroundGuard(setup, foreground, cursor.Position))
+            return "Game must remain in background, with the cursor still and buttons released; target/player/window must be unchanged. Prepare again.";
+        Point realPosition = cursor.Position;
+        if (!ObservePosted(setup, foreground, realPosition, out PostedObservation before))
+            return "Background state changed before posting; no sample saved. Prepare again.";
+        // Pick a point far from the recorded NPC point; it might still be UI or
+        // another object. The observed GUID transition, not geometry, is the control.
+        double awayX = setup.X < setup.Width / 2 ? 0.80 : 0.20;
+        double awayY = setup.Y < setup.Height / 2 ? 0.80 : 0.20;
+        if (!BackgroundGuard(setup, foreground, realPosition) || !ClickAimInput.PostMouseMoveFraction(hwnd, awayX, awayY))
+            return "Background guard or posted move-away failed; no sample saved. Prepare again.";
+        Thread.Sleep(1250); // allow a throttled background client time to process the move
+        if (!ObservePosted(setup, foreground, realPosition, out PostedObservation away))
+            return "State changed after the move-away; no return move or sample. Prepare again.";
+        if (!BackgroundGuard(setup, foreground, realPosition) || !ClickAimInput.PostMouseMoveFraction(hwnd,
+                setup.X / (double)(setup.Width - 1), setup.Y / (double)(setup.Height - 1)))
+            return "Background guard or posted return move failed; no sample saved. Prepare again.";
+        Thread.Sleep(1250); // allow a throttled background client time to process the move
+        if (!ObservePosted(setup, foreground, realPosition, out PostedObservation returned))
+            return "State changed after the return move; no sample saved. Prepare again.";
+        bool transition = CandidateTransition(away.matchesTarget, returned.matchesTarget);
+        var sample = new { schema = 1, utc = DateTime.UtcNow.ToString("O"),
+            playerGuid = setup.Player.Guid.ToString(), targetGuid = setup.Target.Guid.ToString(),
+            foregroundFingerprint = setup.ForegroundFingerprint, before, away, returned,
+            candidateAwayThenTarget = transition,
+            warning = "desktop cursor belongs to the foreground desktop; GUID and cursor observations are not attackability or authorization" };
+        Directory.CreateDirectory(Path.GetDirectoryName(PostedPathName) ?? ".");
+        File.AppendAllText(PostedPathName, JsonSerializer.Serialize(sample) + Environment.NewLine);
+        return "Saved background hover test; candidate away→target transition: " + (transition ? "observed" : "NOT observed (inconclusive)") +
+            "; desktop fingerprints before/away/return: " + (before.cursorFingerprint ?? "unavailable") + "/" +
+            (away.cursorFingerprint ?? "unavailable") + "/" + (returned.cursorFingerprint ?? "unavailable") +
+            ". Not an attackability verdict. Saved to " + PostedPathName;
     }
 
     private sealed class CursorImage

@@ -35,6 +35,19 @@ namespace Styx.Logic.Pathing
             Check(WowBCursorProbe.DaggerHint("aggressive", true, false, dark) == "unknown", "mouseover mismatch");
             Check(WowBCursorProbe.DaggerHint("aggressive", true, true, null) == "unknown", "missing image");
             Check(WowBCursorProbe.DaggerHint("friendly", true, true, new string('A', 64)) == "unknown", "other cursor is not classified friendly");
+            Check(WowBCursorProbe.CandidateTransition(false, true), "away then selected GUID");
+            Check(!WowBCursorProbe.CandidateTransition(true, true), "stale matching GUID is not transition");
+            Check(!WowBCursorProbe.CandidateTransition(null, true), "unreadable away GUID is not transition");
+            Check(!WowBCursorProbe.CandidateTransition(false, null), "unreadable return GUID is not transition");
+            var actor = new WowBObservedUnit(new WowBGuid(1, 2), 10, 20, false, false, new WoWPoint(1, 2, 3), 0, null);
+            var close = new WowBObservedUnit(new WowBGuid(1, 2), 10, 20, false, false, new WoWPoint(1.25f, 2, 3), 0, null);
+            var far = new WowBObservedUnit(new WowBGuid(1, 2), 10, 20, false, false, new WoWPoint(2, 2, 3), 0, null);
+            var different = new WowBObservedUnit(new WowBGuid(3, 2), 10, 20, false, false, new WoWPoint(1, 2, 3), 0, null);
+            var bad = new WowBObservedUnit(new WowBGuid(1, 2), 10, 20, false, false, new WoWPoint(float.NaN, 2, 3), 0, null);
+            Check(WowBCursorProbe.SameActor(actor, close), "small actor movement");
+            Check(!WowBCursorProbe.SameActor(actor, far) && !WowBCursorProbe.SameActor(actor, different) &&
+                  !WowBCursorProbe.SameActor(actor, bad), "movement, identity and NaN reject");
+            Check(!WowBCursorProbe.StartPosted(true, _ => { }), "posted probe requires attachment");
             Check(!WowBCursorProbe.Start("other", _ => { }), "unknown label not started");
             Check(!WowBCursorProbe.Start("friendly", _ => { }), "no attachment not started");
             ClickAimUi.Running = true;

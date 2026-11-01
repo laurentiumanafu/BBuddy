@@ -21,6 +21,10 @@ namespace Styx.Logic.Pathing;
 internal static class ClickAimAbort
 {
     private static volatile bool _requested;
+    private static int _generation;
+
+    // Allows opted-in diagnostics started while already stopped to detect a NEW Stop.
+    public static int Generation => Volatile.Read(ref _generation);
 
     /// <summary>True once Stop was pressed, until the next run clears it.</summary>
     public static bool Requested { get { return _requested; } }
@@ -28,6 +32,7 @@ internal static class ClickAimAbort
     /// <summary>Stop everything that is moving. Idempotent, and safe from any thread.</summary>
     public static void Request()
     {
+        Interlocked.Increment(ref _generation);
         _requested = true;
 
         /* The forward key is held by a PostMessage, so nothing lets it up by itself. Releasing it

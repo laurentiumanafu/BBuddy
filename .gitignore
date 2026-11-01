@@ -79,3 +79,6 @@ wowb-reaction-samples.jsonl
 
 # Cursor probe records player and target GUIDs; share only privately
 wowb-cursor-samples.jsonl
+
+# Background hover diagnostics include player and target GUIDs
+wowb-posted-hover-samples.jsonl

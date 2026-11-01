@@ -1,4 +1,4 @@
-# 70291 NPC cursor: read-only experiment
+# 70291 NPC cursor diagnostics
 
 The user reports that an attackable NPC changes the cursor to a dagger, while
 friendly town NPCs do not. This is a promising **observation**, not yet a
@@ -6,15 +6,17 @@ proven attackability test. The relationship-table offsets are still useful, but
 a template-only comparison does not incorporate reputation, overrides or the
 other checks in the full attack predicate.
 
-The experimental **Gather & tools → NPC cursor probe** captures the Windows
+The passive buttons in **Gather & tools → NPC cursor probe** capture the Windows
 `GetCursorInfo` flags and handle and, if available, a SHA-256 fingerprint of
 `GetIconInfo`'s mask/color bitmaps and hotspot. It never stores those bitmap
 pixels or screen images. It also records full selected and mouseover-*candidate*
-GUIDs and whether they match, with a user-supplied label. It does not move the
-pointer, send mouse or keyboard messages, call client functions, use Lua, write
-game memory, interact, select or attack. It is disabled while the bot is
-running or paused. **Grind, targeting, the existing failsafe and selling are
-unchanged.**
+GUIDs and whether they match, with a user-supplied label. These passive buttons
+do not send mouse or keyboard messages. A separate, explicitly started
+background experiment posts two mouse-move messages, as described below; it
+sends no mouse clicks or keyboard messages. Neither mode calls client functions,
+uses Lua, writes game memory, interacts, selects or attacks. Both are disabled
+while the bot is running or paused. **Grind, targeting, the existing failsafe
+and selling are unchanged.**
 
 ## First sample set (2026-11-01)
 
@@ -60,8 +62,65 @@ pool-selection search uses posted mouse messages, often with the game in the
 background. Whether that changes the Windows cursor in the same way, and ties it
 to the intended game object, is not established. Treating a current desktop
 cursor as the result of a posted hover could associate the wrong NPC and is
-unsafe. A separate, explicitly opted-in test is required before considering any
-gameplay integration.
+unsafe. The separate, explicitly opted-in test below investigates this before any
+gameplay integration is considered.
+
+## Background posted-hover experiment
+
+This is a **separate opt-in test**, not part of normal bot operation. It posts
+at most two `WM_MOUSEMOVE` messages to the game: one to an automatically chosen
+point away from the recorded point, then one back. It does not post mouse buttons
+or keys, directly move the desktop pointer, call game functions, or select or
+attack. The game can still respond to hover messages (for example, show a
+tooltip); these are real messages, not a read-only test. If a guard fails after
+the first post, the second is not sent.
+
+1. Build, attach to wowb.exe and stop the bot. Use windowed or borderless mode;
+   do not minimize the game. Choose a safe, stationary living boar and select
+   it in the game. Don't change character position, target, camera, game window
+   position or size during the test. Avoid UI covering the boar in the game.
+2. Open **Gather & tools → NPC cursor probe**, press **1. Prepare foreground
+   hover**, return to the game, hover the *selected boar* with no buttons held,
+   and hold still for at least 10 seconds. The capture begins after 8 seconds.
+   Return to the tool and check that it says **Foreground hover prepared**. If
+   not, repeat step 1. The preparation is in memory only and expires in two
+   minutes; do not restart the app between steps.
+3. Press **2. Test posted hover in background**. Leave the game in the
+   background, release all mouse buttons and leave the desktop pointer still.
+   Three seconds after the button is pressed, the diagnostic records the
+   foreground desktop cursor and mouseover candidate; it posts an away move,
+   waits 1.25 seconds and records again, then posts a return move, waits and
+   records again. It stops if focus, attachment, bot state, desktop pointer,
+   mouse buttons, Stop generation, game window, selected unit, or player/target
+   observed identity or position change. It also requires readable, nonzero player
+   and target health and a clear provisional player combat bit (`0x80000`),
+   which is not proof that the area is safe. Position tolerance is 0.5 yards; player
+   facing is checked. Camera changes and all change-away-and-back races cannot
+   be ruled out. Pressing Stop during the experiment prevents subsequent posts
+   at the next guard check; it does not start or stop the bot.
+4. When it reports **Saved background hover test**, privately share
+   `Settings\wowb-posted-hover-samples.jsonl` from the output folder. The file
+   appends and is gitignored. If it cancels instead, share the displayed reason;
+   rerun from step 1. Don't move the cursor until the test finishes.
+
+The file contains player, selected and mouseover-candidate GUIDs, cursor handles,
+flags and image fingerprints, but not screen images, cursor pixels, desktop
+coordinates or the recorded hover point. Share it privately. The optional
+analysis command is:
+
+```
+python Tools/WowBCursorAnalysis/analyze_posted.py path/to/wowb-posted-hover-samples.jsonl
+```
+
+A candidate change away from the selected GUID and back is a useful transition,
+not proof of exact hover or attackability. The automatically chosen away point
+may be on a different unit, empty world, or game UI. No change is inconclusive,
+including if the background client doesn't process the messages quickly enough.
+Windows reports the cursor of the actual foreground desktop, which may be the bot
+window rather than the background game; even matching a foreground dagger hash
+can be a stale or unrelated desktop cursor. Bitmap stability and identity checks
+are non-atomic, and the partial build signature is not full build verification.
+This diagnostic makes no gameplay decisions and does not enable dagger targeting.
 
 ## How to collect one controlled set
 
