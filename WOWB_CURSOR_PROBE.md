@@ -46,7 +46,8 @@ It also has one user-reported off-target glove observation with a different
 fingerprint and an empty mouseover candidate. Both Windows cursors were shown.
 The control's selected boar was **not the same GUID** as the hovered boar, so
 this is not a same-target before/after comparison. User visual reports are not
-independently captured by the probe. The dark dagger still has one observation.
+independently captured by the probe. The original dark-dagger label has one
+foreground observation; see the subsequent background test below.
 
 The diagnostic now reports `observed_highlighted_dagger` or
 `observed_dark_dagger` only when the cursor is visible, the selected GUID
@@ -60,10 +61,32 @@ A further obstacle remains: these observations are of the real Windows desktop
 cursor while the user manually hovered a foreground game. Grind's existing
 pool-selection search uses posted mouse messages, often with the game in the
 background. Whether that changes the Windows cursor in the same way, and ties it
-to the intended game object, is not established. Treating a current desktop
+to the intended game object reliably, is not established. Treating a current desktop
 cursor as the result of a posted hover could associate the wrong NPC and is
 unsafe. The separate, explicitly opted-in test below investigates this before any
 gameplay integration is considered.
+
+## First background posted-hover result (2026-11-01)
+
+One completed test with an NPC selected produced this sequence while the game
+was backgrounded and the diagnostic's pointer/focus/identity guards held:
+
+| Phase | Mouseover candidate | Windows cursor image |
+| --- | --- | --- |
+| Before posting | Selected GUID | Same as the foreground dark-dagger fingerprint |
+| Posted move-away | Empty GUID | Same fingerprint as the previously reported glove |
+| Posted return | Selected GUID | Same as the foreground dark-dagger fingerprint |
+
+All three Windows cursors were reported visible. Each phase had a different
+cursor *handle*, so handles are not stable identifiers; the images are compared
+by fingerprint. The record is consistent with both the candidate GUID and
+Windows cursor following these posted moves in this one background trial. It is
+not a gameplay verdict: the image was not independently viewed during the
+background phase, the desktop cursor might belong to another foreground window,
+and one same-target trial cannot establish behavior across targets, camera or
+window configurations. In particular, it does not validate the highlighted
+close-range dagger or multiple friendly-NPC cursors in this mode. No gameplay
+selection, failsafe, vendor or combat change follows from this result.
 
 ## Background posted-hover experiment
 

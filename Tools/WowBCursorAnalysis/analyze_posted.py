@@ -28,8 +28,17 @@ def summarize(sample):
     if type(sample.get('candidateAwayThenTarget')) is not bool or sample['candidateAwayThenTarget'] != observed:
         raise ValueError('inconsistent GUID transition')
     before, away, returned = observations
+    # This is an observed pattern in one trial, not proof the cursor belongs to
+    # the game or an attack verdict. A missing/hidden fingerprint is inconclusive.
+    complete = all(part['cursorShowing'] and part.get('cursorFingerprint') for part in observations)
+    same_target_pattern = (
+        before['matchesTarget'] is True and observed and
+        before['cursorFingerprint'] == foreground == returned['cursorFingerprint'] and
+        away['cursorFingerprint'] != foreground
+    ) if complete else None
     return {
         'transition': observed,
+        'same_target_pattern': same_target_pattern,
         'visible': [part['cursorShowing'] for part in observations],
         'guid_matches': [part['matchesTarget'] for part in observations],
         'hash_available': [part.get('cursorFingerprint') is not None for part in observations],
@@ -60,6 +69,7 @@ def main():
         print(f"  desktop cursor shown={sample['visible']}, fingerprints available={sample['hash_available']}; "
               f"return matches foreground={sample['return_matches_foreground']}, "
               f"away equals return={sample['away_return_equal']}")
+        print(f"  matching on→off→on cursor/GUID pattern observed: {sample['same_target_pattern']} (one trial, not proof)")
     print('The desktop cursor can belong to another foreground window; equality is not proof of game hover or attackability.')
     return 0
 
