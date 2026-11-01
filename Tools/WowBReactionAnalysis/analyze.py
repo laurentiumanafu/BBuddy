@@ -8,6 +8,7 @@ import struct
 import sys
 
 LABELS = ("friendly", "neutral_attackable", "aggressive")
+OBSERVATION_LABEL = "other_observation"  # context only; never a training label
 SIGNATURE = "488BC4554157488D68A14881ECB80000"
 WINDOW = 0x2800
 CHUNK = 0x100
@@ -21,7 +22,7 @@ def load(path):
                 continue
             try:
                 obj = json.loads(line)
-                if obj.get("schema") != 1 or obj.get("diagnosticSignature") != SIGNATURE or obj.get("label") not in LABELS:
+                if obj.get("schema") != 1 or obj.get("diagnosticSignature") != SIGNATURE or obj.get("label") not in (*LABELS, OBSERVATION_LABEL):
                     raise ValueError("unknown schema, signature or label")
                 guid = obj["targetGuid"]
                 player = obj["playerGuid"]
@@ -49,6 +50,8 @@ def template_observations(samples):
     """Return values observed at +0x1E5C; missing bytes remain unknown."""
     result = {label: set() for label in LABELS}
     for sample in samples:
+        if sample["label"] not in LABELS:
+            continue
         chunk = sample["chunks"].get(0x1E00)
         if chunk is not None:
             result[sample["label"]].add(struct.unpack_from("<I", chunk, 0x5C)[0])
@@ -56,6 +59,7 @@ def template_observations(samples):
 
 
 def correlations(samples, minimum=3):
+    samples = [s for s in samples if s["label"] in LABELS]
     players = {s.get("player") for s in samples}
     if len(players) > 1:
         raise ValueError("different player characters must be analyzed separately")
@@ -99,6 +103,10 @@ def main():
     args = parser.parse_args()
     try:
         samples = load(args.file)
+        other_count = sum(s["label"] == OBSERVATION_LABEL for s in samples)
+        if other_count:
+            print(f"Excluded {other_count} other/state observations from label correlations.")
+        samples = [s for s in samples if s["label"] in LABELS]
         players = collections.Counter(s["player"] for s in samples)
         if args.player:
             player = args.player.upper()

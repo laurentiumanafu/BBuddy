@@ -64,6 +64,13 @@ class CorrelationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'different player characters'):
             correlations([one, two])
 
+    def test_other_observations_not_used_as_labels(self):
+        other = dict(self.samples[0], label='other_observation', player='different')
+        counts, hints, conflicts, words, bits = correlations(self.samples + [other])
+        self.assertEqual([counts[x] for x in LABELS], [3, 3, 3])
+        self.assertFalse(conflicts)
+        self.assertEqual(template_observations([other]), {label: set() for label in LABELS})
+
     def test_hint_diversity_required(self):
         for s in self.samples:
             s['hint'] = 1

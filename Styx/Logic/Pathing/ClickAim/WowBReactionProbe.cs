@@ -18,12 +18,18 @@ internal static class WowBReactionProbe
     private const ulong FactionLookupSiteRva = 0x27EE18D;
     private const ulong FactionStorageVtableRva = 0x4E480A8;
     private const string FactionLookupSignature = "488D0DCC553505E8F7A7E6FD8B935C1E0000";
+    private const ulong ReputationReadSiteRva = 0x2F98C10;
+    private const string ReputationReadSignature = "4883EC288BD14C8D4C2438488D0DFEA8";
+    private const ulong ReputationRegionRva = 0x7E1A530;
+    private const int ReputationRegionBytes = 1000 * 16;
+    private const ulong ForcedReactionCandidateOffset = 0x5EA8;
+    private const int ForcedReactionCandidateBytes = 32 * 8;
 
     public static string PathName => Path.Combine(Logging.ApplicationPath, "Settings", "wowb-reaction-samples.jsonl");
 
     public static string Capture(string label)
     {
-        if (label != "friendly" && label != "neutral_attackable" && label != "aggressive")
+        if (label != "friendly" && label != "neutral_attackable" && label != "aggressive" && label != "other_observation")
             return "Unknown label; no sample saved.";
         if (ClickAimUi.Running || ClickAimUi.Paused)
             return "Stop the bot and any route before taking a sample.";
@@ -45,6 +51,7 @@ internal static class WowBReactionProbe
             List<Chunk> playerBytes = ReadChunks(memory, player.UnitAddress);
             List<Chunk> targetBytes = ReadChunks(memory, target.UnitAddress);
             DbDiagnostic? dbProbe = CaptureDbDiagnostic(memory);
+            StateDiagnostic? stateProbe = CaptureStateDiagnostic(memory, player);
             if (playerBytes.Count == 0 || targetBytes.Count == 0)
                 return "Unit bytes were unreadable; no sample saved.";
             if (ObjectManager.Wow != memory || ObjectManager.WowB != reader ||
@@ -65,7 +72,7 @@ internal static class WowBReactionProbe
                 // Observed for gameobjects; this is only a hint for NPC independence, not a validated NPC template id.
                 targetEntryHint = (target.Guid.High >> 6) & 0x7FFFFFUL,
                 targetRecord = target.RecordAddress.ToString("X"), targetUnit = target.UnitAddress.ToString("X"),
-                playerChunks = playerBytes, targetChunks = targetBytes, dbProbe
+                playerChunks = playerBytes, targetChunks = targetBytes, dbProbe, stateProbe
             };
             string path = PathName;
             Directory.CreateDirectory(Path.GetDirectoryName(path) ?? ".");
@@ -77,6 +84,7 @@ internal static class WowBReactionProbe
                     dbProbe.arrayPaletteBytes[5] != null && dbProbe.arrayPaletteBytes[6] != null;
                 result += arraysIncluded ? " (array palettes included)" : " (array palettes unavailable)";
             }
+            result += stateProbe == null ? " (state diagnostic unavailable)" : " (state diagnostic included)";
             Logging.Write("[Reaction probe] " + result + ". Labels are supplied by the user; no classification is inferred.");
             return result;
         }
@@ -84,6 +92,33 @@ internal static class WowBReactionProbe
         {
             return "Reaction sample failed; no classification was made: " + ex.Message;
         }
+    }
+
+    // These are candidate regions from static 70291 traces, not an interpretation
+    // of reputation, forced reaction or UnitCanAttack. No client code is called.
+    private static StateDiagnostic? CaptureStateDiagnostic(GreenMagic.Memory memory, WowBObservedUnit player)
+    {
+        try
+        {
+            byte[]? sig = ReadBounded(memory, memory.GetAbsolute64(ReputationReadSiteRva), 16);
+            if (sig == null || Convert.ToHexString(sig) != ReputationReadSignature || !player.HasPlayerVtable ||
+                player.UnitAddress > 0x00007FFFFFFFFFFFUL - ForcedReactionCandidateOffset - ForcedReactionCandidateBytes)
+                return null;
+            ulong reputation = memory.GetAbsolute64(ReputationRegionRva);
+            ulong forced = player.UnitAddress + ForcedReactionCandidateOffset;
+            byte[]? rep = ReadStable(memory, reputation, ReputationRegionBytes);
+            byte[]? candidate = ReadStable(memory, forced, ForcedReactionCandidateBytes);
+            if (rep == null || candidate == null) return null;
+            return new StateDiagnostic { reputationBytes = Convert.ToBase64String(rep),
+                playerCandidateBytes = Convert.ToBase64String(candidate) };
+        }
+        catch { return null; }
+    }
+
+    private sealed class StateDiagnostic
+    {
+        public string reputationBytes { get; set; } = "";
+        public string playerCandidateBytes { get; set; } = "";
     }
 
     // Bounded read-only metadata for the statically identified table instance.

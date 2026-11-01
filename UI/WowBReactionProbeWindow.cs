@@ -32,6 +32,7 @@ namespace CopilotBuddy.UI
             AddButton(panel, "Friendly town NPC", "friendly");
             AddButton(panel, "Neutral, attackable monster", "neutral_attackable");
             AddButton(panel, "Aggressive monster", "aggressive");
+            AddButton(panel, "Other / changed state (note details separately)", "other_observation");
             panel.Children.Add(_result);
             Content = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = panel };
         }

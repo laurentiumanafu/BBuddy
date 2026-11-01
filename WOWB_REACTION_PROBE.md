@@ -207,6 +207,54 @@ For private offline inspection:
 python Tools/WowBReactionAnalysis/compare_templates.py <private-samples.jsonl> 55 3
 ```
 
+## 2026-11-01: controlled player-state comparison (diagnostic only)
+
+The current probe has an optional `stateProbe`. In addition to the existing
+UnitHealth signature, it checks 16 bytes at reputation-read RVA `0x2F98C10`
+(`4883EC288BD14C8D4C2438488D0DFEA8`) and requires the local player vtable.
+It double-reads 16,000 bytes from image RVA `0x7E1A530` (1,000 candidate
+16-byte slots) and 256 bytes at local player-unit `+0x5EA8` (32 candidate
+8-byte entries). The latter is only a *candidate*: the player-derived pointer
+in the static trace is not yet proven always to equal the local unit pointer.
+Object identity is checked by the existing before/after snapshot. The bytes are
+optional and non-atomic; partial signatures do not prove the whole build. The
+capture does not call client functions, Lua, move, target or interact, and does
+not claim to compute UnitReaction or UnitCanAttack. These raw bytes may contain
+sensitive game/character data, so share privately. Old sample files remain valid.
+The UI reports `state diagnostic included` only if both regions were readable
+and stable across the two reads.
+
+Suggested controlled observation, using a **single character** with the bot
+stopped throughout:
+
+1. Select a living friendly NPC; capture `Friendly town NPC`. Separately note
+   its name, appearance/color and faction if shown. Do not attack it.
+2. If a faction's reversible **At War** checkbox can safely be toggled, keep
+   that *same NPC selected*, record its initial setting, then capture it before
+   and after changing the checkbox. Use `Other / changed state` for an
+   observation that does not cleanly match the three specific labels, and note
+   the checkbox, visible target color and any other game feedback for each
+   sample. Restore the exact initial checkbox setting. Skip this entire step if
+   unavailable or unsafe. Toggling a checkbox alone does not prove a target is
+   attackable or that the checkbox affects that particular NPC.
+3. Independently capture one yellow monster already known to be attackable and
+   one monster known to attack on sight. Record names and observations. To
+   validate the yellow example, if safe, manually attack **the monster** after
+   capture and note whether it actually takes damage; do not attack town NPCs.
+   A red color alone does not prove aggression. Stop the bot and don't perform
+   these checks in an unsafe situation. The probe itself never attacks.
+4. Share `Settings\wowb-reaction-samples.jsonl` privately along with the notes
+   and roughly which times correspond to before/after. The appended file may
+   contain prior samples; no deletion is necessary. Tell us if it says `state
+   diagnostic unavailable` rather than assuming bytes were captured.
+
+For a matched pair of lines (1-based) the offline command
+`python Tools/WowBReactionAnalysis/compare_state.py <private-jsonl> <before-line> <after-line>`
+reports changed slot indices only and requires the same player and target GUIDs.
+Differences are leads, not proof of a particular faction, standing or attackability.
+The fourth label `other_observation` is for context and is excluded from the
+existing three-label correlation analysis; it does not change targeting.
+
 ## Collect labeled observations
 
 1. Build and attach the x64 application. Stop Grind, GatherBuddy and routes.
