@@ -1,5 +1,6 @@
 #if WOWB_READER_TESTS
 using GreenMagic;
+using Styx.Logic.Pathing;
 using Styx.Offsets;
 using Styx.WoWInternals;
 
@@ -80,6 +81,89 @@ Require(!WowBFactionDbSnapshotLayout.TryArrayPalette(arrayFields, arrayPointers,
 BitConverter.GetBytes(6112U).CopyTo(arrayFields, 6 * 24 + 4);
 BitConverter.GetBytes(7U).CopyTo(arrayFields, 6 * 24 + 20);
 Require(!WowBFactionDbSnapshotLayout.TryArrayPalette(arrayFields, arrayPointers, 6, out _, out _), "unknown palette element count rejected");
+// Synthetic primary table: diagnostic-only model, not a live reaction assertion.
+byte[] relationStorage = new byte[0x100], relationFields = new byte[7 * 24], relationRows = new byte[4 * 7];
+byte[] relationIndex = new byte[4 * 4], relationScalar = new byte[8], relationEnemy = new byte[32], relationFriend = new byte[32];
+BitConverter.GetBytes(7U).CopyTo(relationStorage, 0x38);
+BitConverter.GetBytes(1U).CopyTo(relationStorage, 0x40);
+BitConverter.GetBytes(10U).CopyTo(relationStorage, 0x44);
+BitConverter.GetBytes(4U).CopyTo(relationStorage, 0x48);
+BitConverter.GetBytes(4UL).CopyTo(relationStorage, 0xB8);
+int[] relationModes = { 1, 5, 1, 3, 1, 4, 4 }, relationOffsets = { 0, 12, 27, 31, 35, 39, 46 };
+int[] relationWidths = { 12, 15, 4, 4, 4, 7, 8 };
+for (int i = 0; i < 7; i++)
+{
+    BitConverter.GetBytes((uint)relationModes[i]).CopyTo(relationFields, i * 24 + 8);
+    BitConverter.GetBytes((uint)relationOffsets[i]).CopyTo(relationFields, i * 24 + 12);
+    BitConverter.GetBytes((uint)relationWidths[i]).CopyTo(relationFields, i * 24 + 16);
+}
+BitConverter.GetBytes(8U).CopyTo(relationFields, 3 * 24 + 4);
+BitConverter.GetBytes(32U).CopyTo(relationFields, 5 * 24 + 4);
+BitConverter.GetBytes(32U).CopyTo(relationFields, 6 * 24 + 4);
+BitConverter.GetBytes(8U).CopyTo(relationFields, 5 * 24 + 20);
+BitConverter.GetBytes(8U).CopyTo(relationFields, 6 * 24 + 20);
+BitConverter.GetBytes(2U).CopyTo(relationScalar, 0);
+// player, friendly, neutral, aggressive (little-endian 7-byte packed records)
+ulong[] packedFixture = {
+    3UL | (72UL << 12) | (3UL << 27) | (12UL << 35),
+    47UL | (2UL << 27) | (4UL << 35),
+    7UL | (1024UL << 12) | (1UL << 31),
+    37UL | (1UL << 12) | (8UL << 27) | (1UL << 31) | (1UL << 35)
+};
+for (int i = 0; i < packedFixture.Length; i++)
+{
+    byte[] encodedRow = BitConverter.GetBytes(packedFixture[i]);
+    Array.Copy(encodedRow, 0, relationRows, i * 7, 7);
+    BitConverter.GetBytes((ushort)(i + 2)).CopyTo(relationIndex, i * 4);
+    BitConverter.GetBytes((ushort)i).CopyTo(relationIndex, i * 4 + 2);
+}
+Require(WowBFactionTemplateDiagnostic.TryCompare(relationStorage, relationFields, relationRows, relationIndex,
+    relationScalar, relationEnemy, relationFriend, 4, 3, out int rf, out int rr, out _) && rf == 4 && rr == 4,
+    "template-only friendly fixture");
+Require(WowBFactionTemplateDiagnostic.TryCompare(relationStorage, relationFields, relationRows, relationIndex,
+    relationScalar, relationEnemy, relationFriend, 5, 3, out rf, out rr, out _) && rf == 3 && rr == 3,
+    "template-only neutral fixture");
+Require(WowBFactionTemplateDiagnostic.TryCompare(relationStorage, relationFields, relationRows, relationIndex,
+    relationScalar, relationEnemy, relationFriend, 6, 3, out rf, out rr, out _) && rf == 1 && rr == 1,
+    "template-only aggressive fixture");
+// Array precedence and zero termination: an enemy entry overrides a friendly mask,
+// while an entry after zero must not be considered.
+BitConverter.GetBytes((ushort)3).CopyTo(relationEnemy, 0);
+Require(WowBFactionTemplateDiagnostic.TryCompare(relationStorage, relationFields, relationRows, relationIndex,
+    relationScalar, relationEnemy, relationFriend, 4, 3, out rf, out rr, out _) && rf == 1 && rr == 4,
+    "enemy array takes precedence and remains directional");
+BitConverter.GetBytes((ushort)0).CopyTo(relationEnemy, 0);
+BitConverter.GetBytes((ushort)3).CopyTo(relationEnemy, 4);
+Require(WowBFactionTemplateDiagnostic.TryCompare(relationStorage, relationFields, relationRows, relationIndex,
+    relationScalar, relationEnemy, relationFriend, 4, 3, out rf, out rr, out _) && rf == 4 && rr == 4,
+    "array terminates at zero");
+BitConverter.GetBytes((ushort)0).CopyTo(relationEnemy, 4);
+byte[] rowWithBadPalette = BitConverter.GetBytes(packedFixture[1] | (1UL << 39));
+Array.Copy(rowWithBadPalette, 0, relationRows, 7, 7);
+Require(!WowBFactionTemplateDiagnostic.TryCompare(relationStorage, relationFields, relationRows, relationIndex,
+    relationScalar, relationEnemy, relationFriend, 4, 3, out _, out _, out _), "palette index bounds");
+Array.Copy(BitConverter.GetBytes(packedFixture[1]), 0, relationRows, 7, 7);
+byte[] rowWithHostileFlag = BitConverter.GetBytes(packedFixture[2] | (0x2000UL << 12));
+Array.Copy(rowWithHostileFlag, 0, relationRows, 14, 7);
+Require(WowBFactionTemplateDiagnostic.TryCompare(relationStorage, relationFields, relationRows, relationIndex,
+    relationScalar, relationEnemy, relationFriend, 5, 3, out rf, out rr, out _) && rf == 1 && rr == 3,
+    "fallback template bit is directional");
+Array.Copy(BitConverter.GetBytes(packedFixture[2]), 0, relationRows, 14, 7);
+Require(!WowBFactionTemplateDiagnostic.TryCompare(relationStorage, relationFields, relationRows, relationIndex,
+    relationScalar, relationEnemy, relationFriend, 10, 3, out _, out _, out _), "missing row unavailable");
+Require(!WowBFactionTemplateDiagnostic.TryCompare(relationStorage, relationFields, relationRows, relationIndex,
+    relationScalar, null, relationFriend, 4, 3, out _, out _, out _), "missing palette unavailable");
+BitConverter.GetBytes(2U).CopyTo(relationFields, 2 * 24 + 8);
+Require(!WowBFactionTemplateDiagnostic.TryCompare(relationStorage, relationFields, relationRows, relationIndex,
+    relationScalar, relationEnemy, relationFriend, 4, 3, out _, out _, out _), "unknown compression unavailable");
+BitConverter.GetBytes(1U).CopyTo(relationFields, 2 * 24 + 8);
+BitConverter.GetBytes((ushort)0xFFFF).CopyTo(relationIndex, 4 + 2);
+Require(!WowBFactionTemplateDiagnostic.TryCompare(relationStorage, relationFields, relationRows, relationIndex,
+    relationScalar, relationEnemy, relationFriend, 4, 3, out _, out _, out _), "special row unavailable");
+BitConverter.GetBytes((ushort)1).CopyTo(relationIndex, 4 + 2);
+BitConverter.GetBytes((ushort)2).CopyTo(relationIndex, 4);
+Require(!WowBFactionTemplateDiagnostic.TryCompare(relationStorage, relationFields, relationRows, relationIndex,
+    relationScalar, relationEnemy, relationFriend, 4, 3, out _, out _, out _), "duplicate table key unavailable");
 // Faction-template ID is diagnostic, not a reaction or attackability result.
 mem.U32(0x40001000 + WowBOffsets.UnitDataFactionTemplateOffset, 189);
 Require(reader.TryReadFactionTemplateId(0x40001000, out uint factionId) && factionId == 189, "faction template ID");
@@ -343,6 +427,7 @@ Require(reader.TryCaptureWorldSnapshot(out snapshot) && snapshot!.Units.Count ==
 // The local record's back-reference is required.
 mem.U64(0x40000000 + WowBOffsets.UnitObjectBackPtrOffset, 0);
 Require(!reader.TryCaptureWorldSnapshot(out snapshot) && snapshot == null, "fail closed without local player");
+ProbeTests.Run();
 Console.WriteLine("WowBReader snapshot tests passed");
 
 void Add(uint slot, ulong rec, ulong unit, WowBGuid guid, ulong vtRva, float x, float y, float z)
@@ -414,6 +499,7 @@ namespace GreenMagic
         {
             for (int i = 0; i < data.Length; i++) bytes[address + (ulong)i] = data[i];
         }
+        public void Bytes(ulong address, byte[] value) => Put(address, value);
         public void U64(ulong address, ulong value) => Put(address, BitConverter.GetBytes(value));
         public void U32(ulong address, uint value) => Put(address, BitConverter.GetBytes(value));
         public void F32(ulong address, float value) => Put(address, BitConverter.GetBytes(value));

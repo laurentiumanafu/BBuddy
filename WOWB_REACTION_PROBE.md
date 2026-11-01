@@ -231,7 +231,7 @@ stopped throughout:
    its name, appearance/color and faction if shown. Do not attack it.
 2. If a faction's reversible **At War** checkbox can safely be toggled, keep
    that *same NPC selected*, record its initial setting, then capture it before
-   and after changing the checkbox. Use `Other / changed state` for an
+   and after changing the checkbox. Use `Compare selected / other state (unlabeled)` for an
    observation that does not cleanly match the three specific labels, and note
    the checkbox, visible target color and any other game feedback for each
    sample. Restore the exact initial checkbox setting. Skip this entire step if
@@ -295,6 +295,34 @@ vendor interactions. No gameplay or selling behavior was changed.
 The offline `compare_state.py` also prints candidate health qwords and
 `+0x1E60` for the same-player, same-target pair when both chunks exist; missing
 chunks stay unavailable. It does not infer reaction or attackability.
+
+## Diagnostic-only comparison in the sample window
+
+The sample window now compares the selected NPC's and player's keys against
+the **captured primary base table** and displays the numeric table-helper result
+in both directions. It also saves `templateComparison` with keys, results and
+status in the private JSONL (older samples remain readable). Click any known
+label or **Compare selected / other state (unlabeled)**. No movement, attack,
+client call, Lua, targeting, vendor or failsafe behavior is changed.
+
+The result is guarded by the existing two 70291 partial signatures, observed
+storage-vtable RVA, bounded uncached double reads, table pointer/size and unit
+identity rechecks; template keys are re-read. The decoder accepts only the
+observed seven-field packed layout, valid dimensions, unique index keys,
+primary row indices and complete bounded palettes. Missing, changing or
+unsupported inputs show **unavailable**, not a neutral/friendly/hostile guess.
+The helper can yield numerical codes 1, 3 or 4, but those are **not** a live
+reaction, attackability or aggression result. Table overlays are not checked;
+reputation, player overrides and other combat restrictions are not applied.
+All process snapshots are non-atomic, signatures do not prove the entire build,
+and changes away and back may be missed. It must not be used as a combat or
+merchant filter.
+
+The C# reader, probe (with stub app dependencies) and decoder were compiled and
+run under .NET 10 Roslyn in a Linux test harness, including synthetic guard,
+branch and end-to-end probe tests with fake process memory. The C# numeric results matched the existing Python offline helper
+for 1,453 pairs from a private captured table. This is not a Windows/WPF build,
+a live client test, or independent proof of real attackability.
 
 ## Collect labeled observations
 

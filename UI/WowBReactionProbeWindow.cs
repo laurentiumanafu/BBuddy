@@ -19,20 +19,21 @@ namespace CopilotBuddy.UI
         public WowBReactionProbeWindow()
         {
             Title = "NPC reaction samples (read-only)";
-            Width = 500; Height = 420; MinWidth = 380; MinHeight = 320;
+            Width = 500; Height = 470; MinWidth = 380; MinHeight = 320;
             WindowStartupLocation = WindowStartupLocation.CenterOwner;
             var panel = new StackPanel { Margin = new Thickness(16) };
             panel.Children.Add(new TextBlock
             {
                 Text = "Stop the bot. Select an NPC in the game, then choose the label you know applies. " +
                        "Collect several different friendly town NPCs, yellow attackable neutral monsters, and red aggressive monsters; " +
-                       "repeat some NPCs. Do not attack or interact for this probe. The labels are observations, not a classifier.",
+                       "repeat some NPCs. Do not attack or interact for this probe. " +
+                       "Each capture shows a base-table-only comparison, not live reaction or attackability; it never changes targeting.",
                 TextWrapping = TextWrapping.Wrap
             });
             AddButton(panel, "Friendly town NPC", "friendly");
             AddButton(panel, "Neutral, attackable monster", "neutral_attackable");
             AddButton(panel, "Aggressive monster", "aggressive");
-            AddButton(panel, "Other / changed state (note details separately)", "other_observation");
+            AddButton(panel, "Compare selected / other state (unlabeled)", "other_observation");
             panel.Children.Add(_result);
             Content = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = panel };
         }

@@ -62,6 +62,17 @@ internal static class WowBReactionProbe
                 playerAfter.RecordAddress != player.RecordAddress || playerAfter.UnitAddress != player.UnitAddress ||
                 targetAfter.RecordAddress != target.RecordAddress || targetAfter.UnitAddress != target.UnitAddress)
                 return "Player or target changed during sampling; no sample saved. Keep the same NPC selected and retry.";
+            TemplateComparison comparison = CompareTemplates(memory, player, target, playerBytes, targetBytes, dbProbe);
+            // The comparison rereads unit keys after the first identity recheck. Check
+            // identity once more before saving; this still cannot rule out ABA changes.
+            if (ObjectManager.Wow != memory || ObjectManager.WowB != reader ||
+                !reader.TryCaptureWorldSnapshot(out WowBWorldSnapshot? final) || final == null ||
+                final.LocalGuid != before.LocalGuid || final.TargetGuid != before.TargetGuid ||
+                !final.TryGetLocalPlayer(out WowBObservedUnit finalPlayer) ||
+                !final.TryGetSelectedTarget(out WowBObservedUnit finalTarget) ||
+                finalPlayer.RecordAddress != player.RecordAddress || finalPlayer.UnitAddress != player.UnitAddress ||
+                finalTarget.RecordAddress != target.RecordAddress || finalTarget.UnitAddress != target.UnitAddress)
+                return "Player or target changed during sampling; no sample saved. Keep the same NPC selected and retry.";
             uint map;
             uint? mapId = reader.TryReadMapId(out map) ? map : null;
             var sample = new
@@ -72,7 +83,7 @@ internal static class WowBReactionProbe
                 // Observed for gameobjects; this is only a hint for NPC independence, not a validated NPC template id.
                 targetEntryHint = (target.Guid.High >> 6) & 0x7FFFFFUL,
                 targetRecord = target.RecordAddress.ToString("X"), targetUnit = target.UnitAddress.ToString("X"),
-                playerChunks = playerBytes, targetChunks = targetBytes, dbProbe, stateProbe
+                playerChunks = playerBytes, targetChunks = targetBytes, dbProbe, stateProbe, templateComparison = comparison
             };
             string path = PathName;
             Directory.CreateDirectory(Path.GetDirectoryName(path) ?? ".");
@@ -85,6 +96,9 @@ internal static class WowBReactionProbe
                 result += arraysIncluded ? " (array palettes included)" : " (array palettes unavailable)";
             }
             result += stateProbe == null ? " (state diagnostic unavailable)" : " (state diagnostic included)";
+            result += comparison.targetToPlayer.HasValue && comparison.playerToTarget.HasValue
+                ? "\nBase table only (target key " + comparison.targetKey + ", player key " + comparison.playerKey + "): target→player " + comparison.targetToPlayer.Value + ", player→target " + comparison.playerToTarget.Value + ". NOT live reaction or attackability."
+                : "\nBase table comparison unavailable: " + comparison.status + ". No reaction or attackability inferred.";
             Logging.Write("[Reaction probe] " + result + ". Labels are supplied by the user; no classification is inferred.");
             return result;
         }
@@ -92,6 +106,67 @@ internal static class WowBReactionProbe
         {
             return "Reaction sample failed; no classification was made: " + ex.Message;
         }
+    }
+
+    private static TemplateComparison CompareTemplates(GreenMagic.Memory memory, WowBObservedUnit player,
+        WowBObservedUnit target, List<Chunk> playerChunks, List<Chunk> targetChunks, DbDiagnostic? db)
+    {
+        var result = new TemplateComparison { status = "table or keys unavailable" };
+        try
+        {
+            if (!TryCapturedKey(memory, player.UnitAddress, playerChunks, out uint playerKey) ||
+                !TryCapturedKey(memory, target.UnitAddress, targetChunks, out uint targetKey))
+            {
+                result.status = "unit key unreadable or changed during capture";
+                return result;
+            }
+            result.playerKey = playerKey;
+            result.targetKey = targetKey;
+            if (db?.storageBytes == null || db.fieldDescriptorBytes == null || db.rowBytes == null || db.indexBytes == null ||
+                db.paletteBytes == null || db.paletteBytes.Count <= 3 || db.paletteBytes[3] == null ||
+                db.arrayPaletteBytes == null || db.arrayPaletteBytes.Count <= 6 ||
+                db.arrayPaletteBytes[5] == null || db.arrayPaletteBytes[6] == null) return result;
+            if (WowBFactionTemplateDiagnostic.TryCompare(Convert.FromBase64String(db.storageBytes),
+                Convert.FromBase64String(db.fieldDescriptorBytes), Convert.FromBase64String(db.rowBytes),
+                Convert.FromBase64String(db.indexBytes), Convert.FromBase64String(db.paletteBytes[3]!),
+                Convert.FromBase64String(db.arrayPaletteBytes[5]!), Convert.FromBase64String(db.arrayPaletteBytes[6]!),
+                targetKey, playerKey, out int forward, out int reverse, out string reason))
+            {
+                result.targetToPlayer = forward;
+                result.playerToTarget = reverse;
+                result.status = "base table only; not live reaction or attackability";
+            }
+            else result.status = reason;
+        }
+        catch { result.status = "diagnostic read or decode failed"; }
+        return result;
+    }
+
+    private static bool TryCapturedKey(GreenMagic.Memory memory, ulong unit, List<Chunk> chunks, out uint key)
+    {
+        key = 0;
+        if (unit > 0x00007FFFFFFFFFFFUL - WowBOffsets.UnitDataFactionTemplateOffset - 4) return false;
+        foreach (Chunk chunk in chunks)
+        {
+            if (chunk.offset != 0x1E00) continue;
+            byte[] data = Convert.FromBase64String(chunk.bytes);
+            if (data.Length != ChunkSize) return false;
+            uint captured = BitConverter.ToUInt32(data, 0x5C);
+            byte[]? current = ReadStable(memory, unit + WowBOffsets.UnitDataFactionTemplateOffset, 4);
+            if (current == null || BitConverter.ToUInt32(current, 0) != captured) return false;
+            key = captured;
+            return true;
+        }
+        return false;
+    }
+
+    private sealed class TemplateComparison
+    {
+        public string status { get; set; } = "unavailable";
+        public uint? playerKey { get; set; }
+        public uint? targetKey { get; set; }
+        public int? targetToPlayer { get; set; }
+        public int? playerToTarget { get; set; }
     }
 
     // These are candidate regions from static 70291 traces, not an interpretation

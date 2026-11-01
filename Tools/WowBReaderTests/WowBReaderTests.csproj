@@ -8,9 +8,11 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../../Styx/Offsets/WowBOffsets.cs" Link="WowBOffsets.cs" />
+    <Compile Include="../../Styx/Logic/Pathing/ClickAim/WowBReactionProbe.cs" Link="WowBReactionProbe.cs" />
     <Compile Include="../../Styx/WoWInternals/WowBGuid.cs" Link="WowBGuid.cs" />
     <Compile Include="../../Styx/WoWInternals/WowBReader.cs" Link="WowBReader.cs" />
     <Compile Include="../../Styx/WoWInternals/WowBFactionDbSnapshotLayout.cs" Link="WowBFactionDbSnapshotLayout.cs" />
+    <Compile Include="../../Styx/WoWInternals/WowBFactionTemplateDiagnostic.cs" Link="WowBFactionTemplateDiagnostic.cs" />
     <Compile Include="../../Styx/WoWInternals/WowBWorldSnapshot.cs" Link="WowBWorldSnapshot.cs" />
   </ItemGroup>
 </Project>
