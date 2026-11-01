@@ -74,3 +74,5 @@ Tools/NavMeshBuilder/*.exe
 Lib/x64/*.lib
 Tools/CascAdt/*.o
 build-last.log
+# Read-only live unit captures can contain character and world identifiers
+wowb-reaction-samples.jsonl

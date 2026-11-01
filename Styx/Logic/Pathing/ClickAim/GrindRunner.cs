@@ -118,21 +118,12 @@ internal static class GrindRunner
     // 0x800 occurs on idle units too; it is not a verified combat indicator.
 
     /// <summary>
-    /// <c>UnitFlags</c> bits that mean "this is not something to fight", read from the dword at
-    /// object +0x1E60:
-    ///
-    ///   0x2    NON_ATTACKABLE. The client's own attack predicate - the function the registered
-    ///          <c>UnitCanAttack</c> handler calls - tests bit 1 of +0x1E60 and returns false on
-    ///          the path that takes it (hunt/WOWB_70291_TRACE_FINDINGS.md, 16:27).
-    ///   0x100  IMMUNE_TO_PC  \  measured, not guessed: the 14:23 run dumped the same window for a
-    ///   0x200  IMMUNE_TO_NPC /  friendly lazy peon (level 4, hp 86/86) as flags 0x200 and for the
-    ///          scorpions it killed as flags 0x0, and the pool census in the same log lists a
-    ///          second "friend" as 0x300 - both immune bits. A unit carrying either bit cannot be
-    ///          damaged by this character, which is exactly what the fight spent twenty seconds
-    ///          proving at 1.3 yd.
-    ///
-    /// Used as a FILTER, never as proof: a unit carrying a bit is skipped, and a unit without one
-    /// still has to be an enemy that TAB agrees with before it counts.
+    /// Existing conservative target exclusion mask. Static attack-predicate traces test
+    /// bit 1 of +0x1E60 on one false-return path; older logs observed other bits on
+    /// some town units. These observations do not establish friendly, neutral,
+    /// hostile, vendor, or general immunity semantics on build 70291. Keep the
+    /// established failsafe, but do not treat the mask (or its absence) as a
+    /// complete attackability or reaction classifier.
     /// </summary>
     private const uint NotAFightFlag = 0x2 | 0x100 | 0x200;
 
@@ -2602,10 +2593,9 @@ internal static class GrindRunner
 
         ClickAimKeySteer.Face(npc.Location.X, npc.Location.Y, hwnd, 25.0, 4);
 
-        /* The right-click that opens the window, confirmed the only way this build can confirm a
-         * click: the client's own target guid answers with the NPC. On a friendly NPC this is the
-         * interaction, not an attack - a right-click is a walk order on the GROUND and an attack
-         * on a hostile unit, which is why the unit is filtered by NotAFightFlag first. */
+        /* Selection of the guessed NPC does not prove it is friendly or a vendor, nor
+         * that the merchant window opened. A right-click on the wrong unit can attack.
+         * The existing point/flag heuristic is not a reaction classifier. */
         string how;
         if (!TryClickUnit(hwnd, npc, px, py, true, out how))
         {
@@ -2629,13 +2619,11 @@ internal static class GrindRunner
         _killsSinceTrip = 0;
         _vendorRetryAt = 0;
 
-        /* ...and here the same words move the other way, by the number of items sold. A candidate
-         * that does that is the bag count, not a coincidence. */
-        BagSlotHunt.Sample("sold at the vendor");
+        // A replay does not establish that the merchant opened or any items sold.
+        BagSlotHunt.Sample("after vendor replay (sales unverified)");
         Logging.Write(string.Format(CultureInfo.InvariantCulture,
-            "[Grind] vendor trip done: {0} of {1} step(s) sent ({2} click(s)). The merchant window cannot be read "
-            + "on this build, so the plan is what sells the loot - if the bags still hold junk, the plan needs "
-            + "another step.", sent, point.Steps.Count, _sellClicks));
+            "[Grind] vendor replay: {0} of {1} step(s) sent ({2} click(s)). Merchant state and bag contents "
+            + "are not verified; this does not confirm a sale.", sent, point.Steps.Count, _sellClicks));
         return true;
     }
 
@@ -2701,14 +2689,9 @@ internal static class GrindRunner
     }
 
     /// <summary>
-    /// The NPC to click at a vendor point: a unit that cannot be fought, which is exactly what a
-    /// vendor is and what a mob is not.
-    ///
-    /// <see cref="NotAFightFlag"/> is the filter the fight REFUSES targets with. Here it is used
-    /// the other way round, and it is the closest thing to a reaction word this build has. When
-    /// nothing at the point carries it, a single living unit within 8 yd is tried as a guess and
-    /// named as one in the log: the point was captured standing next to the vendor, and a town on
-    /// this build is full of guards that also carry the flags.
+    /// Existing vendor-point heuristic: prefer a nearby unit with an exclusion-mask
+    /// bit; otherwise try a sole nearby living unit. Neither result proves that the
+    /// unit is friendly, is a merchant, or is safe to right-click.
     /// </summary>
     private static bool TryFindVendorNpc(out WowBObservedUnit npc, out double yards)
     {
@@ -2753,7 +2736,7 @@ internal static class GrindRunner
             if (friendlyYd == double.MaxValue)
             {
                 Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                    "[Grind] the vendor should be {0} (level {1}, hp {2}/{3}, flags 0x{4:X}) {5:F1} yd away",
+                    "[Grind] possible vendor (unverified flag heuristic) {0} (level {1}, hp {2}/{3}, flags 0x{4:X}) {5:F1} yd away",
                     candidate.Guid, f.Level, f.Health, f.MaxHealth, f.UnitFlags, d));
             }
 
@@ -2770,7 +2753,7 @@ internal static class GrindRunner
         if (living == 1 && onlyYd < double.MaxValue)
         {
             Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                "[Grind] no unit at the vendor point carries the \"cannot be fought\" flags, but there is exactly "
+                "[Grind] no unit at the vendor point matches the exclusion-mask heuristic, but there is exactly "
                 + "one living unit within 8 yd ({0:F1} yd) - trying it as the vendor", onlyYd));
             npc = only;
             yards = onlyYd;
@@ -2778,8 +2761,8 @@ internal static class GrindRunner
         }
 
         Logging.Write(string.Format(CultureInfo.InvariantCulture,
-            "[Grind] {0} living unit(s) within {1:F0} yd of the vendor point and none of them is marked as "
-            + "friendly - there is nobody here to sell to", living, search));
+            "[Grind] {0} living unit(s) within {1:F0} yd of the vendor point; the vendor heuristic found "
+            + "no candidate. Merchant identity and friendliness are not known.", living, search));
         return false;
     }
 

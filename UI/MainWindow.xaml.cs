@@ -1402,6 +1402,9 @@ namespace CopilotBuddy.UI
                 }),
                 ("Gather hover test", "Test hover tracking without clicking", () => btnGatherHoverTest_Click(this, new RoutedEventArgs())),
                 ("Combat probe", "Compare idle and combat memory samples", () => btnCombatProbe_Click(this, new RoutedEventArgs())),
+                ("NPC reaction samples", "Capture user-labelled NPC memory without attacking", () => {
+                    var probe = new WowBReactionProbeWindow { Owner = this }; probe.Show();
+                }),
                 ("Gather probe", "Inspect a hovered herb or ore", () => btnGatherProbe_Click(this, new RoutedEventArgs())),
                 ("Add hotspot", "Remember your current position as a hotspot", () => btnAimHotspot_Click(this, new RoutedEventArgs())),
                 ("Walk hotspots", "Walk the captured hotspots", () => btnAimHotspots_Click(this, new RoutedEventArgs())),
