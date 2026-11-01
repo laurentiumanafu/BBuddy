@@ -47,6 +47,10 @@ namespace Styx.Logic.Pathing
             Check(WowBCursorProbe.SameActor(actor, close), "small actor movement");
             Check(!WowBCursorProbe.SameActor(actor, far) && !WowBCursorProbe.SameActor(actor, different) &&
                   !WowBCursorProbe.SameActor(actor, bad), "movement, identity and NaN reject");
+            Check(WowBCursorProbe.ActorChangeReason(actor, close, true) == "", "stationary target has no reason");
+            Check(WowBCursorProbe.ActorChangeReason(actor, different, true) == "selected NPC identity changed", "target identity reason");
+            Check(WowBCursorProbe.ActorChangeReason(actor, far, true).Contains("selected NPC moved"), "target movement reason");
+            Check(WowBCursorProbe.ActorChangeReason(actor, bad, false).Contains("player moved"), "player unreadable position reason");
             Check(!WowBCursorProbe.StartPosted(true, _ => { }), "posted probe requires attachment");
             Check(!WowBCursorProbe.Start("other", _ => { }), "unknown label not started");
             Check(!WowBCursorProbe.Start("friendly", _ => { }), "no attachment not started");

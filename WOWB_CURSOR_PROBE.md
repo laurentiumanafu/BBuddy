@@ -85,9 +85,15 @@ the first post, the second is not sent.
    Return to the tool and check that it says **Foreground hover prepared**. If
    not, repeat step 1. The preparation is in memory only and expires in two
    minutes; do not restart the app between steps.
-3. Press **2. Test posted hover in background**. Leave the game in the
-   background, release all mouse buttons and leave the desktop pointer still.
-   Three seconds after the button is pressed, the diagnostic records the
+3. Bring the **NPC cursor diagnostics** window to the foreground (for example,
+   with Alt-Tab) and release Alt. Press **2** on the main keyboard or numpad,
+   or click **2. Test posted hover in background**. The `1` key likewise starts
+   preparation. These shortcuts work only while the diagnostic window has
+   keyboard focus; they are not global hotkeys. Moving the desktop mouse between
+   the foreground capture and this step is allowed. Once step 2 starts, release
+   all mouse buttons and leave the desktop pointer still. Three seconds after
+   the key or button press, the diagnostic takes its desktop-position baseline
+   and records the
    foreground desktop cursor and mouseover candidate; it posts an away move,
    waits 1.25 seconds and records again, then posts a return move, waits and
    records again. It stops if focus, attachment, bot state, desktop pointer,
@@ -101,7 +107,9 @@ the first post, the second is not sent.
 4. When it reports **Saved background hover test**, privately share
    `Settings\wowb-posted-hover-samples.jsonl` from the output folder. The file
    appends and is gitignored. If it cancels instead, share the displayed reason;
-   rerun from step 1. Don't move the cursor until the test finishes.
+   rerun from step 1. The result describes the specific guard that stopped it;
+   the NPC wandering, a changed game window or a pressed Stop can also cancel the
+   test even if the physical mouse did not move. Don't move the cursor until it finishes.
 
 The file contains player, selected and mouseover-candidate GUIDs, cursor handles,
 flags and image fingerprints, but not screen images, cursor pixels, desktop

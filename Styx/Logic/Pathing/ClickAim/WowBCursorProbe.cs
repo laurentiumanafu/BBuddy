@@ -242,8 +242,16 @@ internal static class WowBCursorProbe
         return double.IsFinite(dx) && double.IsFinite(dy) && double.IsFinite(dz) && dx * dx + dy * dy + dz * dz <= 0.25;
     }
 
-    internal static bool SameActor(WowBObservedUnit a, WowBObservedUnit b)
-        => a.Guid == b.Guid && a.RecordAddress == b.RecordAddress && a.UnitAddress == b.UnitAddress && SameLocation(a, b);
+    internal static string ActorChangeReason(WowBObservedUnit expected, WowBObservedUnit actual, bool isTarget)
+    {
+        string name = isTarget ? "selected NPC" : "player";
+        if (actual.Guid != expected.Guid || actual.RecordAddress != expected.RecordAddress || actual.UnitAddress != expected.UnitAddress)
+            return name + " identity changed";
+        if (!SameLocation(expected, actual)) return name + " moved more than 0.5 yards, or position is unreadable";
+        return "";
+    }
+
+    internal static bool SameActor(WowBObservedUnit a, WowBObservedUnit b) => ActorChangeReason(a, b, false).Length == 0;
 
     private static bool Layout(PostedSetup setup)
     {
@@ -252,18 +260,36 @@ internal static class WowBCursorProbe
             ClientToScreen(setup.Hwnd, ref origin) && origin.X == setup.OriginX && origin.Y == setup.OriginY;
     }
 
-    private static bool SameWorld(PostedSetup setup)
+    private static bool SameWorld(PostedSetup setup, out string reason)
     {
-        if (ClickAimAbort.Generation != setup.StopGeneration || !Attached(setup.Memory, setup.Reader, setup.Hwnd) || !Layout(setup) ||
-            !setup.Reader.TryCaptureWorldSnapshot(out WowBWorldSnapshot? snap) || snap == null ||
-            !snap.TryGetLocalPlayer(out WowBObservedUnit player) || !snap.TryGetSelectedTarget(out WowBObservedUnit target) ||
-            !SameActor(setup.Player, player) || !SameActor(setup.Target, target) || target.IsLocalPlayer || target.HasPlayerVtable ||
-            !float.IsFinite(player.Facing) || !float.IsFinite(setup.Player.Facing) || Math.Abs(player.Facing - setup.Player.Facing) > 0.02 ||
-            !setup.Reader.TryGetUnitFields(target.UnitAddress, out WowBReader.WowBUnitFields fields) || fields.Health == 0 ||
-            !setup.Reader.TryGetUnitFields(player.UnitAddress, out WowBReader.WowBUnitFields self) || self.Health == 0 ||
-            (self.UnitFlags & 0x00080000U) != 0)
+        reason = "Stop was pressed after preparation";
+        if (ClickAimAbort.Generation != setup.StopGeneration) return false;
+        reason = "client attachment changed, or the bot started or paused";
+        if (!Attached(setup.Memory, setup.Reader, setup.Hwnd)) return false;
+        reason = "game window position or size changed";
+        if (!Layout(setup)) return false;
+        reason = "could not read the current player and selected NPC";
+        if (!setup.Reader.TryCaptureWorldSnapshot(out WowBWorldSnapshot? snap) || snap == null ||
+            !snap.TryGetLocalPlayer(out WowBObservedUnit player) || !snap.TryGetSelectedTarget(out WowBObservedUnit target))
             return false;
-        return ClickAimAbort.Generation == setup.StopGeneration && Attached(setup.Memory, setup.Reader, setup.Hwnd);
+        reason = "selected target is no longer an NPC";
+        if (target.IsLocalPlayer || target.HasPlayerVtable) return false;
+        reason = ActorChangeReason(setup.Target, target, true);
+        if (reason.Length != 0) return false;
+        reason = ActorChangeReason(setup.Player, player, false);
+        if (reason.Length != 0) return false;
+        reason = "player facing changed or is unreadable";
+        if (!float.IsFinite(player.Facing) || !float.IsFinite(setup.Player.Facing) ||
+            Math.Abs(player.Facing - setup.Player.Facing) > 0.02) return false;
+        reason = "selected NPC health is zero or could not be read";
+        if (!setup.Reader.TryGetUnitFields(target.UnitAddress, out WowBReader.WowBUnitFields fields) || fields.Health == 0) return false;
+        reason = "player health/combat state could not be read, is zero, or the provisional combat bit is set";
+        if (!setup.Reader.TryGetUnitFields(player.UnitAddress, out WowBReader.WowBUnitFields self) ||
+            self.Health == 0 || (self.UnitFlags & 0x00080000U) != 0) return false;
+        reason = "Stop was pressed, client changed, or the bot started during the check";
+        if (ClickAimAbort.Generation != setup.StopGeneration || !Attached(setup.Memory, setup.Reader, setup.Hwnd)) return false;
+        reason = "";
+        return true;
     }
 
     // These two operations deliberately share _active with the passive probe.
@@ -300,8 +326,12 @@ internal static class WowBCursorProbe
             Thread.Sleep(prepare ? WaitMilliseconds : 3000);
             using var uncached = memory.TemporaryCacheState(false);
             byte[]? sig = memory.ReadBytes64(memory.GetAbsolute64(HealthHandlerRva), 16);
-            if (ClickAimAbort.Generation != stopGeneration || !Attached(memory, reader, hwnd) || sig == null || Convert.ToHexString(sig) != HealthSignature)
-                result = "Stop requested, client changed, bot started, or 70291 signature mismatch; test cancelled.";
+            if (ClickAimAbort.Generation != stopGeneration)
+                result = "Stop was pressed during the countdown; test cancelled.";
+            else if (!Attached(memory, reader, hwnd))
+                result = "Client changed, or the bot started or paused during the countdown; test cancelled.";
+            else if (sig == null || Convert.ToHexString(sig) != HealthSignature)
+                result = "70291 signature could not be read or did not match; test cancelled.";
             else result = prepare ? PreparePosted(memory, reader, hwnd, stopGeneration) : RunPostedBackground(memory, reader, hwnd);
         }
         catch (Exception ex) { result = "Posted-hover test stopped: " + ex.Message; }
@@ -339,7 +369,8 @@ internal static class WowBCursorProbe
         var setup = new PostedSetup { Memory = memory, Reader = reader, Hwnd = hwnd, Width = w, Height = h,
             OriginX = origin.X, OriginY = origin.Y, X = point.X, Y = point.Y, Player = player, Target = target,
             PreparedAt = Environment.TickCount, StopGeneration = stopGeneration, ForegroundFingerprint = image.fingerprint };
-        if (!SameWorld(setup) || !TryCursor(hwnd, out CursorInfo final) ||
+        if (!SameWorld(setup, out string reason)) return "Preparation cancelled: " + reason + ". Prepare again.";
+        if (!TryCursor(hwnd, out CursorInfo final) ||
             !SameCursor(first.Flags, first.Cursor.ToInt64(), first.Position.X, first.Position.Y,
                         final.Flags, final.Cursor.ToInt64(), final.Position.X, final.Position.Y))
             return "Target, player, window or cursor changed; prepare again.";
@@ -357,35 +388,52 @@ internal static class WowBCursorProbe
         public string? cursorFingerprint { get; set; }
     }
 
-    private static bool BackgroundGuard(PostedSetup setup, IntPtr foreground, Point start)
+    private static bool DesktopGuard(PostedSetup setup, IntPtr foreground, Point start, out string reason)
     {
+        reason = "game must be in the background and the same other window must stay foreground";
+        if (foreground == IntPtr.Zero || foreground == setup.Hwnd || GetForegroundWindow() != foreground) return false;
+        reason = "a physical mouse button is held";
+        if (!MouseButtonsUp()) return false;
         var cursor = new CursorInfo { Size = Marshal.SizeOf<CursorInfo>() };
-        return foreground != IntPtr.Zero && foreground != setup.Hwnd && GetForegroundWindow() == foreground &&
-            MouseButtonsUp() && GetCursorInfo(ref cursor) &&
-            Math.Abs((long)cursor.Position.X - start.X) <= 2 && Math.Abs((long)cursor.Position.Y - start.Y) <= 2 &&
-            unchecked(Environment.TickCount - setup.PreparedAt) >= 0 && unchecked(Environment.TickCount - setup.PreparedAt) <= 120000 &&
-            SameWorld(setup) && GetForegroundWindow() == foreground && MouseButtonsUp() &&
-            GetCursorInfo(ref cursor) && Math.Abs((long)cursor.Position.X - start.X) <= 2 &&
-            Math.Abs((long)cursor.Position.Y - start.Y) <= 2 && ClickAimAbort.Generation == setup.StopGeneration;
+        reason = "Windows cursor position could not be read";
+        if (!GetCursorInfo(ref cursor)) return false;
+        reason = "desktop cursor moved after the 3-second countdown";
+        if (Math.Abs((long)cursor.Position.X - start.X) > 2 || Math.Abs((long)cursor.Position.Y - start.Y) > 2) return false;
+        reason = "foreground preparation expired (two-minute limit)";
+        int age = unchecked(Environment.TickCount - setup.PreparedAt);
+        if (age < 0 || age > 120000) return false;
+        reason = "Stop was pressed after preparation";
+        if (ClickAimAbort.Generation != setup.StopGeneration) return false;
+        reason = "";
+        return true;
     }
 
-    private static bool ObservePosted(PostedSetup setup, IntPtr foreground, Point start, out PostedObservation observation)
+    private static bool BackgroundGuard(PostedSetup setup, IntPtr foreground, Point start, out string reason)
+        => DesktopGuard(setup, foreground, start, out reason) && SameWorld(setup, out reason) &&
+           DesktopGuard(setup, foreground, start, out reason);
+
+    private static bool ObservePosted(PostedSetup setup, IntPtr foreground, Point start, out PostedObservation observation, out string reason)
     {
         observation = new PostedObservation();
-        if (!BackgroundGuard(setup, foreground, start)) return false;
+        if (!BackgroundGuard(setup, foreground, start, out reason)) return false;
         var cursor = new CursorInfo { Size = Marshal.SizeOf<CursorInfo>() };
+        reason = "Windows cursor could not be read";
         if (!GetCursorInfo(ref cursor)) return false;
         bool read = ReadHover(setup.Memory, out WowBGuid hover);
         CursorImage? image = ReadCursorImage(cursor.Cursor);
         Thread.Sleep(100);
         var last = new CursorInfo { Size = Marshal.SizeOf<CursorInfo>() };
-        if (!BackgroundGuard(setup, foreground, start) || !GetCursorInfo(ref last) ||
+        if (!BackgroundGuard(setup, foreground, start, out reason)) return false;
+        reason = "Windows cursor state could not be read or changed during sampling (not necessarily physical movement)";
+        if (!GetCursorInfo(ref last) ||
             !SameCursor(cursor.Flags, cursor.Cursor.ToInt64(), cursor.Position.X, cursor.Position.Y,
                         last.Flags, last.Cursor.ToInt64(), last.Position.X, last.Position.Y)) return false;
         CursorImage? lastImage = ReadCursorImage(last.Cursor);
         if (!ReadHover(setup.Memory, out WowBGuid lastHover) || !read || lastHover != hover) read = false;
         var final = new CursorInfo { Size = Marshal.SizeOf<CursorInfo>() };
-        if (!BackgroundGuard(setup, foreground, start) || !GetCursorInfo(ref final) ||
+        if (!BackgroundGuard(setup, foreground, start, out reason)) return false;
+        reason = "Windows cursor state could not be read or changed during sampling (not necessarily physical movement)";
+        if (!GetCursorInfo(ref final) ||
             !SameCursor(cursor.Flags, cursor.Cursor.ToInt64(), cursor.Position.X, cursor.Position.Y,
                         final.Flags, final.Cursor.ToInt64(), final.Position.X, final.Position.Y)) return false;
         observation = new PostedObservation { hoverGuid = read ? hover.ToString() : null,
@@ -393,6 +441,7 @@ internal static class WowBCursorProbe
             cursorFlags = cursor.Flags, cursorShowing = (cursor.Flags & 1) != 0 && (cursor.Flags & 2) == 0,
             cursorHandle = cursor.Cursor.ToInt64().ToString("X"),
             cursorFingerprint = image != null && lastImage != null && image.fingerprint == lastImage.fingerprint ? image.fingerprint : null };
+        reason = "";
         return true;
     }
 
@@ -407,26 +456,31 @@ internal static class WowBCursorProbe
             return "No prepared foreground hover for this client. Run step 1 first.";
         IntPtr foreground = GetForegroundWindow();
         var cursor = new CursorInfo { Size = Marshal.SizeOf<CursorInfo>() };
-        if (!GetCursorInfo(ref cursor) || !BackgroundGuard(setup, foreground, cursor.Position))
-            return "Game must remain in background, with the cursor still and buttons released; target/player/window must be unchanged. Prepare again.";
-        Point realPosition = cursor.Position;
-        if (!ObservePosted(setup, foreground, realPosition, out PostedObservation before))
-            return "Background state changed before posting; no sample saved. Prepare again.";
+        if (!GetCursorInfo(ref cursor)) return "Before posting: Windows cursor could not be read. Prepare again.";
+        Point realPosition = cursor.Position; // baseline is AFTER the user has clicked step 2 and the countdown
+        if (!BackgroundGuard(setup, foreground, realPosition, out string reason))
+            return "Before posting: " + reason + ". Prepare again.";
+        if (!ObservePosted(setup, foreground, realPosition, out PostedObservation before, out reason))
+            return "Before posting: " + reason + ". No sample saved; prepare again.";
         // Pick a point far from the recorded NPC point; it might still be UI or
         // another object. The observed GUID transition, not geometry, is the control.
         double awayX = setup.X < setup.Width / 2 ? 0.80 : 0.20;
         double awayY = setup.Y < setup.Height / 2 ? 0.80 : 0.20;
-        if (!BackgroundGuard(setup, foreground, realPosition) || !ClickAimInput.PostMouseMoveFraction(hwnd, awayX, awayY))
-            return "Background guard or posted move-away failed; no sample saved. Prepare again.";
+        if (!BackgroundGuard(setup, foreground, realPosition, out reason))
+            return "Before move-away: " + reason + ". No sample saved; prepare again.";
+        if (!ClickAimInput.PostMouseMoveFraction(hwnd, awayX, awayY))
+            return "Posting the move-away failed. No sample saved; prepare again.";
         Thread.Sleep(1250); // allow a throttled background client time to process the move
-        if (!ObservePosted(setup, foreground, realPosition, out PostedObservation away))
-            return "State changed after the move-away; no return move or sample. Prepare again.";
-        if (!BackgroundGuard(setup, foreground, realPosition) || !ClickAimInput.PostMouseMoveFraction(hwnd,
+        if (!ObservePosted(setup, foreground, realPosition, out PostedObservation away, out reason))
+            return "After move-away: " + reason + ". No return move or sample; prepare again.";
+        if (!BackgroundGuard(setup, foreground, realPosition, out reason))
+            return "Before return move: " + reason + ". No return move or sample; prepare again.";
+        if (!ClickAimInput.PostMouseMoveFraction(hwnd,
                 setup.X / (double)(setup.Width - 1), setup.Y / (double)(setup.Height - 1)))
-            return "Background guard or posted return move failed; no sample saved. Prepare again.";
+            return "Posting the return move failed. No sample saved; prepare again.";
         Thread.Sleep(1250); // allow a throttled background client time to process the move
-        if (!ObservePosted(setup, foreground, realPosition, out PostedObservation returned))
-            return "State changed after the return move; no sample saved. Prepare again.";
+        if (!ObservePosted(setup, foreground, realPosition, out PostedObservation returned, out reason))
+            return "After return move: " + reason + ". No sample saved; prepare again.";
         bool transition = CandidateTransition(away.matchesTarget, returned.matchesTarget);
         var sample = new { schema = 1, utc = DateTime.UtcNow.ToString("O"),
             playerGuid = setup.Player.Guid.ToString(), targetGuid = setup.Target.Guid.ToString(),
