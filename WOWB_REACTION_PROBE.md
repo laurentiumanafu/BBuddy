@@ -255,6 +255,47 @@ Differences are leads, not proof of a particular faction, standing or attackabil
 The fourth label `other_observation` is for context and is excluded from the
 existing three-label correlation analysis; it does not change targeting.
 
+## 2026-11-01: Crag Boar before and during retaliation
+
+The latest version of Drive file `1JmI9h6dS0FXY7k1-DO9VOetAVivTfiQ7`
+(MD5 `05b1ec78335ff1e8ea5bf5e94aaa8ee6`, modified 16:14 UTC) contains
+five new observations: two user-labeled friendly NPCs, one user-labeled
+aggressive monster, and two `neutral_attackable` samples of the same Crag
+Boar, before and while the user reports it was attacking. This Drive file ID
+previously held a different file version (the earlier MD5 quoted above).
+All five new observations include the optional state and table diagnostics;
+all candidate reputation regions, player override regions, and captured primary
+table regions match across these samples. Read consistency is not atomic.
+
+For the same character and the same boar, at 16:13:27 UTC and 16:13:39 UTC:
+
+| Candidate field | Before | During retaliation |
+|---|---:|---:|
+| Boar FactionTemplate key | 189 | 189 |
+| Boar health qwords (current/max) | 120 / 120 | 71 / 120 |
+| Player health qwords (current/max) | 220 / 220 | 192 / 220 |
+| Boar `+0x1E60` | `0x00000000` | `0x00080800` |
+| Player `+0x1E60` | `0x00000008` | `0x00080808` |
+
+The user's report and the falling boar health support attackability in this
+particular encounter; no direct game `UnitCanAttack` result was sampled, and
+health alone does not establish the damage source. The flags changes support
+only a **combat-state candidate**; a neutral monster retaliating is not proof
+that it was aggressive before the pull. Neither `0x80000` nor `0x800` proves
+attackability, allegiance or attacker identity. The candidate reputation and
+player override regions did not differ between these two snapshots. That does
+not validate their semantics or rule out changes between reads, and there was no
+At War checkbox test. The table-only helper returns (3,3) for boar template
+189 vs player template 3; it returns (4,4) for friendly keys 55/57 and (1,1)
+for the user's aggressive example key 44. These are consistent with the labels
+in this small sample but remain neither a live reaction result nor a complete
+attack predicate. Do not use them to weaken the existing failsafe or drive
+vendor interactions. No gameplay or selling behavior was changed.
+
+The offline `compare_state.py` also prints candidate health qwords and
+`+0x1E60` for the same-player, same-target pair when both chunks exist; missing
+chunks stay unavailable. It does not infer reaction or attackability.
+
 ## Collect labeled observations
 
 1. Build and attach the x64 application. Stop Grind, GatherBuddy and routes.

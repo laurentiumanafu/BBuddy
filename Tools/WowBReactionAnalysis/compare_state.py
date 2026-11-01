@@ -3,6 +3,7 @@
 import argparse
 import base64
 import json
+import struct
 import sys
 
 
@@ -34,6 +35,22 @@ def compare(first, second):
     return rep, player
 
 
+def unit_words(sample, field):
+    """Known candidate health qwords and unit flags; missing chunks remain unknown."""
+    chunks = sample.get(field)
+    if not isinstance(chunks, list):
+        return None
+    matches = [c for c in chunks if isinstance(c, dict) and c.get('offset') == 0x1E00]
+    if not matches:
+        return None
+    if len(matches) != 1:
+        raise ValueError('repeated unit chunk')
+    data = decode(matches[0].get('bytes'), 256)
+    health, maximum = struct.unpack_from('<QQ', data, 0x30)
+    flags = struct.unpack_from('<I', data, 0x60)[0]
+    return health, maximum, flags
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('file', help='private JSONL samples')
@@ -51,6 +68,13 @@ def main():
         rep, player = compare(first, second)
         print('Candidate reputation slots changed:', rep)
         print('Candidate player override slots changed:', player)
+        for label, field in (('Player', 'playerChunks'), ('Target', 'targetChunks')):
+            before, after = unit_words(first, field), unit_words(second, field)
+            if before is not None and after is not None:
+                print(f'{label} health candidate: {before[0]}/{before[1]} -> {after[0]}/{after[1]}')
+                print(f'{label} flags candidate +0x1E60: 0x{before[2]:08X} -> 0x{after[2]:08X}')
+            else:
+                print(f'{label} health/flags: unavailable')
         print('Changes are leads only; no reaction or attackability is inferred.')
     except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
         print(f'Cannot compare: {exc}', file=sys.stderr)

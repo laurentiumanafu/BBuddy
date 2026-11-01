@@ -1,6 +1,7 @@
 import base64
+import struct
 import unittest
-from compare_state import compare
+from compare_state import compare, unit_words
 
 
 def obj():
@@ -29,6 +30,19 @@ class CompareStateTests(unittest.TestCase):
         del b['stateProbe']
         with self.assertRaisesRegex(ValueError, 'not captured'):
             compare(a, b)
+
+    def test_unit_words_and_missing_chunk(self):
+        a = obj()
+        self.assertIsNone(unit_words(a, 'targetChunks'))
+        raw = bytearray(256)
+        struct.pack_into('<QQ', raw, 0x30, 120, 125)
+        struct.pack_into('<I', raw, 0x60, 0x80800)
+        chunk = {'offset': 0x1E00, 'bytes': base64.b64encode(raw).decode()}
+        a['targetChunks'] = [chunk]
+        self.assertEqual(unit_words(a, 'targetChunks'), (120, 125, 0x80800))
+        a['targetChunks'].append(chunk)
+        with self.assertRaisesRegex(ValueError, 'repeated unit chunk'):
+            unit_words(a, 'targetChunks')
 
     def test_short_or_invalid_bytes(self):
         a, b = obj(), obj()
