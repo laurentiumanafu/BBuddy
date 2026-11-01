@@ -1402,7 +1402,7 @@ namespace CopilotBuddy.UI
                 }),
                 ("Gather hover test", "Test hover tracking without clicking", () => btnGatherHoverTest_Click(this, new RoutedEventArgs())),
                 ("Combat probe", "Compare idle and combat memory samples", () => btnCombatProbe_Click(this, new RoutedEventArgs())),
-                ("Grind faction filter", "Scan nearby faction-template IDs and configure optional Grind pulls", () => {
+                ("Grind faction filter", "Scan nearby faction-template IDs and configure optional Grind attack filter", () => {
                     if (Styx.Logic.Pathing.ClickAimUi.Running || Styx.Logic.Pathing.ClickAimUi.Paused) { SetStatus("Stop the bot before changing faction settings"); return; }
                     var window = new GrindFactionWindow { Owner = this }; window.ShowDialog();
                 }),

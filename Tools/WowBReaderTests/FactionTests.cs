@@ -18,8 +18,10 @@ namespace Styx.Logic.Pathing
             Check(!GrindFactionRules.TryCreate(true, "189, 0", out _, out _), "zero rejected");
             Check(!GrindFactionRules.TryCreate(false, "189, xx", out _, out _), "invalid rejected even when disabled");
             Check(GrindFactionRules.TryCreate(true, "189, 4 189", out var parsed, out _) && parsed.KeyText == "4, 189" && parsed.Allows(true, 4) && !parsed.Allows(true, 5) && !parsed.Allows(false, 4), "canonicalization and unknown deny");
-            Check(GrindFactionSettings.Save(true, "189, 4", out _) && GrindFactionSettings.TryLoad(out var loaded, out _) && loaded.Enabled && loaded.KeyText == "4, 189", "persist and reload");
-            Check(!GrindFactionSettings.Save(true, "bad", out _) && GrindFactionSettings.TryLoad(out loaded, out _) && loaded.Enabled, "invalid save does not replace file");
+            Check(GrindFactionSettings.SaveList("189, 4", out _) && GrindFactionSettings.TryLoad(out var loaded, out _) && loaded.Enabled && loaded.KeyText == "4, 189", "persist and reload");
+            Check(!GrindFactionSettings.SaveList("bad", out _) && GrindFactionSettings.TryLoad(out loaded, out _) && loaded.Enabled, "invalid save does not replace file");
+            File.WriteAllText(GrindFactionSettings.PathName, "Enabled=False\nKeys=4, 189\n");
+            Check(GrindFactionSettings.TryLoad(out loaded, out _) && loaded.Enabled, "older unchecked populated list activates");
             Check(WowBGrindFactions.PrepareForGrind(out _), "known signatures prepare filter");
             var reader = ObjectManager.WowB!;
             Check(reader.TryCaptureWorldSnapshot(out var snapshot) && snapshot!.TryGetUnit(npc, out _), "npc snapshot available");
@@ -71,7 +73,7 @@ namespace Styx.Logic.Pathing
             memory.Bytes(memory.GetAbsolute64(0x27EE18D), Convert.FromHexString("488D0DCC553505E8F7A7E6FD8B935C1E0000"));
             File.WriteAllText(GrindFactionSettings.PathName, "Enabled=True\nKeys=broken\n");
             Check(!WowBGrindFactions.PrepareForGrind(out _), "malformed settings refuse start");
-            Check(GrindFactionSettings.Save(false, "", out _) && WowBGrindFactions.PrepareForGrind(out _) && WowBGrindFactions.AllowsPull(null, unit, out _), "disabled policy preserves previous behaviour");
+            Check(GrindFactionSettings.SaveList("", out _) && WowBGrindFactions.PrepareForGrind(out _) && WowBGrindFactions.AllowsPull(null, unit, out _), "disabled policy preserves previous behaviour");
             Console.WriteLine("Grind faction settings and nearby scan synthetic fixtures passed");
         }
     }

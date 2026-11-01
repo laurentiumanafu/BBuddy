@@ -74,20 +74,25 @@ internal static class WowBGrindFactions
         return true;
     }
 
-    // Unknown (including key 0) is not permission to start a new pull.
+    public static bool TryReadBoundKey(WowBReader? reader, WowBObservedUnit unit, out uint key)
+    {
+        key = 0;
+        try
+        {
+            return reader != null && _boundMemory != null && reader == _boundReader &&
+                StableKey(_boundMemory, reader, unit, out key);
+        }
+        catch { key = 0; return false; }
+    }
+
+    // Unknown (including key 0) never authorizes an attack with the filter on.
     public static bool AllowsPull(WowBReader? reader, WowBObservedUnit unit, out bool unknown)
     {
         unknown = false;
         GrindFactionRules rules = GrindFactionSettings.Rules;
         if (!rules.Enabled) return true;
-        try
-        {
-            if (reader == null || _boundMemory == null || reader != _boundReader ||
-                !StableKey(_boundMemory, reader, unit, out uint key))
-            { unknown = true; return false; }
-            return rules.Allows(true, key);
-        }
-        catch { unknown = true; return false; }
+        if (!TryReadBoundKey(reader, unit, out uint key)) { unknown = true; return false; }
+        return rules.Allows(true, key);
     }
 
     private sealed class Row

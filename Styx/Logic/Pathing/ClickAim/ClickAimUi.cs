@@ -133,7 +133,7 @@ internal static class ClickAimUi
             if (!GatherSettings.RoamWithoutProfile)
                 return "load a profile, or enable profile-free roaming in Gather settings";
             if (!GrindRunner.StartRoaming()) return "profile-free Grind did not start; see the log";
-            return "profile-free Grind started: local mesh roaming; exact zone borders are unknown";
+            return "profile-free Grind started: local mesh roaming; exact zone borders are unknown. " + FactionStatus();
         }
 
         /* Two kinds of profile, two kinds of run. A levelling/grind profile has <GrindArea>
@@ -153,8 +153,7 @@ internal static class ClickAimUi
 
             return "grinding \"" + name + "\" (" + areas.ToString(System.Globalization.CultureInfo.InvariantCulture)
                    + " area(s)) - hotspots from its <GrindArea>, area chosen by level band, "
-                   + "combat from the action bar in memory, pressed as keys, targets only from the "
-                   + "client's own TAB filter - no Lua";
+                   + "combat from the action bar in memory, pressed as keys - no Lua. " + FactionStatus();
         }
 
         if (!ClickAimDiagnostics.StartProfile(path, 0, 0, false, false))
@@ -163,6 +162,11 @@ internal static class ClickAimUi
         return "walking \"" + name + "\" once - it has waypoints but no <GrindArea>, so there is "
                + "nothing to circle and fight";
     }
+
+    private static string FactionStatus()
+        => GrindFactionSettings.Rules.Enabled
+            ? "Faction attack filter ON: " + GrindFactionSettings.Rules.KeyText + "; attack inputs for unlisted attackers are withheld."
+            : "Faction attack filter OFF: saved ID list is empty.";
 
     public static string ClearProfile()
     {

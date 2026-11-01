@@ -22,6 +22,7 @@ nearest = source[source.index("    private static bool NearestKillable("):source
 approach_policy = source[source.index("    private static bool ShouldApproachPoolCandidate("):source.index("    private static bool PreferNearerPoolCandidate(")]
 approach = source[source.index("    private static string ApproachPoolCandidate("):source.index("    /// <summary>\n    /// Drops a target the fight could not walk to")]
 dismiss = source[source.index("    private static void DismissRejectedSelection("):source.index("    /// <summary>\n    /// Whether a mob of")]
+click_unit = source[source.index("    private static bool TryClickUnit(IntPtr hwnd, WowBObservedUnit unit, double px, double py,\n"):source.index("    /// <summary>\n    /// Finds the screen pixel")]
 chase = source[source.index("    private sealed class ChaseWatch"):source.index("    // A pool unit's position is only a navigation lead")]
 # Guard the control-flow wiring as well: approach is before pixel search and
 # both outer loops retry after it, rather than treating movement as a fight.
@@ -31,13 +32,17 @@ assert "report = ApproachPoolCandidate(hwnd, nearest);" in engage
 assert source.count("_combatHold || _poolApproachHandled") == 2
 assert "out near, out nearYd, out live2, out unread2, null, false" in source
 fight = source[source.index("    private static string Fight("):source.index("    private static", source.index("    private static string Fight(") + 20)]
-assert fight.count("!defenceOnly && !FactionPullStillAllowed(") == 2
+assert fight.count("(!defenceOnly || defenceFactionFilter) && !FactionPullStillAllowed(") == 2
+assert fight.count("!FactionAttackInputAllowed(reader, expectedPull, !defenceOnly || defenceFactionFilter)") == 4
+assert "unverified melee right-click withheld" in fight
+assert "_running && GrindFactionSettings.Rules.Enabled" in source[source.index("    private static bool TryClickUnit(IntPtr hwnd, WowBObservedUnit unit, double px, double py,\n"):source.index("    private static bool FindUnitPixel(")]
+assert "grindMode && !WowBGrindFactions.AllowsPull(reader, selected" in defence
 assert "expectedPull: target" in engage
 start_profile = source[source.index("    public static bool Start("):source.index("    internal static bool StartRoaming(")]
 start_roaming = source[source.index("    internal static bool StartRoaming("):source.index("    private static", source.index("    internal static bool StartRoaming(") + 30)]
 assert "WowBGrindFactions.PrepareForGrind" in start_profile and "WowBGrindFactions.PrepareForGrind" in start_roaming
 assert fixture.count("// __PRODUCTION_METHODS__") == 1
-fixture = fixture.replace("// __PRODUCTION_METHODS__", level + "\n" + selection + "\n" + current_selection + "\n" + dismissible + "\n" + pull + "\n" + nearest + "\n" + approach_policy + "\n" + defence + "\n" + approach + "\n" + dismiss + "\n" + chase)
+fixture = fixture.replace("// __PRODUCTION_METHODS__", level + "\n" + selection + "\n" + current_selection + "\n" + dismissible + "\n" + pull + "\n" + nearest + "\n" + approach_policy + "\n" + defence + "\n" + approach + "\n" + dismiss + "\n" + click_unit + "\n" + chase)
 # Read constants from production so boundary and movement tests cannot pass
 # against stale copies of the thresholds or watchdog limits.
 constants = []

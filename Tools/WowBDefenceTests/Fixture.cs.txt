@@ -36,8 +36,9 @@ namespace Styx.WoWInternals
         public struct WowBUnitFields { public uint Health, UnitFlags, Level; }
         public Dictionary<ulong, WowBUnitFields> Fields = new();
         public WowBGuid Selected;
+        public Action? AfterTargetRead;
         public bool TryGetUnitFields(ulong address, out WowBUnitFields fields) => Fields.TryGetValue(address, out fields);
-        public WowBGuid ReadTargetGuid() => Selected;
+        public WowBGuid ReadTargetGuid() { WowBGuid result = Selected; AfterTargetRead?.Invoke(); return result; }
     }
     sealed class WowBWorldSnapshot
     {
@@ -91,9 +92,10 @@ namespace Styx.Logic.Pathing
     }
     static class ClickAimInput
     {
-        public static bool F1Works = true, TabWorks = true, CombatEndsOnTab, TargetDiesOnTab, StopOnTap;
+        public static bool F1Works = true, TabWorks = true, CombatEndsOnTab, TargetDiesOnTab, StopOnTap, FactionChangesOnTab;
         public static WowBGuid TabTarget = Harness.TargetGuid;
-        public static int Keys;
+        public static int Keys, Clicks;
+        public static void Click(IntPtr hwnd, int x, int y) { Clicks++; }
         public static void TapKey(IntPtr hwnd, int key, int ms)
         {
             Keys++;
@@ -103,6 +105,7 @@ namespace Styx.Logic.Pathing
             if (key == 0x09)
             {
                 if (TabWorks) reader.Selected = TabTarget;
+                if (FactionChangesOnTab) WowBGrindFactions.Allowed = false;
                 if (CombatEndsOnTab) Harness.Combat = false;
                 if (TargetDiesOnTab)
                 {
@@ -111,16 +114,28 @@ namespace Styx.Logic.Pathing
             }
         }
     }
-    static class GrindFactionSettings { public static class Rules { public static bool Enabled; } }
+    static class GrindFactionSettings { public static class Rules { public static bool Enabled; public static string KeyText = "189"; } }
     static class WowBGrindFactions
     {
         public static bool Allowed = true;
-        public static bool AllowsPull(WowBReader? reader, WowBObservedUnit unit, out bool unknown) { unknown = !Allowed; return Allowed; }
+        public static bool TryReadBoundKey(WowBReader? reader, WowBObservedUnit unit, out uint key) { key = 189; return Allowed; }
+        public static bool AllowsPull(WowBReader? reader, WowBObservedUnit unit, out bool unknown)
+        { unknown = GrindFactionSettings.Rules.Enabled && !Allowed; return !GrindFactionSettings.Rules.Enabled || Allowed; }
     }
     static class Harness
     {
         // __PRODUCTION_LEVEL_CONSTANTS__
-        private static bool _stop, _vendorDue, _combatHold;
+        private static bool _stop, _vendorDue, _combatHold, _running, _clickBiasKnown;
+        private static int _clickBiasX, _clickBiasY;
+        private static bool TryProject(IntPtr hwnd, double px, double py, double x, double y, double z, out int dx, out int dy)
+        { dx = dy = 0; return true; }
+        private static bool FindUnitPixel(IntPtr hwnd, WowBObservedUnit unit, double px, double py,
+            out int x, out int y, out string how, Func<bool>? cancel = null)
+        {
+            x = y = 0; how = "fixture";
+            if ((cancel != null && cancel()) || ObjectManager.WowB!.Selected == unit.Guid) return false;
+            ObjectManager.WowB.Selected = unit.Guid; return true;
+        }
         private static int steps, dropped;
         internal static bool NoPath, CombatOnPlan, StopOnPlan, VendorOnPlan;
         internal static int PathQueries;
@@ -156,9 +171,9 @@ namespace Styx.Logic.Pathing
                 ObjectManager.WowB!.Fields[3] = new WowBReader.WowBUnitFields { Health = 100, Level = 5 };
             }
         }
-        private static string Fight(IntPtr hwnd, double px, double py, bool unverified, bool defenceOnly, WowBGuid expected)
+        private static string Fight(IntPtr hwnd, double px, double py, bool unverified, bool defenceOnly, WowBGuid expected, WowBObservedUnit expectedUnit, bool strict)
         {
-            if (!defenceOnly || unverified || expected != TargetGuid) throw new Exception("invalid defence fight arguments");
+            if (!defenceOnly || unverified || expected != TargetGuid || expectedUnit.Guid != expected) throw new Exception("invalid defence fight arguments");
             fightCalls++; return "fight";
         }
 
@@ -175,8 +190,8 @@ namespace Styx.Logic.Pathing
             var target = new WowBObservedUnit { Guid = TargetGuid, UnitAddress = 2, RecordAddress = 20, Location = new Location { X = distance } };
             snapshot = new WowBWorldSnapshot { Reader = reader, Player = player, Units = new() { player, target } };
             _stop = false; ClickAimAbort.Requested = false; Combat = true; CombatReadable = true; fightCalls = 0;
-            ClickAimInput.Keys = 0; ClickAimInput.F1Works = true; ClickAimInput.TabWorks = true;
-            ClickAimInput.CombatEndsOnTab = false; ClickAimInput.TargetDiesOnTab = false; ClickAimInput.StopOnTap = false; ClickAimInput.TabTarget = TargetGuid;
+            ClickAimInput.Keys = 0; ClickAimInput.Clicks = 0; _running = true; ClickAimInput.F1Works = true; ClickAimInput.TabWorks = true;
+            ClickAimInput.CombatEndsOnTab = false; ClickAimInput.TargetDiesOnTab = false; ClickAimInput.StopOnTap = false; ClickAimInput.FactionChangesOnTab = false; ClickAimInput.TabTarget = TargetGuid;
             _notViable.Clear(); _tabRefusedUntil.Clear(); _vendorDue = false; _combatHold = false; steps = 0; dropped = 0;
             NoPath = CombatOnPlan = StopOnPlan = VendorOnPlan = false; PathQueries = 0;
             WowBGrindFactions.Allowed = true; GrindFactionSettings.Rules.Enabled = false;
@@ -193,7 +208,7 @@ namespace Styx.Logic.Pathing
             Require(LevelViable(0, 10) && LevelViable(5, 0), "unknown levels preserve existing behavior");
             Setup(5); Combat = false; ObjectManager.WowB!.Selected = TargetGuid;
             Require(TryCurrentSelection(snapshot, ObjectManager.WowB, 0, 0, out _) && PullWorthTaking(snapshot.Units[1], snapshot.Player, out _, out _), "allowed selected and TAB targets accepted");
-            WowBGrindFactions.Allowed = false;
+            GrindFactionSettings.Rules.Enabled = true; WowBGrindFactions.Allowed = false;
             Require(!TryCurrentSelection(snapshot, ObjectManager.WowB, 0, 0, out _) && !PullWorthTaking(snapshot.Units[1], snapshot.Player, out _, out _) && IsDismissibleSelection(snapshot.Units[1], ObjectManager.WowB), "unknown faction filtered from selection and TAB");
             Require(!NearestKillable(snapshot, 0, 0, 100, out _, out _, out _, out int unknown) && unknown == 1, "unknown excluded from pool");
             Require(NearestKillable(snapshot, 0, 0, 100, out _, out _, out _, out _, null, false), "rest threat scan bypasses allowlist");
@@ -203,10 +218,28 @@ namespace Styx.Logic.Pathing
             Require(FactionPullStillAllowed(ObjectManager.WowB, expected, expected) && !FactionPullStillAllowed(ObjectManager.WowB, expected, changed), "selected GUID checked before and during pull");
             changed = expected; changed.UnitAddress++;
             Require(!FactionPullStillAllowed(ObjectManager.WowB, expected, changed), "changed object identity rejected");
+            ObjectManager.WowB!.Selected = expected.Guid;
+            Require(FactionAttackInputAllowed(ObjectManager.WowB, expected, true), "same selected allowed target accepts attack input");
+            ObjectManager.WowB.Selected = new WowBGuid(9);
+            Require(!FactionAttackInputAllowed(ObjectManager.WowB, expected, true), "changed selected target blocks attack input");
+            ObjectManager.WowB.Selected = expected.Guid;
+            ObjectManager.WowB.AfterTargetRead = () => ObjectManager.WowB.Selected = new WowBGuid(9);
+            Require(!FactionAttackInputAllowed(ObjectManager.WowB, expected, true), "target switch during faction read blocks input");
+            ObjectManager.WowB.AfterTargetRead = null;
+            ObjectManager.WowB.Selected = expected.Guid;
+            ClickAimAbort.Requested = true;
+            Require(!FactionAttackInputAllowed(ObjectManager.WowB, expected, true), "STOP blocks faction-protected attack input");
+            ClickAimAbort.Requested = false;
             WowBGrindFactions.Allowed = false;
-            Require(!FactionPullStillAllowed(ObjectManager.WowB, expected, expected), "unreadable or changed faction stops further pull actions");
-            Setup(5); WowBGrindFactions.Allowed = false;
-            Require(Defend() == "fight" && fightCalls == 1, "combat defence bypasses allowlist");
+            Require(!FactionPullStillAllowed(ObjectManager.WowB, expected, expected) && !FactionAttackInputAllowed(ObjectManager.WowB, expected, true), "unreadable or changed faction stops further pull actions");
+            Setup(5); GrindFactionSettings.Rules.Enabled = true; WowBGrindFactions.Allowed = false;
+            Require(Defend().Contains("faction blocked 1") && fightCalls == 0 && ClickAimInput.Keys == 0, "Grind defence does not attack unlisted or unknown faction");
+            Setup(5); GrindFactionSettings.Rules.Enabled = true; ClickAimInput.FactionChangesOnTab = true;
+            Require(Defend().Contains("no nearby candidate confirmed") && fightCalls == 0, "defence rechecks faction after TAB");
+            Setup(5); GrindFactionSettings.Rules.Enabled = true; WowBGrindFactions.Allowed = false;
+            Require(Defend(false) == "fight" && fightCalls == 1, "independent GatherBuddy defence remains unchanged");
+            Setup(5); GrindFactionSettings.Rules.Enabled = true;
+            Require(Defend() == "fight" && fightCalls == 1, "allowed faction can be defended against");
             Setup(5); Require(Defend() == "fight" && fightCalls == 1, "level-5 bear defends a level-10 player");
             Setup(3); Require(Defend() == "fight" && fightCalls == 1, "seven-below target still eligible in defence");
             Setup(14); Require(Defend() == "fight" && fightCalls == 1, "high level defence");
@@ -247,6 +280,12 @@ namespace Styx.Logic.Pathing
             DismissRejectedSelection(new IntPtr(1), ObjectManager.WowB, PlayerGuid, TargetGuid);
             Require(ClickAimInput.Keys == 0, "STOP blocks deselection");
 
+            Setup(5, health: 0); Combat = false; GrindFactionSettings.Rules.Enabled = true; ObjectManager.WowB!.Selected = TargetGuid;
+            Require(TryClickUnit(new IntPtr(1), snapshot.Units[1], 0, 0, true, out _) && ClickAimInput.Keys == 1 && ClickAimInput.Clicks == 1, "selected corpse safely reselected before loot click");
+            Setup(5); Combat = false; GrindFactionSettings.Rules.Enabled = true; ObjectManager.WowB!.Selected = TargetGuid;
+            Require(!TryClickUnit(new IntPtr(1), snapshot.Units[1], 0, 0, true, out _) && ClickAimInput.Clicks == 0, "selected live NPC unverified click withheld");
+            Setup(5, health: 0); GrindFactionSettings.Rules.Enabled = true; ObjectManager.WowB!.Selected = TargetGuid;
+            Require(!TryClickUnit(new IntPtr(1), snapshot.Units[1], 0, 0, true, out _) && ClickAimInput.Clicks == 0 && ClickAimInput.Keys == 0, "combat stops corpse reselection and click");
             Require(ShouldApproachPoolCandidate(false, true, 100) && ShouldApproachPoolCandidate(false, true, 40.01), "distant candidates enter approach");
             Require(!ShouldApproachPoolCandidate(false, true, 40) && !ShouldApproachPoolCandidate(false, true, 100.01) && !ShouldApproachPoolCandidate(false, true, double.NaN), "approach range boundaries");
             Require(!ShouldApproachPoolCandidate(false, false, 90) && !ShouldApproachPoolCandidate(true, true, 90), "no approach without candidate or with a selected target");
@@ -273,7 +312,7 @@ namespace Styx.Logic.Pathing
             Require(ApproachPoolCandidate(new IntPtr(1), snapshot.Units[1]).Contains("unreadable") && steps == 0 && _combatHold, "nearby unreadable unit pauses approach");
             Setup(5, distance: 100); Combat = false; ObjectManager.WowB!.Fields.Remove(1);
             Require(ApproachPoolCandidate(new IntPtr(1), snapshot.Units[1]).Contains("player fields unreadable") && steps == 0 && _combatHold, "unreadable player fields pause approach");
-            Setup(5, distance: 100); Combat = false; WowBGrindFactions.Allowed = false;
+            Setup(5, distance: 100); Combat = false; GrindFactionSettings.Rules.Enabled = true; WowBGrindFactions.Allowed = false;
             Require(ApproachPoolCandidate(new IntPtr(1), snapshot.Units[1]).Contains("ineligible") && steps == 0 && PathQueries == 0, "disallowed faction not approached");
             Setup(5, distance: 100); Combat = false; var stale = snapshot.Units[1]; stale.RecordAddress = 42;
             Require(ApproachPoolCandidate(new IntPtr(1), stale).Contains("changed identity") && steps == 0 && dropped == 0, "stale identity aborts approach");

@@ -82,7 +82,11 @@ internal static class GrindFactionSettings
                 }
             }
             if (!seenEnabled || !seenKeys) { error = "Faction settings are incomplete."; return false; }
+            // Older dialog versions let a populated list be saved with the checkbox
+            // off. A populated list now always means enabled, including old files.
             if (!GrindFactionRules.TryCreate(enabled, keys, out GrindFactionRules parsed, out error)) return false;
+            if (!enabled && parsed.KeyText.Length > 0 &&
+                !GrindFactionRules.TryCreate(true, parsed.KeyText, out parsed, out error)) return false;
             rules = parsed;
             return true;
         }
@@ -91,8 +95,9 @@ internal static class GrindFactionSettings
 
     public static void Activate(GrindFactionRules rules) => Rules = rules;
 
-    public static bool Save(bool enabled, string text, out string error)
+    public static bool SaveList(string text, out string error)
     {
+        bool enabled = !string.IsNullOrWhiteSpace(text);
         if (!GrindFactionRules.TryCreate(enabled, text, out GrindFactionRules parsed, out error)) return false;
         try
         {
