@@ -74,7 +74,7 @@ internal static class WowBCursorProbe
 
     public static bool Start(string label, Action<string> done)
     {
-        if ((label != "friendly" && label != "neutral_attackable" && label != "aggressive") || done == null ||
+        if ((label != "friendly" && label != "neutral_attackable" && label != "aggressive" && label != "off_target_control") || done == null ||
             ClickAimUi.Running || ClickAimUi.Paused || Interlocked.CompareExchange(ref _active, 1, 0) != 0)
             return false;
         try
@@ -187,7 +187,7 @@ internal static class WowBCursorProbe
         string path = PathName;
         Directory.CreateDirectory(Path.GetDirectoryName(path) ?? ".");
         File.AppendAllText(path, JsonSerializer.Serialize(sample) + Environment.NewLine);
-        return "Saved " + label + "; hover " + (matchesSelected ? "matches selected GUID (candidate only)" : "did NOT match selected GUID (inconclusive)") +
+        return "Saved " + label + "; hover " + (matchesSelected ? "matches selected GUID (candidate only; may be stale)" : (label == "off_target_control" ? "did NOT match selected GUID" : "did NOT match selected GUID (inconclusive)")) +
                "; Windows cursor " + (((first.Flags & 1) != 0 && (first.Flags & 2) == 0) ? "shown" : "hidden or suppressed") +
                "; image fingerprint " + (image == null ? "unavailable" : image.fingerprint) + ". Saved to " + path;
     }

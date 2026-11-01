@@ -21,6 +21,26 @@ class CursorAnalysisTests(unittest.TestCase):
         self.assertTrue(g['friendly']['hashes'] & g['neutral_attackable']['hashes'])
         self.assertFalse(g['friendly']['hashes'] & g['aggressive']['hashes'])
 
+    def test_off_target_controls_do_not_require_a_mouseover_match(self):
+        samples = [sample('off_target_control', match=False, fingerprint='A' * 64),
+                   sample('off_target_control', match=True, fingerprint='B' * 64),
+                   sample('off_target_control', visible=False, fingerprint='C' * 64),
+                   sample('friendly', match=False, fingerprint='D' * 64)]
+        groups = analyze(samples)
+        self.assertEqual(groups['off_target_control']['hashes'], {'A' * 64, 'B' * 64})
+        self.assertFalse(groups['friendly']['hashes'])
+
+    def test_identity_grouping_requires_same_player_and_target(self):
+        samples = [sample('friendly', guid='target1'), sample('off_target_control', match=False, guid='target1'),
+                   sample('off_target_control', match=False, guid='target2')]
+        samples[0]['playerGuid'] = samples[1]['playerGuid'] = 'player1'
+        samples[2]['playerGuid'] = 'player2'
+        groups = analyze(samples)
+        shared = groups['friendly']['by_identity'].keys() & groups['off_target_control']['by_identity'].keys()
+        self.assertEqual(shared, {('PLAYER1', 'TARGET1')})
+        self.assertTrue(groups['friendly']['by_identity'][('PLAYER1', 'TARGET1')] &
+                        groups['off_target_control']['by_identity'][('PLAYER1', 'TARGET1')])
+
     def test_invalid_values_rejected(self):
         a = sample('friendly')
         a['cursorImage']['fingerprint'] = 'Z' * 64

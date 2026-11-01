@@ -16,6 +16,19 @@ game memory, interact, select or attack. It is disabled while the bot is
 running or paused. **Grind, targeting, the existing failsafe and selling are
 unchanged.**
 
+## First sample set (2026-11-01)
+
+The shared file contained one friendly, one attackable-neutral and one
+aggressive labeled observation. All three had a visible Windows cursor, an
+available stable-within-capture image fingerprint, and a mouseover-candidate
+GUID matching the selected target. All three fingerprints were different.
+This is promising but does not establish which image is a dagger, whether the
+fingerprint follows hover rather than some other factor, or whether the
+candidate mouseover is current. The labels are manually supplied; visual
+cursor appearance was not independently recorded. There was no off-target
+control, no repeat of the same target, and only one target per category. No
+classifier or gameplay change follows from these results.
+
 ## How to collect one controlled set
 
 1. Build, attach, stop the bot and routes. In game, select a living friendly
@@ -30,7 +43,14 @@ unchanged.**
    saw a dagger and if any sample said the mouseover did not match or the Windows
    cursor was hidden. Repeat examples if convenient; one example each is only a
    feasibility check.
-4. Privately share `Settings\wowb-cursor-samples.jsonl` from the output folder.
+4. To check whether the desktop cursor actually follows hover, keep the same NPC
+   selected and press **Off-target control**. Return to the game and hover empty
+   world, away from NPCs and UI (not another interactable object). Keep still
+   until capture finishes. Repeat an on-target sample and an off-target control
+   without changing target. The control is intentionally off-target: its
+   mouseover candidate can be empty, different, or even stale and matching;
+   confirm visually where the pointer was. Avoid camera movement and interaction.
+5. Privately share `Settings\wowb-cursor-samples.jsonl` from the output folder.
    The file appends and is gitignored. It contains player/target/mouseover GUIDs,
    target-entry hints, cursor handles, image fingerprints and labels; it does
    not contain screenshots or raw cursor bitmaps. It can identify characters or
@@ -64,7 +84,10 @@ python Tools/WowBCursorAnalysis/analyze.py path/to/wowb-cursor-samples.jsonl
 python -m unittest discover -s Tools/WowBCursorAnalysis -v
 ```
 
-The analyzer reports fingerprint overlap only for visible Windows cursors with a
-matching candidate GUID and available fingerprint. User labels are not proof of
-the visually displayed dagger or attackability; separate notes are needed. An
-observed separation is a lead to test, not a general classifier.
+For NPC labels, the analyzer reports fingerprint overlap only for visible
+Windows cursors with a matching candidate GUID and available fingerprint. For
+off-target controls, it does not require a candidate GUID match: pointer
+position is user-reported and the candidate may be stale. A match between an
+off-target and on-target fingerprint is evidence against relying on that
+fingerprint in the observed situation. Distinct fingerprints are not proof of
+a dagger or attackability; separate visual notes and broader tests are needed.
