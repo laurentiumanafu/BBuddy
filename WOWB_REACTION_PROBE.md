@@ -324,6 +324,32 @@ branch and end-to-end probe tests with fake process memory. The C# numeric resul
 for 1,453 pairs from a private captured table. This is not a Windows/WPF build,
 a live client test, or independent proof of real attackability.
 
+## 2026-11-01: diagnostic run on three selected units
+
+Drive file `1q_7zreYEn3U47gBuDlx6JkpbTGchHpKL` (MD5
+`8c4bfc50325345a590ecbf82cf126b27`) contains three `other_observation`
+samples from the original player, between 16:49:46 and 16:49:57 UTC. All
+three contain readable state and table snapshots, 40/40 target and player
+chunks, and successful `templateComparison` results. The captured primary
+rows, index, field descriptors and array palettes match across all three
+samples. A separate offline recomputation from each sample produced the same
+numbers saved by the C# diagnostic.
+
+| Previously observed entry hint | Player key | Target key | Target → player | Player → target |
+|---:|---:|---:|---:|---:|
+| 1125 (previously labeled Crag Boar) | 3 | 189 | 3 | 3 |
+| 1199 (previously labeled aggressive) | 3 | 66 | 1 | 1 |
+| 727 (previously labeled friendly) | 3 | 57 | 4 | 4 |
+
+These samples were deliberately **unlabeled**, and the entry hint is not a
+proven NPC entry ID, so the historical labels are context rather than new
+independent ground truth. The table reader succeeded in this run; this does
+not establish that any code is the game's actual live reaction or attackability
+result. Reputation, overrides, overlays and other conditions remain outside the
+comparison. The diagnostic has not been connected to targeting or vendoring;
+the existing failsafe remains in place. No experimental key-only fallback is
+activated when the diagnostic is unavailable.
+
 ## Collect labeled observations
 
 1. Build and attach the x64 application. Stop Grind, GatherBuddy and routes.
