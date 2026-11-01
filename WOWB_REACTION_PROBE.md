@@ -159,6 +159,54 @@ changed. A full client reaction still cannot be inferred just from a table row.
 Run `python Tools/WowBReactionAnalysis/inspect_table.py <private-samples> 3 55 57`
 to inspect the last available table capture, without emitting a classifier.
 
+## 2026-11-01: complete primary arrays and template-only comparison
+
+Drive file `1MbnoIT5cV7gNOqe5JrpdpLaDrrCV1pjz` (MD5
+`5aeb3808eb70eff175ddc0a70d8b1fa6`) has 12 user-labeled friendly samples
+from the original player, captured 15:54:40–15:55:19 UTC. All contain the two
+previously missing array palettes (2,976 and 6,112 bytes); field descriptors,
+index, primary rows and array palette payloads match across the 12 captures.
+No raw dumps are committed. The new data is sufficient to inspect the *primary
+captured rows*, not necessarily the values returned by the full client lookup
+when secondary, external, hotfix or other overlays are active.
+
+The offline helper `compare_templates.py` models only the normal table helper
+`0x27EE3B0`, using the decoded fields, in both directions. Its observed branch
+order is: first row field 4 intersects second row field 2, or a nonzero prefix
+of first row field 5 matches second row field 0 => 1; then first field 3
+intersects second field 2, or first field 6 matches second field 0 => 4; then
+first field 2 intersects second field 3, or second field 6 matches first field
+0 => 4; otherwise return 1 if bit 13 of first field 1 is set, else 3. Both
+array loops stop at the first zero. These numeric results are not the complete
+UnitReaction or UnitCanAttack result and the helper is never called in-game.
+
+For the previously labeled examples on this player (template key 3), evaluating
+the latest table snapshot yields target→player and player→target **(4,4)**
+for friendly keys 55, 57 and 875, **(3,3)** for the previously labeled neutral
+key 189, and **(1,1)** for aggressive keys 24, 44 and 66. Some unit labels were
+collected at an earlier time; the current table snapshot is not evidence that
+its data or player state was identical then. These are few examples, not held-out
+validation and not a reason to hardcode template keys or numeric relation rules.
+
+Static disassembly also confirms why the table helper cannot safely be used as
+an attack filter: `0x27EDBC0` has owner, player, PvP and dynamic special-case
+branches; `0x27EE160` consults player-derived overrides and, for eligible
+factions, reputation paths. A 32-entry pair array at player-derived `+0x5EA8`
+is checked before some template paths; the type of that player-derived pointer
+and the semantics of every entry are not yet independently validated.
+`0x2F99080`/`0x2F98C10` reference a 16-byte-stride region beginning at image
+RVA `0x7E1A530` and a separate table at `0x7B43520`, but their layout,
+initialization and relationship to a particular character still require proof.
+`0x27EF450` additionally checks multiple unit flags and may call reaction helpers
+in both directions. No gameplay or vendor filter was changed. Existing
+failsafes are unchanged; vendoring and actual selling remain unverified.
+
+For private offline inspection:
+
+```
+python Tools/WowBReactionAnalysis/compare_templates.py <private-samples.jsonl> 55 3
+```
+
 ## Collect labeled observations
 
 1. Build and attach the x64 application. Stop Grind, GatherBuddy and routes.
