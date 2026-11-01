@@ -71,6 +71,12 @@ internal static class WowBReactionProbe
             Directory.CreateDirectory(Path.GetDirectoryName(path) ?? ".");
             File.AppendAllText(path, JsonSerializer.Serialize(sample) + Environment.NewLine);
             string result = "Saved " + label + " NPC " + target.Guid + " (" + targetBytes.Count + "/" + (WindowSize / ChunkSize) + " chunks; table diagnostic " + (dbProbe == null ? "unavailable" : "included" + (dbProbe.rowBytes == null ? ", rows unavailable" : ", bounded rows included")) + ") to " + path;
+            if (dbProbe != null && dbProbe.rowBytes != null)
+            {
+                bool arraysIncluded = dbProbe.arrayPaletteBytes != null && dbProbe.arrayPaletteBytes.Count > 6 &&
+                    dbProbe.arrayPaletteBytes[5] != null && dbProbe.arrayPaletteBytes[6] != null;
+                result += arraysIncluded ? " (array palettes included)" : " (array palettes unavailable)";
+            }
             Logging.Write("[Reaction probe] " + result + ". Labels are supplied by the user; no classification is inferred.");
             return result;
         }
@@ -124,6 +130,25 @@ internal static class WowBReactionProbe
                     paletteData.Add(Encode(ReadStable(memory, address, length)));
                 else paletteData.Add(null);
             }
+            // Type-4 fields use a second pointer table, distinct from the scalar palettes.
+            // Failure here does not make the already captured primary row region disappear.
+            byte[]? arrayPointers = null;
+            List<string?>? arrayPaletteData = null;
+            ulong arrayPointerAddress = 0;
+            if (WowBFactionDbSnapshotLayout.TryArrayPalettePointers(head, out arrayPointerAddress, out int pointerLength))
+            {
+                arrayPointers = ReadStable(memory, arrayPointerAddress, pointerLength);
+                if (arrayPointers != null)
+                {
+                    arrayPaletteData = new List<string?>();
+                    for (int i = 0; i < arrayPointers.Length / 8; i++)
+                    {
+                        if (WowBFactionDbSnapshotLayout.TryArrayPalette(fields, arrayPointers, i, out ulong address, out int length))
+                            arrayPaletteData.Add(Encode(ReadStable(memory, address, length)));
+                        else arrayPaletteData.Add(null);
+                    }
+                }
+            }
             byte[]? finalRoot = ReadBounded(memory, root, 0x220);
             byte[]? finalStorage = ReadBounded(memory, storage, 0x100);
             if (finalRoot == null || finalStorage == null ||
@@ -131,11 +156,18 @@ internal static class WowBReactionProbe
                 BitConverter.ToUInt64(finalStorage, 0) != table ||
                 !WowBFactionDbSnapshotLayout.TryCreate(finalRoot, finalStorage, out var finalLayout) ||
                 !layout.SameRegions(finalLayout) || !SameRange(storageBytes!, finalStorage, 0x38, 0x20) ||
-                !SameRange(head, finalRoot, 0x10, 0x30) ||
+                !SameRange(head, finalRoot, 0x10, 0x48) ||
                 !SameBytes(fields, ReadBounded(memory, layout.Fields, layout.FieldsLength)) ||
                 !SameBytes(palettes, ReadBounded(memory, layout.Palettes, layout.PalettesLength)) ||
                 !SameBytes(rows, ReadBounded(memory, layout.Rows, layout.RowsLength)) ||
                 !SameBytes(index, ReadBounded(memory, layout.Index, layout.IndexLength))) return diagnostic;
+            if (arrayPointers != null && !SameBytes(arrayPointers, ReadBounded(memory, arrayPointerAddress, arrayPointers.Length)))
+            {
+                arrayPointers = null;
+                arrayPaletteData = null;
+            }
+            diagnostic.arrayPalettePointerBytes = Encode(arrayPointers);
+            diagnostic.arrayPaletteBytes = arrayPaletteData;
             diagnostic.fieldDescriptorBytes = Encode(fields);
             diagnostic.paletteDescriptorBytes = Encode(palettes);
             diagnostic.paletteBytes = paletteData;
@@ -185,6 +217,8 @@ internal static class WowBReactionProbe
         public string? fieldDescriptorBytes { get; set; }
         public string? paletteDescriptorBytes { get; set; }
         public List<string?>? paletteBytes { get; set; }
+        public string? arrayPalettePointerBytes { get; set; }
+        public List<string?>? arrayPaletteBytes { get; set; }
         public string? rowBytes { get; set; }
         public string? indexBytes { get; set; }
     }

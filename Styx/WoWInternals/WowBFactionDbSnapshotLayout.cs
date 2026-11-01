@@ -55,6 +55,35 @@ namespace Styx.WoWInternals
                PalettesLength == other.PalettesLength && Rows == other.Rows && RowsLength == other.RowsLength &&
                Index == other.Index && IndexLength == other.IndexLength;
 
+        // The observed type-4 array palette uses a separate vector of pointers at root +0x40.
+        // Its byte length comes from each field descriptor, not from an untrusted pointer.
+        public static bool TryArrayPalettePointers(byte[]? root, out ulong address, out int length)
+        {
+            address = 0; length = 0;
+            if (root == null || root.Length < 0x50) return false;
+            ulong ptr = BitConverter.ToUInt64(root, 0x40), count = BitConverter.ToUInt64(root, 0x48);
+            if (!Region(ptr, count, 8, 64, 8, out length)) return false;
+            address = ptr;
+            return true;
+        }
+
+        public static bool TryArrayPalette(byte[]? fields, byte[]? pointers, int index, out ulong address, out int length)
+        {
+            address = 0; length = 0;
+            if (fields == null || pointers == null || index < 0 ||
+                index >= fields.Length / 24 || index >= pointers.Length / 8) return false;
+            int field = index * 24;
+            uint size = BitConverter.ToUInt32(fields, field + 4);
+            uint mode = BitConverter.ToUInt32(fields, field + 8);
+            uint elements = BitConverter.ToUInt32(fields, field + 20);
+            // Only the observed fixed eight-element, four-byte palette arrays are followed.
+            if (mode != 4 || elements != 8 || size == 0 || size % 32 != 0) return false;
+            ulong ptr = BitConverter.ToUInt64(pointers, index * 8);
+            if (!Region(ptr, size, 1, 16384, 1, out length)) return false;
+            address = ptr;
+            return true;
+        }
+
         // A palette vector stores count and pointer. Reject suspicious or oversized data.
         public static bool TryPalette(byte[]? descriptors, int index, out ulong address, out int length)
         {

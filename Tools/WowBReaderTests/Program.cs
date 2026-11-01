@@ -63,6 +63,23 @@ BitConverter.GetBytes(8UL).CopyTo(paletteFixture, 8);
 Require(WowBFactionDbSnapshotLayout.TryPalette(paletteFixture, 0, out ulong palAddr, out int palSize) && palAddr == 0x250000UL && palSize == 32, "bounded palette");
 BitConverter.GetBytes(4097UL).CopyTo(paletteFixture, 8);
 Require(!WowBFactionDbSnapshotLayout.TryPalette(paletteFixture, 0, out _, out _), "oversized palette rejected");
+// The separate type-4 array palettes use bounded pointer vectors and byte lengths.
+BitConverter.GetBytes(0x260000UL).CopyTo(dbRoot, 0x40);
+BitConverter.GetBytes(7UL).CopyTo(dbRoot, 0x48);
+Require(WowBFactionDbSnapshotLayout.TryArrayPalettePointers(dbRoot, out ulong ptrAddr, out int ptrLength) &&
+    ptrAddr == 0x260000UL && ptrLength == 56, "bounded array palette pointers");
+byte[] arrayFields = new byte[7 * 24], arrayPointers = new byte[7 * 8];
+BitConverter.GetBytes(6112U).CopyTo(arrayFields, 6 * 24 + 4);
+BitConverter.GetBytes(4U).CopyTo(arrayFields, 6 * 24 + 8);
+BitConverter.GetBytes(8U).CopyTo(arrayFields, 6 * 24 + 20);
+BitConverter.GetBytes(0x270000UL).CopyTo(arrayPointers, 6 * 8);
+Require(WowBFactionDbSnapshotLayout.TryArrayPalette(arrayFields, arrayPointers, 6, out ulong arrayAddr, out int arraySize) &&
+    arrayAddr == 0x270000UL && arraySize == 6112, "bounded array palette bytes");
+BitConverter.GetBytes(16385U).CopyTo(arrayFields, 6 * 24 + 4);
+Require(!WowBFactionDbSnapshotLayout.TryArrayPalette(arrayFields, arrayPointers, 6, out _, out _), "oversized or misaligned array palette rejected");
+BitConverter.GetBytes(6112U).CopyTo(arrayFields, 6 * 24 + 4);
+BitConverter.GetBytes(7U).CopyTo(arrayFields, 6 * 24 + 20);
+Require(!WowBFactionDbSnapshotLayout.TryArrayPalette(arrayFields, arrayPointers, 6, out _, out _), "unknown palette element count rejected");
 // Faction-template ID is diagnostic, not a reaction or attackability result.
 mem.U32(0x40001000 + WowBOffsets.UnitDataFactionTemplateOffset, 189);
 Require(reader.TryReadFactionTemplateId(0x40001000, out uint factionId) && factionId == 189, "faction template ID");

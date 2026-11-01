@@ -114,6 +114,51 @@ share the updated JSONL privately. The UI should report "bounded rows included".
 If it reports rows unavailable, share the result as-is; don't assume a decode.
 This does not require recollecting all existing samples.
 
+## 2026-11-01: nine recent friendly samples and missing array palettes
+
+In Drive file `1CPAVuS-h3XZ8Qwvj3ohMALmFEiga5cJG` (MD5
+`149cb7a9fe642814658988842f369607`), the latest sample's preceding ten-minute
+window contains nine friendly observations at 15:45:36–15:46:14 UTC: nine
+full NPC GUIDs and six unverified entry hints. They are from the original
+player (template key 3). The older four neutral observations in the file lie
+outside that window and were not treated as recent. All nine recent snapshots
+captured the 3,080-byte primary rows, 1,812-byte index and 168-byte descriptor
+vectors; the main regions have matching SHA-256 hashes across these samples.
+This is useful consistency evidence, not an atomicity guarantee. Friendly
+entries use keys 55 and 57; these keys remain labels of records, not universal
+friendly/hostile classifications.
+
+The field descriptors show seven packed fields: compression modes 1, 5, 1, 3,
+1, 4 and 4. The captured scalar palette (field 3) contains 11 four-byte values.
+An offline diagnostic inspector can recover scalar fields and packed array
+indices for the primary captured rows. For example keys 3, 55 and 57 have
+scalar values respectively `[3, 72, 3, 2, 12]`, `[47, 0, 2, 2, 4]` and
+`[47, 2081, 3, 2, 12]`; these are raw fields and are **not** attackability.
+The captured table is only a snapshot: special and secondary rows, hotfix or
+external overlays, player-state overrides and asymmetric reactions are not
+resolved by this inspector.
+
+Further disassembly of the reaction template helper shows type-4 fields 5
+and 6 use a **different** pointer vector rooted at table `+0x40`, rather than
+the scalar palette vector at `+0x28`: `0x27EE4D7` and `0x27EE6F7` call the
+8-byte pointer-vector accessor `0x202970`, then index eight four-byte slots,
+reading the low 16 bits of each slot. Their observed descriptor data sizes are
+2,976 and 6,112 bytes (93 and 191 eight-element arrays). Those arrays were not
+in the previous probe, so their contents cannot be recovered from this file.
+The probe now captures this second vector and bounded arrays only for the
+observed type-4, eight-element format, with caps and double reads. The UI
+reports whether **array palettes included**; metadata/rows may still be saved
+if they are unavailable. The arrays and other dump data remain private.
+
+After rebuilding, one correctly labeled living NPC sample is sufficient for a
+new table snapshot; it need not be a different NPC. Share the appended JSONL
+privately. It should say both "bounded rows included" and "array palettes
+included". No combat, vendor, target failsafe or classification behavior is
+changed. A full client reaction still cannot be inferred just from a table row.
+
+Run `python Tools/WowBReactionAnalysis/inspect_table.py <private-samples> 3 55 57`
+to inspect the last available table capture, without emitting a classifier.
+
 ## Collect labeled observations
 
 1. Build and attach the x64 application. Stop Grind, GatherBuddy and routes.
