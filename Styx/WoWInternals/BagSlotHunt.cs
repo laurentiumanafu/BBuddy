@@ -219,9 +219,8 @@ internal static class BagSlotHunt
 
         if (down.Count == 0 && up.Count == 0)
         {
-            text.AppendLine().Append("[Bag] No word in these windows moved by exactly one per loot. That means the "
-                + "count is NOT in the player's data block on this build - the next place to look is the "
-                + "container objects, which needs the pool walk (see hunt/WOWB_DECODED_MODEL.md).");
+            text.AppendLine().Append("[Bag] No candidate met the exact-one-change rule in the sampled windows. This does not rule out "
+                + "a count elsewhere, indirect storage, unreadable windows, stack merges, or failed loot interactions.");
         }
         else
         {

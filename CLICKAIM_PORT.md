@@ -2150,12 +2150,13 @@ words whose value moves by exactly that much. `Styx/WoWInternals/BagSlotHunt.cs`
 [Bag]   +0x????  down-by-one 5/5  (now 11, started 16)  <- a FREE-SLOT count looks like this
 ```
 
-If it comes back with nothing, the verdict line says so and says where the next place to look is
-(the container objects). That is a real result too: it means the count is not in the player's block
-on this build, and the next step is a pool walk over item objects, not a guess at an offset.
+If it comes back with nothing, this only rules out candidates meeting that exact-change rule in the
+sampled readable windows. It does not rule out a count elsewhere in the player block, indirect
+storage, stack merges, or loot interactions that did not fill a slot. The count and inventory
+layout remain unknown; the next investigation combines static traces and controlled slot changes.
 
-**Until then the kill/loot counter stays the trigger**, because a number that means "twenty kills"
-is honest and an offset that was made up is not. Nothing in the loop reads a bag slot yet.
+**Until then the loot-interaction counter stays the trigger**, because no bag slot offset has been
+verified. Nothing in the loop reads a bag slot yet.
 
 ### 4. Stuck in a cactus: the watchdog that measures the character, not the mob
 
