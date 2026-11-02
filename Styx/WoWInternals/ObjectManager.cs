@@ -348,12 +348,19 @@ namespace Styx.WoWInternals
                 // DX11PresentHook64 once the graphics offsets land
                 // (X64_PORT_PLAN.md §6). The reader validates the 64-bit
                 // read path and logs a full state snapshot on attach.
-                WowB = new WowBReader(memory);
+                WowB = new WowBReader(memory, initialBuild == ClientAttachPolicy.ExperimentalBuild);
+                if (initialBuild == ClientAttachPolicy.ExperimentalBuild)
+                {
+                    try { Logging.Write(WowB.DescribeExperimental70707()); }
+                    catch (Exception ex) { Logging.Write($"[70707 candidates] Diagnostic read failed: {ex.Message}"); }
+                }
                 Update();
                 Logging.Write("[ObjectManager] Attached to a 64-bit client (WowB) — read-only mode.");
                 WowBWorldSnapshot? world = WowBWorld;
                 Logging.Write(world == null
-                    ? "[ObjectManager] WowB pool snapshot unavailable (capture failed or changed during scan)."
+                    ? initialBuild == ClientAttachPolicy.ExperimentalBuild
+                        ? $"[ObjectManager] 70707 pool snapshot unavailable (capture failed or changed); {WowB.LastPoolSlotsScanned} slots scanned with the unverified 70291 layout."
+                        : "[ObjectManager] WowB pool snapshot unavailable (capture failed or changed during scan)."
                     : $"[ObjectManager] WowB pool snapshot: {world.Units.Count} validated units, {world.PoolSlotsScanned} slots scanned, local={world.LocalGuid}, target={world.TargetGuid}.");
                 if (world != null && !world.TargetGuid.IsEmpty)
                 {

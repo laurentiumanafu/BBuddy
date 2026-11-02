@@ -2,7 +2,9 @@
 
 These are **research candidates**, not a usable or validated offset table. They
 were derived without executing the client, changing game memory, or invoking
-Lua. No 70707 support is enabled by this document. A decoded file need not match
+Lua. An explicitly opted-in 70707 attachment now uses the candidate globals in
+its reader and prints a read-only candidate summary; this is not a completed
+port. A decoded file need not match
 the bytes and protection state of the running process; static matches also do
 not establish live pointer validity, object identity, or safe actions.
 
@@ -74,5 +76,7 @@ The new record and unit-object layout, vtables, 128-bit GUID consistency,
 position/facing fields, health/level/faction fields, map ID chain, cursor and
 movement controls, bag capacity/contents, and reaction semantics have **not**
 been established for 70707. Old 70291 member offsets are not safe to carry over
-just because one related field or instruction remains the same. No new values
-have been installed in the bot and no existing safety check has been disabled.
+just because one related field or instruction remains the same. The candidate
+roots are wired into the explicitly opted-in 70707 reader; its map ID and camera
+position remain unavailable until their member fields are established. Existing
+70291 faction signatures and identity checks have not been bypassed.

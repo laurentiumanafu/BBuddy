@@ -18,6 +18,8 @@ Require(ClientAttachPolicy.IsCandidate(12340, "Wow", false) && ClientAttachPolic
 Require(ClientAttachPolicy.IsCandidate(0, "Luacct", false) && ClientAttachPolicy.IsCandidate(70450, "WowB", false), "existing unversioned and name exceptions preserved");
 Require(!ClientAttachPolicy.IsCandidate(70450, "Wow", true) && !ClientAttachPolicy.IsCandidate(-1, "WowB", true), "opt-in does not unlock other builds or unreadable version");
 
+ExperimentalOffsetsTests.Run(); // synthetic routing checks, not live validation
+
 // A deterministic byte-addressed process-memory substitute. No game or native
 // calls: exercises the real pool reader and snapshot filtering logic.
 var mem = new Memory();

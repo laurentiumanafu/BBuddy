@@ -42,15 +42,23 @@ namespace Styx.WoWInternals
         private const int MaxEntities = 262144; // safety cap for entity walks
 
         private readonly Memory _memory;
+        private readonly bool _experimental70707;
 
-        public WowBReader(Memory memory)
+        public WowBReader(Memory memory, bool experimental70707 = false)
         {
             _memory = memory ?? throw new ArgumentNullException(nameof(memory));
+            _experimental70707 = experimental70707;
 
             if (!memory.Is64BitTarget)
                 throw new InvalidOperationException("WowBReader requires a native 64-bit target process.");
         }
 
+        private ulong PlayerGuidRva => _experimental70707 ? Wow70707Offsets.PlayerGuid : WowBOffsets.PlayerGuid;
+        private ulong PlayerNameRva => _experimental70707 ? Wow70707Offsets.PlayerNamePrimary : WowBOffsets.PlayerNamePrimary;
+        private ulong TargetGuidRva => _experimental70707 ? Wow70707Offsets.PlayerTargetGuid : WowBOffsets.PlayerTargetGuid;
+        private ulong LastTargetGuidRva => _experimental70707 ? 0UL : WowBOffsets.LastTargetGuid;
+        private ulong ObjectManagerRva => _experimental70707 ? Wow70707Offsets.ObjectManager : WowBOffsets.ObjectManager;
+        private ulong HandlePoolsRva => _experimental70707 ? Wow70707Offsets.HandlePools : WowBOffsets.HandlePools;
         private ulong Abs(ulong imageRelative) => _memory.GetAbsolute64(imageRelative);
 
         // ------------------------------------------------------------------
@@ -74,6 +82,8 @@ namespace Styx.WoWInternals
         public bool TryReadMapId(out uint mapId)
         {
             mapId = 0;
+            // The 70707 root is a candidate; its +0x28 map field was not established.
+            if (_experimental70707) return false;
             try
             {
                 using var uncached = _memory.TemporaryCacheState(false);
@@ -130,13 +140,13 @@ namespace Styx.WoWInternals
         }
 
         public WowBGuid ReadLocalGuid()
-            => WowBOffsets.PlayerGuid == 0 ? default : ReadGuid(Abs(WowBOffsets.PlayerGuid));
+            => PlayerGuidRva == 0 ? default : ReadGuid(Abs(PlayerGuidRva));
 
         public WowBGuid ReadTargetGuid()
-            => WowBOffsets.PlayerTargetGuid == 0 ? default : ReadGuid(Abs(WowBOffsets.PlayerTargetGuid));
+            => TargetGuidRva == 0 ? default : ReadGuid(Abs(TargetGuidRva));
 
         public WowBGuid ReadLastTargetGuid()
-            => WowBOffsets.LastTargetGuid == 0 ? default : ReadGuid(Abs(WowBOffsets.LastTargetGuid));
+            => LastTargetGuidRva == 0 ? default : ReadGuid(Abs(LastTargetGuidRva));
 
         public WowBGuid ReadMouseoverGuid()
             => WowBOffsets.MouseoverGuid == 0 ? default : ReadGuid(Abs(WowBOffsets.MouseoverGuid));
@@ -164,7 +174,7 @@ namespace Styx.WoWInternals
 
         /// <summary>Pointer to the ClntObjMgr structure (0 when unknown/not in world).</summary>
         public ulong ObjectManagerPtr
-            => WowBOffsets.ObjectManager == 0 ? 0 : _memory.ReadPointer64(Abs(WowBOffsets.ObjectManager));
+            => ObjectManagerRva == 0 ? 0 : _memory.ReadPointer64(Abs(ObjectManagerRva));
 
         /// <summary>Number of entities currently tracked by the client.</summary>
         public uint EntityCount
@@ -276,7 +286,7 @@ namespace Styx.WoWInternals
         /// <summary>
         /// Enumerates every occupied slot of every handle pool (the modern
         /// engine's global GUID registry, table at
-        /// <see cref="WowBOffsets.HandlePools"/>). Each pool header is
+        /// <see cref="HandlePoolsRva"/>). Each pool header is
         /// {u32 flag, elems*, cap, max}; each element is 16 bytes
         /// {u32 tag (bit31 = occupied), u32 opaque marker, u64 record*} and the
         /// record stores GUID128 at +0x18/+0x20 (live-verified: pool slot 16
@@ -289,10 +299,10 @@ namespace Styx.WoWInternals
             var result = new List<WowBPoolObject>();
             LastPoolSlotsScanned = 0;
 
-            if (WowBOffsets.HandlePools == 0)
+            if (HandlePoolsRva == 0)
                 return result;
 
-            ulong table = Abs(WowBOffsets.HandlePools);
+            ulong table = Abs(HandlePoolsRva);
 
             for (int fam = 0; fam < MaxPools; fam++)
             {
@@ -342,7 +352,7 @@ namespace Styx.WoWInternals
             if (record.Family < 0 || record.Family >= MaxPools || record.Slot < 0 ||
                 record.Slot >= MaxPoolSlots || !IsUserPointer(record.PoolPtr) || !IsUserPointer(record.SlotArray))
                 return false;
-            byte[]? familyBytes = _memory.ReadBytes64(Abs(WowBOffsets.HandlePools) + (ulong)record.Family * 8, 8);
+            byte[]? familyBytes = _memory.ReadBytes64(Abs(HandlePoolsRva) + (ulong)record.Family * 8, 8);
             byte[]? arrayBytes = _memory.ReadBytes64(record.PoolPtr + WowBOffsets.HandlePoolArrayOffset, 8);
             byte[]? capacityBytes = _memory.ReadBytes64(record.PoolPtr + WowBOffsets.HandlePoolCapacityOffset, 4);
             if (familyBytes == null || familyBytes.Length != 8 || BitConverter.ToUInt64(familyBytes, 0) != record.PoolPtr ||
@@ -409,7 +419,15 @@ namespace Styx.WoWInternals
             if (guid.IsEmpty)
                 return false;
 
-            return TryFindObjectByGuid(guid, out obj);
+            if (!TryFindObjectByGuid(guid, out WowBPoolObject found))
+                return false;
+            // On experimental 70707, never let the loose record-only lookup
+            // feed movement without the existing identity/vtable checks.
+            if (_experimental70707 &&
+                (!IsPoolRecordCurrent(found) || !TryGetUnitObject(found.RecordPtr, out _, out _, out bool playerVtable) || !playerVtable))
+                return false;
+            obj = found;
+            return true;
         }
 
         /// <summary>
@@ -426,9 +444,9 @@ namespace Styx.WoWInternals
             // This does not make the cross-process scan atomic.
             using var uncached = _memory.TemporaryCacheState(false);
             snapshot = null;
-            if (WowBOffsets.PlayerGuid == 0 || WowBOffsets.PlayerTargetGuid == 0 ||
-                !TryReadGuid(Abs(WowBOffsets.PlayerGuid), out WowBGuid local) || local.IsEmpty ||
-                !TryReadGuid(Abs(WowBOffsets.PlayerTargetGuid), out WowBGuid target))
+            if (PlayerGuidRva == 0 || TargetGuidRva == 0 ||
+                !TryReadGuid(Abs(PlayerGuidRva), out WowBGuid local) || local.IsEmpty ||
+                !TryReadGuid(Abs(TargetGuidRva), out WowBGuid target))
                 return false;
 
             List<WowBPoolObject> records = EnumeratePoolObjects();
@@ -523,8 +541,8 @@ namespace Styx.WoWInternals
                 !TryReadGuid(localRecord.RecordPtr + WowBOffsets.RecordGuidLoOffset, out WowBGuid localRecordAfter) || localRecordAfter != local ||
                 !TryGetUnitObject(localRecord.RecordPtr, out ulong finalLocalUnit, out ulong finalLocalVtable, out bool finalLocalIsPlayer) ||
                 finalLocalUnit != localUnit || finalLocalVtable != localVtable || !finalLocalIsPlayer ||
-                !TryReadGuid(Abs(WowBOffsets.PlayerGuid), out WowBGuid localAfter) || localAfter != local ||
-                !TryReadGuid(Abs(WowBOffsets.PlayerTargetGuid), out WowBGuid targetAfter) || targetAfter != target)
+                !TryReadGuid(Abs(PlayerGuidRva), out WowBGuid localAfter) || localAfter != local ||
+                !TryReadGuid(Abs(TargetGuidRva), out WowBGuid targetAfter) || targetAfter != target)
                 return false;
             snapshot = new WowBWorldSnapshot(local, target, LastPoolSlotsScanned, units);
             return true;
@@ -569,7 +587,7 @@ namespace Styx.WoWInternals
             using var uncached = _memory.TemporaryCacheState(false);
             if (expected.IsEmpty)
                 return "no-target";
-            if (!TryReadGuid(Abs(WowBOffsets.PlayerTargetGuid), out WowBGuid before) || before != expected)
+            if (!TryReadGuid(Abs(TargetGuidRva), out WowBGuid before) || before != expected)
                 return "target-changed-or-unreadable-before-scan";
 
             List<WowBPoolObject> records = EnumeratePoolObjects();
@@ -655,7 +673,7 @@ namespace Styx.WoWInternals
                 }
             }
 
-            if (!TryReadGuid(Abs(WowBOffsets.PlayerTargetGuid), out WowBGuid after) || after != expected)
+            if (!TryReadGuid(Abs(TargetGuidRva), out WowBGuid after) || after != expected)
                 return "target-changed-or-unreadable-after-scan; discard diagnostic";
             // The record can change even if the selected GUID stays the same.
             return detail;
@@ -1132,7 +1150,7 @@ namespace Styx.WoWInternals
 
         /// <summary>The local player's name (module string, read directly).</summary>
         public string ReadPlayerName()
-            => WowBOffsets.PlayerNamePrimary == 0 ? string.Empty : (_memory.ReadString64(Abs(WowBOffsets.PlayerNamePrimary), 32) ?? string.Empty);
+            => PlayerNameRva == 0 ? string.Empty : (_memory.ReadString64(Abs(PlayerNameRva), 32) ?? string.Empty);
 
         // ------------------------------------------------------------------
         // Camera
@@ -1146,7 +1164,8 @@ namespace Styx.WoWInternals
         {
             x = y = z = 0f;
 
-            if (WowBOffsets.CameraManager == 0 || WowBOffsets.CameraPosOffset == 0)
+            // The 70707 zoom trace does not establish the camera position layout.
+            if (_experimental70707 || WowBOffsets.CameraManager == 0 || WowBOffsets.CameraPosOffset == 0)
                 return false;
 
             ulong mgr = _memory.ReadPointer64(Abs(WowBOffsets.CameraManager));
@@ -1166,6 +1185,29 @@ namespace Styx.WoWInternals
         // ------------------------------------------------------------------
         // Diagnostics
         // ------------------------------------------------------------------
+
+        /// <summary>Read-only candidate observations, not gameplay validation.</summary>
+        public string DescribeExperimental70707()
+        {
+            if (!_experimental70707) return "70707 candidate profile is not active";
+            using var uncached = _memory.TemporaryCacheState(false);
+            string player = TryReadGuid(Abs(PlayerGuidRva), out WowBGuid local) ? local.ToString() : "unreadable";
+            string target = TryReadGuid(Abs(TargetGuidRva), out WowBGuid selected) ? selected.ToString() : "unreadable";
+            string name = ReadPlayerName().Replace('\r', ' ').Replace('\n', ' ');
+            ulong manager = _memory.ReadPointer64(Abs(ObjectManagerRva));
+            ulong pool0 = _memory.ReadPointer64(Abs(HandlePoolsRva));
+            ulong pool1 = _memory.ReadPointer64(Abs(HandlePoolsRva) + 8);
+            ulong mapRoot = _memory.ReadPointer64(Abs(Wow70707Offsets.MapRoot));
+            ulong frame = _memory.ReadPointer64(Abs(Wow70707Offsets.CameraWorldFrameGlobal));
+            ulong camera = IsUserPointer(frame) ? _memory.ReadPointer64(frame + Wow70707Offsets.CameraPointerOffset) : 0;
+            byte[]? zoomBytes = IsUserPointer(camera) ? _memory.ReadBytes64(camera + Wow70707Offsets.CameraZoomOffset, 4) : null;
+            string zoom = zoomBytes == null || zoomBytes.Length != 4 ? "unreadable" :
+                BitConverter.ToSingle(zoomBytes, 0).ToString("R", System.Globalization.CultureInfo.InvariantCulture);
+            return $"[70707 candidates] playerGuid={player}; targetGuid={target}; playerName=\"{name}\"; " +
+                $"objectManager=0x{manager:X}; pool0=0x{pool0:X}; pool1=0x{pool1:X}; mapRoot=0x{mapRoot:X}; " +
+                $"cameraFrame=0x{frame:X}; camera=0x{camera:X}; zoomCandidate={zoom}. " +
+                "Unverified observations; pointer 0 can mean zero or unreadable. Map ID, camera position and unit layouts are not established.";
+        }
 
         /// <summary>
         /// One-line summary of everything the reader can see right now —
