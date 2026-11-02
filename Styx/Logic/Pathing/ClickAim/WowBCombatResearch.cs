@@ -22,9 +22,15 @@ internal static class WowBCombatResearch
 
     private static bool Stopped => !ClickAimUi.Running && !ClickAimUi.Paused;
 
-    private static bool SameSelection(WowBReader reader, WowBGuid player, WowBGuid target)
-        => reader.TryReadTraceLocalGuid(out WowBGuid local) && local == player &&
-           reader.TryReadTraceTargetGuid(out WowBGuid selected) && selected == target;
+    private static bool SameSelection(WowBReader reader, WowBGuid player, WowBGuid target, out string reason)
+    {
+        reason = "local player GUID unavailable or changed";
+        if (!reader.TryReadTraceLocalGuid(out WowBGuid local) || local != player) return false;
+        reason = "selected target GUID unavailable or changed";
+        if (!reader.TryReadTraceTargetGuid(out WowBGuid selected) || selected != target) return false;
+        reason = "";
+        return true;
+    }
 
     private static bool SameBar(WowBReader reader, List<WowBReader.WowBActionSlot> expected)
     {
@@ -35,12 +41,32 @@ internal static class WowBCombatResearch
     }
 
     private static bool Stable(Memory memory, WowBReader reader, WowBObservedUnit player,
-        WowBObservedUnit? target, WowBGuid selected)
+        WowBObservedUnit? target, WowBGuid selected, out string reason)
     {
-        if (!Stopped || !SameSelection(reader, player.Guid, selected) ||
-            !WowBGrindFactions.TraceIdentity70707(memory, reader, player, true)) return false;
+        reason = "attachment changed";
+        if (ObjectManager.Wow != memory || ObjectManager.WowB != reader) return false;
+        reason = "bot or route started or paused";
+        if (!Stopped) return false;
+        if (!SameSelection(reader, player.Guid, selected, out reason)) return false;
+        reason = "local player identity or vtable unavailable or changed";
+        if (!WowBGrindFactions.TraceIdentity70707(memory, reader, player, true)) return false;
+        reason = "selected NPC identity or vtable unavailable or changed";
         if (target.HasValue && !WowBGrindFactions.TraceIdentity70707(memory, reader, target.Value, false)) return false;
-        return Stopped && SameSelection(reader, player.Guid, selected) && ObjectManager.Wow == memory && ObjectManager.WowB == reader;
+        reason = "bot or route started or paused";
+        if (!Stopped) return false;
+        if (!SameSelection(reader, player.Guid, selected, out reason)) return false;
+        reason = "attachment changed";
+        if (ObjectManager.Wow != memory || ObjectManager.WowB != reader) return false;
+        reason = "";
+        return true;
+    }
+
+    private static bool StableWithBar(Memory memory, WowBReader reader, WowBObservedUnit player,
+        WowBObservedUnit? target, WowBGuid selected, List<WowBReader.WowBActionSlot> bar, out string reason)
+    {
+        if (!Stable(memory, reader, player, target, selected, out reason)) return false;
+        if (!SameBar(reader, bar)) { reason = "action-bar preview unavailable or changed"; return false; }
+        return true;
     }
 
     // One bounded read in the usual case; if a page is unreadable, retain only
@@ -128,11 +154,12 @@ internal static class WowBCombatResearch
             if (!snapshot.TargetGuid.IsEmpty && snapshot.TryGetSelectedTarget(out WowBObservedUnit selectedUnit) &&
                 !selectedUnit.IsLocalPlayer && !selectedUnit.HasPlayerVtable)
                 target = selectedUnit;
-            if (!Stable(memory, reader, player, target, snapshot.TargetGuid))
-                return "Player, target or attachment changed; capture not started.";
+            if (!Stable(memory, reader, player, target, snapshot.TargetGuid, out string why))
+                return "Capture not started: " + why + ".";
             if (!reader.TryReadExperimentalActionPreview(out var bar)) return "Action-bar preview unreadable or changed; capture not started.";
-            if (cancel.IsCancellationRequested || !Stable(memory, reader, player, target, snapshot.TargetGuid) || !SameBar(reader, bar))
-                return "Capture cancelled or identity changed before recording.";
+            if (cancel.IsCancellationRequested) return "Capture cancelled before recording.";
+            if (!StableWithBar(memory, reader, player, target, snapshot.TargetGuid, bar, out why))
+                return "Capture not started: " + why + ".";
 
             string cleanLabel = (label ?? "").Replace('\r', ' ').Replace('\n', ' ').Trim();
             if (cleanLabel.Length > 80) cleanLabel = cleanLabel.Substring(0, 80);
@@ -158,11 +185,13 @@ internal static class WowBCombatResearch
                 for (int i = 0; i < samples; i++)
                 {
                     if (cancel.IsCancellationRequested) { reason = "cancelled"; break; }
-                    if (!Stable(memory, reader, player, target, snapshot.TargetGuid) || !SameBar(reader, bar)) { reason = "bot, target, player, action-bar preview or attachment changed; last sample discarded"; break; }
+                    if (!StableWithBar(memory, reader, player, target, snapshot.TargetGuid, bar, out why))
+                    { reason = "state changed before read (" + why + "); last sample discarded"; break; }
                     long started = watch.ElapsedMilliseconds;
                     byte[]?[] playerBytes = ReadWindow(memory, player.UnitAddress);
                     byte[]?[]? targetBytes = target.HasValue ? ReadWindow(memory, target.Value.UnitAddress) : null;
-                    if (!Stable(memory, reader, player, target, snapshot.TargetGuid) || !SameBar(reader, bar)) { reason = "bot, target, player, action-bar preview or attachment changed during read; last sample discarded"; break; }
+                    if (!StableWithBar(memory, reader, player, target, snapshot.TargetGuid, bar, out why))
+                    { reason = "state changed during read (" + why + "); last sample discarded"; break; }
                     output.WriteLine("sample=" + i.ToString(CultureInfo.InvariantCulture) + " startMs=" + started.ToString(CultureInfo.InvariantCulture) +
                         " endMs=" + watch.ElapsedMilliseconds.ToString(CultureInfo.InvariantCulture) + " utc=" + DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
                     output.Write(Diff(priorPlayer, playerBytes, "player"));

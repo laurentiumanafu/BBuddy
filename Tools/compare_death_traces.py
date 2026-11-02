@@ -71,7 +71,7 @@ def compare(paths):
     lines = ['Raw sample-zero observations only; not verified death/ghost state.']
     for trace in traces:
         lines.append(f'{trace.label!r}: {trace.samples} sample(s), {trace.status}')
-    lines.append('Field (alive / dead / ghost):')
+    lines.append('Fields below follow the input order shown above; supplied labels may be ambiguous:')
     for name, offset, width in [
         ('health candidate', 0x1E28, 8), ('maximum health candidate', 0x1E30, 8),
         ('other health-like word', 0x1BB8, 4), ('unknown word', 0x0110, 4),

@@ -96,7 +96,7 @@ internal static class CombatResearchTests
             };
             result = WowBCombatResearch.Capture("target change", CancellationToken.None, 3, 10);
             mem.OnRead = null;
-            Check(result.Contains("changed during read") && result.Contains("1 sample(s)"), "target change discards current sample");
+            Check(result.Contains("changed during read") && result.Contains("selected target GUID unavailable or changed") && result.Contains("1 sample(s)"), "target change discards current sample with reason");
             path = Directory.GetFiles(Path.Combine(folder, "Logs", "CombatResearch"), "*.txt").Single(p => File.ReadAllText(p).Contains("label=target change"));
             data = File.ReadAllText(path);
             Check(data.Contains("sample=0 ") && !data.Contains("sample=1 ") && data.Contains("last sample discarded"), "no mixed-target sample written");
@@ -108,7 +108,7 @@ internal static class CombatResearchTests
             };
             result = WowBCombatResearch.Capture("bot start", CancellationToken.None, 3, 10);
             mem.OnRead = null; ClickAimUi.Running = false;
-            Check(result.Contains("changed during read") && result.Contains("1 sample(s)"), "bot start stops sampling safely");
+            Check(result.Contains("changed during read") && result.Contains("bot or route started or paused") && result.Contains("1 sample(s)"), "bot start stops sampling safely with reason");
             reads = 0;
             mem.OnRead = (address, count) =>
             {
@@ -117,8 +117,18 @@ internal static class CombatResearchTests
             };
             result = WowBCombatResearch.Capture("bar change", CancellationToken.None, 3, 10);
             mem.OnRead = null;
-            Check(result.Contains("action-bar preview") && result.Contains("1 sample(s)"), "bar change discards sample");
+            Check(result.Contains("action-bar preview unavailable or changed") && result.Contains("1 sample(s)"), "bar change discards sample with reason");
             mem.U64(module + Wow70707Offsets.StoredActionArrayCandidate, 403);
+            reads = 0;
+            mem.OnRead = (address, count) =>
+            {
+                if (address == playerUnit && count == WowBCombatResearch.WindowSize && ++reads == 2)
+                    mem.U64(playerUnit + WowBOffsets.UnitObjectBackPtrOffset, targetRecord);
+            };
+            result = WowBCombatResearch.Capture("identity change", CancellationToken.None, 3, 10);
+            mem.OnRead = null;
+            Check(result.Contains("local player identity or vtable unavailable or changed") && result.Contains("1 sample(s)"), "player identity change gives reason and discards sample");
+            mem.U64(playerUnit + WowBOffsets.UnitObjectBackPtrOffset, playerRecord);
             mem.Guid(module + Wow70707Offsets.PlayerTargetGuid, default);
             result = WowBCombatResearch.Capture("self buff", CancellationToken.None, 1, 10);
             Check(result.Contains("completed: 1 sample(s)"), "self-buff works without target");

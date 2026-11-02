@@ -10,6 +10,18 @@ Three user-supplied 70707 traces have labels `alive`, `dead before releasing`, a
 
 The supplied recordings say their window ended at `+0x23FF`: they were made with an earlier recorder and do **not** include `+0x26D8`. An absent value is not zero and these traces cannot confirm or refute the static ghost-byte hypothesis. Compare suitable recordings without exposing the player's GUID using `python Tools/compare_death_traces.py alive.txt dead.txt ghost.txt`; it checks matching identities and reports missing bytes as not recorded. The labels and paths must be supplied in that order. The files themselves still contain sensitive raw data.
 
+## Expanded-window observations
+
+A later set captures `+0x26D8` on the same player, with these sample-zero values:
+
+| Recorded label | Health candidate | `+0x26D8` byte | Status |
+| --- | ---: | ---: | --- |
+| `alive` | 126 | `0x00` | 100 samples; completed |
+| `Dead, before release` | 0 | `0x00` | 100 samples; completed; a target GUID was present but no target unit window was captured |
+| `dead` | 1 | `0x10` | 5 samples, about one second; stopped on an unspecified guard change |
+
+The `dead` label does **not** say whether release had already occurred. The byte matches the static `UnitIsGhost` local-path prediction, but the visible state of this particular short trace needs confirmation; the values do not prove the character was a ghost. No recorded transition established when the bit flipped. The earlier `+0x0110` difference is not a reliable state marker: the later `alive` baseline also has 4. No candidate is used to authorize release, navigation or resurrection. The recorder now reports which check failed in future captures, while retaining the same discard guards; this cannot determine the cause of the already-finished short trace.
+
 ## Next diagnostic
 
 The updated stopped-bot Combat research recorder now includes `+0x26D8` in its read-only window (`+0x0000..+0x27FF`). To investigate on 70707, stop the bot and make separate labeled 25-second traces for the **same character**, target cleared: (1) visibly alive, (2) dead with the release prompt still showing, (3) ghost after manually releasing. Do not click a bot control during a recording. If any trace stops early, retain its status; identity or action-bar changes may cause it to stop. These logs include raw memory and GUIDs and may contain sensitive information. A difference in the bit is evidence only, not proof of a safe control or a complete state machine. Screenshot-independent UI visibility and exact release/resurrect control targeting, confirmation transitions, map/identity checks, route reachability and STOP/focus safeguards still need validation before recovery can be enabled. No assumptions are made from health 1 or fixed screen coordinates.
