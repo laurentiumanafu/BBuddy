@@ -191,6 +191,10 @@ namespace Styx.WoWInternals
         public WowBGuid ReadTargetGuid()
             => TargetGuidRva == 0 ? default : ReadGuid(Abs(TargetGuidRva));
 
+        // Unlike ReadGuid, preserves failure for read-only diagnostic stability checks.
+        internal bool TryReadTraceLocalGuid(out WowBGuid guid) => TryReadGuid(Abs(PlayerGuidRva), out guid);
+        internal bool TryReadTraceTargetGuid(out WowBGuid guid) => TryReadGuid(Abs(TargetGuidRva), out guid);
+
         public WowBGuid ReadLastTargetGuid()
             => LastTargetGuidRva == 0 ? default : ReadGuid(Abs(LastTargetGuidRva));
 

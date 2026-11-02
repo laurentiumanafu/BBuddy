@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
@@ -63,6 +64,47 @@ namespace CopilotBuddy.UI
 
             try { lblFile.Text = "Saved to " + ClickAimSettings.Path; }
             catch (Exception ex) { lblFile.Text = "Settings file: " + ex.Message; }
+        }
+
+        private CancellationTokenSource? _combatResearchCancellation;
+
+        private async void btnCombatResearch_Click(object sender, RoutedEventArgs e)
+        {
+            if (ClickAimUi.Running || ClickAimUi.Paused)
+            { lblCombatResearch.Text = "Stop the bot and routes before recording."; return; }
+            if (_combatResearchCancellation != null) return;
+            var cancellation = new CancellationTokenSource();
+            _combatResearchCancellation = cancellation;
+            btnCombatResearch.IsEnabled = false;
+            btnCancelCombatResearch.IsEnabled = true;
+            string label = txtCombatResearchLabel.Text;
+            lblCombatResearch.Text = "Preparing and checking identity; wait for Recording before returning to the game.";
+            try
+            {
+                string result = await Task.Run(() => WowBCombatResearch.Capture(label, cancellation.Token,
+                    onStarted: () => Dispatcher.BeginInvoke(new Action(() =>
+                    {
+                        if (!cancellation.IsCancellationRequested)
+                            lblCombatResearch.Text = "Recording for 25 seconds. Return to the game, wait about 5 seconds, then manually cast once; keep the same target.";
+                    }))));
+                lblCombatResearch.Text = result;
+                Logging.Write("[Combat research] " + result);
+            }
+            catch (Exception ex)
+            { lblCombatResearch.Text = "Combat research failed: " + ex.Message; Logging.Write("[Combat research] " + lblCombatResearch.Text); }
+            finally
+            {
+                _combatResearchCancellation = null;
+                cancellation.Dispose();
+                btnCombatResearch.IsEnabled = true;
+                btnCancelCombatResearch.IsEnabled = false;
+            }
+        }
+
+        private void btnCancelCombatResearch_Click(object sender, RoutedEventArgs e)
+        {
+            _combatResearchCancellation?.Cancel();
+            lblCombatResearch.Text = "Stopping recording; previously validated samples will be retained.";
         }
 
         private GrindFactionRules _originalFaction = GrindFactionRules.Disabled();
@@ -922,6 +964,7 @@ namespace CopilotBuddy.UI
         /// </summary>
         protected override void OnClosed(EventArgs e)
         {
+            _combatResearchCancellation?.Cancel();
             if (!Saved)
             {
                 ClickAimCombat.ClearRoleOverrides();

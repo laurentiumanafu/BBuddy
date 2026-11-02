@@ -14,6 +14,7 @@ Require(!ClientAttachPolicy.IsCandidate(70450, "Wow") && !ClientAttachPolicy.IsC
 
 ExperimentalOffsetsTests.Run(); // synthetic routing checks, not live validation
 RotationTests.Run(); // hotbar/priority logic only, not client-state validation
+CombatResearchTests.Run(); // bounded read-only trace fixtures, not live offsets
 
 // A deterministic byte-addressed process-memory substitute. No game or native
 // calls: exercises the real pool reader and snapshot filtering logic.

@@ -184,6 +184,27 @@ internal static class WowBGrindFactions
         return true;
     }
 
+    // 70707 trace identities are checked separately from gameplay authorization.
+    // This is read-only evidence and does not arm a Grind session.
+    internal static bool TraceBuild70707(Memory memory, WowBReader reader)
+        => reader.IsExperimental70707 && ObjectManager.Wow == memory && ObjectManager.WowB == reader && CheckExperimentalBuild(memory);
+
+    internal static bool TraceIdentity70707(Memory memory, WowBReader reader, WowBObservedUnit unit, bool local)
+    {
+        try
+        {
+            if (!reader.IsExperimental70707 || ObjectManager.Wow != memory || ObjectManager.WowB != reader ||
+                unit.Guid.IsEmpty || unit.IsLocalPlayer != local || unit.HasPlayerVtable != local || !SameIdentity(memory, unit)) return false;
+            byte[]? vt = memory.ReadBytes64(unit.UnitAddress, 8);
+            ulong expected = local ? Wow70707Offsets.PlayerVtable : Wow70707Offsets.UnitVtable;
+            return vt != null && vt.Length == 8 && BitConverter.ToUInt64(vt, 0) == memory.ImageBase64 + expected &&
+                (local ? reader.TryReadTraceLocalGuid(out WowBGuid guid) && guid == unit.Guid :
+                         reader.TryReadTraceTargetGuid(out WowBGuid selectedGuid) && selectedGuid == unit.Guid) &&
+                ObjectManager.Wow == memory && ObjectManager.WowB == reader && SameIdentity(memory, unit);
+        }
+        catch { return false; }
+    }
+
     // Diagnostic reads must not depend on whether a Grind session has bound a reader.
     // Verify build and identity each time; this is not a merchant/hostility verdict.
     internal static bool ValidateDiagnosticUnit(Memory memory, WowBReader reader, WowBObservedUnit unit)
