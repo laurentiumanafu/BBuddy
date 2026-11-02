@@ -16,6 +16,15 @@ ExperimentalOffsetsTests.Run(); // synthetic routing checks, not live validation
 RotationTests.Run(); // hotbar/priority logic only, not client-state validation
 CombatResearchTests.Run(); // bounded read-only trace fixtures, not live offsets
 
+// Foreground classification for the opt-in gather diagnostic; no native calls.
+IntPtr gameWindow = new IntPtr(42), otherWindow = new IntPtr(43);
+Require(GatherBackgroundFocus.Classify(IntPtr.Zero, gameWindow, 0, 9) == GatherBackgroundFocus.State.Unavailable, "no foreground window");
+Require(GatherBackgroundFocus.Classify(gameWindow, gameWindow, 0, 9) == GatherBackgroundFocus.State.Game, "game HWND foreground");
+Require(GatherBackgroundFocus.Classify(otherWindow, gameWindow, 9, 9) == GatherBackgroundFocus.State.Game, "game-owned foreground window");
+Require(GatherBackgroundFocus.Classify(otherWindow, gameWindow, 10, 9) == GatherBackgroundFocus.State.OtherApplication, "different process foreground");
+Require(GatherBackgroundFocus.Classify(otherWindow, gameWindow, 0, 9) == GatherBackgroundFocus.State.Unavailable, "foreground process unavailable");
+Require(GatherBackgroundFocus.Classify(otherWindow, gameWindow, 10, 0) == GatherBackgroundFocus.State.Unavailable, "game process unavailable");
+
 // A deterministic byte-addressed process-memory substitute. No game or native
 // calls: exercises the real pool reader and snapshot filtering logic.
 var mem = new Memory();

@@ -24,6 +24,8 @@ internal static class GatherHoverTest
     [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint processId);
     [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool ClientToScreen(IntPtr hwnd, ref Point point);
+    [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool IsIconic(IntPtr hwnd);
 
     public static bool Start() => StartCore(Run, "GatherHoverTest");
     public static bool StartBackground()
@@ -60,16 +62,34 @@ internal static class GatherHoverTest
     }
 
     // This experiment is diagnostic only. It posts mouse moves to the game but
-    // never buttons, keys, process writes or gameplay interactions.
+    // never buttons, keys, process writes or gameplay interactions. Focus may
+    // move among other applications, but game focus or a minimized/moved game
+    // invalidates the experiment.
     private static bool BackgroundStable(Memory memory, WowBReader reader, IntPtr hwnd, int generation,
-                                         int width, int height, Point origin, IntPtr foreground)
+                                         int width, int height, Point origin, uint gameProcess,
+                                         out string reason, out GatherBackgroundFocus.State focus)
     {
-        if (ClickAimUi.Running || ClickAimUi.Paused || ClickAimAbort.Generation != generation ||
-            ObjectManager.Wow != memory || ObjectManager.WowB != reader || memory.WindowHandle != hwnd ||
-            GetForegroundWindow() != foreground || !ClickAimInput.ClientSize(hwnd, out int w, out int h) ||
-            w != width || h != height) return false;
+        focus = GatherBackgroundFocus.State.Unavailable;
+        reason = "";
+        if (ClickAimUi.Running || ClickAimUi.Paused) { reason = "bot started or was paused"; return false; }
+        if (ClickAimAbort.Generation != generation) { reason = "Stop was pressed"; return false; }
+        if (ObjectManager.Wow != memory || ObjectManager.WowB != reader || memory.WindowHandle != hwnd)
+        { reason = "game attachment or window handle changed"; return false; }
+        if (IsIconic(hwnd)) { reason = "WoW was minimized (try windowed or borderless mode)"; return false; }
+        if (!ClickAimInput.ClientSize(hwnd, out int w, out int h))
+        { reason = "game client size could not be read"; return false; }
+        if (w != width || h != height) { reason = "game client size changed after preparation"; return false; }
         Point current = default;
-        return ClientToScreen(hwnd, ref current) && current.X == origin.X && current.Y == origin.Y;
+        if (!ClientToScreen(hwnd, ref current)) { reason = "game client position could not be read"; return false; }
+        if (current.X != origin.X || current.Y != origin.Y)
+        { reason = "game window moved after preparation"; return false; }
+        IntPtr foreground = GetForegroundWindow();
+        uint process = 0;
+        if (foreground != IntPtr.Zero) GetWindowThreadProcessId(foreground, out process);
+        focus = GatherBackgroundFocus.Classify(foreground, hwnd, process, gameProcess);
+        if (focus == GatherBackgroundFocus.State.Game) { reason = "WoW or a game-owned window regained focus"; return false; }
+        if (focus == GatherBackgroundFocus.State.Unavailable) { reason = "foreground window or process temporarily unavailable"; return false; }
+        return true;
     }
 
     private static bool DiagnosticWait(int milliseconds, int generation)
@@ -115,34 +135,66 @@ internal static class GatherHoverTest
             uint gameProcess;
             if (GetWindowThreadProcessId(hwnd, out gameProcess) == 0 || gameProcess == 0)
             { Logging.Write("[Gather background test] game window process unavailable; no result"); return; }
+            IntPtr candidateForeground = IntPtr.Zero;
+            int stableMs = 0;
             for (int elapsed = 0; elapsed < 12000; elapsed += 100)
             {
-                if (!DiagnosticWait(100, generation) || ObjectManager.Wow != memory || ObjectManager.WowB != reader) return;
+                if (!DiagnosticWait(100, generation))
+                { Logging.Write("[Gather background test] stopped while waiting for another application; result discarded"); return; }
+                if (ObjectManager.Wow != memory || ObjectManager.WowB != reader || memory.WindowHandle != hwnd)
+                { Logging.Write("[Gather background test] attachment changed while waiting for another application; result discarded"); return; }
                 IntPtr foreground = GetForegroundWindow();
-                if (foreground != IntPtr.Zero && foreground != hwnd &&
-                    GetWindowThreadProcessId(foreground, out uint process) != 0 && process != 0 && process != gameProcess)
-                { other = foreground; break; }
+                uint process = 0;
+                if (foreground != IntPtr.Zero) GetWindowThreadProcessId(foreground, out process);
+                if (GatherBackgroundFocus.Classify(foreground, hwnd, process, gameProcess) != GatherBackgroundFocus.State.OtherApplication)
+                { candidateForeground = IntPtr.Zero; stableMs = 0; continue; }
+                if (foreground == candidateForeground) stableMs += 100;
+                else { candidateForeground = foreground; stableMs = 100; }
+                if (stableMs >= 400) { other = foreground; break; }
             }
-            if (other == IntPtr.Zero || !BackgroundStable(memory, reader, hwnd, generation, width, height, origin, other))
-            { Logging.Write("[Gather background test] no stable different foreground application; no result"); return; }
+            if (other == IntPtr.Zero)
+            { Logging.Write("[Gather background test] no different foreground application within 12 seconds; no result"); return; }
+            if (!BackgroundStable(memory, reader, hwnd, generation, width, height, origin, gameProcess, out string reason, out _))
+            { Logging.Write("[Gather background test] before away move: " + reason + "; result discarded"); return; }
             double awayX = fx < 0.5 ? 0.95 : 0.05;
             double awayY = fy < 0.5 ? 0.95 : 0.05;
-            if (!ClickAimInput.PostMouseMoveFraction(hwnd, awayX, awayY) || !DiagnosticWait(400, generation) ||
-                !BackgroundStable(memory, reader, hwnd, generation, width, height, origin, other) ||
-                !ReadHover(memory, out WowBGuid away) ||
-                !ClickAimInput.PostMouseMoveFraction(hwnd, fx, fy) || !DiagnosticWait(400, generation) ||
-                !BackgroundStable(memory, reader, hwnd, generation, width, height, origin, other) ||
-                !ReadHover(memory, out WowBGuid returned))
-            { Logging.Write("[Gather background test] window, attachment, stop state or hover read changed; no result"); return; }
+            if (!ClickAimInput.PostMouseMoveFraction(hwnd, awayX, awayY))
+            { Logging.Write("[Gather background test] failed to post away move; result discarded"); return; }
+            if (!DiagnosticWait(400, generation))
+            { Logging.Write("[Gather background test] stopped during away wait; result discarded"); return; }
+            if (!BackgroundStable(memory, reader, hwnd, generation, width, height, origin, gameProcess, out reason, out _))
+            { Logging.Write("[Gather background test] after away move: " + reason + "; result discarded"); return; }
+            if (!ReadHover(memory, out WowBGuid away))
+            { Logging.Write("[Gather background test] hover read failed after away move; result discarded"); return; }
+            if (!ClickAimInput.PostMouseMoveFraction(hwnd, fx, fy))
+            { Logging.Write("[Gather background test] failed to post return move; result discarded"); return; }
+            if (!DiagnosticWait(400, generation))
+            { Logging.Write("[Gather background test] stopped during return wait; result discarded"); return; }
+            if (!BackgroundStable(memory, reader, hwnd, generation, width, height, origin, gameProcess, out reason, out _))
+            { Logging.Write("[Gather background test] after return move: " + reason + "; result discarded"); return; }
+            if (!ReadHover(memory, out WowBGuid returned))
+            { Logging.Write("[Gather background test] hover read failed after return move; result discarded"); return; }
             bool transition = away != expected && returned == expected;
             if (!ClickAimInput.TryCursorScreen(out int lastX, out int lastY))
-            { Logging.Write("[Gather background test] desktop cursor unavailable; no result"); return; }
-            int moves = 0, matching = 0, movedWithMismatch = 0, samples = 0;
-            for (int i = 0; i < 60; i++)
+            { Logging.Write("[Gather background test] desktop cursor read failed before sampling; result discarded"); return; }
+            int moves = 0, matching = 0, movedWithMismatch = 0, samples = 0, focusGaps = 0;
+            while (samples < 60)
             {
-                if (!DiagnosticWait(100, generation) || !BackgroundStable(memory, reader, hwnd, generation, width, height, origin, other) ||
-                    !ClickAimInput.TryCursorScreen(out int x, out int y) || !ReadHover(memory, out WowBGuid hover))
-                { Logging.Write("[Gather background test] foreground, geometry, attachment or reads changed; result discarded"); return; }
+                if (!DiagnosticWait(100, generation))
+                { Logging.Write("[Gather background test] stopped during sampling; result discarded after " + samples + " samples"); return; }
+                if (!BackgroundStable(memory, reader, hwnd, generation, width, height, origin, gameProcess, out reason, out GatherBackgroundFocus.State focus))
+                {
+                    // Alt-Tab and Start can temporarily report no foreground HWND.
+                    // Skip those observations, but bound the wait and never use them
+                    // as evidence of isolation.
+                    if (focus == GatherBackgroundFocus.State.Unavailable && reason == "foreground window or process temporarily unavailable" && ++focusGaps <= 20) continue;
+                    Logging.Write("[Gather background test] during sampling: " + reason + "; result discarded after " + samples + " samples");
+                    return;
+                }
+                if (!ClickAimInput.TryCursorScreen(out int x, out int y))
+                { Logging.Write("[Gather background test] desktop cursor read failed during sampling; result discarded after " + samples + " samples"); return; }
+                if (!ReadHover(memory, out WowBGuid hover))
+                { Logging.Write("[Gather background test] hover read failed during sampling; result discarded after " + samples + " samples"); return; }
                 bool moved = x != lastX || y != lastY;
                 if (moved) moves++;
                 if (moved && hover != expected) movedWithMismatch++;
@@ -151,7 +203,7 @@ internal static class GatherHoverTest
             }
             Logging.Write("[Gather background test] away/return transition=" + (transition ? "observed" : "not observed") +
                 "; samples=" + samples + "; samples with desktop movement=" + moves + "; matching hover samples=" + matching +
-                "; movement samples with mismatching hover=" + movedWithMismatch +
+                "; movement samples with mismatching hover=" + movedWithMismatch + "; skipped unavailable-focus samples=" + focusGaps +
                 ". Diagnostic only: this does not prove safe clicks or authorize removing gather checks.");
             if (moves == 0) Logging.Write("[Gather background test] no desktop movement observed; isolation test inconclusive");
         }
