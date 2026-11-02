@@ -75,8 +75,9 @@ def candidate_events(changes):
         for time, old, new in events:
             grouped[(actor, time)][offset] = (old, new)
     results = []
-    # These offsets were observed together in one Mage Fireball trace. Require
-    # corroborating words in the same sampled interval; absent != inactive.
+    # These offsets were observed together in Mage Fireball and Shaman Lightning
+    # Bolt traces. Require corroborating words in the same sampled interval;
+    # absent != inactive, and the extra counter is only supporting evidence.
     for (actor, time), values in sorted(grouped.items(), key=lambda item: item[0][1]):
         if actor == "player" and 0x3C0 in values:
             old, spell = values[0x3C0]
@@ -86,9 +87,23 @@ def candidate_events(changes):
             if old == 0 and spell != 0 and mirrored == (0, spell) and start and end and start[0] == 0 and end[0] == 0:
                 duration = (end[1] - start[1]) & 0xFFFFFFFF
                 if 0 < duration <= 60000:
-                    results.append((time, f"player cast-like start: id={spell}, timing-word difference={duration} (unverified units)"))
+                    counter = values.get(0x3E8)
+                    increment = counter is not None and counter[1] == ((counter[0] + 1) & 0xFFFFFFFF)
+                    extra = "; +0x03E8 incremented" if increment else ""
+                    results.append((time, f"player cast-like start: id={spell}, timing-word difference={duration}{extra} (unverified units)"))
             elif old != 0 and spell == 0 and mirrored == (old, 0) and start and end and start[1] == 0 and end[1] == 0:
                 results.append((time, f"player cast-like fields cleared: id={old}"))
+        # A separate static branch writes these other words and clears the first
+        # pair. Its meaning (including whether it is a channel) is unverified.
+        if actor == "player":
+            alt = values.get(0x424)
+            start = values.get(0x430)
+            end = values.get(0x434)
+            counter = values.get(0x3E8)
+            if (alt and alt[0] == 0 and alt[1] != 0 and start and start[0] == 0 and start[1] != 0
+                    and end and end[0] == 0 and end[1] != 0 and counter
+                    and counter[1] == ((counter[0] + 1) & 0xFFFFFFFF)):
+                results.append((time, f"player alternate field cluster populated: word={alt[1]}, +0x03E8 incremented (meaning unknown)"))
         if actor == "target" and 0x6F0 in values:
             old, effect = values[0x6F0]
             duration = values.get(0x6FC)

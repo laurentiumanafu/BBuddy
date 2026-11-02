@@ -20,6 +20,15 @@ The user's 70707 decoded executable (SHA-256 `2cfec8708b648efd8b78db4cd52da78ede
 
 At `0x17CEA23..0x17CEA3F` a path in the `GetComboPoints` handler calls `0x20AC3B0` with `DL=4` and reads a dword at `[rbx+rax*4+0x20C8]` if the returned index is not `-1`. This is a **static lead only**: the meaning of the index, `rbx`, alternate paths and live representation must be established with actual combo-point observations. Do not use this as a gameplay reader or treat all `+0x20C8` values as combo points. A Shaman or Mage alone cannot validate energy, rage, combo points or pets.
 
+### Follow-up static cast-field comparison
+
+A search of executable sections for the observed displacements found code whose writes are consistent with the trace pattern. This is static corroboration, not a verified decoder or a callable entry point:
+
+- At RVAs `0x1ED1C6D..0x1ED1CBD`, a decoded path increments `[rdi+0x3E8]`, stores a nonzero value in `[rdi+0x3EC]`, stores the return of `0x3A0E2F0` at `[rdi+0x418]`, and stores that return plus another value at `[rdi+0x41C]`. The meaning of the registers, helper, path preconditions, and whether this is executed during the recorded actions have not been established. The same trace sample as each of the four observed Fireball/Lightning Bolt starts also shows `player+0x3E8` increasing by one. Neither the increment nor the fields establish success or a universal state.
+- A different decoded path at `0x1EEE03F..0x1EEE092` increments `+0x3E8`, writes `+0x424/+0x430/+0x434`, and clears `+0x3EC/+0x418`; its alternate branch at `0x1EEE121..0x1EEE188` writes `+0x3EC/+0x418/+0x41C` and clears `+0x424/+0x430`. These are leads for future differential traces, **not evidence that the alternate branch is a channel**. The analyzer's narrow same-sample alternate-cluster pattern did not appear in the available Mage and Shaman samples. Control flow and object identity require independent verification; there may be other paths, layouts and clock behavior.
+
+The offline analyzer can highlight the `+0x3E8` increment alongside a known cast-like cluster and report a narrowly matching alternate cluster as meaning unknown. It never treats a missing match as proof that nothing was happening.
+
 ## First Mage traces (2026-11-02)
 
 The supplied trace labels are **Mage Fireball**, **Nothing**, and **Frost Armor**. All three completed 100 samples at roughly 250 ms intervals. They use the same Mage but the Fireball trace has a selected NPC and subsequent combat; the other two have no selected target. The idle trace is therefore a player-side control, not a target/combat control. Times below are relative to recording start, with 250 ms sampling uncertainty and non-atomic reads. No raw GUIDs or process addresses are reproduced here.

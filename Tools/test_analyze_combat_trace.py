@@ -32,6 +32,7 @@ class TraceTests(unittest.TestCase):
         changes = {
             ('player', 0x3c0): [(5.75, 0, 133), (7.0, 133, 0)],
             ('player', 0x3ec): [(5.75, 0, 133), (7.0, 133, 0)],
+            ('player', 0x3e8): [(5.75, 0xffffffff, 0)],
             ('player', 0x418): [(5.75, 0, 10000), (7.0, 10000, 0)],
             ('player', 0x41c): [(5.75, 0, 11200), (7.0, 11200, 0)],
             ('target', 0x6f0): [(7.75, 0, 133), (11.75, 133, 0)],
@@ -42,6 +43,7 @@ class TraceTests(unittest.TestCase):
         self.assertEqual(len(events), 4)
         self.assertIn('id=133', events[0][1])
         self.assertIn('1200', events[0][1])
+        self.assertIn('+0x03E8 incremented', events[0][1])
         self.assertIn('4000', events[2][1])
         del changes[('player', 0x3ec)]
         del changes[('target', 0x700)]
@@ -49,6 +51,22 @@ class TraceTests(unittest.TestCase):
         changes[('player', 0x3ec)] = [(5.75, 0, 133)]
         changes[('player', 0x41c)] = [(5.75, 0, 10000)]
         self.assertEqual(candidate_events(changes), [])  # zero-length timing
+
+    def test_alternate_cluster_is_not_called_a_channel(self):
+        changes = {
+            ('player', 0x424): [(2.0, 0, 403)],
+            ('player', 0x430): [(2.0, 0, 10000)],
+            ('player', 0x434): [(2.0, 0, 11500)],
+            ('player', 0x3e8): [(2.0, 5, 6)],
+        }
+        events = candidate_events(changes)
+        self.assertEqual(len(events), 1)
+        self.assertIn('meaning unknown', events[0][1])
+        self.assertNotIn('channel', events[0][1])
+        changes[('player', 0x3e8)] = [(2.0, 5, 7)]
+        self.assertEqual(candidate_events(changes), [])
+        del changes[('player', 0x3e8)]
+        self.assertEqual(candidate_events(changes), [])
 
     def test_bad_header_and_out_of_bounds(self):
         with tempfile.TemporaryDirectory() as folder:
