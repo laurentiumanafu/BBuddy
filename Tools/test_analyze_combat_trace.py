@@ -2,7 +2,7 @@
 import tempfile
 import unittest
 from pathlib import Path
-from analyze_combat_trace import read_trace, candidate_events
+from analyze_combat_trace import read_trace, candidate_events, trace_label, player_offsets_not_in_control
 
 
 class TraceTests(unittest.TestCase):
@@ -12,6 +12,7 @@ class TraceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / 'trace.txt'
             path.write_text('70707 COMBAT RESEARCH v1: test\n'
+                'UTC 2026-01-01T00:00:00Z; label=Example\n'
                 'sample=0 startMs=0 endMs=3 utc=2026-01-01T00:00:00Z\n'
                 'player+0x0100 baseline ' + baseline.hex().upper() + '\n'
                 'sample=1 startMs=5000 endMs=5001 utc=2026-01-01T00:00:05Z\n'
@@ -19,6 +20,9 @@ class TraceTests(unittest.TestCase):
                 'target+0x0200 unreadable\n'
                 'end: completed; samples=2\n', encoding='utf-8')
             changes, matches, count, status = read_trace(path, 133)
+            self.assertEqual(trace_label(path), 'Example')
+            self.assertEqual(player_offsets_not_in_control(changes, {('target', 0x110): []}), [0x110])
+            self.assertEqual(player_offsets_not_in_control(changes, {('player', 0x110): []}), [])
             self.assertEqual(count, 2)
             self.assertEqual(status, 'completed; samples=2')
             self.assertEqual(matches, [('player', 0x10C, 0.0)])

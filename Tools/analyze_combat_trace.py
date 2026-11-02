@@ -52,6 +52,22 @@ def read_trace(path, spell_id=None):
     return changes, baseline_matches, count, status
 
 
+def trace_label(path):
+    with Path(path).open(encoding="utf-8-sig") as stream:
+        for _ in range(8):
+            line = stream.readline()
+            if not line:
+                break
+            if "; label=" in line:
+                return line.rstrip("\r\n").split("; label=", 1)[1]
+    return "(not recorded)"
+
+
+def player_offsets_not_in_control(changes, control):
+    # Compare the player only: the target may be a different creature or missing.
+    return sorted(offset for actor, offset in changes if actor == "player" and (actor, offset) not in control)
+
+
 def candidate_events(changes):
     """Recognize observed 70707 trace patterns, never a general-purpose state reader."""
     grouped = defaultdict(dict)
@@ -90,13 +106,20 @@ def main():
     parser.add_argument("--around", type=float, help="approximate event time in seconds from start")
     parser.add_argument("--radius", type=float, default=2, help="seconds on each side (default: 2)")
     parser.add_argument("--spell-id", type=lambda text: int(text, 0), help="optional observed numeric spell ID; decimal or 0x hex")
+    parser.add_argument("--control", help="optional no-action trace; compare player offsets only")
     parser.add_argument("--max", type=int, default=40, help="maximum offsets to print (default: 40)")
     args = parser.parse_args()
     if args.radius < 0 or args.max < 1 or (args.spell_id is not None and not 0 <= args.spell_id <= 0xFFFFFFFF):
         parser.error("radius, --max or spell ID outside allowed bounds")
     changes, matches, count, status = read_trace(args.trace, args.spell_id)
-    print(f"Samples: {count}; end: {status}")
+    print(f"Label: {trace_label(args.trace)}; samples: {count}; end: {status}")
     print("Uninterpreted dword changes; correlations and numeric matches do NOT establish spell state.")
+    if args.control:
+        control, _, control_count, control_status = read_trace(args.control)
+        new_offsets = player_offsets_not_in_control(changes, control)
+        print(f"Control label: {trace_label(args.control)}; samples: {control_count}; end: {control_status}")
+        print(f"Player offsets changed here but not in control: {len(new_offsets)} (different conditions can still cause changes)")
+        print("  " + (", ".join(f"+0x{x:04X}" for x in new_offsets[:args.max]) if new_offsets else "none"))
     events = candidate_events(changes)
     print(f"Observed research patterns: {len(events)} (one-build candidates, not verified state)")
     for time, description in events:
