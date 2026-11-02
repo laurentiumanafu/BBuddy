@@ -19,12 +19,12 @@ internal static class GatherInteraction
 
     private const int HoverSearchBudgetMs = 45000;
 
-    // Only a hint: every eventual button-down still requires the current full GUID,
+    // Only hints: every eventual button-down still requires the current full GUID,
     // fresh node scan, combat/cursor checks and final confirmation.
-    private static bool _herbHintKnown;
-    private static double _herbHintX, _herbHintY;
+    private static bool _herbHintKnown, _oreHintKnown;
+    private static double _herbHintX, _herbHintY, _oreHintX, _oreHintY;
 
-    internal static void ResetHoverHint() { _herbHintKnown = false; }
+    internal static void ResetHoverHint() { _herbHintKnown = false; _oreHintKnown = false; }
 
     private static void AddHint(List<(double X, double Y)> points, double x, double y)
     {
@@ -32,12 +32,13 @@ internal static class GatherInteraction
             points.Add((x, y));
     }
 
-    private static List<(double X, double Y)> SearchPoints(GatherNodeScanner.Node node, int width, int height)
+    private static List<(double X, double Y)> SearchPoints(GatherNodeScanner.Node node, int width, int height,
+                                                            bool hintKnown, double hintX, double hintY)
     {
         var points = new List<(double X, double Y)>();
+        if (hintKnown) AddHint(points, hintX, hintY);
         if (node.IsHerb)
         {
-            if (_herbHintKnown) AddHint(points, _herbHintX, _herbHintY);
             // Retain the grid's successful first point before trying speculative projection.
             AddHint(points, 0.50, 0.45);
             // Approximate projection is only a search hint, never a click authorization.
@@ -113,12 +114,16 @@ internal static class GatherInteraction
         var far = new GatherNodeScanner.Node(b, kind, true, new WoWPoint(0, 0, 4.1f), 2);
         var outOfReach = new GatherNodeScanner.Node(b, kind, true, new WoWPoint(0, 0, 0), 5.1);
         var oreNode = new GatherNodeScanner.Node(a, kind, false, new WoWPoint(0, 0, 0), 2);
-        var orePoints = SearchPoints(oreNode, 1920, 1080);
+        var orePoints = SearchPoints(oreNode, 1920, 1080, false, 0, 0);
+        var oreHintPoints = SearchPoints(oreNode, 1920, 1080, true, 0.38, 0.60);
+        var invalidHintPoints = SearchPoints(oreNode, 1920, 1080, true, double.NaN, 0.60);
         var hints = new List<(double X, double Y)>();
         AddHint(hints, 0.5, 0.45);
         AddHint(hints, double.NaN, 0.45);
         AddHint(hints, -0.1, 0.45);
         bool ok = orePoints.Count == 162 && orePoints[0].X == 0.50 && orePoints[0].Y == 0.45
+               && oreHintPoints.Count == 163 && oreHintPoints[0].X == 0.38 && oreHintPoints[0].Y == 0.60
+               && invalidHintPoints.Count == 162 && invalidHintPoints[0].X == 0.50
                && hints.Count == 1 && MaySubstitute(node, near, b, default, _ => true)
                && !MaySubstitute(node, near, b, b, _ => true)
                && !MaySubstitute(node, near, a, default, _ => true)
@@ -159,7 +164,9 @@ internal static class GatherInteraction
         if (away == node.Guid) return false;
         // Two interleaved grids cover gaps in the first pass. They still cannot guarantee
         // a hit on a small/occluded node, so a miss is reported rather than clicked blindly.
-        List<(double X, double Y)> points = SearchPoints(node, width, height);
+        List<(double X, double Y)> points = SearchPoints(node, width, height,
+            node.IsHerb ? _herbHintKnown : _oreHintKnown,
+            node.IsHerb ? _herbHintX : _oreHintX, node.IsHerb ? _herbHintY : _oreHintY);
         int started = Environment.TickCount;
         int sampled = 0;
         bool loggedOther = false;
@@ -250,6 +257,7 @@ internal static class GatherInteraction
             {
                 clickedNode = hoveredNode;
                 if (hoveredNode.IsHerb) { _herbHintKnown = true; _herbHintX = x; _herbHintY = y; }
+                else { _oreHintKnown = true; _oreHintX = x; _oreHintY = y; }
                 Logging.Write("[Gather] hover match after " + sampled + " sampled point(s)");
             }
             return sent;
