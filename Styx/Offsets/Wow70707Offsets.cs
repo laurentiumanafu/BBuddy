@@ -19,6 +19,9 @@ namespace Styx.Offsets
         internal const ulong CameraZoomOffset = 0x274;
         internal const ulong PlayerVtable = 0x41DA390; // one player observation
         internal const ulong UnitVtable = 0x41EE168; // one selected-unit observation
+        internal const ulong HealthCandidateOffset = 0x1E28; // static path + two reported current HP values
+        internal const ulong MaxHealthCandidateOffset = 0x1E30; // static path; both observations were equal
+        internal const ulong LevelCandidateOffset = 0x1E38; // static path; live values not yet confirmed
         internal const ulong FactionKeyCandidateOffset = 0x1E54; // static reaction path only
     }
 }

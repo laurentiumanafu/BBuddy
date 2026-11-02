@@ -92,6 +92,28 @@ print 16 uninterpreted dwords from unit `+0x1E20` through `+0x1E5C` for the
 local and selected records when readable and structurally matched; these are
 never used for targeting. The 70291 faction filter remains unchanged.
 
+A later attach contained `+0x1E28` qwords 148 for the player and 55 for the
+selected Rockjaw Trogg, matching the user's reported current HP. `+0x1E30`
+had the same respective values; maximum HP was not independently reported, so
+the sample does not distinguish current from maximum. The `+0x1E38` dwords
+were 4 and 2, plausible levels but not user-confirmed. The `+0x1E54` dwords
+were 3 and 36; neither value alone proves reaction or attackability.
+
+Static evidence: `UnitHealth` at `0x17F7390` calls `0x288FF50`, whose unit
+path tail-jumps to `0x20AAE60`; at `0x20AAF97` one path reads a signed qword
+at `+0x1E28`. `UnitHealthMax` at `0x17F5AE0` calls `0x28900A0`, which
+can tail-jump to `0x20AAFF0`; `0x20AB0F9` reads `+0x1E30`. Both paths can
+use other sources or multiply by a client-computed scale, so the raw fields
+are not guaranteed to equal displayed health in every context. A level-related
+helper reached from `UnitLevel` also reads `+0x1E38`, but may choose alternate
+values. These are candidates, not validated gameplay stats or safe call APIs.
+
+The stopped-bot **Combat Settings → Factions → Scan nearby** button now shows
+70707 candidate `+0x1E54` words without selection. It rechecks identity and
+stable values, but uses unverified vtables and transforms and does not verify
+code signatures. The output is explicitly research-only, is also written to the
+log, and never binds these candidates to the Grind filter.
+
 ## Still unknown
 
 The new record and unit-object layout, generality of the observed vtables,

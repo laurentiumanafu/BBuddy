@@ -16,8 +16,11 @@ those candidates, disable existing safety checks, or enable Lua.
    validated. A successful attachment does not establish that the bot can run.
    `[70707 candidates]` logs candidate GUIDs, player name, pointers, a proposed
    map field and camera zoom. `[70707 player record]` and `[70707 selected
-   record]` log read-only pool observations, not gameplay authorization. These
-   logs contain identifying information and process addresses.
+   record]` log read-only pool observations and candidate raw health, level and
+   faction values, not gameplay authorization. These logs contain identifying
+   information and process addresses. With the bot stopped, Combat Settings →
+   Factions → Scan nearby also logs a selection-free 70707 research report;
+   candidate keys and approximate distances do not establish attackability.
 4. The attach snapshot recognizes the observed 70707 player and selected-unit
    vtables, but these are still candidates. Record transforms are displayed for
    research only; player position, map ID and camera position remain unavailable

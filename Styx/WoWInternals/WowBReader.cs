@@ -713,11 +713,18 @@ namespace Styx.WoWInternals
                             BitConverter.ToUInt64(headerAfter, 0) == BitConverter.ToUInt64(header, 0) &&
                             BitConverter.ToUInt64(headerAfter, 8) == found.RecordPtr &&
                             new WowBGuid(BitConverter.ToUInt64(headerAfter, 0x10), BitConverter.ToUInt64(headerAfter, 0x18)) == expected &&
-                            IsPoolRecordCurrent(found))
+                            IsPoolRecordCurrent(found) && TryReadGuid(Abs(guidRva), out WowBGuid currentGuid) && currentGuid == expected)
                         {
                             string[] words = Array.ConvertAll(rawWords, word => word.ToString("X8", System.Globalization.CultureInfo.InvariantCulture));
+                            int hpIndex = (int)((Wow70707Offsets.HealthCandidateOffset - 0x1E20UL) / 4UL);
+                            int maxIndex = (int)((Wow70707Offsets.MaxHealthCandidateOffset - 0x1E20UL) / 4UL);
+                            int levelIndex = (int)((Wow70707Offsets.LevelCandidateOffset - 0x1E20UL) / 4UL);
+                            int factionIndex = (int)((Wow70707Offsets.FactionKeyCandidateOffset - 0x1E20UL) / 4UL);
+                            ulong hp = rawWords[hpIndex] | ((ulong)rawWords[hpIndex + 1] << 32);
+                            ulong maxHp = rawWords[maxIndex] | ((ulong)rawWords[maxIndex + 1] << 32);
                             detail += " rawUnit+0x1E20..0x1E5C=" + string.Join(" ", words) +
-                                $" (uninterpreted; +0x{Wow70707Offsets.FactionKeyCandidateOffset:X} is a static faction-key candidate)";
+                                $"; raw candidates hp={hp}/{maxHp}, level={rawWords[levelIndex]}, factionKey={rawWords[factionIndex]}" +
+                                " (unverified; health may be scaled or overridden; never an attackability verdict)";
                         }
                     }
                 }

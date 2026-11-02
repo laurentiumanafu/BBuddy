@@ -1,6 +1,7 @@
 #if WOWB_READER_TESTS
 using System;
 using GreenMagic;
+using Styx.Logic.Pathing;
 using Styx.Offsets;
 using Styx.WoWInternals;
 
@@ -82,16 +83,29 @@ internal static class ExperimentalOffsetsTests
         memory.U32(0x22000014, 0);
         memory.U64(0x22000018, 0x23001000);
         memory.Guid(0x23001000 + WowBOffsets.RecordGuidLoOffset, target);
-        memory.U64(0x23001000 + WowBOffsets.RecordDataBlockPtrOffset, 0x24001000);
-        memory.U64(0x24001000, module + Wow70707Offsets.UnitVtable);
-        memory.U64(0x24001008, 0x23001000);
-        memory.Guid(0x24001010, target);
+        ulong targetUnit = 0x24001004; // exercise the observed 4-byte alignment
+        memory.U64(0x23001000 + WowBOffsets.RecordDataBlockPtrOffset, targetUnit);
+        memory.U64(targetUnit, module + Wow70707Offsets.UnitVtable);
+        memory.U64(targetUnit + 8, 0x23001000);
+        memory.Guid(targetUnit + 0x10, target);
         memory.F32(0x23001000 + WowBOffsets.RecordPositionOffset, 105);
         memory.F32(0x23001000 + WowBOffsets.RecordPositionOffset + 4, 201);
         memory.F32(0x23001000 + WowBOffsets.RecordPositionOffset + 8, 300);
         memory.F32(0x23001000 + WowBOffsets.RecordPositionOffset + 12, 1);
         memory.F32(0x23001000 + WowBOffsets.RecordPositionOffset + 16, 2);
-        for (int i = 0; i < 16; i++) memory.U32(0x24000000 + 0x1E20UL + (ulong)(i * 4), (uint)i);
+        for (int i = 0; i < 16; i++)
+        {
+            memory.U32(0x24000000 + 0x1E20UL + (ulong)(i * 4), 0);
+            memory.U32(targetUnit + 0x1E20UL + (ulong)(i * 4), 0);
+        }
+        memory.U64(0x24000000 + Wow70707Offsets.HealthCandidateOffset, 148);
+        memory.U64(0x24000000 + Wow70707Offsets.MaxHealthCandidateOffset, 148);
+        memory.U32(0x24000000 + Wow70707Offsets.LevelCandidateOffset, 4);
+        memory.U32(0x24000000 + Wow70707Offsets.FactionKeyCandidateOffset, 3);
+        memory.U64(targetUnit + Wow70707Offsets.HealthCandidateOffset, 55);
+        memory.U64(targetUnit + Wow70707Offsets.MaxHealthCandidateOffset, 55);
+        memory.U32(targetUnit + Wow70707Offsets.LevelCandidateOffset, 2);
+        memory.U32(targetUnit + Wow70707Offsets.FactionKeyCandidateOffset, 36);
         Require(experimental.IsKnownUnitVtable(Wow70707Offsets.PlayerVtable) &&
                 experimental.IsKnownUnitVtable(Wow70707Offsets.UnitVtable) &&
                 !experimental.IsKnownUnitVtable(WowBOffsets.CGUnitFnTable) &&
@@ -101,7 +115,35 @@ internal static class ExperimentalOffsetsTests
                 observedPlayer.IsLocalPlayer && observedPlayer.HasPlayerVtable && !observedPlayer.CandidateHealth.HasValue &&
                 snapshot.TryGetUnit(target, out WowBObservedUnit observedTarget) && !observedTarget.CandidateHealth.HasValue,
                 "70707 diagnostic snapshot omits unverified health");
-        Require(experimental.DiagnoseExperimentalPlayer().Contains("rawUnit+0x1E20..0x1E5C="), "bounded candidate words logged");
+        Require(experimental.DiagnoseExperimentalPlayer().Contains("raw candidates hp=148/148, level=4, factionKey=3") &&
+                experimental.DiagnoseTarget(target).Contains("raw candidates hp=55/55, level=2, factionKey=36"),
+                "bounded candidate words formatted without enabling gameplay");
+        ObjectManager.Wow = memory; ObjectManager.WowB = experimental;
+        memory.Guid(module + Wow70707Offsets.PlayerTargetGuid, default); // no selection required
+        string candidateScan = WowBGrindFactions.ScanNearby();
+        Require(candidateScan.Contains("RESEARCH ONLY") && candidateScan.Contains("Candidate 36 | 1 unit(s)") &&
+                candidateScan.Contains("Grind remains blocked") && candidateScan.Contains(target.ToString()), "70707 candidate scan without target");
+        int reads = 0;
+        memory.OnRead = (address, count) =>
+        {
+            if (address == targetUnit + Wow70707Offsets.FactionKeyCandidateOffset && count == 4 && ++reads == 2)
+                memory.U32(address, 44);
+        };
+        candidateScan = WowBGrindFactions.ScanNearby();
+        memory.OnRead = null;
+        Require(!candidateScan.Contains("Candidate 36 |") && !candidateScan.Contains("Candidate 44 |") &&
+                candidateScan.Contains("Unreadable/changed candidates: 1"), "unstable 70707 key omitted");
+        memory.U32(targetUnit + Wow70707Offsets.FactionKeyCandidateOffset, 0);
+        Require(!WowBGrindFactions.ScanNearby().Contains("Candidate 0 |"), "zero 70707 candidate not reported as known");
+        memory.U32(targetUnit + Wow70707Offsets.FactionKeyCandidateOffset, 36);
+        memory.U64(targetUnit, module + 0x41DC3A8);
+        Require(!WowBGrindFactions.ScanNearby().Contains("Candidate 36 |"), "unknown 70707 vtable excluded");
+        memory.U64(targetUnit, module + Wow70707Offsets.UnitVtable);
+        ClickAimUi.Running = true;
+        Require(WowBGrindFactions.ScanNearby().Contains("Stop the bot"), "70707 candidate scan denied while running");
+        ClickAimUi.Running = false;
+        ObjectManager.Wow = null; ObjectManager.WowB = null;
+        memory.Guid(module + Wow70707Offsets.PlayerTargetGuid, target);
         memory.OnRead = (address, count) =>
         {
             if (address == 0x24000000 + 0x1E20 && count == 64)
@@ -110,10 +152,18 @@ internal static class ExperimentalOffsetsTests
         Require(!experimental.DiagnoseExperimentalPlayer().Contains("rawUnit+0x1E20..0x1E5C="), "changed identity discards candidate words");
         memory.OnRead = null;
         memory.U64(0x23000000 + WowBOffsets.RecordDataBlockPtrOffset, 0x24000000);
+        memory.OnRead = (address, count) =>
+        {
+            if (address == targetUnit + 0x1E20 && count == 64)
+                memory.Guid(module + Wow70707Offsets.PlayerTargetGuid, default);
+        };
+        Require(!experimental.DiagnoseTarget(target).Contains("raw candidates hp="), "changed selected GUID discards candidate words");
+        memory.OnRead = null;
+        memory.Guid(module + Wow70707Offsets.PlayerTargetGuid, target);
         Require(!experimental.TryGetPlayerObject(out _) && !experimental.TryGetUnitFields(0x24000000, out _) &&
                 !experimental.TryReadFactionTemplateId(0x24000000, out _) && !experimental.TryGetUnitStats(0x23000000, out _),
                 "70707 diagnostic observations do not authorize movement or legacy combat fields");
-        memory.U64(0x24001008, 0x23000000); // mismatched target back-pointer
+        memory.U64(targetUnit + 8, 0x23000000); // mismatched target back-pointer
         Require(experimental.TryCaptureWorldSnapshot(out snapshot) && snapshot != null && snapshot.Units.Count == 1,
                 "mismatched target identity is rejected");
         Require(legacy.DescribeExperimental70707() == "70707 candidate profile is not active", "legacy profile not switched");

@@ -131,6 +131,7 @@ internal static class WowBGrindFactions
         try
         {
             using var uncached = memory.TemporaryCacheState(false);
+            if (reader.IsExperimental70707) return ScanExperimental70707(memory, reader);
             if (!CheckBuild(memory)) return "70291 signatures did not match; no faction scan performed.";
             if (!reader.TryCaptureWorldSnapshot(out WowBWorldSnapshot? before) || before == null ||
                 !before.TryGetLocalPlayer(out WowBObservedUnit player)) return "The player/world snapshot could not be read.";
@@ -186,5 +187,73 @@ internal static class WowBGrindFactions
             return result.ToString();
         }
         catch (Exception ex) { return "Faction scan failed: " + ex.Message; }
+    }
+
+    // 70707 is research-only. A repeated raw word is not proof of a faction
+    // key, reaction or permission to attack. Never bind it to Grind rules.
+    private static bool Experimental70707Key(Memory memory, WowBReader reader, WowBObservedUnit unit, out uint key)
+    {
+        key = 0;
+        if (!reader.IsExperimental70707 || unit.Guid.IsEmpty || unit.IsLocalPlayer || unit.HasPlayerVtable ||
+            ObjectManager.Wow != memory || ObjectManager.WowB != reader || !SameIdentity(memory, unit)) return false;
+        byte[]? vt = memory.ReadBytes64(unit.UnitAddress, 8);
+        byte[]? first = memory.ReadBytes64(unit.UnitAddress + Wow70707Offsets.FactionKeyCandidateOffset, 4);
+        byte[]? second = memory.ReadBytes64(unit.UnitAddress + Wow70707Offsets.FactionKeyCandidateOffset, 4);
+        byte[]? vtAfter = memory.ReadBytes64(unit.UnitAddress, 8);
+        if (vt == null || vt.Length != 8 || BitConverter.ToUInt64(vt, 0) != memory.ImageBase64 + Wow70707Offsets.UnitVtable ||
+            vtAfter == null || vtAfter.Length != 8 || BitConverter.ToUInt64(vtAfter, 0) != BitConverter.ToUInt64(vt, 0) ||
+            first == null || first.Length != 4 || second == null || second.Length != 4 ||
+            BitConverter.ToUInt32(first, 0) == 0 || BitConverter.ToUInt32(first, 0) != BitConverter.ToUInt32(second, 0) ||
+            !SameIdentity(memory, unit) || ObjectManager.Wow != memory || ObjectManager.WowB != reader) return false;
+        key = BitConverter.ToUInt32(first, 0);
+        return true;
+    }
+
+    private static string ScanExperimental70707(Memory memory, WowBReader reader)
+    {
+        if (!reader.TryCaptureWorldSnapshot(out WowBWorldSnapshot? before) || before == null ||
+            !before.TryGetLocalPlayer(out WowBObservedUnit player)) return "70707 candidate player/world snapshot could not be read.";
+        var rows = new List<Row>();
+        int unreadable = 0;
+        foreach (WowBObservedUnit unit in before.Units)
+        {
+            if (ClickAimUi.Running || ClickAimUi.Paused) return "The bot started during the scan; results discarded.";
+            if (unit.Guid.IsEmpty || unit.IsLocalPlayer || unit.HasPlayerVtable) continue;
+            double distance = ClickAimMath.Len(unit.Location.X - player.Location.X, unit.Location.Y - player.Location.Y);
+            if (!double.IsFinite(distance) || distance > 100) continue;
+            if (!Experimental70707Key(memory, reader, unit, out uint key)) { unreadable++; continue; }
+            rows.Add(new Row { Unit = unit, Key = key, Distance = distance });
+        }
+        if (ClickAimUi.Running || ClickAimUi.Paused || ObjectManager.Wow != memory || ObjectManager.WowB != reader ||
+            !reader.TryCaptureWorldSnapshot(out WowBWorldSnapshot? after) || after == null ||
+            !after.TryGetLocalPlayer(out WowBObservedUnit playerAfter) || playerAfter.Guid != player.Guid ||
+            playerAfter.RecordAddress != player.RecordAddress || playerAfter.UnitAddress != player.UnitAddress)
+            return "Player, attachment or bot state changed during the scan; results discarded.";
+        var groups = new SortedDictionary<uint, List<Row>>();
+        rows.Sort((a, b) => a.Distance.CompareTo(b.Distance));
+        foreach (Row row in rows)
+        {
+            if (ClickAimUi.Running || ClickAimUi.Paused) return "The bot started during the scan; results discarded.";
+            if (!after.TryGetUnit(row.Unit.Guid, out WowBObservedUnit current) ||
+                current.RecordAddress != row.Unit.RecordAddress || current.UnitAddress != row.Unit.UnitAddress ||
+                !Experimental70707Key(memory, reader, current, out uint key) || key != row.Key)
+            { unreadable++; continue; }
+            if (!groups.TryGetValue(key, out List<Row>? group))
+            { group = new List<Row>(); groups.Add(key, group); }
+            group.Add(row);
+        }
+        if (ObjectManager.Wow != memory || ObjectManager.WowB != reader || ClickAimUi.Running || ClickAimUi.Paused)
+            return "Attachment or bot state changed during the scan; results discarded.";
+        var result = new StringBuilder("70707 RESEARCH ONLY: candidate faction-key words (no selection required; approximate 100 yd radius):\n");
+        if (groups.Count == 0) result.AppendLine("No readable candidate keys were observed.");
+        foreach (var group in groups)
+        {
+            result.AppendFormat(CultureInfo.InvariantCulture, "Candidate {0} | {1} unit(s) | nearest approximately {2:F1} yd\n", group.Key, group.Value.Count, group.Value[0].Distance);
+            foreach (Row row in group.Value)
+                result.AppendFormat(CultureInfo.InvariantCulture, "  approximately {0:F1} yd | GUID {1}\n", row.Distance, row.Unit.Guid);
+        }
+        result.AppendFormat(CultureInfo.InvariantCulture,
+            "Unreadable/changed candidates: {0}. Vtable, position and field meanings remain unverified; no code signatures checked. These observations do not authorize combat or establish NPC names, friendliness or attackability. Grind remains blocked on 70707. Reads are non-atomic and can omit units.", unreadable);
+        return result.ToString();
     }
 }

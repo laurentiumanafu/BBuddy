@@ -84,7 +84,14 @@ namespace CopilotBuddy.UI
             if (ClickAimUi.Running || ClickAimUi.Paused) { txtFactionReport.Text = "Stop the bot and any route before scanning."; return; }
             btnFactionScan.IsEnabled = false;
             txtFactionReport.Text = "Reading nearby NPC faction keys...";
-            try { txtFactionReport.Text = await Task.Run(() => WowBGrindFactions.ScanNearby()); }
+            try
+            {
+                string report = await Task.Run(() => WowBGrindFactions.ScanNearby());
+                txtFactionReport.Text = report;
+                if (report.StartsWith("70707 RESEARCH ONLY", StringComparison.Ordinal))
+                    foreach (string line in report.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+                        Logging.Write("[70707 faction research] " + line);
+            }
             catch (Exception ex) { txtFactionReport.Text = "Faction scan failed: " + ex.Message; }
             finally { btnFactionScan.IsEnabled = true; }
         }
