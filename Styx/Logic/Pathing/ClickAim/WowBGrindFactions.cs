@@ -94,6 +94,10 @@ internal static class WowBGrindFactions
                 !reader.TryGetUnitFields(player.UnitAddress, out WowBReader.WowBUnitFields self) || self.Health == 0 ||
                 ObjectManager.Wow != memory || ObjectManager.WowB != reader)
             { reason = "70707 candidate map, player or mana unavailable"; return false; }
+            if (!TryReadGhostFlagCandidate(memory, reader, player, out bool ghostFlag))
+            { reason = "70707 ghost flag candidate unavailable or changed; refusing to start"; return false; }
+            if (ghostFlag)
+            { reason = "70707 ghost flag candidate is set; manually recover before starting"; return false; }
             _boundMemory = memory; _boundReader = reader;
             GrindFactionSettings.Activate(rules);
             armed = true;
@@ -201,6 +205,26 @@ internal static class WowBGrindFactions
                 (local ? reader.TryReadTraceLocalGuid(out WowBGuid guid) && guid == unit.Guid :
                          reader.TryReadTraceTargetGuid(out WowBGuid selectedGuid) && selectedGuid == unit.Guid) &&
                 ObjectManager.Wow == memory && ObjectManager.WowB == reader && SameIdentity(memory, unit);
+        }
+        catch { return false; }
+    }
+
+    // Static local-player branch plus one user-confirmed ghost trace. This is
+    // a veto only: an unset bit is not proof of life or permission to recover.
+    internal static bool TryReadGhostFlagCandidate(Memory memory, WowBReader reader, WowBObservedUnit player, out bool set)
+    {
+        set = false;
+        try
+        {
+            if (!reader.IsExperimental70707 || !reader.ExperimentalGrindActive ||
+                player.UnitAddress >= 0x00007FFFFFFFFFFFUL - Wow70707Offsets.GhostFlagsCandidateOffset ||
+                !TraceIdentity70707(memory, reader, player, true)) return false;
+            byte[]? first = memory.ReadBytes64(player.UnitAddress + Wow70707Offsets.GhostFlagsCandidateOffset, 1);
+            byte[]? second = memory.ReadBytes64(player.UnitAddress + Wow70707Offsets.GhostFlagsCandidateOffset, 1);
+            if (first == null || first.Length != 1 || second == null || second.Length != 1 || first[0] != second[0] ||
+                !reader.ExperimentalGrindActive || !TraceIdentity70707(memory, reader, player, true)) return false;
+            set = (first[0] & Wow70707Offsets.GhostFlagCandidate) != 0;
+            return true;
         }
         catch { return false; }
     }

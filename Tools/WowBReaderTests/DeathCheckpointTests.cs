@@ -17,6 +17,30 @@ internal static class DeathCheckpointTests
         {
             Styx.Helpers.Logging.ApplicationPath = folder;
             string directory = Path.Combine(folder, "Logs", "CorpseRecovery");
+            ulong ghostAddress = unit + Wow70707Offsets.GhostFlagsCandidateOffset;
+            var ghostTracker = new WowBDeathCheckpoint();
+            memory.U64(unit + Wow70707Offsets.HealthCandidateOffset, 1);
+            memory.Bytes(ghostAddress, new byte[] { Wow70707Offsets.GhostFlagCandidate });
+            if (!ghostTracker.Poll(out bool ghostObserved) || !ghostObserved || Directory.Exists(directory))
+                throw new Exception("Ghost candidate must stop without saving a corpse at the graveyard");
+            memory.Remove(ghostAddress);
+            if (!ghostTracker.Poll(out ghostObserved) || !ghostObserved || Directory.Exists(directory))
+                throw new Exception("Unreadable ghost candidate must stop without saving a checkpoint");
+            memory.Bytes(ghostAddress, new byte[] { 0 });
+            var transitionTracker = new WowBDeathCheckpoint();
+            memory.U64(unit + Wow70707Offsets.HealthCandidateOffset, 148);
+            if (transitionTracker.Poll(out _)) throw new Exception("Living observation unexpectedly vetoed");
+            memory.U64(unit + Wow70707Offsets.HealthCandidateOffset, 0);
+            int ghostReads = 0;
+            memory.OnRead = (address, count) =>
+            {
+                if (address == ghostAddress && count == 1 && ++ghostReads == 3)
+                    memory.Bytes(ghostAddress, new byte[] { Wow70707Offsets.GhostFlagCandidate });
+            };
+            if (!transitionTracker.Poll(out _) || Directory.Exists(directory))
+                throw new Exception("Ghost transition must not save a graveyard position");
+            memory.OnRead = null;
+            memory.Bytes(ghostAddress, new byte[] { 0 });
             var deadAtStart = new WowBDeathCheckpoint();
             memory.U64(unit + Wow70707Offsets.HealthCandidateOffset, 0);
             if (!deadAtStart.Poll(out _) || Directory.Exists(directory)) throw new Exception("Starting dead must not save a checkpoint");
@@ -43,6 +67,8 @@ internal static class DeathCheckpointTests
         }
         finally
         {
+            memory.OnRead = null;
+            memory.Bytes(unit + Wow70707Offsets.GhostFlagsCandidateOffset, new byte[] { 0 });
             memory.U64(unit + Wow70707Offsets.HealthCandidateOffset, 148);
             Styx.Helpers.Logging.ApplicationPath = oldPath;
             if (Directory.Exists(folder)) Directory.Delete(folder, true);

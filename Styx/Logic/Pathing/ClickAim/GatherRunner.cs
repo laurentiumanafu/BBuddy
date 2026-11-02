@@ -52,11 +52,12 @@ internal static class GatherRunner
     private static uint _sessionMap;
     private static WowBDeathCheckpoint? _deathCheckpoint;
 
-    private static bool StopIfDead()
+    internal static bool StopIfDeadOrGhost()
     {
         if (_deathCheckpoint == null || !_deathCheckpoint.Poll(out _)) return false;
         _stop = true;
-        Logging.Write("[Gather] 0-health candidate; stopping for manual recovery (automatic recovery is not yet enabled)");
+        ClickAimKeySteer.ReleaseHeld();
+        Logging.Write("[Gather] death/ghost safety check stopped gathering; automatic recovery is not yet enabled");
         return true;
     }
 
@@ -226,7 +227,7 @@ internal static class GatherRunner
         if (unchecked(Environment.TickCount - _lastCombatCheck) >= 500)
         {
             _lastCombatCheck = Environment.TickCount;
-            if (StopIfDead() || !MapStillCurrent()) return true;
+            if (StopIfDeadOrGhost() || !MapStillCurrent()) return true;
             if (!GrindRunner.TryReadGatherCombat(out bool fighting) || fighting) return true;
         }
         if (!checkNodes || unchecked(Environment.TickCount - _lastScan) < 1500) return false;
@@ -551,7 +552,7 @@ internal static class GatherRunner
             }
             while (!_stop && !ClickAimAbort.Requested)
             {
-                if (StopIfDead()) break;
+                if (StopIfDeadOrGhost()) break;
                 if (reader.IsExperimental70707 && !WowBGrindFactions.Experimental70707BarSafe(reader))
                 { Logging.Write("[Gather] 70707 action bar changed or became unreadable; stopping"); break; }
                 if (!MapStillCurrent() || (roam != null && !roam.MapCurrent())) break;

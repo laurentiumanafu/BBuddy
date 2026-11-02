@@ -21,6 +21,8 @@ namespace Styx.Offsets
         internal const ulong PlayerVtable = 0x41DA390; // one player observation
         internal const ulong UnitVtable = 0x41EE168; // one selected-unit observation
         internal const ulong GameObjectVtableCandidate = 0x41E1480; // static counterpart; not yet observed live
+        internal const ulong GhostFlagsCandidateOffset = 0x26D8; // static UnitIsGhost local branch; one confirmed ghost observation
+        internal const byte GhostFlagCandidate = 0x10; // used only to stop/deny, never to authorize recovery
         internal const ulong HealthCandidateOffset = 0x1E28; // static path + two reported current HP values
         internal const ulong MaxHealthCandidateOffset = 0x1E30; // static path; both observations were equal
         internal const ulong LevelCandidateOffset = 0x1E38; // static path + two user-confirmed levels

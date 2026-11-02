@@ -316,12 +316,15 @@ internal static class GrindRunner
 
     private static bool CheckDeathCheckpoint()
     {
+        // Standalone Gather uses this fight loop for defence and owns its tracker.
+        if (_deathCheckpoint == null && GatherRunner.Running && GatherRunner.StopIfDeadOrGhost())
+        { _stop = true; return true; }
         bool observed = false;
-        bool dead = _deathCheckpoint != null && _deathCheckpoint.Poll(out observed);
-        if (!dead && (observed || !PlayerDead())) return false;
+        bool veto = _deathCheckpoint != null && _deathCheckpoint.Poll(out observed);
+        if (!veto && (observed || !PlayerDead())) return false;
         _stop = true;
         ClickAimKeySteer.ReleaseHeld();
-        Logging.Write("[Grind] 0-health candidate; stopping for manual recovery (automatic recovery is not yet enabled)");
+        Logging.Write("[Grind] death/ghost safety check stopped the bot; automatic recovery is not yet enabled");
         return true;
     }
     private static int _presses;    // action-bar presses this session, for the summary
@@ -4277,7 +4280,7 @@ internal static class GrindRunner
             {
                 lastDeathCheck = Environment.TickCount;
                 if (CheckDeathCheckpoint())
-                    return "0-health candidate; stopping fight for manual recovery";
+                    return "death/ghost safety check; stopping fight for manual recovery";
             }
             if (defenceOnly && (!TryReadGatherCombat(out bool fighting) || !fighting))
                 return "combat ended or state unreadable; ending defence";

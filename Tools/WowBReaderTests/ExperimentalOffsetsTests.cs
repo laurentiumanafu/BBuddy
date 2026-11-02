@@ -181,6 +181,7 @@ internal static class ExperimentalOffsetsTests
         }
         memory.U64(0x24000000 + Wow70707Offsets.HealthCandidateOffset, 148);
         memory.U64(0x24000000 + Wow70707Offsets.MaxHealthCandidateOffset, 148);
+        memory.Bytes(0x24000000 + Wow70707Offsets.GhostFlagsCandidateOffset, new byte[] { 0 });
         memory.U32(0x24000000 + Wow70707Offsets.LevelCandidateOffset, 4);
         memory.U32(0x24000000 + Wow70707Offsets.FactionKeyCandidateOffset, 3);
         memory.U64(targetUnit + Wow70707Offsets.HealthCandidateOffset, 55);
@@ -277,6 +278,23 @@ internal static class ExperimentalOffsetsTests
         Require(!WowBGrindFactions.PrepareForGrind(out string mismatch) && mismatch.Contains("mismatch="), "readable signature mismatch refuses start even with two matches");
         memory.Bytes(module + 0x2890305, Convert.FromHexString("448B8C86C01B0000"));
         memory.Bytes(module + 0xA538FD, Convert.FromHexString("488D0D5CB32E06488D34C1488B04C1"));
+        ulong ghostAddress = 0x24000000 + Wow70707Offsets.GhostFlagsCandidateOffset;
+        memory.Bytes(ghostAddress, new byte[] { Wow70707Offsets.GhostFlagCandidate });
+        Require(!WowBGrindFactions.PrepareForGrind(out string ghostError) && ghostError.Contains("ghost flag candidate is set") &&
+                !experimental.HasExperimentalGrindSession, "set ghost candidate refuses startup and revokes session");
+        memory.Remove(ghostAddress);
+        Require(!WowBGrindFactions.PrepareForGrind(out ghostError) && ghostError.Contains("ghost flag candidate unavailable") &&
+                !experimental.HasExperimentalGrindSession, "unreadable ghost candidate refuses startup and revokes session");
+        memory.Bytes(ghostAddress, new byte[] { 0 });
+        int ghostReads = 0;
+        memory.OnRead = (address, count) =>
+        {
+            if (address == ghostAddress && count == 1 && ++ghostReads == 2)
+                memory.Bytes(ghostAddress, new byte[] { Wow70707Offsets.GhostFlagCandidate });
+        };
+        Require(!WowBGrindFactions.PrepareForGrind(out ghostError) && ghostError.Contains("ghost flag candidate unavailable"), "unstable ghost candidate refuses startup");
+        memory.OnRead = null;
+        memory.Bytes(ghostAddress, new byte[] { 0 });
         Require(WowBGrindFactions.PrepareForGrind(out string trialError), "70707 synthetic start without selected target: " + trialError);
         Require(!WowBGrindFactions.PrepareForGrind(out _) && experimental.TryReadMapId(out _), "overlapping sessions rejected without revoking current session");
         Require(experimental.TryReadMapId(out mapCandidate) && mapCandidate == 7 && experimental.TryGetPlayerObject(out _) &&

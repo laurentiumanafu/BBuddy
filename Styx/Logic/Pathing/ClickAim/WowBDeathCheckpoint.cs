@@ -7,7 +7,7 @@ using Styx.WoWInternals;
 
 namespace Styx.Logic.Pathing;
 
-// Best-effort recording only. This is not a ghost reader and must never release,
+// Best-effort recording and 70707 ghost-candidate veto only. Never release,
 // move or resurrect the character. Both game fields and positions are non-atomic.
 internal sealed class WowBDeathCheckpoint
 {
@@ -25,8 +25,9 @@ internal sealed class WowBDeathCheckpoint
            && double.IsFinite(x) && double.IsFinite(y) && double.IsFinite(z)
            && Math.Abs(x) < 100000 && Math.Abs(y) < 100000 && Math.Abs(z) < 100000;
 
-    // False means either alive or unreadable, never proof of life. A true result
-    // is a guarded 0-health candidate; recorded coordinates are not proven corpse coordinates.
+    // False means either alive or unreadable, never proof of life. True vetoes
+    // gameplay for zero health, a set ghost candidate or an unreadable ghost byte.
+    // Recorded coordinates are not proven corpse coordinates.
     internal bool Poll(out bool observed)
     {
         observed = false;
@@ -42,6 +43,21 @@ internal sealed class WowBDeathCheckpoint
                 !reader.TryGetUnitFields(player.UnitAddress, out WowBReader.WowBUnitFields before) ||
                 before.MaxHealth == 0 || before.Health > before.MaxHealth ||
                 ObjectManager.Wow != memory || ObjectManager.WowB != reader) return false;
+            if (reader.IsExperimental70707)
+            {
+                if (!WowBGrindFactions.TryReadGhostFlagCandidate(memory, reader, player, out bool ghostFlag))
+                {
+                    Logging.Write("[Corpse] 70707 ghost flag candidate unavailable or changed; stopping rather than guessing");
+                    observed = true;
+                    return true;
+                }
+                if (ghostFlag)
+                {
+                    Logging.Write("[Corpse] 70707 ghost flag candidate is set; stopping for manual recovery");
+                    observed = true;
+                    return true;
+                }
+            }
             if (before.Health > 0)
             {
                 _aliveGuid = player.Guid; _aliveMap = map; _aliveAt = Environment.TickCount; _hasAlive = true;
@@ -55,6 +71,13 @@ internal sealed class WowBDeathCheckpoint
                 current.RecordAddress != player.RecordAddress || current.UnitAddress != player.UnitAddress ||
                 !reader.TryReadMapId(out uint mapAfter) || mapAfter != map ||
                 ObjectManager.Wow != memory || ObjectManager.WowB != reader) return false;
+            if (reader.IsExperimental70707 &&
+                (!WowBGrindFactions.TryReadGhostFlagCandidate(memory, reader, current, out bool ghostAfter) || ghostAfter))
+            {
+                Logging.Write("[Corpse] ghost candidate changed or became unavailable during 0-health observation; not saving a location");
+                observed = true;
+                return true;
+            }
 
             int now = Environment.TickCount;
             WoWPoint position = current.Location;
