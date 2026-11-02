@@ -29,15 +29,21 @@ chase = source[source.index("    private sealed class ChaseWatch"):source.index(
 engage = source[source.index("    private static bool TryEngage("):source.index("    private static bool TryCurrentSelection(")]
 assert engage.index("ShouldApproachPoolCandidate(have, haveNearest, nearestYd)") < engage.index("FindUnitPixel(")
 assert "report = ApproachPoolCandidate(hwnd, nearest);" in engage
+assert engage.index("report = ApproachPoolCandidate(hwnd, nearest, FactionApproachYd)") < engage.index("ClickAimInput.TapKey(hwnd, TabVk")
+assert engage.index("if (GrindFactionSettings.Rules.Enabled && !have)", engage.index("ClickAimInput.TapKey(hwnd, TabVk")) < engage.index("FindUnitPixel(")
+assert "if (!GrindFactionSettings.Rules.Enabled && TryPullOnTheWay(hwnd, me))" in source
 assert source.count("_combatHold || _poolApproachHandled") == 2
 assert "out near, out nearYd, out live2, out unread2, null, false" in source
 fight = source[source.index("    private static string Fight("):source.index("    private static", source.index("    private static string Fight(") + 20)]
 assert fight.count("(!defenceOnly || defenceFactionFilter) && !FactionPullStillAllowed(") == 2
 assert fight.count("!FactionAttackInputAllowed(reader, expectedPull, !defenceOnly || defenceFactionFilter)") == 4
 assert "unverified melee right-click withheld" in fight
+assert "filtered pool check: no in-fight TAB" in fight
 assert "_running && GrindFactionSettings.Rules.Enabled" in source[source.index("    private static bool TryClickUnit(IntPtr hwnd, WowBObservedUnit unit, double px, double py,\n"):source.index("    private static bool FindUnitPixel(")]
 assert "grindMode && !WowBGrindFactions.AllowsPull(reader, selected" in defence
 assert "expectedPull: target" in engage
+assert "if (GrindFactionSettings.Rules.Enabled) poolPick = true;" in engage
+assert engage.count("ClearNonSelfFactionSelection(hwnd,") >= 3
 start_profile = source[source.index("    public static bool Start("):source.index("    internal static bool StartRoaming(")]
 start_roaming = source[source.index("    internal static bool StartRoaming("):source.index("    private static", source.index("    internal static bool StartRoaming(") + 30)]
 assert "WowBGrindFactions.PrepareForGrind" in start_profile and "WowBGrindFactions.PrepareForGrind" in start_roaming
@@ -46,7 +52,7 @@ fixture = fixture.replace("// __PRODUCTION_METHODS__", level + "\n" + selection 
 # Read constants from production so boundary and movement tests cannot pass
 # against stale copies of the thresholds or watchdog limits.
 constants = []
-for name in ("LevelAbovePlayer", "LevelBelowPlayer", "SearchYd", "PullYd", "GiveUpYd", "PoolApproachYd",
+for name in ("LevelAbovePlayer", "LevelBelowPlayer", "SearchYd", "PullYd", "GiveUpYd", "PoolApproachYd", "FactionApproachYd",
              "PoolApproachTimeoutMs", "GatherDefenceRadius", "TabVk", "TabSettleMs", "NotAFightFlag",
              "StuckMoveYd", "StuckMs", "StuckEscapes", "ChaseNoClosingMs"):
     matches = re.findall(r"^\s*private const (?:int|uint|double) " + name + r"\s*=[^;\r\n]+;", source, re.MULTILINE)

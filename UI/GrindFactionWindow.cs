@@ -36,7 +36,7 @@ namespace CopilotBuddy.UI
             panel.Children.Add(_report);
             panel.Children.Add(new TextBlock { Text = "Allowed attack IDs (decimal; separate with commas or spaces)", TextWrapping = TextWrapping.Wrap });
             panel.Children.Add(_keys);
-            panel.Children.Add(new TextBlock { Text = "A saved non-empty list turns the filter on; clear the field and save to turn it off. Grind will not intentionally attack unknown or unlisted IDs, even in defence: your character may be left unable to fight back. GatherBuddy defence is unchanged. The pool failsafe remains active. Put Attack on your action bar; unverified melee/loot/vendor clicks may be withheld. A key does not prove attackability.", TextWrapping = TextWrapping.Wrap });
+            panel.Children.Add(new TextBlock { Text = "A saved non-empty list turns the filter on; clear the field and save to turn it off. Grind cannot yet identify its attacker, so it cannot safely defend against unlisted IDs; your character may be left unable to fight back. GatherBuddy defence is unchanged. No blind pool click-search runs with this filter. The pool failsafe remains active. Put Attack on your action bar; unverified melee/loot/vendor clicks may be withheld. A key does not prove attackability.", TextWrapping = TextWrapping.Wrap });
             var save = new Button { Content = "Save", Width = 110, Height = 28, Margin = new Thickness(0, 12, 0, 0), HorizontalAlignment = System.Windows.HorizontalAlignment.Right };
             save.Click += SaveClick;
             panel.Children.Add(save);

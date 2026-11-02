@@ -118,9 +118,12 @@ namespace Styx.Logic.Pathing
     static class WowBGrindFactions
     {
         public static bool Allowed = true;
+        public static readonly Dictionary<ulong, bool> PerUnit = new();
+        public static readonly HashSet<ulong> KnownRejected = new();
         public static bool TryReadBoundKey(WowBReader? reader, WowBObservedUnit unit, out uint key) { key = 189; return Allowed; }
         public static bool AllowsPull(WowBReader? reader, WowBObservedUnit unit, out bool unknown)
-        { unknown = GrindFactionSettings.Rules.Enabled && !Allowed; return !GrindFactionSettings.Rules.Enabled || Allowed; }
+        { bool allowed = PerUnit.TryGetValue(unit.UnitAddress, out bool value) ? value : Allowed;
+          unknown = GrindFactionSettings.Rules.Enabled && !allowed && !KnownRejected.Contains(unit.UnitAddress); return !GrindFactionSettings.Rules.Enabled || allowed; }
     }
     static class Harness
     {
@@ -194,7 +197,7 @@ namespace Styx.Logic.Pathing
             ClickAimInput.CombatEndsOnTab = false; ClickAimInput.TargetDiesOnTab = false; ClickAimInput.StopOnTap = false; ClickAimInput.FactionChangesOnTab = false; ClickAimInput.TabTarget = TargetGuid;
             _notViable.Clear(); _tabRefusedUntil.Clear(); _vendorDue = false; _combatHold = false; steps = 0; dropped = 0;
             NoPath = CombatOnPlan = StopOnPlan = VendorOnPlan = false; PathQueries = 0;
-            WowBGrindFactions.Allowed = true; GrindFactionSettings.Rules.Enabled = false;
+            WowBGrindFactions.Allowed = true; WowBGrindFactions.PerUnit.Clear(); WowBGrindFactions.KnownRejected.Clear(); GrindFactionSettings.Rules.Enabled = false;
             stopOnStep = combatOnStep = vendorOnStep = nearerOnStep = false;
             ClickAimKeySteer.Releases = 0;
         }
@@ -212,6 +215,12 @@ namespace Styx.Logic.Pathing
             Require(!TryCurrentSelection(snapshot, ObjectManager.WowB, 0, 0, out _) && !PullWorthTaking(snapshot.Units[1], snapshot.Player, out _, out _) && IsDismissibleSelection(snapshot.Units[1], ObjectManager.WowB), "unknown faction filtered from selection and TAB");
             Require(!NearestKillable(snapshot, 0, 0, 100, out _, out _, out _, out int unknown) && unknown == 1, "unknown excluded from pool");
             Require(NearestKillable(snapshot, 0, 0, 100, out _, out _, out _, out _, null, false), "rest threat scan bypasses allowlist");
+            Setup(5, distance: 10); Combat = false; GrindFactionSettings.Rules.Enabled = true;
+            WowBGrindFactions.PerUnit[2] = false; WowBGrindFactions.KnownRejected.Add(2);
+            snapshot.Units.Add(new WowBObservedUnit { Guid = new WowBGuid(3), UnitAddress = 3, RecordAddress = 30, Location = new Location { X = 46 } });
+            ObjectManager.WowB!.Fields.Remove(2);
+            ObjectManager.WowB.Fields[3] = new WowBReader.WowBUnitFields { Health = 100, Level = 5 };
+            Require(NearestKillable(snapshot, 0, 0, 100, out var nearestAllowed, out _, out _, out int rejectedUnread) && rejectedUnread == 0 && nearestAllowed.Guid == new WowBGuid(3), "only allowed faction chosen for pool navigation despite nearer unlisted NPC");
             Setup(5); var expected = snapshot.Units[1]; var changed = expected; changed.Guid = new WowBGuid(9);
             Require(FactionPullStillAllowed(ObjectManager.WowB, expected, changed), "disabled fight filter preserves existing behavior");
             GrindFactionSettings.Rules.Enabled = true;
@@ -259,6 +268,12 @@ namespace Styx.Logic.Pathing
             Setup(5); CombatReadable = false; Require(Defend() == "" && fightCalls == 0 && ClickAimInput.Keys == 0, "unreadable combat blocks defence input");
             Setup(5); ClickAimAbort.Requested = true; Require(Defend() == "" && fightCalls == 0 && ClickAimInput.Keys == 0, "STOP blocks defence input");
             Setup(5); Combat = false; ObjectManager.WowB!.Selected = TargetGuid;
+            Require(ClearFactionSelection(new IntPtr(1), ObjectManager.WowB, PlayerGuid, TargetGuid) && ObjectManager.WowB.Selected == PlayerGuid, "unlisted selection cleared and verified");
+            Setup(5); Combat = false; ObjectManager.WowB!.Selected = new WowBGuid(999);
+            Require(ClearNonSelfFactionSelection(new IntPtr(1), ObjectManager.WowB, PlayerGuid) && ObjectManager.WowB.Selected == PlayerGuid, "selection missing from snapshot is still cleared");
+            Setup(5); Combat = false; ObjectManager.WowB!.Selected = TargetGuid; ClickAimInput.F1Works = false;
+            Require(!ClearFactionSelection(new IntPtr(1), ObjectManager.WowB, PlayerGuid, TargetGuid), "rebound F1 prevents faction search from continuing");
+            Setup(5); Combat = false; ObjectManager.WowB!.Selected = TargetGuid;
             DismissRejectedSelection(new IntPtr(1), ObjectManager.WowB, PlayerGuid, TargetGuid);
             Require(ObjectManager.WowB.Selected == PlayerGuid && ClickAimInput.Keys == 1 && Logging.Last.Contains("F1 verified"), "selected corpse is moved to verified self target");
             Setup(5); Combat = false; ObjectManager.WowB!.Selected = TargetGuid; ClickAimInput.F1Works = false;
@@ -291,6 +306,9 @@ namespace Styx.Logic.Pathing
             Require(!ShouldApproachPoolCandidate(false, false, 90) && !ShouldApproachPoolCandidate(true, true, 90), "no approach without candidate or with a selected target");
             Setup(5, distance: 100); Combat = false;
             Require(ApproachPoolCandidate(new IntPtr(1), snapshot.Units[1]).Contains("within 40 yd") && steps == 3 && PathQueries > 0 && ClickAimInput.Keys == 0 && fightCalls == 0 && ClickAimKeySteer.Releases > 0, "100 yd approach uses stepper, stops at 40 and sends no targeting/attack input");
+            Require(ShouldApproachPoolCandidate(false, true, 46, FactionApproachYd) && !ShouldApproachPoolCandidate(false, true, 15, FactionApproachYd), "filtered candidates approach to 15 yd");
+            Setup(5, distance: 46); Combat = false; GrindFactionSettings.Rules.Enabled = true;
+            Require(ApproachPoolCandidate(new IntPtr(1), snapshot.Units[1], FactionApproachYd).Contains("within 15 yd") && steps == 2 && PathQueries > 0 && ClickAimInput.Keys == 0 && ClickAimInput.Clicks == 0, "filtered candidate approaches by mesh to 15 yd with no clicks or keys");
             Setup(5, distance: 100); Combat = false; NoPath = true;
             Require(ApproachPoolCandidate(new IntPtr(1), snapshot.Units[1]).Contains("no complete validated mesh") && PathQueries == 1 && steps == 0 && dropped == 1 && ClickAimKeySteer.Releases > 0, "failed path deferred without direct walk");
             Setup(5, distance: 100); Combat = false; combatOnStep = true;

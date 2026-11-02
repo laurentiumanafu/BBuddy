@@ -46,6 +46,10 @@ internal static class GrindRunner
     private const int TabVk = 0x09;
     private const int TabTries = 3;
     private const int TabSettleMs = 250;
+    // With a manual allowlist, move close to an allowed candidate on mesh
+    // rather than using indiscriminate pixel probes to search around it.
+    private const double FactionApproachYd = 15.0;
+    private const int FactionTabRetryMs = 5000;
 
     /// <summary>
     /// How far from the CHARACTER something may stand and still be fought. This is the user's
@@ -969,7 +973,8 @@ internal static class GrindRunner
                 for (int i = 0; i < snap.Units.Count && shown < 10; i++)
                 {
                     WowBObservedUnit u = snap.Units[i];
-                    if (u.IsLocalPlayer) continue;
+                    if (u.IsLocalPlayer || u.HasPlayerVtable) continue;
+                    if (GrindFactionSettings.Rules.Enabled && !WowBGrindFactions.AllowsPull(reader, u, out _)) continue;
                     double d = ClickAimMath.Len(u.Location.X - me.Location.X, u.Location.Y - me.Location.Y);
                     if (d > SearchYd) continue;
                     Styx.WoWInternals.WowBReader.WowBUnitFields uf;
@@ -1205,8 +1210,13 @@ internal static class GrindRunner
             // Even a clear pool can leave an unsuitable live target selected by a
             // previous walk/TAB. Move off it only when it is still the same GUID.
             WowBReader? clearReader = ObjectManager.WowB;
-            if (snap.TryGetSelectedTarget(out WowBObservedUnit selected)
-                && IsDismissibleSelection(selected, clearReader))
+            if (GrindFactionSettings.Rules.Enabled)
+            {
+                if (!ClearNonSelfFactionSelection(hwnd, clearReader, player.Guid))
+                { report = "cannot verify selection cleared; holding before continuing route"; _poolApproachHandled = true; ClickAimAbort.Wait(300); return false; }
+            }
+            else if (snap.TryGetSelectedTarget(out WowBObservedUnit selected)
+                     && IsDismissibleSelection(selected, clearReader))
                 DismissRejectedSelection(hwnd, clearReader, player.Guid, selected.Guid);
             _scanWasClear = true;
             if (unchecked(Environment.TickCount - _clearQuietAt) > 15000)
@@ -1227,7 +1237,8 @@ internal static class GrindRunner
          * target. Nothing is walked yet: this is a facing change only. */
         if (!haveNearest)
             NearestKillable(snap, px, py, SearchYd, out nearest, out nearestYd, out live, out unread);
-        if (haveNearest && nearestYd > 2.0)
+        if (haveNearest && nearestYd > 2.0 &&
+            (!GrindFactionSettings.Rules.Enabled || nearestYd <= FactionApproachYd))
             ClickAimKeySteer.Face(nearest.Location.X, nearest.Location.Y, hwnd, 25.0, 4);
 
         Styx.WoWInternals.WowBReader? selReader = ObjectManager.WowB;
@@ -1249,6 +1260,27 @@ internal static class GrindRunner
                 ClickAimMath.Len(target.Location.X - px, target.Location.Y - py)));
         }
 
+        // An allowlisted pool candidate is a navigation lead, not proof of
+        // hostility. Do not click-screen-search or TAB around distant NPCs.
+        // Move toward the exact allowed record on the validated mesh first.
+        if (GrindFactionSettings.Rules.Enabled && !have)
+        {
+            if (!ClearNonSelfFactionSelection(hwnd, selReader, player.Guid))
+            { report = "cannot verify selection cleared; holding before faction search"; _poolApproachHandled = true; ClickAimAbort.Wait(300); return false; }
+            if (!haveNearest)
+            {
+                if (unchecked(Environment.TickCount - _clearQuietAt) > 15000)
+                { _clearQuietAt = Environment.TickCount; report = "no readable eligible faction candidate; holding this search"; }
+                _poolApproachHandled = true; ClickAimAbort.Wait(300); return false;
+            }
+            if (ShouldApproachPoolCandidate(have, haveNearest, nearestYd, FactionApproachYd))
+            {
+                _poolApproachHandled = true;
+                report = ApproachPoolCandidate(hwnd, nearest, FactionApproachYd);
+                return false;
+            }
+        }
+
         WowBGuid rejectedGuid = default(WowBGuid);
         for (int i = 0; i < TabTries && !have && !_stop && !ClickAimAbort.Requested && !_vendorDue; i++)
         {
@@ -1259,16 +1291,25 @@ internal static class GrindRunner
             catch { /* Unknown pre-TAB target cannot confirm a pool pick. */ }
             ClickAimInput.TapKey(hwnd, TabVk, 40);
             if (ClickAimAbort.Wait(TabSettleMs) || _stop) return false;
-            if (!Capture(out snap) || snap == null) return false;
+            if (!Capture(out snap) || snap == null)
+            {
+                if (GrindFactionSettings.Rules.Enabled)
+                { _poolApproachHandled = true; report = "TAB selection unreadable; holding instead of searching by click"; ClickAimAbort.Wait(300); }
+                return false;
+            }
             if (!TryCurrentSelection(snap, selReader, px, py, out target))
             {
                 // TAB can keep selecting the same low-level, refused or otherwise
                 // unsuitable unit. Do not let it block cycling or the pool fallback.
-                if (IsDismissibleSelection(target, selReader))
+                if (GrindFactionSettings.Rules.Enabled)
                 {
                     rejectedGuid = target.Guid;
-                    _lastEngageRejected = true;
+                    _lastEngageRejected = !target.Guid.IsEmpty && !target.IsLocalPlayer;
+                    if (!ClearNonSelfFactionSelection(hwnd, selReader, player.Guid))
+                    { report = "TAB selected an unsuitable or unreadable NPC and F1 could not be verified; holding"; _poolApproachHandled = true; return false; }
                 }
+                else if (IsDismissibleSelection(target, selReader))
+                { rejectedGuid = target.Guid; _lastEngageRejected = true; }
                 continue;
             }
             // An unchanged pool pick is not proof that TAB confirmed hostility.
@@ -1288,6 +1329,21 @@ internal static class GrindRunner
         if (_stop || ClickAimAbort.Requested || _vendorDue) return false;
         if (!TryReadGatherCombat(out bool beforePoolCombat) || beforePoolCombat)
         { _combatHold = true; ClickAimKeySteer.ReleaseHeld(); return false; }
+
+        if (GrindFactionSettings.Rules.Enabled && !have)
+        {
+            // Do not search by indiscriminate left clicks: they can select a
+            // nearby NPC of a different faction. TAB can still select another
+            // unit, which is rejected above and never treated as attackable.
+            if (haveNearest)
+            {
+                if (_tabRefusedUntil.Count > 256) _tabRefusedUntil.Clear();
+                _tabRefusedUntil[nearest.Guid] = unchecked(Environment.TickCount + FactionTabRetryMs);
+            }
+            _interruptQuietUntil = unchecked(Environment.TickCount + InterruptRetryMs);
+            report = "TAB did not select an eligible allowed NPC; briefly deferring the candidate (not a hostility verdict). No pixel search was used";
+            return false;
+        }
 
         // Do not waste dozens of pixel clicks on an unselected unit near the
         // edge of the 100 yd pool. Approach on a strictly validated mesh and
@@ -1561,6 +1617,10 @@ internal static class GrindRunner
         if (_stop || ClickAimAbort.Requested || _vendorDue) return false;
         if (!TryReadGatherCombat(out bool beforeFightCombat) || beforeFightCombat)
         { _combatHold = true; ClickAimKeySteer.ReleaseHeld(); return false; }
+        // A faction key and a TAB selection are not a live reaction verdict.
+        // Keep the existing unverified-target / 10-second pool failsafe even
+        // when filtered mode selected a candidate through TAB.
+        if (GrindFactionSettings.Rules.Enabled) poolPick = true;
         int fightStarted = Environment.TickCount;
         LogFactionFight(esp, target, false);
         report = Fight(hwnd, px, py, poolPick, expectedPull: target);
@@ -1627,10 +1687,10 @@ internal static class GrindRunner
         if (!snap.TryGetSelectedTarget(out target)) return false;
         if (target.IsLocalPlayer || target.HasPlayerVtable || target.Guid.IsEmpty) return false;
 
+        if (!WowBGrindFactions.AllowsPull(reader, target, out _)) return false;
         Styx.WoWInternals.WowBReader.WowBUnitFields f;
         if (!reader.TryGetUnitFields(target.UnitAddress, out f)) return false;
         if (!SelectionFieldsValid(f.Health, f.UnitFlags, f.Level, PlayerLevel())) return false;
-        if (!WowBGrindFactions.AllowsPull(reader, target, out _)) return false;
 
         /* A unit this run has already given up on must not come back through the selection.
          * The 14:23 run is that bug: the fight refused the friendly peon four times in a row -
@@ -1685,8 +1745,8 @@ internal static class GrindRunner
             "; attack checks will re-read identity, selection and key");
     }
 
-    private static bool ShouldApproachPoolCandidate(bool hasSelection, bool hasCandidate, double distance)
-        => !hasSelection && hasCandidate && double.IsFinite(distance) && distance > PoolApproachYd && distance <= SearchYd;
+    private static bool ShouldApproachPoolCandidate(bool hasSelection, bool hasCandidate, double distance, double stopRadius = PoolApproachYd)
+        => !hasSelection && hasCandidate && double.IsFinite(distance) && distance > stopRadius && distance <= SearchYd;
 
     private static bool PreferNearerPoolCandidate(bool unverified, bool haveNearest, bool same,
                                                    double selectedYd, double nearestYd)
@@ -1737,6 +1797,42 @@ internal static class GrindRunner
         catch { Logging.Write("[Grind] could not verify the rejected target was dismissed"); }
     }
 
+    // TAB may keep or select a non-allowlisted unit. Clear it before looking
+    // for a new target; F1 is not trusted unless the player's GUID is observed.
+    private static bool ClearFactionSelection(IntPtr hwnd, WowBReader? reader, WowBGuid player, WowBGuid selected)
+    {
+        if (selected.IsEmpty || selected == player) return true;
+        if (reader == null || player.IsEmpty || _stop || ClickAimAbort.Requested) return false;
+        DismissRejectedSelection(hwnd, reader, player, selected);
+        GreenMagic.Memory? memory = ObjectManager.Wow;
+        if (memory == null || _stop || ClickAimAbort.Requested) return false;
+        try
+        {
+            using var uncached = memory.TemporaryCacheState(false);
+            return ObjectManager.Wow == memory && ObjectManager.WowB == reader && reader.ReadTargetGuid() == player;
+        }
+        catch { return false; }
+    }
+
+    // Read the actual selected GUID, including selections absent from the pool
+    // snapshot, rather than treating an unresolved target as no selection.
+    private static bool ClearNonSelfFactionSelection(IntPtr hwnd, WowBReader? reader, WowBGuid player)
+    {
+        GreenMagic.Memory? memory = ObjectManager.Wow;
+        if (reader == null || memory == null || player.IsEmpty || _stop || ClickAimAbort.Requested) return false;
+        try
+        {
+            WowBGuid selected;
+            using (memory.TemporaryCacheState(false))
+            {
+                if (ObjectManager.Wow != memory || ObjectManager.WowB != reader) return false;
+                selected = reader.ReadTargetGuid();
+            }
+            return ClearFactionSelection(hwnd, reader, player, selected);
+        }
+        catch { return false; }
+    }
+
     /// <summary>
     /// Whether a mob of <paramref name="mobLevel"/> is worth attacking at
     /// <paramref name="myLevel"/>. A level the client did not report (0) is allowed: the
@@ -1779,10 +1875,10 @@ internal static class GrindRunner
 
         /* Nothing is fighting us - but that is not the same as "nothing here worth killing",
          * and treating the two as one is why the character walked past mobs on every leg and
-         * only fought at the hotspots (the user's report). Ask the client instead of guessing:
-         * TAB applies its own hostility filter, so whatever it selects is attackable by
-         * definition, and the level band and the distance are checked here. */
-        if (TryPullOnTheWay(hwnd, me)) return true;
+         * only fought at the hotspots (the user's report). In unfiltered mode the client is
+         * asked with TAB and the level band and distance are checked here. TAB alone is not
+         * proof of hostility; filtered mode instead interrupts for allowed pool candidates. */
+        if (!GrindFactionSettings.Rules.Enabled && TryPullOnTheWay(hwnd, me)) return true;
 
         /* The pool has no facing blind spot. Stop for a level-viable observation
          * within the search radius; the main loop can approach distant candidates
@@ -3104,6 +3200,8 @@ internal static class GrindRunner
             double d = ClickAimMath.Len(candidate.Location.X - px, candidate.Location.Y - py);
             if (d > radius) continue;
 
+            if (applyFactionFilter && reader != null && !WowBGrindFactions.AllowsPull(reader, candidate, out bool factionUnknown))
+            { if (factionUnknown) unread++; continue; }
             Styx.WoWInternals.WowBReader.WowBUnitFields f;
             if (reader == null || !reader.TryGetUnitFields(candidate.UnitAddress, out f))
             {
@@ -3116,8 +3214,6 @@ internal static class GrindRunner
             if (f.Health == 0) continue;                       // a corpse is not a monster
             if ((f.UnitFlags & NotAFightFlag) != 0) continue;
             if (!LevelViable(f.Level, myLevel)) continue;
-            if (applyFactionFilter && !WowBGrindFactions.AllowsPull(reader, candidate, out bool factionUnknown))
-            { if (factionUnknown) unread++; continue; }
 
             live++;
             if (d > 0.4 && d < yards)
@@ -3289,7 +3385,7 @@ internal static class GrindRunner
             return string.Format(CultureInfo.InvariantCulture,
                 "no eligible live NPC within 12 yd; holding position (nearby {0}, unreadable {1}, dead {2}, excluded flags {3}, previously refused {4}, faction blocked {5}); {6}",
                 inRange, unreadable, dead, flagged, refused, factionBlocked,
-                grindMode && GrindFactionSettings.Rules.Enabled ? "unlisted attackers will not be fought" : "attacker may be ranged or missing from the snapshot");
+                grindMode && GrindFactionSettings.Rules.Enabled ? "attacker identity is unknown; unlisted NPCs cannot be safely identified as attackers" : "attacker may be ranged or missing from the snapshot");
         int candidates = Math.Min(nearby.Count, 6);
         for (int i = 0; i < candidates && !_stop && !ClickAimAbort.Requested; i++)
         {
@@ -3748,16 +3844,19 @@ internal static class GrindRunner
 
     // A pool unit's position is only a navigation lead, not proof that it is
     // hostile. No click or attack is sent here; normal TAB/pool handling resumes
-    // after any eligible unit comes within the requested 40 yd radius.
-    private static string ApproachPoolCandidate(IntPtr hwnd, WowBObservedUnit initial)
+    // after an eligible unit comes within the requested stop radius.
+    private static string ApproachPoolCandidate(IntPtr hwnd, WowBObservedUnit initial, double stopRadius = PoolApproachYd)
     {
         int started = Environment.TickCount;
         var watch = new ChaseWatch(started);
         WowBReader? reader = ObjectManager.WowB;
         GreenMagic.Memory? memory = ObjectManager.Wow;
         if (reader == null || memory == null || initial.Guid.IsEmpty) return "cannot read distant pool candidate";
-        Logging.Write("[Grind] approaching distant pool candidate " + initial.Guid +
-            " on a validated mesh; hostility is unknown, TAB will be retried within 40 yd");
+        string faction = GrindFactionSettings.Rules.Enabled && WowBGrindFactions.TryReadBoundKey(reader, initial, out uint initialKey)
+            ? ", observed faction key " + initialKey.ToString(CultureInfo.InvariantCulture) : "";
+        Logging.Write("[Grind] approaching pool candidate " + initial.Guid + faction +
+            string.Format(CultureInfo.InvariantCulture, " at ({0:F1}, {1:F1}, {2:F1})", initial.Location.X, initial.Location.Y, initial.Location.Z) +
+            " on a validated mesh; hostility is unknown, TAB will be retried within " + stopRadius.ToString("F0", CultureInfo.InvariantCulture) + " yd");
         try
         {
             while (!_stop && !ClickAimAbort.Requested && !_vendorDue)
@@ -3787,9 +3886,9 @@ internal static class GrindRunner
                 if (!current.TryGetUnit(initial.Guid, out WowBObservedUnit candidate) ||
                     candidate.Guid != initial.Guid || candidate.RecordAddress != initial.RecordAddress ||
                     candidate.UnitAddress != initial.UnitAddress || candidate.IsLocalPlayer || candidate.HasPlayerVtable ||
+                    !WowBGrindFactions.AllowsPull(reader, candidate, out _) ||
                     !reader.TryGetUnitFields(candidate.UnitAddress, out WowBReader.WowBUnitFields fields) ||
                     !SelectionFieldsValid(fields.Health, fields.UnitFlags, fields.Level, approachLevel) ||
-                    !WowBGrindFactions.AllowsPull(reader, candidate, out _) ||
                     _notViable.Contains(candidate.Guid) || Refused(candidate.Guid) || Unreachable(candidate.Guid))
                 {
                     ClickAimAbort.Wait(150);
@@ -3799,9 +3898,11 @@ internal static class GrindRunner
                 double distance = ClickAimMath.Len(candidate.Location.X - me.Location.X, candidate.Location.Y - me.Location.Y);
                 if (!double.IsFinite(distance) || distance > GiveUpYd)
                     return DropUnreachable(candidate, "candidate moved outside the search margin");
-                if (NearestKillable(current, me.Location.X, me.Location.Y, PoolApproachYd,
+                if (distance <= stopRadius)
+                    return "the pool candidate is within " + stopRadius.ToString("F0", CultureInfo.InvariantCulture) + " yd; stopping to retry TAB";
+                if (NearestKillable(current, me.Location.X, me.Location.Y, stopRadius,
                                     out _, out _, out _, out int unreadNearby, approachLevel))
-                    return "a level-eligible pool candidate is within 40 yd; stopping to retry TAB";
+                    return "an eligible pool candidate is within " + stopRadius.ToString("F0", CultureInfo.InvariantCulture) + " yd; stopping to retry TAB";
                 if (unreadNearby > 0)
                 {
                     _combatHold = true;
@@ -4065,45 +4166,56 @@ internal static class GrindRunner
                 && unchecked(Environment.TickCount - lastHealthDropMs) >= PoolVerifyMs)
             {
                 verifyAsked = true;
-                WowBGuid asked = target.Guid;
-
-                Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                    "[Grind] {0} has been in TAB's reach for {1} s at {2:F1} yd with no damage on it - "
-                    + "asking the client whether it is an enemy at all",
-                    asked, PoolVerifyMs / 1000, d));
-
-                ClickAimInput.TapKey(hwnd, TabVk, 40);
-                Thread.Sleep(TabSettleMs);
-
-                WowBWorldSnapshot? verdictSnap;
-                WowBObservedUnit verdictUnit = default(WowBObservedUnit);
-                bool offered = Capture(out verdictSnap) && verdictSnap != null
-                               && verdictSnap.TryGetSelectedTarget(out verdictUnit);
-                int offeredHealth = offered ? Health(verdictUnit) : 0;
-
-                if (!offered || offeredHealth == 0)
+                if (GrindFactionSettings.Rules.Enabled)
                 {
-                    _notViable.Add(asked);
-                    if (_notViable.Count > 256) _notViable.Clear();
-                    return string.Format(CultureInfo.InvariantCulture,
-                        "TAB offered nothing for {0} after {1} s with its health untouched - the client "
-                        + "does not treat it as an enemy (friendly NPC or blocked), so it is ignored from "
-                        + "now on and the next target is taken", asked, PoolVerifyMs / 1000);
+                    // TAB can switch to an unlisted unit while auto-attack is
+                    // already active. Keep the combat/damage timeout below,
+                    // but do not issue another TAB from inside this fight.
+                    Logging.Write("[Grind] filtered pool check: no in-fight TAB; using the damage/combat timeout");
                 }
-
-                if (verdictUnit.Guid != asked)
+                else
                 {
+                    WowBGuid asked = target.Guid;
+
                     Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                        "[Grind] TAB moved off {0} and selected {1} instead - taking the client's own pick",
-                        asked, verdictUnit.Guid));
-                    return "TAB moved off the pool's target - re-engaging what the client selected";
-                }
+                        "[Grind] {0} has been in TAB's reach for {1} s at {2:F1} yd with no damage on it - "
+                        + "asking the client whether it is an enemy at all",
+                        asked, PoolVerifyMs / 1000, d));
 
-                Logging.Write("[Grind] TAB kept the same target, which proves nothing on this client - "
-                            + "the verdict is whether a fight starts at all");
+                    ClickAimInput.TapKey(hwnd, TabVk, 40);
+                    Thread.Sleep(TabSettleMs);
+
+                    WowBWorldSnapshot? verdictSnap;
+                    WowBObservedUnit verdictUnit = default(WowBObservedUnit);
+                    bool offered = Capture(out verdictSnap) && verdictSnap != null
+                                   && verdictSnap.TryGetSelectedTarget(out verdictUnit);
+                    int offeredHealth = offered ? Health(verdictUnit) : 0;
+
+                    if (!offered || offeredHealth == 0)
+                    {
+                        _notViable.Add(asked);
+                        if (_notViable.Count > 256) _notViable.Clear();
+                        return string.Format(CultureInfo.InvariantCulture,
+                            "TAB offered nothing for {0} after {1} s with its health untouched - the client "
+                            + "does not treat it as an enemy (friendly NPC or blocked), so it is ignored from "
+                            + "now on and the next target is taken", asked, PoolVerifyMs / 1000);
+                    }
+
+                    if (verdictUnit.Guid != asked)
+                    {
+                        Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                            "[Grind] TAB moved off {0} and selected {1} instead - taking the client's own pick",
+                            asked, verdictUnit.Guid));
+                        return "TAB moved off the pool's target - re-engaging what the client selected";
+                    }
+
+                    Logging.Write("[Grind] TAB kept the same target, which proves nothing on this client - "
+                                + "the verdict is whether a fight starts at all");
+                }
             }
 
-            /* The combat verdict. It runs a few seconds after the TAB ask, because a press of
+            /* The combat verdict. It runs after the verification interval (and, with the
+             * filter off, the TAB ask), because a press of
              * Attack needs MeleeSwingQuietMs to prove itself - and on a friendly NPC it never does.
              * The 14:23 peon sat at 1.3 yd with Attack pressed and the character never entered
              * combat; a scorpion enters combat on the first swing. */
