@@ -107,6 +107,24 @@ namespace CopilotBuddy.UI
             finally { btnTargetInfo.IsEnabled = true; }
         }
 
+        private async void btnInventoryProbe_Click(object sender, RoutedEventArgs e)
+        {
+            if (ClickAimUi.Running || ClickAimUi.Paused) { lblVendorNote.Text = "Stop the bot and routes before the bag research snapshot."; return; }
+            btnInventoryProbe.IsEnabled = false;
+            lblVendorNote.Text = "Reading bounded inventory candidate; keep bags unchanged...";
+            try
+            {
+                string report = await Task.Run(() => WowBInventoryProbe.Capture());
+                foreach (string line in report.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+                    Logging.Write("[Bag research] " + line);
+                lblVendorNote.Text = report.StartsWith("70291 read-only", StringComparison.Ordinal)
+                    ? "Bag research snapshot written to the bot log. Candidate data, GUID and addresses may be sensitive."
+                    : report;
+            }
+            catch (Exception ex) { lblVendorNote.Text = "Bag research snapshot failed: " + ex.Message; }
+            finally { btnInventoryProbe.IsEnabled = true; }
+        }
+
         private bool SaveFactionSettings()
         {
             if (!_factionLoaded)

@@ -100,3 +100,41 @@ preceding context/argument helpers from the same ID handler. It is another
 bounded, static Ghidra trace: it does not attach to or call the client. It has
 not been run locally. Do not treat any listed displacement as a bag, free-slot
 or item-ID offset until static dataflow and controlled live observations agree.
+
+## Focused static trace: 2026-11-02
+
+The subsequent `WowBInventoryLookup70291` report showed that the
+`0x290CFC0` path bounds an index using a dword at its input base, multiplies it
+by 16 and adds the qword at input `+8`, before passing that address to a helper
+at `0x1FC37F0`. The `0x290BDD0` path also indexes a 16-byte array and can
+recurse through an indirect call. These are static dataflow observations, not
+proof that the array contains item GUIDs, represents a backpack, has a known
+capacity, or uses all-zero bytes for an empty slot. The initial handler applies
+`+0x9440` to its resolved context object; its identity has not been proven to
+be exactly the local player object used by our reader. The connector response
+was truncated in the middle, so conclusions are limited to the visible parts.
+
+### Read-only comparison probe
+
+**Combat settings → Selling → Bag research snapshot** samples a candidate
+header at the validated local player object's `+0x9440` and, if its observed
+count is at most 256 and the pointer is in the bounded user-address range,
+reads up to 256 16-byte entries twice. The input header and entries, player
+identity, attachment and bot state are checked again; failed or changing reads
+are discarded. Four short code signatures reduce accidental use on a different
+client but do not prove a build or object layout. Data reads are non-atomic.
+It does not call client code, use Lua, click, move items or change selling.
+The raw header, process addresses, player GUID and candidate bytes go into the
+bot log; review them before sharing. Do not infer emptiness, item ID, slot count
+or bag fullness from the bytes. Observing a zero count or failed read is not a
+full-bag or empty-bag result.
+
+With the bot and any route stopped, press the button once, move a single known
+item to an empty slot **manually**, then press it again. Keep the same character,
+client and settings window open and let each capture finish before moving the
+item. Press again after moving it back; repeat with a different item. The log
+reports raw changed indices when the same player, array address and count were
+observed; otherwise it prints a new baseline. A changed address, incomplete
+snapshot or zero changes does not prove the hypothesis false. Do not delete or
+send any items for this experiment. This probe was tested with synthetic reads,
+not a real Windows client; no bag detection has been enabled.

@@ -185,8 +185,11 @@
                 <Button x:Name="btnTargetInfo" Grid.Row="4" Grid.Column="2" Content="Target Info" Height="24" Padding="10,0" HorizontalAlignment="Left" Margin="100,0,0,8"
                         Click="btnTargetInfo_Click" ToolTip="Stop the bot, select an NPC and log a read-only 70291 snapshot for vendor investigation."/>
 
-                <TextBlock x:Name="lblVendorNote" Grid.Row="5" Grid.ColumnSpan="3" TextWrapping="Wrap"
-                           Margin="0,2,0,8" FontSize="11" Opacity="0.9"/>
+                <StackPanel Grid.Row="5" Grid.ColumnSpan="3">
+                    <Button x:Name="btnInventoryProbe" Content="Bag research snapshot" Height="24" Padding="10,0" HorizontalAlignment="Left" Click="btnInventoryProbe_Click"
+                            ToolTip="Stopped bot only. Read-only candidate bytes, not a bag-full or item detector; logged data can be sensitive."/>
+                    <TextBlock x:Name="lblVendorNote" TextWrapping="Wrap" Margin="0,2,0,8" FontSize="11" Opacity="0.9"/>
+                </StackPanel>
 
                 <!-- the two lists: vendor points on the left, the plan of the selected one on the right -->
                 <Grid Grid.Row="6" Grid.ColumnSpan="3">

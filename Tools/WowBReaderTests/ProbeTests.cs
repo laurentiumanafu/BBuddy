@@ -77,6 +77,7 @@ internal static class ProbeTests
         try
         {
             FactionTests.Run(memory, player, npc, npcUnit, npcRecord);
+            InventoryTests.Run(memory, playerUnit);
             VendorTests.Run(memory, player, npc, npcUnit, npcRecord);
             string result = WowBReactionProbe.Capture("friendly");
             Check(result.Contains("target→player 4, player→target 4") && result.Contains("NOT live reaction"), "base comparison displayed");
