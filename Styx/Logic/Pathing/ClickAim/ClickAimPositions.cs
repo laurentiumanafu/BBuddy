@@ -62,7 +62,9 @@ internal static class ClickAimPositions
         int now = Environment.TickCount;
         lock (Sync)
         {
-            if (_cachedOk && unchecked(now - _cachedAt) < CacheMs && !unchecked(now < _cachedAt))
+            WowBReader? cachedReader = ObjectManager.WowB;
+            if (_cachedOk && (cachedReader?.IsExperimental70707 != true || cachedReader.ExperimentalGrindActive) &&
+                unchecked(now - _cachedAt) < CacheMs && !unchecked(now < _cachedAt))
             {
                 x = _cachedX;
                 y = _cachedY;

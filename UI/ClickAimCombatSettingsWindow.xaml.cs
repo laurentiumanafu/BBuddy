@@ -574,20 +574,28 @@ namespace CopilotBuddy.UI
             catch { return IntPtr.Zero; }
         }
 
+        private static bool TryTownPosition(WowBReader? reader, out uint map, out double x, out double y, out double z)
+        {
+            map = 0; x = y = z = 0;
+            if (reader == null) return false;
+            if (reader.IsExperimental70707) return WowBKnownMerchants.TryReadExperimentalTown(out map, out x, out y, out z);
+            if (!reader.TryReadMapId(out map) || !ClickAimPositions.TryRead(out x, out y)) return false;
+            z = ClickAimPositions.Z();
+            return double.IsFinite(z);
+        }
+
         private void btnRecordTown_Click(object sender, RoutedEventArgs e)
         {
             if (ClickAimUi.Running || ClickAimUi.Paused) { lblVendorNote.Text = "Stop the bot before recording a town hotspot."; return; }
             int index = SelectedVendorIndex();
             if (index < 0) { lblVendorNote.Text = "Add a vendor point first; select its existing click plan before recording the town hotspot."; return; }
             WowBReader? reader = ObjectManager.WowB;
-            if (reader == null || !reader.TryReadMapId(out uint map) || !ClickAimPositions.TryRead(out double x, out double y))
+            if (!TryTownPosition(reader, out uint map, out double x, out double y, out double z))
             { lblVendorNote.Text = "Map or player position unavailable; stand in town on wowb.exe and retry."; return; }
-            double z = ClickAimPositions.Z();
-            if (!double.IsFinite(z)) { lblVendorNote.Text = "Player height unavailable; town hotspot not recorded."; return; }
             if (System.Windows.MessageBox.Show("Replace the selected plan's town hotspot? Its recorded clicks stay, but previously remembered merchants must be recorded again.",
                 "Record town", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
-            if (ClickAimUi.Running || ClickAimUi.Paused || ObjectManager.WowB != reader || !reader.TryReadMapId(out uint finalMap) || finalMap != map ||
-                !ClickAimPositions.TryRead(out x, out y) || !double.IsFinite(z = ClickAimPositions.Z()))
+            if (ClickAimUi.Running || ClickAimUi.Paused || ObjectManager.WowB != reader ||
+                !TryTownPosition(reader, out uint finalMap, out x, out y, out z) || finalMap != map)
             { lblVendorNote.Text = "Player, map or bot state changed; town hotspot not saved."; return; }
             if (!VendorFile.SetTown(index, x, y, z, map, out string error)) { lblVendorNote.Text = "Town hotspot could not be saved: " + error; return; }
             LoadVendor(); lstVendors.SelectedIndex = index;
@@ -611,16 +619,20 @@ namespace CopilotBuddy.UI
 
         private void btnVendorAdd_Click(object sender, RoutedEventArgs e)
         {
-            double x, y;
-            if (!ClickAimPositions.TryRead(out x, out y))
+            double x, y, z;
+            WowBReader? reader = ObjectManager.WowB;
+            if (reader?.IsExperimental70707 == true)
             {
-                lblVendorNote.Text = "No player position: be in the world, standing at the vendor, and press it again.";
-                return;
+                if (!TryTownPosition(reader, out _, out x, out y, out z))
+                { lblVendorNote.Text = "Stop the bot and stand at the vendor; the 70707 position candidate is unavailable."; return; }
             }
-
-            double z = 0.0;
-            try { z = ClickAimPositions.Z(); } catch { z = 0.0; }
-            if (double.IsNaN(z)) z = 0.0;
+            else
+            {
+                if (!ClickAimPositions.TryRead(out x, out y))
+                { lblVendorNote.Text = "No player position: be in the world, standing at the vendor, and press it again."; return; }
+                try { z = ClickAimPositions.Z(); } catch { z = 0.0; }
+                if (double.IsNaN(z)) z = 0.0;
+            }
 
             string error;
             int count = VendorFile.Add(x, y, z, out error);

@@ -49,23 +49,51 @@ internal static class GatherRunner
     private static uint _sessionMap;
 
     public static bool Running => _running;
+    private static readonly object StartStopGate = new object();
+    private static int _stopGeneration, _starting;
 
     public static void Stop()
     {
-        _stop = true;
-        ClickAimAbort.Request();
-        RouteRunner.StopRequested = true;
+        lock (StartStopGate)
+        {
+            _stopGeneration++;
+            _stop = true;
+            ClickAimAbort.Request();
+            RouteRunner.StopRequested = true;
+        }
         GrindRunner.Stop();
     }
 
     public static bool Start(string profile)
     {
-        if (_running) return false;
-        if (ObjectManager.WowB?.IsExperimental70707 == true)
+        if (Interlocked.CompareExchange(ref _starting, 1, 0) != 0) return false;
+        bool started = false;
+        WowBReader? experimentalReader = null;
+        try
         {
-            Logging.Write("[Gather] 70707 gathering is blocked: node, movement and combat layouts are not validated");
-            return false;
+            int generation;
+            lock (StartStopGate) generation = _stopGeneration;
+            if (_running) return false;
+            if (ObjectManager.WowB?.IsExperimental70707 == true)
+            {
+                if (!WowBGrindFactions.PrepareForGrind(out string reason))
+                { Logging.Write("[Gather] 70707 preparation failed: " + reason); return false; }
+                experimentalReader = WowBGrindFactions.ExperimentalBoundReader;
+                if (experimentalReader == null) return false;
+                Logging.Write("[Gather] EXPERIMENTAL 70707: static node vtable candidate, allowlisted defence only; monitor closely and use STOP.");
+            }
+            started = StartPrepared(profile, generation, experimentalReader);
+            return started;
         }
+        finally
+        {
+            if (!started && experimentalReader != null) WowBGrindFactions.EndExperimental70707();
+            Volatile.Write(ref _starting, 0);
+        }
+    }
+
+    private static bool StartPrepared(string profile, int generation, WowBReader? experimentalReader)
+    {
         GatherSettings.Load();
         List<RoutePoint> points = new List<RoutePoint>();
         MeshRoam? roam = null;
@@ -95,24 +123,29 @@ internal static class GatherRunner
             Logging.Write("[Gather] mesh navigation is unavailable; refusing to gather without meshes");
             return false;
         }
-        _stop = false;
-        RouteRunner.StopRequested = false;
-        ClickAimAbort.Clear();
-        Retry.Clear();
-        GatherInteraction.ResetHoverHint();
-        _pending = null;
-        _lastScan = unchecked(Environment.TickCount - 1500);
-        _lastCombatCheck = unchecked(Environment.TickCount - 500);
-        _lastSummary = unchecked(Environment.TickCount - 15000);
-        GrindRunner.PrepareGatherDefence();
-        _running = true;
-        try
+        lock (StartStopGate)
         {
-            var thread = new Thread(() => Run(points, roam)) { IsBackground = true, Name = "GatherRunner" };
-            thread.Start();
-            return true;
+            if (generation != _stopGeneration || _running ||
+                (experimentalReader != null && (ObjectManager.WowB != experimentalReader || !experimentalReader.ExperimentalGrindActive))) return false;
+            _stop = false;
+            RouteRunner.StopRequested = false;
+            ClickAimAbort.Clear();
+            Retry.Clear();
+            GatherInteraction.ResetHoverHint();
+            _pending = null;
+            _lastScan = unchecked(Environment.TickCount - 1500);
+            _lastCombatCheck = unchecked(Environment.TickCount - 500);
+            _lastSummary = unchecked(Environment.TickCount - 15000);
+            GrindRunner.PrepareGatherDefence();
+            _running = true;
+            try
+            {
+                var thread = new Thread(() => RunGuarded(points, roam, experimentalReader)) { IsBackground = true, Name = "GatherRunner" };
+                thread.Start();
+                return true;
+            }
+            catch { _running = false; throw; }
         }
-        catch { _running = false; throw; }
     }
 
     private static void LoadBlackspots(string path)
@@ -345,8 +378,6 @@ internal static class GatherRunner
     // Grind owns the thread, mover and stop state. This does not start a second bot.
     internal static bool PrepareForGrind(string profile)
     {
-        if (ObjectManager.WowB?.IsExperimental70707 == true)
-        { Logging.Write("[Grind gather] disabled for the 70707 trial"); return false; }
         if (_running || ClickAimAbort.Requested) return false;
         try
         {
@@ -443,6 +474,25 @@ internal static class GatherRunner
         finally { mover.QuietKeyStop = oldQuiet; }
     }
 
+    private static void RunGuarded(List<RoutePoint> points, MeshRoam? roam, WowBReader? experimentalReader)
+    {
+        try
+        {
+            if (experimentalReader != null)
+            {
+                WowBGrindFactions.ClaimExperimentalGrindThread();
+                if (ObjectManager.WowB != experimentalReader || !experimentalReader.ExperimentalGrindActive) return;
+            }
+            Run(points, roam);
+        }
+        catch (Exception ex) { Logging.Write("[Gather] worker stopped on error: " + ex.Message); }
+        finally
+        {
+            if (experimentalReader != null) WowBGrindFactions.EndExperimental70707();
+            _running = false;
+        }
+    }
+
     private static void Run(List<RoutePoint> points, MeshRoam? roam)
     {
         var mover = new ClickAimMover { QuietKeyStop = true };
@@ -469,6 +519,8 @@ internal static class GatherRunner
             }
             while (!_stop && !ClickAimAbort.Requested)
             {
+                if (reader.IsExperimental70707 && !WowBGrindFactions.Experimental70707BarSafe(reader))
+                { Logging.Write("[Gather] 70707 action bar changed or became unreadable; stopping"); break; }
                 if (!MapStillCurrent() || (roam != null && !roam.MapCurrent())) break;
                 if (!GrindRunner.TryReadGatherCombat(out bool fighting))
                 {
@@ -586,7 +638,6 @@ internal static class GatherRunner
             RouteRunner.ShouldInterrupt = null;
             ClickAimKeySteer.ReleaseHeld();
             try { mover.MoveStop(); } catch { }
-            _running = false;
             Logging.Write("[Gather] stopped");
         }
     }

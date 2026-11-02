@@ -1,63 +1,24 @@
-# Experimental attachment and single-target Grind trial: build 70707
+# Experimental gameplay: build 70707
 
-Build 70707 is discovered on normal startup; no special launch argument is needed.
-The port is **not validated as a complete bot**. The raw candidates, image
-signatures and synthetic tests are not evidence of correct combat, hotkey
-bindings, movement, death detection, or safety in the live client. No Lua is
-used. Builds 70291 and 12340 retain their existing paths.
+Build 70707 is discovered on normal startup; no special launch argument is needed. Builds 70291 and 12340 retain their separate paths. No Lua is used.
 
-## Supervised first-fight trial
+## Supervised expanded mode
 
-- Build CopilotBuddy for x64 and attach to the logged-in 70707 client.
-- In Combat Settings, set Factions to **Allow** and include the candidate key
-  for the specific monster you intend to fight. The observed Trogg candidate
-  was 36; it was not added to anyone's allowlist automatically. The faction key
-  is not a hostility or attackability verdict. Select a known hostile monster,
-  not a friendly NPC. The selection-free nearby scan remains available while
-  stopped and is still research-only.
-- For the observed shaman, the trial requires action slots 1 Attack (6603),
-  2 Lightning Bolt (403), and 3 Healing Wave (331), the observed mana-type-0
-  array, a readable living player and target, matching partial code signatures,
-  and the selected monster within 15 yards. Confirm the real key bindings before
-  use; an action array does not establish them. Start Grind using a grind-area
-  profile, or enable profile-free roaming in Gather settings to use its mesh
-  initialization without a profile.
-- The trial admits **only the exact full GUID selected at start**, and rechecks
-  its record, vtable and allowlisted key before combat inputs. It does not use
-  TAB or pixel searching to replace a lost target. It stops after one fight or
-  if the target cannot be engaged, rather than continuing to roam. A 60-second
-  outer-loop budget does not preempt an in-progress fight; the fight has its own
-  timeout and STOP remains necessary. Reads and inputs are non-atomic: races
-  remain possible. If already in combat or the candidate combat flag is set,
-  the trial stops without attempting defence.
-- Auto-healing is **disabled** in the trial because its F1/TAB retargeting is
-  not verified and could select a different unit while auto-attack is active.
-  Rest, buffs, automatic looting, gathering and selling are also disabled.
-  Unlisted attackers cannot be identified or defended against. Do not leave the
-  character unattended: use STOP and manually take over if anything looks wrong.
-  STOP releases movement and revokes trial reads, but it does not guarantee the
-  game's already-enabled auto-attack is switched off; verify it manually.
+Continuous Grind and GatherBuddy are enabled experimentally, using a profile or profile-free mesh roaming. Grind may use the configured rotation, healing, buffs, food/drink, looting, optional gathering and registered-merchant selling. GatherBuddy uses the configured professions and skill levels. These are existing feature paths, not a claim that they have all been verified on 70707. Settings still control which features run.
 
-Experimental gameplay reads are bound to the startup/Grind thread and revoked
-on STOP, start failures, and worker exit. The standalone GatherBuddy and
-70291 gathering scanner remain blocked on 70707. Other modes do not receive
-70707 candidate gameplay values from the trial.
+1. Build x64 and attach to the logged-in 70707 client. Confirm your real action-key bindings, including F1 and TAB, and your food/drink slots. The first 12 candidate action slots are read; the bar must be nonempty and stay unchanged during the run. The client memory does not prove that the keys are bound as assumed.
+2. In Combat Settings set Factions to **Allow** and enter only known eligible IDs. The observed Trogg key was 36; it is not added automatically. The selection-free nearby scan works while stopped. A faction key does not establish hostility or merchant status. No target needs to be selected at startup. Unknown and unlisted NPCs are withheld, including in defence, because attacker identity is still unknown.
+3. Configure the mesh, profile or profile-free roaming, and any desired combat, gather and selling settings. For selling, stop the bot, record a town location and explicitly select/record a merchant, then record the user-confirmed selling click plan. Selling replays coordinates; it does not verify that the merchant window opened, the inventory state, or that items sold. The full-bag/item reader and automatic merchant-type detection remain unresolved.
+4. Watch the character and use STOP immediately if anything is wrong. STOP releases held movement and revokes experimental reads, but cannot guarantee the game's already-enabled auto-attack is off; check it manually. Healing uses F1 and TAB to retarget; auto-attack may persist when the target changes. A selection/allowlist check before the next bot attack cannot prevent a client-side auto-attack already active during retargeting. Avoid friendly NPCs and manually intervene if needed.
 
-## Diagnostics and evidence
+Startup checks partial build signatures, candidate map and living player, the allowlist and stable action bar. Gameplay reads are bound to the startup/worker thread and revoked on STOP, failed starts, and worker exit. Reads and input are non-atomic. The combat flag, health-zero/death interpretation, faction, power, movement and other fields remain candidates; currently only the observed mana-type-0 power interpretation is enabled. Unlisted attacker defence is not implemented. Other legacy bot modes and standalone route-only profiles are not automatically made compatible by this experiment.
 
-`[70707 candidates]` logs candidate GUIDs, player name, pointers, map and camera
-zoom. Player and selected-record logs include candidate raw health, level,
-faction and power; `[70707 action research]` prints the first twelve candidate
-qwords. These can contain identifying information and process addresses.
+The 70707 game-object vtable candidate `0x41E1480` was found by static comparison (14 matching-function votes). No live 70707 node, entry, header, hover, cast or harvest was validated. The scanner retains GUID, back-pointer, entry, profession and skill checks, so it may reject real nodes or find none; no correct harvest is implied. The 70291 candidate remains separate.
 
-The reported 171/171 mana matched candidate array index zero; raw action slots
-1–3 matched the abilities above. The selected Trogg's candidate key was 36 and
-its level was reported as 2. These are single observations, not proof of live
-transitions or binding semantics. Nearest mesh polygon checks snapped the player
-and target to within 0.18 and 0.20 yards respectively, but did not calculate a
-route or demonstrate actual movement. Health scaling, zero/death transitions,
-combat flags, facing, route execution and attacker identity remain unverified.
+## Evidence and diagnostics
 
-The 70707 client must be x64 and its version resource must be readable.
-Discovery includes `Wow`, `Luacct`, `WowB` and `Wow-decoded`; `/pid=1234` may
-optionally select a differently named process by its actual PID.
+The user observed successful 70707 killing and looting. Two supervised fight logs showed target candidate health 55→40→25→10 and 55→39→24→9, and player mana 171→156→141→126. The latest log recorded no automated corpse clicks, so it does not itself verify the auto-loot path. The candidate action slots 1–3 matched Attack 6603, Lightning Bolt 403 and Healing Wave 331. Nearest mesh polygons were 0.18 and 0.20 yards from player and target; that query did not itself validate a route.
+
+`[70707 candidates]` logs candidate GUIDs, player name, pointers, map and camera zoom. Player and selected-record logs include candidate raw health, level, faction and power; `[70707 action research]` prints the first twelve candidate qwords. These can contain identifying information and process addresses. Synthetic tests and static comparisons are not a Windows build or a live game test.
+
+The client must be x64 and its version resource readable. Discovery includes `Wow`, `Luacct`, `WowB` and `Wow-decoded`; `/pid=1234` can select a differently named process by its actual PID.

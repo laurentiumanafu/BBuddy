@@ -645,6 +645,7 @@ internal static class GrindRunner
             if (trialReader != null && (ObjectManager.WowB != trialReader || !trialReader.ExperimentalGrindActive)) return;
             Run(areas, minutes, profilePath, roam, trialReader);
         }
+        catch (Exception ex) { Logging.Write("[Grind] worker stopped on error: " + ex.Message); }
         finally { WowBGrindFactions.EndExperimental70707(); _running = false; }
     }
 
@@ -653,10 +654,7 @@ internal static class GrindRunner
         int started = Environment.TickCount;
         int budgetMs = minutes <= 0 ? int.MaxValue : minutes * 60000;
         if (trialReader != null)
-        {
-            budgetMs = Math.Min(budgetMs, 60000);
-            Logging.Write("[Grind] EXPERIMENTAL 70707: one preselected allowlisted monster only; 60-second outer limit; candidate stats, combat flags, bindings and movement are unverified. No automatic healing, gathering, selling, rest, buffs or loot. Watch continuously and use STOP.");
-        }
+            Logging.Write("[Grind] EXPERIMENTAL 70707: continuous allowlist-filtered Grind. Candidate stats, reaction, flags, hotkeys and movement remain unverified. Monitor closely; use STOP if anything is wrong.");
 
         IntPtr hwnd = Handle();
         if (hwnd == IntPtr.Zero) { Logging.Write("[Grind] no game window"); return; }
@@ -724,7 +722,6 @@ internal static class GrindRunner
             chosen = SelectArea(areas, level, out string choice);
             Logging.Write("[Grind] " + choice);
         }
-        else if (trialReader != null) Logging.Write("[Grind] 70707 single-target trial; profile-free mesh initialized, but roaming is disabled");
         else Logging.Write("[Grind] profile-free mesh roaming; no profile level bands or blackspots, existing combat safety filters still apply");
         ProfileGrindArea area = areas[chosen];
 
@@ -733,7 +730,9 @@ internal static class GrindRunner
             while (!_stop && !ClickAimAbort.Requested && unchecked(Environment.TickCount - started) < budgetMs)
             {
                 if (trialReader != null && (ObjectManager.WowB != trialReader || !trialReader.ExperimentalGrindActive))
-                { Logging.Write("[Grind] 70707 attachment or trial authorization changed; stopping"); break; }
+                { Logging.Write("[Grind] 70707 attachment or session authorization changed; stopping"); break; }
+                if (trialReader != null && !WowBGrindFactions.Experimental70707BarSafe(trialReader))
+                { Logging.Write("[Grind] 70707 action bar changed or became unreadable; stopping. Restart to rescan it."); break; }
                 if (roam != null && !roam.MapCurrent())
                 { Logging.Write("[Roam] map changed or became unreadable; stopping"); break; }
                 /* Every LevelCheckMs, read the level again: a grind profile is a ladder, and the
@@ -785,7 +784,7 @@ internal static class GrindRunner
                  *
                  * Not when the window asked, though. "Sell now" is a button somebody is watching;
                  * a trip the counters asked for can afford to eat first. */
-                if (!_vendorDue && trialReader == null)
+                if (!_vendorDue)
                 {
                     string restedFirst = RestIfNeeded(hwnd);
                     if (restedFirst.Length > 0) Logging.Write("[Grind] " + restedFirst);
@@ -805,7 +804,7 @@ internal static class GrindRunner
 
                 /* Once, before the first fight rather than in the middle of one: whatever this
                  * class buffs itself with (Mark of the Wild, Arcane Intellect, ...). */
-                string buffed = trialReader != null ? "" : ApplyBuffsIfNeeded(hwnd);
+                string buffed = ApplyBuffsIfNeeded(hwnd);
                 if (buffed.Length > 0) Logging.Write("[Grind] " + buffed);
 
                 string combatReport;
@@ -820,8 +819,6 @@ internal static class GrindRunner
                         _killsSinceTrip++;
                     }
                     Logging.Write("[Grind] " + combatReport);
-                    if (trialReader != null)
-                    { Logging.Write("[Grind] 70707 single-target trial complete; stopping"); break; }
                     if (combatReport.StartsWith("the character died", StringComparison.Ordinal)) break;
                     continue;
                 }
@@ -829,8 +826,6 @@ internal static class GrindRunner
                 if (combatReport.Length > 0) Logging.Write("[Grind] " + combatReport);
                 if (trialReader != null && ObjectManager.WowB != trialReader) break;
                 if (_combatHold || _poolApproachHandled) continue;
-                if (trialReader != null)
-                { Logging.Write("[Grind] 70707 trial target was not engaged; stopping rather than roaming"); break; }
 
                 /* Between fights, with nothing on us: eat and drink if the user's percentages say
                  * so. This is the cheapest place in the loop to sit - the next thing it would do
@@ -1221,12 +1216,6 @@ internal static class GrindRunner
             ClickAimAbort.Wait(300);
             return false;
         }
-        if (combatNow && trialReader != null)
-        {
-            ClickAimKeySteer.ReleaseHeld();
-            report = "70707 trial started in combat or the candidate flag is set; stopping without TAB or defence";
-            return false;
-        }
         if (combatNow)
         {
             _combatHold = true;
@@ -1301,8 +1290,6 @@ internal static class GrindRunner
                                           out live, out unread);
         if (!haveNearest && unread == 0)
         {
-            if (trialReader != null)
-            { report = "70707 trial target is no longer eligible; stopping without changing selection"; return false; }
             // Even a clear pool can leave an unsuitable live target selected by a
             // previous walk/TAB. Move off it only when it is still the same GUID.
             WowBReader? clearReader = ObjectManager.WowB;
@@ -1354,12 +1341,6 @@ internal static class GrindRunner
             if (have) Logging.Write(string.Format(CultureInfo.InvariantCulture,
                 "[Grind] going with the target already selected: {0} ({1:F1} yd)", target.Guid,
                 ClickAimMath.Len(target.Location.X - px, target.Location.Y - py)));
-        }
-
-        if (trialReader != null && !have)
-        {
-            report = "70707 trial lost its explicitly selected eligible target; stopping without TAB or pixel search";
-            return false;
         }
 
         // A filter-permitted pool candidate is a navigation lead, not proof of
@@ -1752,9 +1733,8 @@ internal static class GrindRunner
 
         /* A kill leaves a body, and the character is already standing next to it. Take it
          * before deciding where to walk: this is the cheapest loot there is. */
-        if ((report.StartsWith("killed", StringComparison.Ordinal)
+        if (report.StartsWith("killed", StringComparison.Ordinal)
             || report.IndexOf("killed or fled", StringComparison.Ordinal) >= 0)
-            && trialReader == null)
         {
             /* A trip that was asked for outranks the corpse on the ground. The 15:50 run pressed
              * "Sell now" at 15:50:35 and spent the next eight seconds right-clicking two bodies
@@ -2143,8 +2123,8 @@ internal static class GrindRunner
             {
                 fights++;
                 fought++;
-                if (report.StartsWith("killed", StringComparison.Ordinal)) { kills++; killed++; _killsSinceTrip++; }
-                else if (report.IndexOf("killed or fled", StringComparison.Ordinal) >= 0) { kills++; killed++; _killsSinceTrip++; }
+                if (CountFightAsKill(report, ObjectManager.WowB?.IsExperimental70707 == true))
+                { kills++; killed++; _killsSinceTrip++; }
                 Logging.Write("[Grind] " + report);
                 clearScans = 0;               // something was here: this hotspot is not finished
                 continue;
@@ -2212,6 +2192,7 @@ internal static class GrindRunner
         for (int i = 0; i < bar.Count && applied.Count < 2 && !_stop; i++)
         {
             if (!bar[i].IsBuff) continue;
+            if (reader.IsExperimental70707 && !WowBGrindFactions.Experimental70707BarSafe(reader)) return "action bar changed; buff withheld";
             ClickAimInput.TapKey(hwnd, bar[i].KeyVk, 40);
             _presses++;
             Thread.Sleep(ClickAimCombat.CastSettleMs);
@@ -2486,6 +2467,7 @@ internal static class GrindRunner
         }
         // Combat or Stop can arrive while movement is settling.
         if (_stop || ClickAimAbort.Requested || InRealCombat()) return "";
+        if (reader.IsExperimental70707 && !WowBGrindFactions.Experimental70707BarSafe(reader)) return "action bar changed; rest withheld";
 
         var said = new List<string>();
         if (wantFood)
@@ -2574,6 +2556,9 @@ internal static class GrindRunner
             if (unit.IsLocalPlayer) continue;
             if (unit.HasPlayerVtable) continue;
             if (_looted.Contains(unit.Guid)) continue;
+            // 70707 corpse classifications are candidates; never probe a body
+            // outside the same explicit faction allowlist used for combat.
+            if (reader.IsExperimental70707 && !WowBGrindFactions.AllowsPull(reader, unit, out _)) continue;
 
             double d = ClickAimMath.Len(unit.Location.X - me.Location.X, unit.Location.Y - me.Location.Y);
             if (d <= 0.5 || d > LootYd) continue;
@@ -2652,8 +2637,6 @@ internal static class GrindRunner
     /// </summary>
     public static bool RequestVendorTrip()
     {
-        if (ObjectManager.WowB?.IsExperimental70707 == true)
-        { Logging.Write("[Grind] selling is disabled for the 70707 trial"); return false; }
         if (!_running)
         {
             Logging.Write("[Grind] no run is going, so there is nothing to sell during - start grinding first");
@@ -2674,7 +2657,6 @@ internal static class GrindRunner
     /// </summary>
     private static bool VendorDue()
     {
-        if (ObjectManager.WowB?.IsExperimental70707 == true) return false;
         if (!_running || _stop) return false;
         if (UnderAttack()) return false;
 
@@ -3420,7 +3402,7 @@ internal static class GrindRunner
     private const double GatherDefenceRadius = 12.0;
 
     internal static string DefendGatherer(IntPtr hwnd)
-        => DefendNearby(hwnd, false, out _);
+        => DefendNearby(hwnd, ObjectManager.WowB?.IsExperimental70707 == true, out _);
 
     // Levels are deliberately absent: while combat is active, a grey or high-level
     // attacker is still a threat. This is not a hostility/attacker predicate.
@@ -4120,9 +4102,7 @@ internal static class GrindRunner
         Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
         List<ClickAimAction> bar = ClickAimCombat.ReadBar(reader);
         ClickAimAction? damage = ClickAimCombat.FirstDamageOrDot(bar);  // Wrath, or Moonfire alone
-        // Self-healing retargets with F1/TAB. Keep that out of the one-target
-        // 70707 trial until auto-attack and retargeting are verified there.
-        ClickAimAction? heal = WowBGrindFactions.ExperimentalBoundReader != null ? null : ClickAimCombat.FirstHeal(bar);
+        ClickAimAction? heal = ClickAimCombat.FirstHeal(bar);
         ClickAimAction? auto = ClickAimCombat.AutoAttack(bar);          // Attack (6603)
         ClickAimAction? dot = ClickAimCombat.FirstDot(bar);             // Moonfire, Corruption, ...
         ClickAimAction? meleeHit = ClickAimCombat.FirstMeleeDamage(bar); // Claw, Heroic Strike, ...
@@ -4184,7 +4164,7 @@ internal static class GrindRunner
 
             int health = Health(target);
             if (reader?.IsExperimental70707 == true && health < 0)
-            { ClickAimKeySteer.ReleaseHeld(); return "70707 target health became unreadable; stopping the trial"; }
+            { _stop = true; ClickAimAbort.Request(); return "70707 target health became unreadable; stopping"; }
             if (health >= 0 && lastHealth > 0 && health == 0)
                 return "killed" + (worked.Count == 0 ? "" : " with " + string.Join(", ", worked.ToArray()));
             if ((!defenceOnly || defenceFactionFilter) && !FactionPullStillAllowed(reader, expectedPull, target))
@@ -4339,7 +4319,7 @@ internal static class GrindRunner
                 myMaxMana = mine.MaxPower;      // a candidate on this build: see HealPowerOk
             }
             else if (reader?.IsExperimental70707 == true)
-            { ClickAimKeySteer.ReleaseHeld(); return "70707 player vitals became unreadable; stopping the trial"; }
+            { _stop = true; ClickAimAbort.Request(); return "70707 player vitals became unreadable; stopping"; }
 
             /* Every read feeds the peak. It used to be fed only while resting, so a fight that
              * began on a full bar had no denominator at all - and an unknown maximum is what
@@ -4427,6 +4407,7 @@ internal static class GrindRunner
                         return "F1 did not confirm self-target; heal withheld";
                 }
                 if (_stop || ClickAimAbort.Requested) return "stopped";
+                if (reader.IsExperimental70707 && !WowBGrindFactions.Experimental70707BarSafe(reader)) return "action bar changed; heal withheld";
                 ClickAimInput.TapKey(hwnd, heal.KeyVk, 40);
 
                 /* Wait for the heal to actually land. Healing Touch is a 1.5 s cast on top

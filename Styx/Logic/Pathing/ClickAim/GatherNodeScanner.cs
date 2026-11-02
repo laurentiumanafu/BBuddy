@@ -8,8 +8,9 @@ using Styx.WoWInternals;
 namespace Styx.Logic.Pathing;
 
 /// <summary>
-/// Read-only 70291 resource observations. The game-object vtable, position and entry
-/// agree with two copper nodes and one Peacebloom; this does not establish lootability,
+/// Resource observations. The 70291 layout matches two copper nodes and one
+/// Peacebloom; the 70707 vtable is a static candidate with no live node sample.
+/// Neither layout establishes lootability,
 /// profession level, line of sight, success or permission to interact. A snapshot is
 /// non-atomic and may miss nodes or go stale immediately after it is returned.
 /// </summary>
@@ -86,11 +87,12 @@ internal static class GatherNodeScanner
     // Demand independent GUID and object-entry agreement, known vtable and backpointer.
     // A match is only an observation, never proof of harvestability.
     private static bool MatchingHeader(byte[]? header, ulong imageBase, ulong record, WowBGuid guid,
-                                       out uint entry)
+                                       out uint entry, bool experimental70707 = false)
     {
         entry = 0;
         if (header == null || header.Length != HeaderSize || guid.IsEmpty) return false;
-        if (BitConverter.ToUInt64(header, 0) != imageBase + NodeVtableCandidate
+        ulong vtable = experimental70707 ? Wow70707Offsets.GameObjectVtableCandidate : NodeVtableCandidate;
+        if (BitConverter.ToUInt64(header, 0) != imageBase + vtable
             || BitConverter.ToUInt64(header, 8) != record
             || new WowBGuid(BitConverter.ToUInt64(header, 16), BitConverter.ToUInt64(header, 24)) != guid)
             return false;
@@ -110,7 +112,7 @@ internal static class GatherNodeScanner
         nodes = new List<Node>();
         Memory? memory = ObjectManager.Wow;
         WowBReader? reader = ObjectManager.WowB;
-        if (memory == null || reader == null || reader.IsExperimental70707 || !memory.Is64BitTarget || radius <= 0 || !double.IsFinite(radius))
+        if (memory == null || reader == null || (reader.IsExperimental70707 && !reader.ExperimentalGrindActive) || !memory.Is64BitTarget || radius <= 0 || !double.IsFinite(radius))
             return false;
         try
         {
@@ -129,7 +131,7 @@ internal static class GatherNodeScanner
                 ulong ptr = BitConverter.ToUInt64(ptrBytes, 0);
                 if (ptr <= 0x10000UL || ptr >= 0x00007FFFFFFFFF00UL || (ptr & 3UL) != 0) continue;
                 byte[]? header = memory.ReadBytes64(ptr, HeaderSize);
-                if (!MatchingHeader(header, memory.ImageBase64, record.RecordPtr, record.Guid, out uint entry)
+                if (!MatchingHeader(header, memory.ImageBase64, record.RecordPtr, record.Guid, out uint entry, reader.IsExperimental70707)
                     || entry != kind.Entry) continue;
                 byte[]? position = memory.ReadBytes64(record.RecordPtr + WowBOffsets.RecordPositionOffset, 12);
                 if (position == null || position.Length != 12) continue;
@@ -148,7 +150,7 @@ internal static class GatherNodeScanner
                 if (ptrAfter == null || ptrAfter.Length != 8 || BitConverter.ToUInt64(ptrAfter, 0) != ptr
                     || guidAfter == null || guidAfter.Length != 16
                     || new WowBGuid(BitConverter.ToUInt64(guidAfter, 0), BitConverter.ToUInt64(guidAfter, 8)) != record.Guid
-                    || !MatchingHeader(headerAfter, memory.ImageBase64, record.RecordPtr, record.Guid, out uint entryAfter)
+                    || !MatchingHeader(headerAfter, memory.ImageBase64, record.RecordPtr, record.Guid, out uint entryAfter, reader.IsExperimental70707)
                     || entryAfter != entry || !reader.IsPoolRecordCurrent(record)) continue;
                 found.Add(record.Guid);
                 nodes.Add(new Node(record.Guid, kind, herb, new WoWPoint(x, y, z), distance));
@@ -224,6 +226,12 @@ internal static class GatherNodeScanner
         checkFixture(MatchingHeader(data, image, rec, copper, out uint entry) && entry == 1731);
         checkFixture(!MatchingHeader(data, image, rec + 8, copper, out _));
         checkFixture(!MatchingHeader(data, image, rec, herb, out _));
+        checkFixture(!MatchingHeader(data, image, rec, copper, out _, true));
+        Array.Copy(BitConverter.GetBytes(image + Wow70707Offsets.GameObjectVtableCandidate), 0, data, 0, 8);
+        checkFixture(MatchingHeader(data, image, rec, copper, out uint newEntry, true) && newEntry == 1731);
+        checkFixture(!MatchingHeader(data, image, rec, copper, out _));
+        checkFixture(!MatchingHeader(data, image, rec + 8, copper, out _, true));
+        Array.Copy(BitConverter.GetBytes(image + NodeVtableCandidate), 0, data, 0, 8);
         Array.Copy(BitConverter.GetBytes(1618u), 0, data, 0x90, 4);
         checkFixture(!MatchingHeader(data, image, rec, copper, out _));
         Array.Copy(BitConverter.GetBytes(wiltedGuid.Low), 0, data, 16, 8);

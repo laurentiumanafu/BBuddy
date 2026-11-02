@@ -268,7 +268,7 @@
         <TabItem Header="Factions">
             <ScrollViewer VerticalScrollBarVisibility="Auto">
                 <StackPanel Margin="12">
-                    <TextBlock TextWrapping="Wrap" Text="Stop the bot and scan nearby NPC faction-template IDs without selecting them. On 70707 the scan is research-only; the separate experimental Grind trial requires a preselected, explicitly allowed monster. IDs are not names or proof of hostility or merchant status."/>
+                    <TextBlock TextWrapping="Wrap" Text="Stop the bot and scan nearby NPC faction-template IDs without selecting them. On 70707 keys and gameplay are experimental; Grind requires Allow mode. IDs are not names or proof of hostility or merchant status."/>
                     <Button x:Name="btnFactionScan" Content="Scan nearby NPC factions (100 horizontal yd)" Height="30" Margin="0,10,0,0" Click="btnFactionScan_Click"/>
                     <TextBox x:Name="txtFactionReport" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" Height="145" Margin="0,8,0,8"/>
                     <TextBlock Text="Filter mode (only one applies)" FontWeight="SemiBold" Margin="0,2,0,4"/>

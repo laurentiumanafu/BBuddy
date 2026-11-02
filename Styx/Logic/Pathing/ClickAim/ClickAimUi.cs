@@ -134,7 +134,7 @@ internal static class ClickAimUi
                 return "load a profile, or enable profile-free roaming in Gather settings";
             if (!GrindRunner.StartRoaming()) return "profile-free Grind did not start; see the log";
             if (ObjectManager.WowB?.IsExperimental70707 == true)
-                return "70707 single-target trial started; roaming, healing, gathering, selling and auto-loot are disabled. " + FactionStatus();
+                return "experimental 70707 Grind started with profile-free mesh roaming; verify hotkeys and watch closely. " + FactionStatus();
             return "profile-free Grind started: local mesh roaming; exact zone borders are unknown. " + FactionStatus();
         }
 
@@ -153,13 +153,15 @@ internal static class ClickAimUi
             if (!GrindRunner.Start(path, 0))
                 return "the grind loop refused \"" + name + "\" - the reason is in the lines above";
             if (ObjectManager.WowB?.IsExperimental70707 == true)
-                return "70707 single-target trial started; profile roaming, healing, gathering, selling and auto-loot are disabled. " + FactionStatus();
+                return "experimental 70707 Grind started on the profile; verify hotkeys and watch closely. " + FactionStatus();
 
             return "grinding \"" + name + "\" (" + areas.ToString(System.Globalization.CultureInfo.InvariantCulture)
                    + " area(s)) - hotspots from its <GrindArea>, area chosen by level band, "
                    + "combat from the action bar in memory, pressed as keys - no Lua. " + FactionStatus();
         }
 
+        if (ObjectManager.WowB?.IsExperimental70707 == true)
+            return "70707 standalone route-only profiles are not supported yet; use a GrindArea profile or profile-free Grind/GatherBuddy.";
         if (!ClickAimDiagnostics.StartProfile(path, 0, 0, false, false))
             return "\"" + name + "\" has neither <GrindArea> nor Hotspot/RunTo waypoints - nothing to walk";
 
@@ -189,10 +191,11 @@ internal static class ClickAimUi
         _paused = null;
         ClickAimAbort.Request();
         ClickAimDiagnostics.RequestStop();
-        // Also cancel a Grind startup that has not yet published Running.
-        GrindRunner.Stop();
-        if (!Running) return "nothing is running";
+        // Also cancel startups that have not yet published Running; Gather
+        // Stop delegates to Grind Stop as well.
+        bool wasRunning = Running;
         GatherRunner.Stop();
+        if (!wasRunning) return "nothing is running";
         return "stopped: the walk and the turn loop end on this tick";
     }
 

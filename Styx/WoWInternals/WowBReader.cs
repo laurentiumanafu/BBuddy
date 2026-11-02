@@ -46,7 +46,8 @@ namespace Styx.WoWInternals
         private volatile bool _experimentalGrindActive;
         private volatile int _experimentalGrindThread;
         public bool IsExperimental70707 => _experimental70707;
-        internal bool ExperimentalGrindActive => _experimental70707 && _experimentalGrindActive && _experimentalGrindThread == System.Threading.Thread.CurrentThread.ManagedThreadId;
+        internal bool HasExperimentalGrindSession => _experimental70707 && _experimentalGrindActive;
+        internal bool ExperimentalGrindActive => HasExperimentalGrindSession && _experimentalGrindThread == System.Threading.Thread.CurrentThread.ManagedThreadId;
         internal void SetExperimentalGrindActive(bool active)
         {
             if (!_experimental70707) return;
@@ -1137,6 +1138,23 @@ namespace Styx.WoWInternals
             }
         }
 
+        // Keep every raw qword, including encodings the rotation cannot decode, so
+        // changing an unsupported slot cannot evade the session stability check.
+        internal bool TryReadExperimentalActionSnapshot(out ulong[] snapshot)
+        {
+            snapshot = Array.Empty<ulong>();
+            if (!ExperimentalGrindActive) return false;
+            using var uncached = _memory.TemporaryCacheState(false);
+            ulong address = Abs(Wow70707Offsets.StoredActionArrayCandidate);
+            byte[]? first = _memory.ReadBytes64(address, 12 * 8);
+            byte[]? second = _memory.ReadBytes64(address, 12 * 8);
+            if (first == null || second == null || first.Length != 96 || second.Length != 96 ||
+                Convert.ToHexString(first) != Convert.ToHexString(second) || !ExperimentalGrindActive) return false;
+            snapshot = new ulong[12];
+            for (int i = 0; i < snapshot.Length; i++) snapshot[i] = BitConverter.ToUInt64(first, i * 8);
+            return true;
+        }
+
         /// <summary>
         /// The client's stored action bar. An empty slot is all zeros - which is what a
         /// character at level 2 with two spells on the bar should mostly show.
@@ -1146,9 +1164,8 @@ namespace Styx.WoWInternals
             var slots = new List<WowBActionSlot>();
             if (_experimental70707 && !ExperimentalGrindActive) return slots;
             using IDisposable? uncached = _experimental70707 ? _memory.TemporaryCacheState(false) : null;
-            // The observed 70707 sample confirmed only the first three slots;
-            // expose no others to the experimental combat rotation.
-            int count = _experimental70707 ? 3 : ActionSlotCount;
+            // The 70707 first bar is experimental; only known qword packings are exposed.
+            int count = _experimental70707 ? 12 : ActionSlotCount;
             ulong rva = _experimental70707 ? Wow70707Offsets.StoredActionArrayCandidate : WowBOffsets.StoredActionArray;
             byte[]? bytes = _memory.ReadBytes64(Abs(rva), count * 8);
             if (bytes == null || bytes.Length != count * 8) return slots;

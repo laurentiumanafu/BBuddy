@@ -183,7 +183,7 @@ internal static class ExperimentalOffsetsTests
         memory.Guid(module + Wow70707Offsets.PlayerTargetGuid, default); // no selection required
         string candidateScan = WowBGrindFactions.ScanNearby();
         Require(candidateScan.Contains("RESEARCH ONLY") && candidateScan.Contains("Candidate 36 | 1 unit(s)") &&
-                candidateScan.Contains("explicitly selected allowlisted monster") && candidateScan.Contains(target.ToString()), "70707 candidate scan without target");
+                candidateScan.Contains("explicit Allow list") && candidateScan.Contains(target.ToString()), "70707 candidate scan without target");
         int reads = 0;
         memory.OnRead = (address, count) =>
         {
@@ -203,37 +203,57 @@ internal static class ExperimentalOffsetsTests
         ClickAimUi.Running = true;
         Require(WowBGrindFactions.ScanNearby().Contains("Stop the bot"), "70707 candidate scan denied while running");
         ClickAimUi.Running = false;
-        // Synthetic opt-in is scoped to one selected, allowed GUID and thread.
-        Require(GrindFactionSettings.Save(GrindFactionMode.Allow, "36", "", out _), "save trial allowlist");
-        Require(!WowBGrindFactions.PrepareForGrind(out _), "70707 trial refuses missing signatures");
+        // The continuous experiment requires Allow mode, but not selection.
+        Require(GrindFactionSettings.Save(GrindFactionMode.Allow, "36", "", out _), "save allowlist");
+        Require(!WowBGrindFactions.PrepareForGrind(out _), "70707 refuses missing signatures");
         memory.Bytes(module + 0x2080D2C, Convert.FromHexString("488D0DCD38A004E808A843FE8B93541E0000"));
         memory.Bytes(module + 0x20AAF97, Convert.FromHexString("F2480F2A83281E0000"));
         memory.Bytes(module + 0x2890305, Convert.FromHexString("448B8C86C01B0000"));
         memory.Bytes(module + 0xA538FD, Convert.FromHexString("488D0D5CB32E06488D34C1488B04C1"));
-        Require(!WowBGrindFactions.PrepareForGrind(out _), "70707 trial refuses missing target");
-        memory.Guid(module + Wow70707Offsets.PlayerTargetGuid, target);
+        Require(GrindFactionSettings.Save(GrindFactionMode.Off, "36", "", out _), "save off mode");
+        Require(!WowBGrindFactions.PrepareForGrind(out _), "70707 off mode fails closed");
+        Require(GrindFactionSettings.Save(GrindFactionMode.Allow, "36", "", out _), "restore allowlist");
+        memory.Guid(module + Wow70707Offsets.PlayerTargetGuid, default);
         memory.U64(module + Wow70707Offsets.StoredActionArrayCandidate + 8, 403);
         memory.U64(module + Wow70707Offsets.StoredActionArrayCandidate + 16, 331);
-        Require(GrindFactionSettings.Save(GrindFactionMode.Allow, "31", "", out _), "save different allowlist");
-        Require(!WowBGrindFactions.PrepareForGrind(out _), "70707 trial refuses unlisted target");
-        Require(GrindFactionSettings.Save(GrindFactionMode.Allow, "36", "", out _), "restore trial allowlist");
-        memory.U64(module + Wow70707Offsets.StoredActionArrayCandidate + 8, 5176);
-        Require(!WowBGrindFactions.PrepareForGrind(out _) && !experimental.TryReadMapId(out _), "wrong bar rejects and revokes trial");
-        memory.U64(module + Wow70707Offsets.StoredActionArrayCandidate + 8, 403);
+        memory.U64(module + Wow70707Offsets.StoredActionArrayCandidate + 11 * 8, 12345);
         memory.U32(0x24000000 + 0x1E20, 0x100);
-        Require(!WowBGrindFactions.PrepareForGrind(out _) && !experimental.TryReadMapId(out _), "unsupported power type rejects and revokes trial");
+        Require(!WowBGrindFactions.PrepareForGrind(out _) && !experimental.TryReadMapId(out _), "unsupported power type rejects and revokes session");
         memory.U32(0x24000000 + 0x1E20, 0);
-        Require(WowBGrindFactions.PrepareForGrind(out string trialError), "70707 synthetic trial start: " + trialError);
+        Require(WowBGrindFactions.PrepareForGrind(out string trialError), "70707 synthetic start without selected target: " + trialError);
+        Require(!WowBGrindFactions.PrepareForGrind(out _) && experimental.TryReadMapId(out _), "overlapping sessions rejected without revoking current session");
         Require(experimental.TryReadMapId(out mapCandidate) && mapCandidate == 7 && experimental.TryGetPlayerObject(out _) &&
                 experimental.TryGetUnitFields(0x24000000, out var selfFields) && selfFields.Health == 148 && selfFields.Power == 10 && selfFields.MaxPower == 20 &&
                 experimental.TryGetUnitFields(targetUnit, out var targetFields) && targetFields.Health == 55 && targetFields.Level == 2 &&
-                experimental.ReadActionBar().Count == 3, "trial candidate reads");
+                experimental.ReadActionBar().Count == 4 && experimental.ReadActionBar()[3].Index == 12, "candidate gameplay reads include slot twelve");
         WowBObservedUnit selectedUnit = default;
         Require(experimental.TryCaptureWorldSnapshot(out snapshot) && snapshot != null && snapshot.TryGetUnit(target, out selectedUnit) &&
-                WowBGrindFactions.AllowsPull(experimental, selectedUnit, out _), "selected allowlisted target accepted");
+                WowBGrindFactions.AllowsPull(experimental, selectedUnit, out _), "allowlisted target found without selection");
         var differentUnit = new WowBObservedUnit(new WowBGuid(7, 8), selectedUnit.RecordAddress, selectedUnit.UnitAddress,
             false, false, selectedUnit.Location, selectedUnit.Facing, null);
-        Require(!WowBGrindFactions.AllowsPull(experimental, differentUnit, out _), "another GUID cannot use the trial allowlist");
+        Require(!WowBGrindFactions.AllowsPull(experimental, differentUnit, out _), "mismatched GUID fails identity check");
+        var secondGuid = new WowBGuid(11, 12);
+        const ulong secondRecord = 0x23002000, secondAddress = 0x24005000;
+        memory.U32(0x21000000 + WowBOffsets.HandlePoolCapacityOffset, 3);
+        memory.U32(0x22000020, (uint)WowBOffsets.HandleOccupiedBit);
+        memory.U32(0x22000024, 0);
+        memory.U64(0x22000028, secondRecord);
+        memory.Guid(secondRecord + WowBOffsets.RecordGuidLoOffset, secondGuid);
+        memory.U64(secondRecord + WowBOffsets.RecordDataBlockPtrOffset, secondAddress);
+        memory.U64(secondAddress, module + Wow70707Offsets.UnitVtable);
+        memory.U64(secondAddress + 8, secondRecord);
+        memory.Guid(secondAddress + 0x10, secondGuid);
+        memory.F32(secondRecord + WowBOffsets.RecordPositionOffset, 106);
+        memory.F32(secondRecord + WowBOffsets.RecordPositionOffset + 4, 202);
+        memory.F32(secondRecord + WowBOffsets.RecordPositionOffset + 8, 300);
+        memory.F32(secondRecord + WowBOffsets.RecordPositionOffset + 12, 1);
+        memory.F32(secondRecord + WowBOffsets.RecordPositionOffset + 16, 2);
+        memory.U32(secondAddress + Wow70707Offsets.FactionKeyCandidateOffset, 36);
+        WowBObservedUnit secondUnit = default;
+        Require(experimental.TryCaptureWorldSnapshot(out snapshot) && snapshot != null && snapshot.TryGetUnit(secondGuid, out secondUnit) &&
+                WowBGrindFactions.AllowsPull(experimental, secondUnit, out _), "another allowed GUID accepted in same session");
+        memory.U32(secondAddress + Wow70707Offsets.FactionKeyCandidateOffset, 31);
+        Require(!WowBGrindFactions.AllowsPull(experimental, secondUnit, out _), "unlisted second GUID rejected");
         bool otherThreadReadable = true;
         var other = new System.Threading.Thread(() => { otherThreadReadable = experimental.TryReadMapId(out _) || experimental.ReadActionBar().Count != 0; });
         other.Start(); other.Join();
@@ -244,6 +264,9 @@ internal static class ExperimentalOffsetsTests
         memory.U64(module + Wow70707Offsets.StoredActionArrayCandidate + 8, 5176);
         Require(!WowBGrindFactions.Experimental70707BarSafe(experimental), "changed action bar withholds trial input");
         memory.U64(module + Wow70707Offsets.StoredActionArrayCandidate + 8, 403);
+        memory.U64(module + Wow70707Offsets.StoredActionArrayCandidate + 10 * 8, 0x20000000001UL);
+        Require(!WowBGrindFactions.Experimental70707BarSafe(experimental), "undecodable changed slot also withholds input");
+        memory.U64(module + Wow70707Offsets.StoredActionArrayCandidate + 10 * 8, 0);
         bool claimedThreadReadable = false;
         var worker = new System.Threading.Thread(() =>
         {
@@ -255,6 +278,17 @@ internal static class ExperimentalOffsetsTests
         WowBGrindFactions.EndExperimental70707();
         Require(!experimental.TryReadMapId(out _) && !experimental.TryGetPlayerObject(out _) && experimental.ReadActionBar().Count == 0 &&
                 !experimental.TryGetUnitFields(targetUnit, out _), "session revocation closes gameplay reads");
+        Require(WowBKnownMerchants.TryReadExperimentalTown(out uint townMap, out double tx, out double ty, out _) &&
+                townMap == 7 && tx == 100 && ty == 200, "stopped 70707 town candidate captured");
+        memory.U64(secondAddress + Wow70707Offsets.HealthCandidateOffset, 100);
+        memory.U64(secondAddress + Wow70707Offsets.MaxHealthCandidateOffset, 100);
+        memory.Guid(module + Wow70707Offsets.PlayerTargetGuid, secondGuid);
+        Require(WowBKnownMerchants.CaptureSelected(out var confirmed, out uint merchantMap, out _) &&
+                confirmed == secondGuid && merchantMap == 7, "stopped 70707 confirmed merchant candidate captured");
+        ClickAimUi.Running = true;
+        Require(!WowBKnownMerchants.TryReadExperimentalTown(out _, out _, out _, out _) &&
+                !WowBKnownMerchants.CaptureSelected(out _, out _, out _), "70707 setup denied while running");
+        ClickAimUi.Running = false;
         System.IO.File.Delete(GrindFactionSettings.PathName);
         ObjectManager.Wow = null; ObjectManager.WowB = null;
         memory.Guid(module + Wow70707Offsets.PlayerTargetGuid, target);
@@ -278,7 +312,7 @@ internal static class ExperimentalOffsetsTests
                 !experimental.TryReadFactionTemplateId(0x24000000, out _) && !experimental.TryGetUnitStats(0x23000000, out _),
                 "70707 diagnostic observations do not authorize movement or legacy combat fields");
         memory.U64(targetUnit + 8, 0x23000000); // mismatched target back-pointer
-        Require(experimental.TryCaptureWorldSnapshot(out snapshot) && snapshot != null && snapshot.Units.Count == 1,
+        Require(experimental.TryCaptureWorldSnapshot(out snapshot) && snapshot != null && !snapshot.TryGetUnit(target, out _),
                 "mismatched target identity is rejected");
         Require(legacy.DescribeExperimental70707() == "70707 candidate profile is not active", "legacy profile not switched");
     }
