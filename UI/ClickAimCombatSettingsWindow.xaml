@@ -101,8 +101,16 @@
                     <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
 
-                <TextBlock Grid.Row="0" TextWrapping="Wrap" Margin="0,0,0,8"
-                           Text="What each spell on the action bar is for. The bot knows the 3.3.5a spellbook by name; a rank from a private server, a spell it does not recognise, or one you would rather it never pressed can be set here."/>
+                <StackPanel Grid.Row="0" Margin="0,0,0,8">
+                    <TextBlock TextWrapping="Wrap" Margin="0,0,0,6"
+                               Text="Stage 1: choose a low-level hotbar priority. Auto uses recognizable class spells; ambiguous bars use Generic. The lists do not read spec, cooldowns, auras, forms, runes, combo points or pets."/>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="Rotation class:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <ComboBox x:Name="cmbRotation" Width="145"/>
+                    </StackPanel>
+                    <TextBlock TextWrapping="Wrap" FontSize="11" Opacity="0.7" Margin="0,5,0,0"
+                               Text="Generic retains the older first-spell behavior, including its limitations. Class profiles omit rune abilities, feral forms, finishers and pet actions unless manually overridden. On 70707 only verified mana-type characters pass the existing combat gate."/>
+                </StackPanel>
 
                 <ListView x:Name="lstSpells" Grid.Row="1" Margin="0,0,0,8"
                           SelectionMode="Single" SelectionChanged="lstSpells_SelectionChanged">

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Globalization;
 using System.IO;
 using System.Text;
@@ -23,6 +23,9 @@ namespace Styx.Logic.Pathing;
 /// </summary>
 internal static class ClickAimSettings
 {
+    /// <summary>Hotbar-based class profile; Auto falls back to the legacy generic selection.</summary>
+    public static ClickAimRotationClass RotationClass = ClickAimRotationClass.Auto;
+
     /// <summary>Press food when health is at or below this percentage. 0 turns it off.</summary>
     public static int EatBelowPercent = 55;
 
@@ -137,6 +140,7 @@ internal static class ClickAimSettings
     /// <summary>Back to the shipped values. Used by the Reset button and by a first run.</summary>
     public static void ResetDefaults()
     {
+        RotationClass = ClickAimRotationClass.Auto;
         EatBelowPercent = 55;
         DrinkBelowPercent = 35;
         HealBelowPercent = 60;
@@ -204,6 +208,13 @@ internal static class ClickAimSettings
     public static bool Apply(string key, string value)
     {
         if (key.Length == 0) return false;
+        if (string.Equals(key, "RotationClass", StringComparison.OrdinalIgnoreCase))
+        {
+            if (Enum.TryParse(value, true, out ClickAimRotationClass rotation) &&
+                Enum.IsDefined(typeof(ClickAimRotationClass), rotation) && !int.TryParse(value, out _))
+                RotationClass = rotation;
+            return true;
+        }
 
         int number;
         bool hasNumber = int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out number);
@@ -327,6 +338,7 @@ internal static class ClickAimSettings
         var text = new StringBuilder();
         text.AppendLine("# CopilotBuddy grind settings. The window's Combat settings button edits this file;");
         text.AppendLine("# a hand edit here is read at the start of the next run. 0 = off for the three percentages.");
+        text.AppendLine("RotationClass = " + RotationClass);
         text.AppendLine("EatBelowPercent = " + EatBelowPercent.ToString(CultureInfo.InvariantCulture));
         text.AppendLine("DrinkBelowPercent = " + DrinkBelowPercent.ToString(CultureInfo.InvariantCulture));
         text.AppendLine("HealBelowPercent = " + HealBelowPercent.ToString(CultureInfo.InvariantCulture));

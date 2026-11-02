@@ -825,7 +825,7 @@ internal static class ClickAimCombat
     /// <summary>The auto-attack slot (spell 6603), or null.</summary>
     public static ClickAimAction? AutoAttack(List<ClickAimAction> bar)
     {
-        for (int i = 0; i < bar.Count; i++) if (bar[i].IsAutoAttack) return bar[i];
+        for (int i = 0; i < bar.Count; i++) if (bar[i].IsAutoAttack && bar[i].IsAttack) return bar[i];
         return null;
     }
 

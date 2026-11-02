@@ -13,6 +13,7 @@ Require(ClientAttachPolicy.IsCandidate(0, "Luacct") && ClientAttachPolicy.IsCand
 Require(!ClientAttachPolicy.IsCandidate(70450, "Wow") && !ClientAttachPolicy.IsCandidate(-1, "WowB"), "unsupported or unreadable build rejected");
 
 ExperimentalOffsetsTests.Run(); // synthetic routing checks, not live validation
+RotationTests.Run(); // hotbar/priority logic only, not client-state validation
 
 // A deterministic byte-addressed process-memory substitute. No game or native
 // calls: exercises the real pool reader and snapshot filtering logic.

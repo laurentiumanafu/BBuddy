@@ -1011,7 +1011,7 @@ internal static class GrindRunner
         _buffsApplied = false;
         _healCostGuess = 0;
         _castCosts.Clear();
-        Logging.Write("[Grind] combat settings: " + ClickAimSettings.Describe());
+        Logging.Write("[Grind] combat settings: " + ClickAimSettings.Describe() + "; rotation " + ClickAimSettings.RotationClass);
 
         int level = reader.ReadPlayerLevel();
         ulong levelOffset = reader.IsExperimental70707 ? Styx.Offsets.Wow70707Offsets.LevelCandidateOffset : Styx.Offsets.WowBOffsets.UnitDataLevelOffset;
@@ -1846,6 +1846,23 @@ internal static class GrindRunner
         catch { return false; }
     }
 
+    // Even unfiltered defence must not send a spell after STOP, attachment or
+    // target changes. The 70707 session/bar check is independent of faction mode.
+    private static bool FightAttackInputAllowed(WowBReader? reader, GreenMagic.Memory? memory, WowBGuid target, WowBObservedUnit expected, bool enforceFaction)
+    {
+        if (_stop || ClickAimAbort.Requested || reader == null || memory == null || target.IsEmpty) return false;
+        try
+        {
+            using (memory.TemporaryCacheState(false))
+            {
+                if (ObjectManager.WowB != reader || ObjectManager.Wow != memory || reader.ReadTargetGuid() != target ||
+                    (reader.IsExperimental70707 && !WowBGrindFactions.Experimental70707BarSafe(reader))) return false;
+            }
+            return !_stop && !ClickAimAbort.Requested && FactionAttackInputAllowed(reader, expected, enforceFaction);
+        }
+        catch { return false; }
+    }
+
     private static void LogFactionFight(WowBReader? reader, WowBObservedUnit unit, bool defence)
     {
         if (!GrindFactionSettings.Rules.Enabled) return;
@@ -2215,10 +2232,16 @@ internal static class GrindRunner
         if (reader == null) return "";
 
         List<ClickAimAction> bar = ClickAimCombat.ReadBar(reader);
+        ClickAimRotationClass buffClass = ClickAimClassRotation.Resolve(ClickAimSettings.RotationClass, bar);
         var applied = new List<string>();
         for (int i = 0; i < bar.Count && applied.Count < 2 && !_stop; i++)
         {
             if (!bar[i].IsBuff) continue;
+            // The caster druid profile cannot verify or cancel a form. Generic
+            // deliberately keeps the old behavior; explicit role overrides remain a choice.
+            string buffName = ClickAimCombat.NameOf(bar[i].Id);
+            if (buffClass == ClickAimRotationClass.Druid && ClickAimCombat.RoleOverrideOf(bar[i].Id) == ClickAimSpellRole.Unknown &&
+                (buffName == "Cat Form" || buffName == "Bear Form")) continue;
             if (reader.IsExperimental70707 && !WowBGrindFactions.Experimental70707BarSafe(reader)) return "action bar changed; buff withheld";
             ClickAimInput.TapKey(hwnd, bar[i].KeyVk, 40);
             _presses++;
@@ -3199,6 +3222,8 @@ internal static class GrindRunner
     /// price of the spell the rotation stops trying and swings instead.
     /// </summary>
     private static readonly Dictionary<int, uint> _castCosts = new Dictionary<int, uint>();
+    // Conservative estimates survive target changes; these are NOT client cooldown reads.
+    private static readonly Dictionary<string, int> _rotationCooldowns = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// The windows of a unit object that the loot probe reads. They bracket the fields this
@@ -4115,22 +4140,10 @@ internal static class GrindRunner
     }
 
     /// <summary>
-    /// One fight: Singular's lowbie druid rotation, driven by the action bar the client
-    /// keeps in memory and verified against the mob's health and my own mana.
-    ///
-    /// The order is Singular's (<c>ClassSpecific/Druid/Lowbie.cs</c>), with the spells this
-    /// character does not have yet left out because they are not on the bar:
-    ///
-    ///   1. if health is at or below 60% and a heal is on the bar - heal self (F1, then the
-    ///      heal's slot key), which is Singular's <c>Spell.BuffSelf("Rejuvenation", ...)</c>;
-    ///   2. auto-attack: a right-click on the mob, which is Singular's
-    ///      <c>CreateAutoAttack(true)</c> plus the target selection it assumes;
-    ///   3. Wrath, from range, on the global cooldown timer.
-    ///
-    /// Every step is measured: a heal has to raise my health, a cast has to cost mana or
-    /// take health off the mob, and if two casts in a row do neither the rotation says the
-    /// key did not cast and falls back to melee. Nothing here is reported as working
-    /// because it was sent.
+    /// One fight using a hotbar-only class priority or the legacy generic selector.
+    /// Healing, estimated DoT timing and optional instants share the existing
+    /// movement, faction, selected-target, resource and input safeguards. A
+    /// keypress or an estimated timer is not proof that a spell landed.
     /// </summary>
     private static string Fight(IntPtr hwnd, double px, double py, bool unverified, bool defenceOnly = false, WowBGuid defenceExpected = default(WowBGuid), WowBObservedUnit expectedPull = default(WowBObservedUnit), bool defenceFactionFilter = false)
     {
@@ -4200,12 +4213,20 @@ internal static class GrindRunner
             return "the target is already dead (health 0) - that is a corpse left selected, not a fight";
 
         Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
+        GreenMagic.Memory? fightMemory = ObjectManager.Wow;
+        if (reader == null || fightMemory == null) return "client attachment unavailable; fight withheld";
         List<ClickAimAction> bar = ClickAimCombat.ReadBar(reader);
-        ClickAimAction? damage = ClickAimCombat.FirstDamageOrDot(bar);  // Wrath, or Moonfire alone
-        ClickAimAction? heal = ClickAimCombat.FirstHeal(bar);
+        ClickAimRotationPlan rotation = ClickAimClassRotation.Build(ClickAimSettings.RotationClass, bar);
+        ClickAimAction? damage = rotation.Damage;
+        ClickAimAction? heal = rotation.Heal;
         ClickAimAction? auto = ClickAimCombat.AutoAttack(bar);          // Attack (6603)
-        ClickAimAction? dot = ClickAimCombat.FirstDot(bar);             // Moonfire, Corruption, ...
-        ClickAimAction? meleeHit = ClickAimCombat.FirstMeleeDamage(bar); // Claw, Heroic Strike, ...
+        ClickAimAction? dot = rotation.Dot;
+        ClickAimAction? meleeHit = rotation.Melee;
+        bool damageWasDot = damage != null && damage.IsDot;
+        Logging.Write("[Grind] hotbar rotation: " + rotation.Class + " (requested " + ClickAimSettings.RotationClass
+            + "); damage=" + (damage?.Name ?? "none") + ", extra=" + (rotation.Supplemental?.Name ?? "none")
+            + ", DoT=" + (dot?.Name ?? "none") + ", melee=" + (meleeHit?.Name ?? "none")
+            + ", heal=" + (heal?.Name ?? "none") + ". Cooldowns and DoT duration are estimates, not client state.");
 
         /* How far the damage spell actually reaches. Every spell used to be treated as a 28 yd
          * cast, so a cat stood 25 yd off a mob pressing a 5 yd Claw - the user's "the bot thinks
@@ -4446,6 +4467,14 @@ internal static class GrindRunner
             }
             double myPercent = myMaxHealth > 0 ? myHealth * 100.0 / myMaxHealth : 100.0;
 
+            // The settings window may veto a cached action during a fight. Do not
+            // send a key whose effective role has since changed; reselect next fight.
+            if (heal != null && !heal.IsHeal) heal = null;
+            if (dot != null && !dot.IsDot) dot = null;
+            if (damage != null && (damageWasDot ? !damage.IsDot || !ClickAimSettings.UseDamageOverTime : !damage.IsDamage)) damage = null;
+            if (meleeHit != null && !meleeHit.IsDamage) meleeHit = null;
+            if (auto != null && !auto.IsAttack) auto = null;
+
             /* A heal that lands too late is a corpse. Saying so beats pressing keys at a
              * dead character, which is what the 16:09 run did for its last four seconds
              * ("health 0% and Healing Touch did not lift it"). */
@@ -4512,7 +4541,7 @@ internal static class GrindRunner
                 ClickAimInput.TapKey(hwnd, 0x70, 40);                  // F1 = target self (Blizzard default)
                 if (ClickAimAbort.Wait(120) || _stop) return "stopped";
                 GreenMagic.Memory? healMemory = ObjectManager.Wow;
-                if (reader == null || healMemory == null) return "self-target unreadable; heal withheld";
+                if (reader == null || healMemory == null || healMemory != fightMemory) return "self-target or attachment unreadable; heal withheld";
                 using (healMemory.TemporaryCacheState(false))
                 {
                     if (ObjectManager.WowB != reader || ObjectManager.Wow != healMemory || reader.ReadTargetGuid() != me.Guid)
@@ -4520,6 +4549,7 @@ internal static class GrindRunner
                 }
                 if (_stop || ClickAimAbort.Requested) return "stopped";
                 if (reader.IsExperimental70707 && !WowBGrindFactions.Experimental70707BarSafe(reader)) return "action bar changed; heal withheld";
+                if (!heal.IsHeal) return "heal role changed; heal withheld";
                 ClickAimInput.TapKey(hwnd, heal.KeyVk, 40);
 
                 /* Wait for the heal to actually land. Healing Touch is a 1.5 s cast on top
@@ -4623,8 +4653,11 @@ internal static class GrindRunner
              * left alone until ClickAimSettings.DotRefreshSeconds has passed. The client's
              * debuff list is not readable on this build, so the timer is our own cast - being
              * a second late costs nothing, being early costs mana. */
-            if (dot != null && ClickAimSettings.UseDamageOverTime && !melee
+            if (dot != null && ClickAimSettings.UseDamageOverTime
+                && (!melee || (dot.IsMelee && rotation.Class != ClickAimRotationClass.Generic))
                 && (dot.IsMelee || myMana >= PowerForCast(dot, 10)) && d <= dotRange
+                && (rotation.Class != ClickAimRotationClass.Hunter || d >= 8.0)
+                && (rotation.Class != ClickAimRotationClass.Shaman || ClickAimClassRotation.Ready(_rotationCooldowns, ClickAimClassRotation.DotCooldownGroup(dot), Environment.TickCount))
                 && (_dotGuid != target.Guid || unchecked(Environment.TickCount - _dotUntil) >= 0))
             {
                 StopAndSettle(hwnd);
@@ -4634,20 +4667,34 @@ internal static class GrindRunner
                     continue;
                 }
 
-                if (!FactionAttackInputAllowed(reader, expectedPull, !defenceOnly || defenceFactionFilter))
+                if (!FightAttackInputAllowed(reader, fightMemory, defenceTarget, expectedPull, !defenceOnly || defenceFactionFilter))
                 { ClickAimKeySteer.ReleaseHeld(); return "selected target or faction changed; attack input withheld"; }
+                if (!dot.IsDot || !ClickAimSettings.UseDamageOverTime) return "DoT role or setting changed; attack withheld";
                 ClickAimInput.TapKey(hwnd, dot.KeyVk, 40);
+                if (rotation.Class == ClickAimRotationClass.Shaman)
+                    ClickAimClassRotation.Defer(_rotationCooldowns, ClickAimClassRotation.DotCooldownGroup(dot), 8000, Environment.TickCount);
                 MarkFocusedAttack(target.Guid);
                 presses++;
                 _presses++;
                 _dotGuid = target.Guid;
                 _dotUntil = Environment.TickCount + ClickAimSettings.DotRefreshSeconds * 1000;
                 Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                    "[Grind] {0} (slot {1}, key '{2}') on {3} at {4:F1} yd - it stays on the target for "
-                    + "the next {5} s and is refreshed by a timer, not by spamming it",
+                    "[Grind] pressed {0} (slot {1}, key '{2}') on {3} at {4:F1} yd - "
+                    + "assuming a {5} s DoT duration; application and aura are not verified",
                     dot.Name, dot.Slot, ClickAimCombat.KeyLabel(dot.KeyVk), target.Guid, d,
                     ClickAimSettings.DotRefreshSeconds));
-                Thread.Sleep(ClickAimCombat.CastSettleMs);
+                ClickAimAbort.Wait(ClickAimCombat.CastSettleMs);
+                continue;
+            }
+
+            // With a DoT as the only ranged action, approach its range for the
+            // opener rather than closing all the way to melee before using it.
+            if (ClickAimClassRotation.ShouldApproachDotOnly(damage, dot, melee, ClickAimSettings.UseDamageOverTime,
+                _dotGuid != target.Guid || unchecked(Environment.TickCount - _dotUntil) >= 0,
+                dot == null || rotation.Class != ClickAimRotationClass.Shaman || ClickAimClassRotation.Ready(_rotationCooldowns, ClickAimClassRotation.DotCooldownGroup(dot), Environment.TickCount),
+                myMana, PowerForCast(dot, 10), d))
+            {
+                if (!ChaseStep(hwnd, watch, target, out string blockedDot)) return DropUnreachable(target, blockedDot);
                 continue;
             }
 
@@ -4664,10 +4711,19 @@ internal static class GrindRunner
              * and below it the character stops casting and swings - which is what the user
              * asked for and what a player does. 10 power was the old gate and it produced
              * cast, refuse, cast, refuse while a mob ate the character. */
-            uint needForCast = PowerForCast(damage, 10);
-            bool canCast = !melee && damage != null && !damage.IsMelee && myMana >= needForCast;
+            ClickAimAction? optional = ClickAimClassRotation.SelectSupplemental(rotation, melee,
+                _focusedFightGuid == target.Guid && _focusedDamageObserved, d, myMana,
+                PowerForCast(rotation.Supplemental, 10), Environment.TickCount, _rotationCooldowns);
+            ClickAimAction? castDamage = optional ?? damage;
+            bool supplemental = optional != null;
+            double selectedRange = castDamage != null && castDamage.RangeYd > 0 ? castDamage.RangeYd : castRange;
+            uint needForCast = PowerForCast(castDamage, 10);
+            // Classic Hunter shots have an estimated minimum range. If the target is
+            // closer, the existing melee fallback takes over rather than spamming a shot.
+            bool hunterTooClose = rotation.Class == ClickAimRotationClass.Hunter && d < 8.0;
+            bool canCast = !melee && castDamage != null && !castDamage.IsMelee && !hunterTooClose && myMana >= needForCast;
 
-            if (!canCast && !melee && damage != null && !damage.IsMelee && myMana < needForCast
+            if (!canCast && !melee && damage != null && !damage.IsMelee && myMana < PowerForCast(damage, 10)
                 && !powerShortLogged)
             {
                 powerShortLogged = true;
@@ -4676,10 +4732,10 @@ internal static class GrindRunner
                     + "bar comes back; auto-attacking instead", myMana, damage.Name, needForCast));
             }
 
-            if (watch.Path != null && ((canCast && d <= castRange) || (!canCast && d <= MeleeEngageYd)))
+            if (watch.Path != null && ((canCast && d <= selectedRange) || (!canCast && d <= MeleeEngageYd)))
                 watch.EndApproach(); // a later chase gets a fresh progress budget
 
-            if (canCast && d > castRange)
+            if (canCast && d > selectedRange)
             {
                 string blocked;
                 if (!ChaseStep(hwnd, watch, target, out blocked))
@@ -4687,7 +4743,7 @@ internal static class GrindRunner
                 continue;
             }
 
-            if (canCast && d > castRange - 2.0)
+            if (canCast && d > selectedRange - 2.0)
                 ClickAimKeySteer.ReleaseHeld();      // arrived: stop walking before casting
 
             /* ---- 3. Wrath, on the global cooldown timer ----
@@ -4700,6 +4756,12 @@ internal static class GrindRunner
             if (canCast && unchecked(Environment.TickCount - lastCastMs) < ClickAimCombat.CastSettleMs)
             {
                 Thread.Sleep(120);
+                continue;
+            }
+
+            if (canCast && !supplemental && !ClickAimClassRotation.Ready(_rotationCooldowns, rotation.DamageGroup, Environment.TickCount))
+            {
+                Thread.Sleep(120); // estimated cooldown, still refresh target, health and STOP each loop
                 continue;
             }
 
@@ -4730,11 +4792,16 @@ internal static class GrindRunner
                 meleeSwinging = false;          // a cast stops auto-attack; it must be restarted
                 uint manaBefore = myMana;
                 int mobBeforeHealth = lastHealth;
-                _pendingCastId = damage.Id;
+                _pendingCastId = castDamage!.Id;
                 _pendingCastMana = manaBefore;
-                if (!FactionAttackInputAllowed(reader, expectedPull, !defenceOnly || defenceFactionFilter))
+                if (!FightAttackInputAllowed(reader, fightMemory, defenceTarget, expectedPull, !defenceOnly || defenceFactionFilter))
                 { ClickAimKeySteer.ReleaseHeld(); return "selected target or faction changed; attack input withheld"; }
-                ClickAimInput.TapKey(hwnd, damage.KeyVk, 40);
+                if (supplemental ? !castDamage!.IsDamage : (damageWasDot ? !castDamage!.IsDot || !ClickAimSettings.UseDamageOverTime : !castDamage!.IsDamage))
+                    return "damage role or DoT setting changed; attack withheld";
+                ClickAimInput.TapKey(hwnd, castDamage!.KeyVk, 40);
+                ClickAimClassRotation.Defer(_rotationCooldowns,
+                    supplemental ? rotation.SupplementalGroup : rotation.DamageGroup,
+                    supplemental ? rotation.SupplementalIntervalMs : rotation.DamageIntervalMs, Environment.TickCount);
                 MarkFocusedAttack(target.Guid);
                 presses++;
                 _presses++;
@@ -4768,26 +4835,34 @@ internal static class GrindRunner
                 if (spentMana || hurtMob)
                 {
                     castEverLanded = true;
-                    LearnCastCost(damage.Id, manaBefore, manaAfter);
-                    string label = damage.Name + " (slot " + damage.Slot.ToString(CultureInfo.InvariantCulture) + ")";
+                    LearnCastCost(castDamage!.Id, manaBefore, manaAfter);
+                    string label = castDamage!.Name + " (slot " + castDamage!.Slot.ToString(CultureInfo.InvariantCulture) + ")";
                     if (!worked.Contains(label)) worked.Add(label);
                     if (hurtMob)
                     {
+                        if (_focusedFightGuid == defenceTarget) _focusedDamageObserved = true;
                         Logging.Write(string.Format(CultureInfo.InvariantCulture,
                             "[Grind] {0} does damage: mob health {1} -> {2} (mana {3} -> {4})",
-                            damage.Name, lastHealth, mobAfter, manaBefore, manaAfter));
+                            castDamage!.Name, lastHealth, mobAfter, manaBefore, manaAfter));
                         lastHealth = mobAfter;
                     }
                     castFailures = 0;
                     continue;
                 }
 
-                LearnCastCost(damage.Id, manaBefore, manaAfter);   // a refusal costs nothing, a cast does
+                LearnCastCost(castDamage!.Id, manaBefore, manaAfter);   // a refusal costs nothing, a cast does
+                if (supplemental)
+                {
+                    // A cooldown/range/resource estimate can be wrong. Do not let one
+                    // optional key force the whole fight into melee; retry the filler.
+                    Logging.Write("[Grind] optional " + castDamage!.Name + " had no observed effect; estimated cooldown applied, returning to the main spell");
+                    continue;
+                }
                 castFailures++;
                 Logging.Write(string.Format(CultureInfo.InvariantCulture,
                     "[Grind] {0} (slot {1}, key '{2}') changed nothing in {3} ms: mana {4} -> {5}, "
                     + "mob health {6} - {7} failure(s) this fight{8}",
-                    damage.Name, damage.Slot, ClickAimCombat.KeyLabel(damage.KeyVk), ClickAimCombat.CastVerifyMs,
+                    castDamage!.Name, castDamage!.Slot, ClickAimCombat.KeyLabel(castDamage!.KeyVk), ClickAimCombat.CastVerifyMs,
                     manaBefore, manaAfter,
                     mobAfter >= 0 ? mobAfter.ToString(CultureInfo.InvariantCulture) : "unreadable",
                     castFailures, castEverLanded ? " (but it has cast before)" : ""));
@@ -4944,8 +5019,9 @@ internal static class GrindRunner
                     && sinceDamageMs >= (attackPressed ? MeleeSwingQuietMs * 2 : MeleeSwingQuietMs))
                 {
                     attackPressed = true;
-                    if (!FactionAttackInputAllowed(reader, expectedPull, !defenceOnly || defenceFactionFilter))
+                    if (!FightAttackInputAllowed(reader, fightMemory, defenceTarget, expectedPull, !defenceOnly || defenceFactionFilter))
                     { ClickAimKeySteer.ReleaseHeld(); return "selected target or faction changed; attack input withheld"; }
+                    if (!auto.IsAttack) return "Attack role changed; attack withheld";
                     ClickAimInput.TapKey(hwnd, auto.KeyVk, 40);
                     MarkFocusedAttack(target.Guid);
                     lastAttackPressMs = Environment.TickCount;
@@ -4981,11 +5057,16 @@ internal static class GrindRunner
              * have stood at 28 yd pressing a key the client refuses. Rage and energy are not
              * readable apart from mana here, so the press goes out, and a refusal costs the
              * client's own error line rather than a global cooldown spent twice. */
-            if (meleeHit != null && (!swinging || sinceDamageMs >= MeleePressMs))
+            if (meleeHit != null && (!swinging || sinceDamageMs >= MeleePressMs)
+                && ClickAimClassRotation.Ready(_rotationCooldowns, rotation.MeleeGroup, Environment.TickCount)
+                && (rotation.MeleeIntervalMs == 0 || myMana >= PowerForCast(meleeHit, 10)))
             {
-                if (!FactionAttackInputAllowed(reader, expectedPull, !defenceOnly || defenceFactionFilter))
+                if (!FightAttackInputAllowed(reader, fightMemory, defenceTarget, expectedPull, !defenceOnly || defenceFactionFilter))
                 { ClickAimKeySteer.ReleaseHeld(); return "selected target or faction changed; attack input withheld"; }
+                if (!meleeHit.IsDamage) return "melee ability role changed; attack withheld";
                 ClickAimInput.TapKey(hwnd, meleeHit.KeyVk, 40);
+                ClickAimClassRotation.Defer(_rotationCooldowns, rotation.MeleeGroup, rotation.MeleeIntervalMs, Environment.TickCount);
+                if (rotation.MeleeIntervalMs > 0) { _pendingCastId = meleeHit.Id; _pendingCastMana = myMana; }
                 MarkFocusedAttack(target.Guid);
                 presses++;
                 _presses++;

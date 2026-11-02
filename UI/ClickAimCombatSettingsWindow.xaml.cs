@@ -158,6 +158,8 @@ namespace CopilotBuddy.UI
         /// <summary>Puts the current values into the boxes; called on open and by Defaults.</summary>
         private void LoadFromSettings()
         {
+            cmbRotation.ItemsSource = Enum.GetValues(typeof(ClickAimRotationClass));
+            cmbRotation.SelectedItem = ClickAimSettings.RotationClass;
             txtHeal.Text = Text(ClickAimSettings.HealBelowPercent);
             txtHealMana.Text = Text(ClickAimSettings.HealMinManaPercent);
             txtEat.Text = Text(ClickAimSettings.EatBelowPercent);
@@ -204,6 +206,8 @@ namespace CopilotBuddy.UI
             if (!TryRead(txtVendorWait, "Merchant window wait", out vendorWait)) return false;
             if (!TryRead(txtVendorSearch, "Vendor search radius", out vendorSearch)) return false;
 
+            if (cmbRotation.SelectedItem is ClickAimRotationClass selectedRotation)
+                ClickAimSettings.RotationClass = selectedRotation;
             ClickAimSettings.HealBelowPercent = heal;
             ClickAimSettings.HealMinManaPercent = healMana;
             ClickAimSettings.EatBelowPercent = eat;
