@@ -135,8 +135,13 @@ field. The attach log prints the first eight raw dwords from each candidate
 array and the raw `+0x1E21` byte only when the local unit identity and repeated
 samples are stable. A later 171/171-mana sample matched index zero and action
 slots 1–3 matched 6603/403/331, but this does not prove dynamic behavior or
-actual bindings. The supervised single-target trial uses these candidates;
-see `WOW_70707_EXPERIMENTAL_ATTACH.md` for its restrictions.
+actual bindings. In a subsequent supervised single-target trial, the log recorded
+three Lightning Bolt health changes 55→40→25→10 and mana observations
+156→141→126 after starting at 171. The target then disappeared; the log cannot
+distinguish death from losing the target. The user reported that the trial
+looked fine. This supports the tested damage and mana paths, but not healing,
+melee, a route, or general combat. See `WOW_70707_EXPERIMENTAL_ATTACH.md` for
+trial restrictions.
 
 The stopped-bot **Combat Settings → Factions → Scan nearby** button now shows
 70707 candidate `+0x1E54` words without selection. It rechecks identity and

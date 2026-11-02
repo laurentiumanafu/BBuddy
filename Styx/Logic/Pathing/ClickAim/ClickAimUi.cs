@@ -133,6 +133,8 @@ internal static class ClickAimUi
             if (!GatherSettings.RoamWithoutProfile)
                 return "load a profile, or enable profile-free roaming in Gather settings";
             if (!GrindRunner.StartRoaming()) return "profile-free Grind did not start; see the log";
+            if (ObjectManager.WowB?.IsExperimental70707 == true)
+                return "70707 single-target trial started; roaming, healing, gathering, selling and auto-loot are disabled. " + FactionStatus();
             return "profile-free Grind started: local mesh roaming; exact zone borders are unknown. " + FactionStatus();
         }
 
@@ -150,6 +152,8 @@ internal static class ClickAimUi
         {
             if (!GrindRunner.Start(path, 0))
                 return "the grind loop refused \"" + name + "\" - the reason is in the lines above";
+            if (ObjectManager.WowB?.IsExperimental70707 == true)
+                return "70707 single-target trial started; profile roaming, healing, gathering, selling and auto-loot are disabled. " + FactionStatus();
 
             return "grinding \"" + name + "\" (" + areas.ToString(System.Globalization.CultureInfo.InvariantCulture)
                    + " area(s)) - hotspots from its <GrindArea>, area chosen by level band, "

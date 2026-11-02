@@ -724,6 +724,7 @@ internal static class GrindRunner
             chosen = SelectArea(areas, level, out string choice);
             Logging.Write("[Grind] " + choice);
         }
+        else if (trialReader != null) Logging.Write("[Grind] 70707 single-target trial; profile-free mesh initialized, but roaming is disabled");
         else Logging.Write("[Grind] profile-free mesh roaming; no profile level bands or blackspots, existing combat safety filters still apply");
         ProfileGrindArea area = areas[chosen];
 
@@ -811,10 +812,9 @@ internal static class GrindRunner
                 if (TryEngage(hwnd, out combatReport))
                 {
                     fights++;
-                    /* The Lua fight reports which slots did the killing, so the word is a
-                     * prefix, not the whole line. */
-                    if (combatReport.StartsWith("killed", StringComparison.Ordinal)
-                        || combatReport.IndexOf("killed or fled", StringComparison.Ordinal) >= 0)
+                    // On the 70707 trial a lost selection does not confirm death.
+                    // Preserve the existing 70291 accounting unchanged.
+                    if (CountFightAsKill(combatReport, trialReader != null))
                     {
                         kills++;
                         _killsSinceTrip++;
@@ -953,12 +953,20 @@ internal static class GrindRunner
         string bagReport = BagSlotHunt.Report();
         if (bagReport.Length > 0) Logging.Write(bagReport);
 
+        string killSummary = trialReader != null ? "target(s) observed at zero candidate health" : "kill(s) confirmed";
         Logging.Write(string.Format(CultureInfo.InvariantCulture,
-            "[Grind] done: {0} hotspot(s) reached, {1} fight(s), {2} kill(s) confirmed, "
+            "[Grind] done: {0} hotspot(s) reached, {1} fight(s), {2} " + killSummary + ", "
             + "{3} corpse(s) looted, {4} key press(es), {5} click(s) that landed, {6} area switch(es), "
             + "{8} vendor trip(s), {9} sell click(s), {7:F0} s",
             hotspots, fights, kills, _loots, _presses, _clicks, switches,
             (Environment.TickCount - started) / 1000.0, vendorTrips, _sellClicks));
+    }
+
+    private static bool CountFightAsKill(string report, bool experimental70707)
+    {
+        bool ambiguous = report.IndexOf("killed or fled", StringComparison.Ordinal) >= 0;
+        return (report.StartsWith("killed", StringComparison.Ordinal) || ambiguous) &&
+            (!experimental70707 || !ambiguous);
     }
 
     /// <summary>
@@ -995,9 +1003,10 @@ internal static class GrindRunner
         Logging.Write("[Grind] combat settings: " + ClickAimSettings.Describe());
 
         int level = reader.ReadPlayerLevel();
+        ulong levelOffset = reader.IsExperimental70707 ? Styx.Offsets.Wow70707Offsets.LevelCandidateOffset : Styx.Offsets.WowBOffsets.UnitDataLevelOffset;
         Logging.Write(level > 0
             ? "[Grind] memory: player level " + level.ToString(CultureInfo.InvariantCulture)
-              + " (the level word at data+" + Styx.Offsets.WowBOffsets.UnitDataLevelOffset.ToString("X", CultureInfo.InvariantCulture) + ")"
+              + " (" + (reader.IsExperimental70707 ? "candidate " : "") + "level word at data+" + levelOffset.ToString("X", CultureInfo.InvariantCulture) + ")"
             : "[Grind] memory: the player's level word did not read - the area will be picked by distance");
 
         List<Styx.WoWInternals.WowBReader.WowBActionSlot> bar = reader.ReadActionBar();
@@ -5030,6 +5039,12 @@ internal static class GrindRunner
             if (ok) passed++;
             else fails.Append(" [").Append(label).Append(']');
         };
+
+        check("trialConfirmedKill", CountFightAsKill("killed with Lightning Bolt", true));
+        check("trialUnknownOutcome", !CountFightAsKill("killed or fled after 8 s", true));
+        check("trialUnknownMidReport", !CountFightAsKill("killed or fled while attacking", true));
+        check("legacyKillAccountingUnchanged", CountFightAsKill("killed or fled after 8 s", false));
+        check("trialNoKill", !CountFightAsKill("target gone and nothing landed", true));
 
         string path = System.IO.Path.Combine(System.IO.Path.GetTempPath(),
             "clickaim-grind-selftest-" + Guid.NewGuid().ToString("N") + ".xml");
