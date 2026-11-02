@@ -43,6 +43,7 @@ namespace Styx.WoWInternals
 
         private readonly Memory _memory;
         private readonly bool _experimental70707;
+        public bool IsExperimental70707 => _experimental70707;
 
         public WowBReader(Memory memory, bool experimental70707 = false)
         {
@@ -59,6 +60,9 @@ namespace Styx.WoWInternals
         private ulong LastTargetGuidRva => _experimental70707 ? 0UL : WowBOffsets.LastTargetGuid;
         private ulong ObjectManagerRva => _experimental70707 ? Wow70707Offsets.ObjectManager : WowBOffsets.ObjectManager;
         private ulong HandlePoolsRva => _experimental70707 ? Wow70707Offsets.HandlePools : WowBOffsets.HandlePools;
+        private ulong PlayerVtableRva => _experimental70707 ? Wow70707Offsets.PlayerVtable : WowBOffsets.PlayerObjectVtable;
+        private ulong UnitVtableRva => _experimental70707 ? Wow70707Offsets.UnitVtable : WowBOffsets.CGUnitFnTable;
+        public bool IsKnownUnitVtable(ulong vtableRva) => vtableRva == PlayerVtableRva || vtableRva == UnitVtableRva;
         private ulong Abs(ulong imageRelative) => _memory.GetAbsolute64(imageRelative);
 
         // ------------------------------------------------------------------
@@ -414,20 +418,16 @@ namespace Styx.WoWInternals
         public bool TryGetPlayerObject(out WowBPoolObject obj)
         {
             obj = default;
+            // The 70707 snapshot is diagnostic only until its transform and
+            // remaining gameplay fields have been verified. Do not let the
+            // record-only path feed movement or clicks in the meantime.
+            if (_experimental70707) return false;
 
             WowBGuid guid = ReadLocalGuid();
             if (guid.IsEmpty)
                 return false;
 
-            if (!TryFindObjectByGuid(guid, out WowBPoolObject found))
-                return false;
-            // On experimental 70707, never let the loose record-only lookup
-            // feed movement without the existing identity/vtable checks.
-            if (_experimental70707 &&
-                (!IsPoolRecordCurrent(found) || !TryGetUnitObject(found.RecordPtr, out _, out _, out bool playerVtable) || !playerVtable))
-                return false;
-            obj = found;
-            return true;
+            return TryFindObjectByGuid(guid, out obj);
         }
 
         /// <summary>
@@ -470,7 +470,7 @@ namespace Styx.WoWInternals
                     fourByteCandidate = true;
                 }
                 ulong vtRva = vtable >= _memory.ImageBase64 ? vtable - _memory.ImageBase64 : 0;
-                if (!playerVtable && vtRva != WowBOffsets.CGUnitFnTable)
+                if (!playerVtable && vtRva != UnitVtableRva)
                     continue;
 
                 // Read the complete transform in one operation. Read64<T>
@@ -491,7 +491,7 @@ namespace Styx.WoWInternals
                 // width, signedness and general semantics remain unverified.
                 // An unreadable sample stays null and does not become zero.
                 WowBCandidateHealthWords? candidateHealth = null;
-                if (record.Guid == local || (!target.IsEmpty && record.Guid == target))
+                if (!_experimental70707 && (record.Guid == local || (!target.IsEmpty && record.Guid == target)))
                 {
                     byte[]? words = _memory.ReadBytes64(unitPtr + WowBOffsets.UnitDataHealthOffset, 16);
                     if (words != null && words.Length == 16)
@@ -567,7 +567,7 @@ namespace Styx.WoWInternals
             if (header == null || header.Length != 0x20)
                 return false;
             ulong vt = BitConverter.ToUInt64(header, 0);
-            if (vt < _memory.ImageBase64 || vt - _memory.ImageBase64 != WowBOffsets.CGUnitFnTable ||
+            if (vt < _memory.ImageBase64 || vt - _memory.ImageBase64 != UnitVtableRva ||
                 BitConverter.ToUInt64(header, 8) != record.RecordPtr ||
                 new WowBGuid(BitConverter.ToUInt64(header, 0x10), BitConverter.ToUInt64(header, 0x18)) != record.Guid)
                 return false;
@@ -658,7 +658,7 @@ namespace Styx.WoWInternals
                                 detail = $"back-pointer-mismatch {raw}";
                             else if (unitGuid != expected)
                                 detail = $"unit-guid-mismatch {raw}";
-                            else if (vtRva != WowBOffsets.PlayerObjectVtable && vtRva != WowBOffsets.CGUnitFnTable)
+                            else if (vtRva != PlayerVtableRva && vtRva != UnitVtableRva)
                                 detail = $"vtable-not-in-unit-filter {raw}";
                             else
                             {
@@ -675,7 +675,9 @@ namespace Styx.WoWInternals
                                         Math.Abs(x) >= 100000f || Math.Abs(y) >= 100000f || Math.Abs(z) >= 100000f)
                                         detail = $"transform-invalid {raw} pos=({x},{y},{z}) facing={facing}";
                                     else
-                                        detail = $"passes-filter-on-rescan {raw} pos=({x:F1},{y:F1},{z:F1}) facing={facing:F2}";
+                                        detail = _experimental70707
+                                            ? $"matches-observed-vtable-on-rescan {raw} pos=({x:F1},{y:F1},{z:F1}) facing={facing:F2} (unverified)"
+                                            : $"passes-filter-on-rescan {raw} pos=({x:F1},{y:F1},{z:F1}) facing={facing:F2}";
                                 }
                             }
                         }
@@ -695,6 +697,30 @@ namespace Styx.WoWInternals
                         " rawRecord+0x60=({0:R},{1:R},{2:R}); +0x70={3:R} (unverified)",
                         BitConverter.ToSingle(transformCandidate, 0), BitConverter.ToSingle(transformCandidate, 4),
                         BitConverter.ToSingle(transformCandidate, 8), BitConverter.ToSingle(transformCandidate, 16));
+                byte[]? ptrBytes = _memory.ReadBytes64(found.RecordPtr + WowBOffsets.RecordDataBlockPtrOffset, 8);
+                ulong rawUnit = ptrBytes == null || ptrBytes.Length != 8 ? 0UL : BitConverter.ToUInt64(ptrBytes, 0);
+                if (rawUnit > 0x10000UL && rawUnit < 0x00007FFFFFFFF000UL && (rawUnit & 3UL) == 0)
+                {
+                    byte[]? header = _memory.ReadBytes64(rawUnit, 0x20);
+                    if (header != null && header.Length == 0x20 && BitConverter.ToUInt64(header, 8) == found.RecordPtr &&
+                        new WowBGuid(BitConverter.ToUInt64(header, 0x10), BitConverter.ToUInt64(header, 0x18)) == expected &&
+                        TryReadWords(rawUnit + 0x1E20, 16, out uint[] rawWords) && IsPoolRecordCurrent(found))
+                    {
+                        byte[]? ptrAfter = _memory.ReadBytes64(found.RecordPtr + WowBOffsets.RecordDataBlockPtrOffset, 8);
+                        byte[]? headerAfter = _memory.ReadBytes64(rawUnit, 0x20);
+                        if (ptrAfter != null && ptrAfter.Length == 8 && BitConverter.ToUInt64(ptrAfter, 0) == rawUnit &&
+                            headerAfter != null && headerAfter.Length == 0x20 &&
+                            BitConverter.ToUInt64(headerAfter, 0) == BitConverter.ToUInt64(header, 0) &&
+                            BitConverter.ToUInt64(headerAfter, 8) == found.RecordPtr &&
+                            new WowBGuid(BitConverter.ToUInt64(headerAfter, 0x10), BitConverter.ToUInt64(headerAfter, 0x18)) == expected &&
+                            IsPoolRecordCurrent(found))
+                        {
+                            string[] words = Array.ConvertAll(rawWords, word => word.ToString("X8", System.Globalization.CultureInfo.InvariantCulture));
+                            detail += " rawUnit+0x1E20..0x1E5C=" + string.Join(" ", words) +
+                                $" (uninterpreted; +0x{Wow70707Offsets.FactionKeyCandidateOffset:X} is a static faction-key candidate)";
+                        }
+                    }
+                }
             }
             // The record can change even if the selected GUID stays the same.
             return detail;
@@ -716,7 +742,7 @@ namespace Styx.WoWInternals
                 ulong vtRva = vt >= _memory.ImageBase64 ? vt - _memory.ImageBase64 : 0;
                 bool backMatches = BitConverter.ToUInt64(raw, 8) == target.RecordPtr;
                 var headerGuid = new WowBGuid(BitConverter.ToUInt64(raw, 0x10), BitConverter.ToUInt64(raw, 0x18));
-                headerChecks = $"vtableRva=0x{vtRva:X},knownUnitVtable={vtRva == WowBOffsets.CGUnitFnTable},backMatches={backMatches},guidMatches={headerGuid == guid}";
+                headerChecks = $"vtableRva=0x{vtRva:X},knownUnitVtable={vtRva == UnitVtableRva},backMatches={backMatches},guidMatches={headerGuid == guid}";
             }
             string position = "unreadable";
             byte[]? transform = _memory.ReadBytes64(target.RecordPtr + WowBOffsets.RecordPositionOffset, 20);
@@ -842,6 +868,7 @@ namespace Styx.WoWInternals
         public bool TryGetUnitFields(ulong unitPtr, out WowBUnitFields fields)
         {
             fields = default;
+            if (_experimental70707) return false; // 70291 stat/flag fields do not carry over safely.
             // Not IsUserPointer: a monster unit object is legitimately 4-byte aligned on
             // this build (TryGetFourByteUnitCandidate exists for exactly that), and the
             // 8-byte rule would refuse to read the mobs the grind loop has to fight.
@@ -891,6 +918,7 @@ namespace Styx.WoWInternals
         public bool TryReadFactionTemplateId(ulong unitPtr, out uint factionTemplateId)
         {
             factionTemplateId = 0;
+            if (_experimental70707) return false; // 70707 faction candidate is not yet validated.
             if (unitPtr <= 0x10000UL || unitPtr >= 0x00007FFFFFFFFFFFUL - WowBOffsets.UnitDataFactionTemplateOffset - 4UL)
                 return false;
             byte[]? raw = _memory.ReadBytes64(unitPtr + WowBOffsets.UnitDataFactionTemplateOffset, 4);
@@ -1086,6 +1114,7 @@ namespace Styx.WoWInternals
         public bool TryGetUnitStats(ulong recordPtr, out WowBUnitStats stats)
         {
             stats = default;
+            if (_experimental70707) return false; // legacy field layout is unverified here.
             if (!IsUserPointer(recordPtr))
                 return false;
 
@@ -1147,7 +1176,7 @@ namespace Styx.WoWInternals
             vtable = vt;
 
             ulong vtRva = vt >= _memory.ImageBase64 ? vt - _memory.ImageBase64 : vt;
-            isPlayerVtable = vtRva == WowBOffsets.PlayerObjectVtable;
+            isPlayerVtable = vtRva == PlayerVtableRva;
 
             return true;
         }
@@ -1162,7 +1191,7 @@ namespace Styx.WoWInternals
                 return true; // the player is also a unit
 
             ulong vtRva = vt >= _memory.ImageBase64 ? vt - _memory.ImageBase64 : vt;
-            return vtRva == WowBOffsets.CGUnitFnTable;
+            return vtRva == UnitVtableRva;
         }
 
         // ------------------------------------------------------------------

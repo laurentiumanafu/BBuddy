@@ -30,6 +30,10 @@ internal static class WowBGrindFactions
     {
         _boundMemory = null; _boundReader = null; reason = "";
         if (!GrindFactionSettings.TryLoad(out GrindFactionRules rules, out reason)) return false;
+        // Snapshot vtables on 70707 are experimental diagnostics, not a safe
+        // combat layout. Off must not bypass this guard or the faction rules.
+        if (ObjectManager.WowB?.IsExperimental70707 == true)
+        { reason = "70707 Grind is blocked: faction, stats and movement layouts are not validated"; return false; }
         if (!rules.Enabled) { GrindFactionSettings.Activate(rules); return true; }
         try
         {

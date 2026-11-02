@@ -96,7 +96,7 @@ internal static class GatherProbe
         {
             if (!TryCandidateHeader(memory, obj, out ulong ptr, out ulong vt)) continue;
             ulong rva = vt - memory.ImageBase64;
-            if (rva == WowBOffsets.PlayerObjectVtable || rva == WowBOffsets.CGUnitFnTable) continue;
+            if (reader.IsKnownUnitVtable(rva)) continue;
             byte[]? coords = memory.ReadBytes64(obj.RecordPtr + WowBOffsets.RecordPositionOffset, 12);
             if (coords == null || coords.Length != 12) continue;
             float x = BitConverter.ToSingle(coords, 0), y = BitConverter.ToSingle(coords, 4),

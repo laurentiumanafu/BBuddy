@@ -371,7 +371,9 @@ namespace Styx.WoWInternals
                     ? initialBuild == ClientAttachPolicy.ExperimentalBuild
                         ? $"[ObjectManager] 70707 pool snapshot unavailable (capture failed or changed); {initialSnapshotSlots} slots scanned with the unverified 70291 layout."
                         : "[ObjectManager] WowB pool snapshot unavailable (capture failed or changed during scan)."
-                    : $"[ObjectManager] WowB pool snapshot: {world.Units.Count} validated units, {world.PoolSlotsScanned} slots scanned, local={world.LocalGuid}, target={world.TargetGuid}.");
+                    : initialBuild == ClientAttachPolicy.ExperimentalBuild
+                        ? $"[ObjectManager] 70707 diagnostic snapshot: {world.Units.Count} structurally matched candidate units, {world.PoolSlotsScanned} slots scanned, local={world.LocalGuid}, target={world.TargetGuid}; gameplay layouts unverified."
+                        : $"[ObjectManager] WowB pool snapshot: {world.Units.Count} validated units, {world.PoolSlotsScanned} slots scanned, local={world.LocalGuid}, target={world.TargetGuid}.");
                 if (world != null && !world.TargetGuid.IsEmpty)
                 {
                     if (world.TryGetSelectedTarget(out WowBObservedUnit selected))
@@ -379,7 +381,8 @@ namespace Styx.WoWInternals
                         string distance = "unknown";
                         if (world.TryGetLocalPlayer(out WowBObservedUnit player))
                             distance = player.Location.Distance(selected.Location).ToString("F1", System.Globalization.CultureInfo.InvariantCulture);
-                        Logging.Write($"[ObjectManager] Selected target found in snapshot: guid={selected.Guid}, pos=({selected.Location.X:F1}, {selected.Location.Y:F1}, {selected.Location.Z:F1}), distance={distance} yd, playerVtable={selected.HasPlayerVtable}.");
+                        string label = initialBuild == ClientAttachPolicy.ExperimentalBuild ? "Selected target candidate (transform unverified)" : "Selected target found in snapshot";
+                        Logging.Write($"[ObjectManager] {label}: guid={selected.Guid}, pos=({selected.Location.X:F1}, {selected.Location.Y:F1}, {selected.Location.Z:F1}), distance={distance} yd, playerVtable={selected.HasPlayerVtable}.");
                     }
                     else
                     {

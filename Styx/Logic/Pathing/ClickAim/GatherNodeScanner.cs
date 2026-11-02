@@ -110,7 +110,7 @@ internal static class GatherNodeScanner
         nodes = new List<Node>();
         Memory? memory = ObjectManager.Wow;
         WowBReader? reader = ObjectManager.WowB;
-        if (memory == null || reader == null || !memory.Is64BitTarget || radius <= 0 || !double.IsFinite(radius))
+        if (memory == null || reader == null || reader.IsExperimental70707 || !memory.Is64BitTarget || radius <= 0 || !double.IsFinite(radius))
             return false;
         try
         {

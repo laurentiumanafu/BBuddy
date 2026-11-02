@@ -61,6 +61,11 @@ internal static class GatherRunner
     public static bool Start(string profile)
     {
         if (_running) return false;
+        if (ObjectManager.WowB?.IsExperimental70707 == true)
+        {
+            Logging.Write("[Gather] 70707 gathering is blocked: node, movement and combat layouts are not validated");
+            return false;
+        }
         GatherSettings.Load();
         List<RoutePoint> points = new List<RoutePoint>();
         MeshRoam? roam = null;

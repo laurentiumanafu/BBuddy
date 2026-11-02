@@ -83,8 +83,9 @@ namespace Styx.WoWInternals
     }
 
     /// <summary>
-    /// Best-effort, non-atomic read-only snapshot of structurally validated
-    /// 70291 player/CGUnit records. It is not sufficient to run the bot.
+    /// Best-effort, non-atomic read-only snapshot of structurally checked
+    /// player/CGUnit records. On experimental 70707, the recognized vtables
+    /// and transforms are only observed candidates. It is not sufficient to run the bot.
     /// </summary>
     public sealed class WowBWorldSnapshot
     {

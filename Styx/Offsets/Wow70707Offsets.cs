@@ -1,9 +1,9 @@
 namespace Styx.Offsets
 {
     /// <summary>
-    /// Experimental 70707 image-relative candidates from static analysis only.
-    /// No member layouts, vtables or safe gameplay behavior have been verified.
-    /// Selected only when attached to build 70707.
+    /// Experimental 70707 image-relative candidates. Vtables have one live
+    /// player/selected-unit observation; member layouts and safe gameplay are
+    /// not established. Selected only when attached to build 70707.
     /// </summary>
     internal static class Wow70707Offsets
     {
@@ -17,5 +17,8 @@ namespace Styx.Offsets
         internal const ulong CameraWorldFrameGlobal = 0x4F48610;
         internal const ulong CameraPointerOffset = 0x480;
         internal const ulong CameraZoomOffset = 0x274;
+        internal const ulong PlayerVtable = 0x41DA390; // one player observation
+        internal const ulong UnitVtable = 0x41EE168; // one selected-unit observation
+        internal const ulong FactionKeyCandidateOffset = 0x1E54; // static reaction path only
     }
 }

@@ -18,10 +18,14 @@ those candidates, disable existing safety checks, or enable Lua.
    map field and camera zoom. `[70707 player record]` and `[70707 selected
    record]` log read-only pool observations, not gameplay authorization. These
    logs contain identifying information and process addresses.
-4. The map ID and camera position remain unavailable to gameplay code. Grind's
-   70291 faction-signature and identity checks are still enforced; with the
-   faction filter enabled Grind may refuse to start. Do not turn the filter off
-   merely to bypass validation.
+4. The attach snapshot recognizes the observed 70707 player and selected-unit
+   vtables, but these are still candidates. Record transforms are displayed for
+   research only; player position, map ID and camera position remain unavailable
+   to gameplay code. Legacy 70291 health, level, flags and faction reads are
+   disabled on 70707. Grind refuses to start on 70707 in every faction mode,
+   including Off, until its required movement and combat layouts are validated.
+   Gathering also refuses to start and the 70291 node scanner rejects 70707.
+   The existing 70291 faction-signature and identity checks are unchanged.
 
 The 70707 client must be x64 and its version resource must be readable. The
 selector, explicit PID and automatic attachment apply the same build policy;

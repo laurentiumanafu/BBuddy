@@ -129,6 +129,11 @@ namespace Styx.Logic.Pathing
             File.WriteAllText(GrindFactionSettings.PathName, "Enabled=True\nKeys=broken\n");
             Check(!WowBGrindFactions.PrepareForGrind(out _), "malformed settings refuse start");
             Check(GrindFactionSettings.SaveList("", out _) && WowBGrindFactions.PrepareForGrind(out _) && WowBGrindFactions.AllowsPull(null, unit, out _), "disabled policy preserves previous behaviour");
+            ObjectManager.WowB = new WowBReader(memory, experimental70707: true);
+            Check(!WowBGrindFactions.PrepareForGrind(out string reason) && reason.Contains("70707"), "70707 cannot start Grind with filter off");
+            Check(GrindFactionSettings.Save(GrindFactionMode.Allow, "4", "", out _) &&
+                  !WowBGrindFactions.PrepareForGrind(out reason) && reason.Contains("70707"), "70707 cannot start Grind with filter on");
+            ObjectManager.WowB = reader;
             Console.WriteLine("Grind faction settings and nearby scan synthetic fixtures passed");
         }
     }

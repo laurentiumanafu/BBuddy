@@ -71,9 +71,30 @@ that invoking them is safe; the bot's Lua bridge remains retired.
 | `GetCameraZoom` | `0x2835700` | Name/function table entry at `0x4947240` |
 | `GetInventoryItemID` | `0x26CAA90` | Name/function table entry at `0x492EDC0`; says nothing by itself about bag layout |
 
+## Follow-up observations and faction lead
+
+One live attach showed matching record/unit GUIDs and back-pointers for a local
+player with vtable RVA `0x41DA390`, and one selected monster with vtable RVA
+`0x41EE168`. Their `record+0x60` transforms were plausible, about 4.8 yards
+apart. These two observations do not validate every player or unit, establish
+the transform's semantics, or authorize movement/combat. The diagnostic
+snapshot recognizes these two vtables with identity and stability checks;
+`0x41DC3A8` remains an unverified candidate and is not accepted.
+
+The 70707 `UnitReaction` handler at `0x1819F90` calls `0x20807B0`, in the
+same position as 70291 `0x1D89A00` calls `0x27EDBC0`. The routines have closely
+corresponding paths: 70291 reads unit `+0x1E5C` (previously traced to
+FactionTemplate), while 70707 reads `+0x1E54` (e.g. `0x2080BE2`). A nearby
+70707 helper at `0x2080D38` also reads `+0x1E54` after a table lookup, mirroring
+70291 `0x27EE199`. The adjacent flag test shifts from `+0x1E60` to `+0x1E58`.
+This is a **static candidate**, not a proven key or reaction. Attach diagnostics
+print 16 uninterpreted dwords from unit `+0x1E20` through `+0x1E5C` for the
+local and selected records when readable and structurally matched; these are
+never used for targeting. The 70291 faction filter remains unchanged.
+
 ## Still unknown
 
-The new record and unit-object layout, vtables, 128-bit GUID consistency,
+The new record and unit-object layout, generality of the observed vtables,
 position/facing fields, health/level/faction fields, map ID chain, cursor and
 movement controls, bag capacity/contents, and reaction semantics have **not**
 been established for 70707. Old 70291 member offsets are not safe to carry over
