@@ -23,5 +23,8 @@ namespace Styx.Offsets
         internal const ulong MaxHealthCandidateOffset = 0x1E30; // static path; both observations were equal
         internal const ulong LevelCandidateOffset = 0x1E38; // static path + two user-confirmed levels
         internal const ulong FactionKeyCandidateOffset = 0x1E54; // static reaction path only
+        internal const ulong StoredActionArrayCandidate = 0x6D3EC60; // static references only, read-only
+        internal const ulong PowerArrayCandidateOffset = 0x1BC0; // indexed; power type mapping unverified
+        internal const ulong MaxPowerArrayCandidateOffset = 0x20F0; // indexed; power type mapping unverified
     }
 }

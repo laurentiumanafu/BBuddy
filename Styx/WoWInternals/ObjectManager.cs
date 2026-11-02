@@ -364,6 +364,8 @@ namespace Styx.WoWInternals
                         Logging.Write("[70707 player record] " + WowB.DiagnoseExperimentalPlayer());
                         WowBGuid selectedGuid = WowB.ReadTargetGuid();
                         Logging.Write("[70707 selected record] " + WowB.DiagnoseTarget(selectedGuid));
+                        try { Logging.Write("[70707 action research] " + WowB.DescribeExperimentalActionBar()); }
+                        catch (Exception ex) { Logging.Write("[70707 action research] unavailable: " + ex.Message); }
                     }
                     catch (Exception ex) { Logging.Write("[70707 record diagnostics] unavailable: " + ex.Message); }
                 }

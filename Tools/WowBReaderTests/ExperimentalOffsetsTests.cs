@@ -77,6 +77,29 @@ internal static class ExperimentalOffsetsTests
         memory.OnRead = null;
         memory.U64(module + Wow70707Offsets.MapRoot, 0x30000000);
         Require(!experimental.TryGetCameraPosition(out _, out _, out _), "unknown 70707 camera position fails closed");
+        for (int i = 0; i < 12; i++) memory.U64(module + Wow70707Offsets.StoredActionArrayCandidate + (ulong)(i * 8), 0);
+        memory.U64(module + Wow70707Offsets.StoredActionArrayCandidate, 6603);
+        memory.U64(module + Wow70707Offsets.StoredActionArrayCandidate + 8, 5176);
+        Require(experimental.ReadActionBar().Count == 0, "70707 candidate action bar cannot drive gameplay");
+        Require(experimental.DescribeExperimentalActionBar().Contains("1:0x00000000000019CB 2:0x0000000000001438"),
+                "raw candidate action array is reported");
+        int actionReads = 0;
+        memory.OnRead = (address, count) =>
+        {
+            if (address == module + Wow70707Offsets.StoredActionArrayCandidate && count == 96 && ++actionReads == 2)
+                memory.U64(address, 42);
+        };
+        Require(experimental.DescribeExperimentalActionBar().Contains("changed; discarded"), "unstable action array discarded");
+        memory.OnRead = null;
+        memory.U64(module + Wow70707Offsets.StoredActionArrayCandidate, 6603);
+        memory.OnRead = (address, count) =>
+        {
+            if (address == module + Wow70707Offsets.StoredActionArrayCandidate && count == 96)
+                memory.Guid(module + Wow70707Offsets.PlayerGuid, default);
+        };
+        Require(experimental.DescribeExperimentalActionBar().Contains("unavailable/changed"), "changed action-bar player discarded");
+        memory.OnRead = null;
+        memory.Guid(module + Wow70707Offsets.PlayerGuid, player);
         memory.EnableCache();
         string diagnostic = experimental.DescribeExperimental70707();
         Require(memory.CacheEnabled, "candidate diagnostic restores cache state");
@@ -128,6 +151,22 @@ internal static class ExperimentalOffsetsTests
         memory.U64(targetUnit + Wow70707Offsets.MaxHealthCandidateOffset, 55);
         memory.U32(targetUnit + Wow70707Offsets.LevelCandidateOffset, 2);
         memory.U32(targetUnit + Wow70707Offsets.FactionKeyCandidateOffset, 36);
+        for (int i = 0; i < 8; i++)
+        {
+            memory.U32(0x24000000 + Wow70707Offsets.PowerArrayCandidateOffset + (ulong)(i * 4), (uint)(i + 10));
+            memory.U32(0x24000000 + Wow70707Offsets.MaxPowerArrayCandidateOffset + (ulong)(i * 4), (uint)(i + 20));
+        }
+        Require(experimental.DiagnoseExperimentalPlayer().Contains("rawUnit+0x1BC0=[10,11,12,13,14,15,16,17]") &&
+                experimental.DiagnoseExperimentalPlayer().Contains("rawUnit+0x20F0=[20,21,22,23,24,25,26,27]"), "indexed power candidates logged");
+        int powerReads = 0;
+        memory.OnRead = (address, count) =>
+        {
+            if (address == 0x24000000 + Wow70707Offsets.PowerArrayCandidateOffset && count == 32 && ++powerReads == 2)
+                memory.U32(address, 99);
+        };
+        Require(!experimental.DiagnoseExperimentalPlayer().Contains("rawUnit+0x1BC0="), "changing power candidates discarded");
+        memory.OnRead = null;
+        memory.U32(0x24000000 + Wow70707Offsets.PowerArrayCandidateOffset, 10);
         Require(experimental.IsKnownUnitVtable(Wow70707Offsets.PlayerVtable) &&
                 experimental.IsKnownUnitVtable(Wow70707Offsets.UnitVtable) &&
                 !experimental.IsKnownUnitVtable(WowBOffsets.CGUnitFnTable) &&

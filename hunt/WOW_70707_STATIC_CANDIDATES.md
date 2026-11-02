@@ -113,6 +113,27 @@ are not guaranteed to equal displayed health in every context. A level-related
 helper reached from `UnitLevel` also reads `+0x1E38`, but may choose alternate
 values. These are candidates, not validated gameplay stats or safe call APIs.
 
+The user later reported a mesh research query at candidate map 0: the nearest
+polygons to the player and selected unit were respectively 0.18 and 0.31 yd
+from the candidate positions. This supports the location/map lead at that spot,
+but does not prove the map on transitions, an actual route, movement, or attackability.
+
+Additional static tracing found a stored-action-array candidate at RVA
+`0x6D3EC60`. The 70291 reference at `0xDB87F1` and corresponding 70707 reference
+at `0xA538FD` both access an indexed qword array, and 35 unique-reference
+matches in the sampled set point to the same new RVA (not necessarily
+independent). The old 70291 array RVA `0x7DFF4E0` is outside the 70707 image.
+The first 12 qwords are logged on attach only if two reads and player GUID
+checks agree; ordering, slot mapping and packing are still unknown.
+
+The `UnitPower` path in 70707 can use `[unit+index*4+0x1BC0]` at `0x2890305`;
+`UnitPowerMax` can use `[unit+index*4+0x20F0]` at `0x289040D`. Both obtain
+`index` through `0x20AC3B0` and have special cases or other sources. It is not
+safe to assume index zero is current mana or reuse 70291's contiguous max-power
+field. The attach log prints the first eight raw dwords from each candidate
+array and the raw `+0x1E21` byte only when the local unit identity and repeated
+samples are stable. These values cannot drive gameplay or prove a power type.
+
 The stopped-bot **Combat Settings → Factions → Scan nearby** button now shows
 70707 candidate `+0x1E54` words without selection. It rechecks identity and
 stable values, but uses unverified vtables and transforms and does not verify

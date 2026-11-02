@@ -16,8 +16,9 @@ those candidates, disable existing safety checks, or enable Lua.
    validated. A successful attachment does not establish that the bot can run.
    `[70707 candidates]` logs candidate GUIDs, player name, pointers, a proposed
    map field and camera zoom. `[70707 player record]` and `[70707 selected
-   record]` log read-only pool observations and candidate raw health, level and
-   faction values, not gameplay authorization. These logs contain identifying
+   record]` log read-only pool observations and candidate raw health, level,
+   faction and indexed power values. `[70707 action research]` prints the first
+   twelve raw candidate action qwords. None authorizes gameplay. These logs contain identifying
    information and process addresses. With the bot stopped, Combat Settings →
    Factions → Scan nearby also logs a selection-free 70707 research report;
    candidate keys and approximate distances do not establish attackability.

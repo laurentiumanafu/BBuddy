@@ -749,12 +749,42 @@ namespace Styx.WoWInternals
                             detail += " rawUnit+0x1E20..0x1E5C=" + string.Join(" ", words) +
                                 $"; raw candidates hp={hp}/{maxHp}, level={rawWords[levelIndex]}, factionKey={rawWords[factionIndex]}" +
                                 " (unverified; health may be scaled or overridden; never an attackability verdict)";
+                            if (localPlayer)
+                            {
+                                try { detail += DescribeExperimentalPower(found, expected, rawUnit, BitConverter.ToUInt64(header, 0)); }
+                                catch { detail += "; raw power candidates unavailable"; }
+                            }
                         }
                     }
                 }
             }
             // The record can change even if the selected GUID stays the same.
             return detail;
+        }
+
+        // Research only: the 70707 client indexes these arrays by a helper,
+        // so an array index is not automatically the active power type.
+        private string DescribeExperimentalPower(WowBPoolObject record, WowBGuid expected, ulong unit, ulong expectedVtable)
+        {
+            byte[]? type = _memory.ReadBytes64(unit + 0x1E21, 1);
+            if (type == null || type.Length != 1 ||
+                !TryReadWords(unit + Wow70707Offsets.PowerArrayCandidateOffset, 8, out uint[] power) ||
+                !TryReadWords(unit + Wow70707Offsets.MaxPowerArrayCandidateOffset, 8, out uint[] maximum) ||
+                !TryReadWords(unit + Wow70707Offsets.PowerArrayCandidateOffset, 8, out uint[] powerAfter) ||
+                !TryReadWords(unit + Wow70707Offsets.MaxPowerArrayCandidateOffset, 8, out uint[] maximumAfter)) return "";
+            byte[]? typeAfter = _memory.ReadBytes64(unit + 0x1E21, 1);
+            byte[]? ptrAfter = _memory.ReadBytes64(record.RecordPtr + WowBOffsets.RecordDataBlockPtrOffset, 8);
+            byte[]? headerAfter = _memory.ReadBytes64(unit, 0x20);
+            if (typeAfter == null || typeAfter.Length != 1 || typeAfter[0] != type[0] ||
+                ptrAfter == null || ptrAfter.Length != 8 || BitConverter.ToUInt64(ptrAfter, 0) != unit ||
+                headerAfter == null || headerAfter.Length != 0x20 || BitConverter.ToUInt64(headerAfter, 0) != expectedVtable ||
+                BitConverter.ToUInt64(headerAfter, 8) != record.RecordPtr ||
+                new WowBGuid(BitConverter.ToUInt64(headerAfter, 0x10), BitConverter.ToUInt64(headerAfter, 0x18)) != expected ||
+                !IsPoolRecordCurrent(record) || !TryReadGuid(Abs(PlayerGuidRva), out WowBGuid currentGuid) || currentGuid != expected) return "";
+            for (int i = 0; i < power.Length; i++)
+                if (power[i] != powerAfter[i] || maximum[i] != maximumAfter[i]) return "";
+            return $"; rawPowerTypeByte=0x{type[0]:X2}, rawUnit+0x1BC0=[{string.Join(",", power)}], " +
+                $"rawUnit+0x20F0=[{string.Join(",", maximum)}] (candidate indexed arrays, meaning and active index unverified)";
         }
 
         /// <summary>
@@ -1058,6 +1088,9 @@ namespace Styx.WoWInternals
         public List<WowBActionSlot> ReadActionBar()
         {
             var slots = new List<WowBActionSlot>();
+            // The 70291 array is outside the 70707 image; the replacement is
+            // research-only until its live layout and hotkeys are verified.
+            if (_experimental70707) return slots;
             byte[]? bytes = _memory.ReadBytes64(Abs(WowBOffsets.StoredActionArray), ActionSlotCount * 8);
             if (bytes == null || bytes.Length != ActionSlotCount * 8)
                 return slots;
@@ -1068,6 +1101,33 @@ namespace Styx.WoWInternals
                 slots.Add(new WowBActionSlot(i + 1, raw));
             }
             return slots;
+        }
+
+        /// <summary>
+        /// Read-only 70707 action-array candidate; no slot meaning or key binding
+        /// is inferred and this output must not be used to drive a rotation.
+        /// </summary>
+        public string DescribeExperimentalActionBar()
+        {
+            if (!_experimental70707) return "70707 candidate profile is not active";
+            using var uncached = _memory.TemporaryCacheState(false);
+            const int count = 12;
+            if (!TryReadGuid(Abs(PlayerGuidRva), out WowBGuid before) || before.IsEmpty) return "player GUID unavailable";
+            ulong address = Abs(Wow70707Offsets.StoredActionArrayCandidate);
+            byte[]? first = _memory.ReadBytes64(address, count * 8);
+            byte[]? second = _memory.ReadBytes64(address, count * 8);
+            if (first == null || second == null || first.Length != count * 8 || second.Length != count * 8 ||
+                !TryReadGuid(Abs(PlayerGuidRva), out WowBGuid after) || before != after) return "array or player unavailable/changed";
+            for (int i = 0; i < first.Length; i++)
+                if (first[i] != second[i]) return "candidate array changed; discarded";
+            var values = new string[count];
+            for (int i = 0; i < count; i++)
+            {
+                ulong raw = BitConverter.ToUInt64(first, i * 8);
+                values[i] = $"{i + 1}:0x{raw:X16}";
+            }
+            return "first 12 candidate qwords [index:raw]=" + string.Join(" ", values) +
+                " (unverified ordering, packing and key bindings; read-only, not used for combat)";
         }
 
         private bool TryReadUInt32(ulong address, out uint value)
