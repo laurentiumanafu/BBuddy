@@ -489,6 +489,8 @@ namespace CopilotBuddy.UI
                 : string.Format(CultureInfo.InvariantCulture,
                     "{0}, {1} step(s). The plan runs top to bottom: it is what sells the loot, so it has to "
                     + "match the merchant window's own layout.", point, point.Steps.Count);
+            lblVendorPlan.Text += " Town map: " + (point.TownMap.HasValue ? point.TownMap.Value.ToString(CultureInfo.InvariantCulture) : "not recorded")
+                + "; confirmed merchant GUIDs: " + point.MerchantGuids.Count.ToString(CultureInfo.InvariantCulture) + ".";
         }
 
         private void lstVendors_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -545,6 +547,41 @@ namespace CopilotBuddy.UI
         {
             try { return ObjectManager.Wow.WindowHandle; }
             catch { return IntPtr.Zero; }
+        }
+
+        private void btnRecordTown_Click(object sender, RoutedEventArgs e)
+        {
+            if (ClickAimUi.Running || ClickAimUi.Paused) { lblVendorNote.Text = "Stop the bot before recording a town hotspot."; return; }
+            int index = SelectedVendorIndex();
+            if (index < 0) { lblVendorNote.Text = "Add a vendor point first; select its existing click plan before recording the town hotspot."; return; }
+            WowBReader? reader = ObjectManager.WowB;
+            if (reader == null || !reader.TryReadMapId(out uint map) || !ClickAimPositions.TryRead(out double x, out double y))
+            { lblVendorNote.Text = "Map or player position unavailable; stand in town on wowb.exe and retry."; return; }
+            double z = ClickAimPositions.Z();
+            if (!double.IsFinite(z)) { lblVendorNote.Text = "Player height unavailable; town hotspot not recorded."; return; }
+            if (System.Windows.MessageBox.Show("Replace the selected plan's town hotspot? Its recorded clicks stay, but previously remembered merchants must be recorded again.",
+                "Record town", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+            if (ClickAimUi.Running || ClickAimUi.Paused || ObjectManager.WowB != reader || !reader.TryReadMapId(out uint finalMap) || finalMap != map ||
+                !ClickAimPositions.TryRead(out x, out y) || !double.IsFinite(z = ClickAimPositions.Z()))
+            { lblVendorNote.Text = "Player, map or bot state changed; town hotspot not saved."; return; }
+            if (!VendorFile.SetTown(index, x, y, z, map, out string error)) { lblVendorNote.Text = "Town hotspot could not be saved: " + error; return; }
+            LoadVendor(); lstVendors.SelectedIndex = index;
+            lblVendorNote.Text = "Town hotspot saved; the click plan was preserved. Select a known merchant and press Remember selected merchant.";
+        }
+
+        private void btnRememberMerchant_Click(object sender, RoutedEventArgs e)
+        {
+            if (ClickAimUi.Running || ClickAimUi.Paused) { lblVendorNote.Text = "Stop the bot before remembering a merchant."; return; }
+            int index = SelectedVendorIndex();
+            if (index < 0) { lblVendorNote.Text = "Select a town point first."; return; }
+            if (!WowBKnownMerchants.CaptureSelected(out WowBGuid guid, out uint map, out string reason)) { lblVendorNote.Text = reason; return; }
+            if (System.Windows.MessageBox.Show("Only continue if the selected NPC is a merchant you have personally verified. The bot cannot yet detect merchant type. Remember " + guid + "?",
+                "Remember merchant", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
+            if (!WowBKnownMerchants.CaptureSelected(out WowBGuid finalGuid, out uint finalMap, out string finalReason) || finalGuid != guid || finalMap != map)
+            { lblVendorNote.Text = "Selection or map changed; merchant not saved. " + finalReason; return; }
+            if (!VendorFile.AddMerchant(index, guid.ToString(), map, out string error)) { lblVendorNote.Text = "Merchant was not saved: " + error; return; }
+            LoadVendor(); lstVendors.SelectedIndex = index;
+            lblVendorNote.Text = "Recorded merchant " + guid + ". This is user-confirmed, not an automatically detected merchant type.";
         }
 
         private void btnVendorAdd_Click(object sender, RoutedEventArgs e)

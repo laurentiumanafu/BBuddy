@@ -138,6 +138,8 @@ internal static class VendorFile
         public double X { get; set; }
         public double Y { get; set; }
         public double Z { get; set; }
+        public uint? TownMap { get; set; }
+        public List<string> MerchantGuids { get; } = new List<string>();
         public List<Step> Steps { get; } = new List<Step>();
 
         public override string ToString()
@@ -187,15 +189,36 @@ internal static class VendorFile
                     Y = ReadDouble(element, "Y"),
                     Z = ReadDouble(element, "Z")
                 };
-                if (Math.Abs(point.X) > 100000.0 || Math.Abs(point.Y) > 100000.0) continue;
+                string? rawMap = (string?)element.Attribute("TownMap");
+                if (rawMap != null)
+                {
+                    if (!uint.TryParse(rawMap, NumberStyles.None, CultureInfo.InvariantCulture, out uint map))
+                        throw new FormatException("Invalid town map id");
+                    point.TownMap = map;
+                }
+                if (!double.IsFinite(point.X) || !double.IsFinite(point.Y) || !double.IsFinite(point.Z) || Math.Abs(point.X) > 100000.0 || Math.Abs(point.Y) > 100000.0)
+                    throw new FormatException("Invalid vendor coordinates");
+                if (point.TownMap.HasValue &&
+                    (!double.TryParse((string?)element.Attribute("X"), NumberStyles.Float, CultureInfo.InvariantCulture, out _) ||
+                     !double.TryParse((string?)element.Attribute("Y"), NumberStyles.Float, CultureInfo.InvariantCulture, out _) ||
+                     !double.TryParse((string?)element.Attribute("Z"), NumberStyles.Float, CultureInfo.InvariantCulture, out _)))
+                    throw new FormatException("Invalid town coordinates");
                 if (point.Name.Length == 0) point.Name = "vendor " + (points.Count + 1).ToString(CultureInfo.InvariantCulture);
 
                 foreach (XElement stepElement in element.Elements())
                 {
+                    if (string.Equals(stepElement.Name.LocalName, "Merchant", StringComparison.OrdinalIgnoreCase))
+                    {
+                        string guid = ((string?)stepElement.Attribute("Guid") ?? "").Trim();
+                        if (!ValidMerchantGuid(guid)) throw new FormatException("Invalid recorded merchant GUID");
+                        if (!point.MerchantGuids.Contains(guid)) point.MerchantGuids.Add(guid);
+                        continue;
+                    }
                     if (!string.Equals(stepElement.Name.LocalName, "Step", StringComparison.OrdinalIgnoreCase))
                         continue;
                     Step? step = ReadStep(stepElement);
-                    if (step != null) point.Steps.Add(step);
+                    if (step == null) throw new FormatException("Invalid sell step in vendor plan");
+                    point.Steps.Add(step);
                 }
 
                 points.Add(point);
@@ -220,7 +243,7 @@ internal static class VendorFile
         };
         if (step.WaitMs <= 0) step.WaitMs = 300;
 
-        if (step.IsClick && (step.Fx <= 0.0 || step.Fx >= 1.0 || step.Fy <= 0.0 || step.Fy >= 1.0))
+        if (step.IsClick && (!double.IsFinite(step.Fx) || !double.IsFinite(step.Fy) || step.Fx <= 0.0 || step.Fx >= 1.0 || step.Fy <= 0.0 || step.Fy >= 1.0))
             return null;                       // a click at the edge of the window is a typo
         if (!step.IsClick && !step.IsKey && !step.IsWait) return null;
         return step;
@@ -269,6 +292,64 @@ internal static class VendorFile
             error = ex.Message;
             return -1;
         }
+    }
+
+    private static bool ValidMerchantGuid(string guid)
+    {
+        if (guid.Length != 34 || !guid.StartsWith("0x", StringComparison.Ordinal)) return false;
+        return ulong.TryParse(guid.Substring(2, 16), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out ulong high) &&
+               ulong.TryParse(guid.Substring(18, 16), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out ulong low) &&
+               (high != 0 || low != 0);
+    }
+
+    // Change only the selected point's location, keeping its recorded sell plan.
+    public static bool SetTown(int index, double x, double y, double z, uint map, out string error, string? path = null)
+    {
+        error = ""; string file = path ?? DefaultPath;
+        if (!double.IsFinite(x) || !double.IsFinite(y) || !double.IsFinite(z) || Math.Abs(x) > 100000 || Math.Abs(y) > 100000)
+        { error = "Town position is invalid"; return false; }
+        try
+        {
+            lock (Gate)
+            {
+                if (!File.Exists(file)) { error = "Add a vendor point first"; return false; }
+                XDocument doc = XDocument.Load(file); XElement? target = VendorAt(doc, index);
+                if (target == null) { error = "Select a vendor point first"; return false; }
+                target.SetAttributeValue("X", x.ToString("0.000", CultureInfo.InvariantCulture));
+                target.SetAttributeValue("Y", y.ToString("0.000", CultureInfo.InvariantCulture));
+                target.SetAttributeValue("Z", z.ToString("0.000", CultureInfo.InvariantCulture));
+                target.SetAttributeValue("TownMap", map.ToString(CultureInfo.InvariantCulture));
+                // Registered full GUIDs can belong to a different town. Reconfirm them.
+                var oldMerchants = new List<XElement>();
+                foreach (XElement element in target.Elements())
+                    if (string.Equals(element.Name.LocalName, "Merchant", StringComparison.OrdinalIgnoreCase)) oldMerchants.Add(element);
+                for (int i = 0; i < oldMerchants.Count; i++) oldMerchants[i].Remove();
+                Save(doc, file); return true;
+            }
+        }
+        catch (Exception ex) { error = ex.Message; return false; }
+    }
+
+    public static bool AddMerchant(int index, string guid, uint map, out string error, string? path = null)
+    {
+        error = ""; string file = path ?? DefaultPath;
+        if (!ValidMerchantGuid(guid)) { error = "Invalid merchant GUID"; return false; }
+        try
+        {
+            lock (Gate)
+            {
+                if (!File.Exists(file)) { error = "Add a vendor point first"; return false; }
+                XDocument doc = XDocument.Load(file); XElement? target = VendorAt(doc, index);
+                if (target == null || !uint.TryParse((string?)target.Attribute("TownMap"), NumberStyles.None, CultureInfo.InvariantCulture, out uint townMap) || townMap != map)
+                { error = "Record the selected town hotspot on this map first"; return false; }
+                foreach (XElement existing in target.Elements())
+                    if (string.Equals(existing.Name.LocalName, "Merchant", StringComparison.OrdinalIgnoreCase) &&
+                        string.Equals((string?)existing.Attribute("Guid"), guid, StringComparison.Ordinal)) return true;
+                target.Add(new XElement("Merchant", new XAttribute("Guid", guid)));
+                Save(doc, file); return true;
+            }
+        }
+        catch (Exception ex) { error = ex.Message; return false; }
     }
 
     /// <summary>Appends one step to the point at <paramref name="index"/> (0-based).</summary>
@@ -323,7 +404,8 @@ internal static class VendorFile
                 if (target == null) { error = "there is no vendor point to clear"; return false; }
 
                 var steps = new List<XElement>();
-                foreach (XElement element in target.Elements()) steps.Add(element);
+                foreach (XElement element in target.Elements())
+                    if (string.Equals(element.Name.LocalName, "Step", StringComparison.OrdinalIgnoreCase)) steps.Add(element);
                 for (int i = 0; i < steps.Count; i++) steps[i].Remove();
 
                 Save(doc, file);
@@ -544,11 +626,11 @@ internal static class VendorFile
 
     private static XElement? VendorAt(XDocument doc, int index)
     {
-        XElement? vendors = doc.Root?.Element("Vendors");
-        if (vendors == null) return null;
+        if (doc.Root == null) return null;
         int at = 0;
-        foreach (XElement element in vendors.Elements("Vendor"))
+        foreach (XElement element in doc.Root.Descendants())
         {
+            if (!string.Equals(element.Name.LocalName, "Vendor", StringComparison.OrdinalIgnoreCase)) continue;
             if (at == index) return element;
             at++;
         }

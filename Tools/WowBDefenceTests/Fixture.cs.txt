@@ -38,6 +38,7 @@ namespace Styx.WoWInternals
         public WowBGuid Selected;
         public Action? AfterTargetRead;
         public bool TryGetUnitFields(ulong address, out WowBUnitFields fields) => Fields.TryGetValue(address, out fields);
+        public bool TryReadMapId(out uint map) { map = 1; return true; }
         public WowBGuid ReadTargetGuid() { WowBGuid result = Selected; AfterTargetRead?.Invoke(); return result; }
     }
     sealed class WowBWorldSnapshot
@@ -64,12 +65,18 @@ namespace Styx.Logic.Pathing
     static class ClickAimAbort { public static bool Requested; public static bool Wait(int ms) => Requested; }
     static class ClickAimMath { public static double Len(double x, double y) => Math.Sqrt(x*x + y*y); }
     struct WoWPoint { public double X, Y, Z; public WoWPoint(double x, double y, double z) { X=x; Y=y; Z=z; } }
-    sealed class RoutePoint { public double X, Y, Z; public string Kind = ""; }
+    sealed class RoutePoint { public double X, Y, Z; public string Kind = "", Label = ""; }
     static class NavGridStore { public static int MapId = 1; }
     static class ClickAimDiagnostics { public static uint ResolveMap(uint map, double x, double y) => map; }
     static class ClickAimPositions { public static bool TryRead(out double x, out double y) { x = Harness.X; y = 0; return true; } }
+    sealed class ClickAimMover { }
+    static class BagSlotHunt { public static void Sample(string label) { } }
     static class RouteRunner
     {
+        public static Func<bool>? ShouldInterrupt;
+        public static bool PollInterruptDuringWalk, RequireMeshDuringSession, LastRunInterrupted;
+        public static bool RunWithinSession(ClickAimMover mover, IList<RoutePoint> route, int legs)
+        { Harness.VendorRouteCalls++; return Harness.VendorRouteWorks && RequireMeshDuringSession && !(ShouldInterrupt?.Invoke() ?? false); }
         public static WoWPoint[]? TryCombatMeshPath(double x, double y, RoutePoint goal)
         {
             Harness.PathQueries++;
@@ -96,6 +103,7 @@ namespace Styx.Logic.Pathing
         public static WowBGuid TabTarget = Harness.TargetGuid;
         public static int Keys, Clicks;
         public static void Click(IntPtr hwnd, int x, int y) { Clicks++; }
+        public static bool ClickFraction(IntPtr hwnd, double x, double y, bool right) { Clicks++; return true; }
         public static void TapKey(IntPtr hwnd, int key, int ms)
         {
             Keys++;
@@ -125,11 +133,27 @@ namespace Styx.Logic.Pathing
         { bool allowed = PerUnit.TryGetValue(unit.UnitAddress, out bool value) ? value : Allowed;
           unknown = GrindFactionSettings.Rules.Enabled && !allowed && !KnownRejected.Contains(unit.UnitAddress); return !GrindFactionSettings.Rules.Enabled || allowed; }
     }
+    static class ClickAimSettings { public static int VendorSearchYd = 25, VendorWaitMs = 0, SellAfterLoots = 40; public static bool AutoSell = true; }
+    static class VendorFile
+    {
+        public sealed class Step { public bool IsWait, IsKey, IsClick, IsRightClick; public int WaitMs, Vk; public double Fx, Fy; }
+        public static List<VendorPoint> Points = new();
+        public static List<VendorPoint> Read() => Points;
+        public sealed class VendorPoint { public double X, Y, Z; public string Name = "town"; public uint? TownMap; public List<string> MerchantGuids = new(); public List<Step> Steps = new(); }
+    }
+    static class WowBKnownMerchants
+    {
+        public static bool IsRecordedLive(VendorFile.VendorPoint point, WowBObservedUnit unit, GreenMagic.Memory? memory, WowBReader? reader)
+            => memory != null && reader != null && point.MerchantGuids.Contains(unit.Guid.ToString()) && reader.TryGetUnitFields(unit.UnitAddress, out var fields) && fields.Health > 0;
+    }
     static class Harness
     {
         // __PRODUCTION_LEVEL_CONSTANTS__
-        private static bool _stop, _vendorDue, _combatHold, _running, _clickBiasKnown;
-        private static int _clickBiasX, _clickBiasY;
+        private static bool _stop, _vendorDue, _combatHold, _running, _clickBiasKnown, _vendorImpossible, _vendorManualPending;
+        private static int _vendorRetryAt, _killsSinceTrip, _lootsSinceTrip, _interruptQuietUntil;
+        internal static int VendorRouteCalls; internal static bool VendorRouteWorks = true;
+        private static bool StopForRest(IntPtr hwnd) => !ClickAimAbort.Requested && !_stop;
+        private static int _clickBiasX, _clickBiasY, _presses, _clicks, _sellClicks;
         private static bool TryProject(IntPtr hwnd, double px, double py, double x, double y, double z, out int dx, out int dy)
         { dx = dy = 0; return true; }
         private static bool FindUnitPixel(IntPtr hwnd, WowBObservedUnit unit, double px, double py,
@@ -146,6 +170,7 @@ namespace Styx.Logic.Pathing
         private static readonly HashSet<WowBGuid> _notViable = new();
         private static readonly Dictionary<WowBGuid, int> _tabRefusedUntil = new();
         private static bool InRealCombat() => Combat;
+        private static bool UnderAttack() => Combat;
         private static WowBWorldSnapshot snapshot = null!;
         internal static bool Combat, CombatReadable;
         internal static readonly WowBGuid PlayerGuid = new(1), TargetGuid = new(2);
@@ -199,6 +224,7 @@ namespace Styx.Logic.Pathing
             NoPath = CombatOnPlan = StopOnPlan = VendorOnPlan = false; PathQueries = 0;
             WowBGrindFactions.Allowed = true; WowBGrindFactions.PerUnit.Clear(); WowBGrindFactions.KnownRejected.Clear(); GrindFactionSettings.Rules.Enabled = false;
             stopOnStep = combatOnStep = vendorOnStep = nearerOnStep = false;
+            VendorFile.Points.Clear(); VendorRouteCalls = 0; VendorRouteWorks = true; _vendorImpossible = false; _vendorManualPending = false; _vendorRetryAt = _killsSinceTrip = _lootsSinceTrip = _interruptQuietUntil = 0;
             ClickAimKeySteer.Releases = 0;
         }
         private static void Require(bool condition, string name) { if (!condition) throw new Exception(name); }
@@ -267,6 +293,43 @@ namespace Styx.Logic.Pathing
             Setup(5); ClickAimInput.StopOnTap = true; Require(Defend() == "stopped" && fightCalls == 0 && ClickAimInput.Keys == 1, "STOP during TAB blocks fight");
             Setup(5); CombatReadable = false; Require(Defend() == "" && fightCalls == 0 && ClickAimInput.Keys == 0, "unreadable combat blocks defence input");
             Setup(5); ClickAimAbort.Requested = true; Require(Defend() == "" && fightCalls == 0 && ClickAimInput.Keys == 0, "STOP blocks defence input");
+            Setup(5); Combat = false; _running = true; _killsSinceTrip = 40; _lootsSinceTrip = 39;
+            Require(!VendorDue(), "kills cannot trigger loot-only threshold");
+            _lootsSinceTrip = 40; Require(VendorDue(), "40 looted bodies trigger trip");
+            ClickAimSettings.AutoSell = false; _lootsSinceTrip = 0; _vendorManualPending = true;
+            Require(VendorDue(), "interrupted manual request retries even when auto selling is off"); ClickAimSettings.AutoSell = true;
+            Setup(5, distance: 4); Combat = false; var town = new VendorFile.VendorPoint { TownMap = 1 }; town.MerchantGuids.Add(TargetGuid.ToString());
+            Require(TryFindVendorNpc(town, out var selectedMerchant, out double selectedDistance) && selectedMerchant.Guid == TargetGuid && selectedDistance == 4, "nearest recorded merchant found");
+            var unknownNear = new WowBObservedUnit { Guid = new WowBGuid(3), UnitAddress = 3, RecordAddress = 30, Location = new Location { X = 2 } };
+            snapshot.Units.Add(unknownNear); ObjectManager.WowB!.Fields[3] = new WowBReader.WowBUnitFields { Health = 100, Level = 5 };
+            Require(TryFindVendorNpc(town, out selectedMerchant, out selectedDistance) && selectedMerchant.Guid == TargetGuid, "closer unconfirmed NPC ignored");
+            Require(TryClickRecordedMerchant(new IntPtr(1), town, selectedMerchant, out _) && ClickAimInput.Clicks == 1, "verified merchant selection right-clicked");
+            Setup(5, distance: 4); Combat = true;
+            Require(!TryFindVendorNpc(town, out _, out _) && !TryClickRecordedMerchant(new IntPtr(1), town, snapshot.Units[1], out _), "combat blocks merchant search and click");
+            Setup(5, distance: 4); Combat = false; town.MerchantGuids.Clear();
+            Require(!TryFindVendorNpc(town, out _, out _) && !TryClickRecordedMerchant(new IntPtr(1), town, snapshot.Units[1], out _), "unrecorded NPC not used");
+            town.MerchantGuids.Add(TargetGuid.ToString()); town.TownMap = 2;
+            Require(!TryFindVendorNpc(town, out _, out _), "wrong map blocks search");
+            town.TownMap = 1; ObjectManager.WowB!.Selected = TargetGuid; ClickAimInput.F1Works = false;
+            Require(!TryClickRecordedMerchant(new IntPtr(1), town, snapshot.Units[1], out _) && ClickAimInput.Clicks == 0, "F1 failure blocks unsafe merchant click");
+            Setup(5, distance: 4); Combat = false; town.Steps.Add(new VendorFile.Step { IsClick = true, IsRightClick = true, WaitMs = 1 });
+            ObjectManager.WowB!.Selected = TargetGuid;
+            Require(RunSellPlan(new IntPtr(1), town, snapshot.Units[1]) == 1 && ClickAimInput.Clicks == 1, "recorded plan replays for selected known merchant");
+            Setup(5, distance: 4); Combat = false; ObjectManager.WowB!.Selected = TargetGuid; town.Steps.Clear(); town.Steps.Add(new VendorFile.Step { IsKey = true, Vk = 66 }); ClickAimInput.StopOnTap = true;
+            Require(RunSellPlan(new IntPtr(1), town, snapshot.Units[1]) == 0, "STOP during plan is not counted as complete");
+            town.Steps.Clear(); town.Steps.Add(new VendorFile.Step { IsClick = true });
+            Setup(5, distance: 4); Combat = true; ObjectManager.WowB!.Selected = TargetGuid;
+            Require(RunSellPlan(new IntPtr(1), town, snapshot.Units[1]) == 0 && ClickAimInput.Clicks == 0, "combat blocks sell plan");
+            Setup(5, distance: 4); Combat = false; town = new VendorFile.VendorPoint { TownMap = 1 }; town.MerchantGuids.Add(TargetGuid.ToString());
+            town.Steps.Add(new VendorFile.Step { IsClick = true, IsRightClick = true, WaitMs = 1 }); VendorFile.Points.Add(town);
+            var wrongMap = new VendorFile.VendorPoint { TownMap = 2 }; wrongMap.MerchantGuids.Add(TargetGuid.ToString()); wrongMap.Steps.Add(new VendorFile.Step { IsClick = true }); VendorFile.Points.Insert(0, wrongMap);
+            Func<bool> oldInterrupt = () => false; RouteRunner.ShouldInterrupt = oldInterrupt; RouteRunner.PollInterruptDuringWalk = false; RouteRunner.RequireMeshDuringSession = false;
+            Require(VendorTrip(new IntPtr(1), new ClickAimMover()) && VendorRouteCalls == 1 && ClickAimInput.Clicks == 2, "town trip uses mesh and replays recorded combo after verified click");
+            Require(RouteRunner.ShouldInterrupt == oldInterrupt && !RouteRunner.PollInterruptDuringWalk && !RouteRunner.RequireMeshDuringSession, "town route restores shared route flags");
+            Setup(5, distance: 4); Combat = false; town = new VendorFile.VendorPoint { TownMap = 1 }; VendorFile.Points.Add(town);
+            Require(!VendorTrip(new IntPtr(1), new ClickAimMover()) && VendorRouteCalls == 0 && ClickAimInput.Clicks == 0, "town trip refuses unknown merchant before routing");
+            Setup(5, distance: 4); Combat = false; town = new VendorFile.VendorPoint { TownMap = 1 }; town.MerchantGuids.Add(TargetGuid.ToString()); town.Steps.Add(new VendorFile.Step { IsClick = true }); VendorFile.Points.Add(town); VendorRouteWorks = false;
+            Require(!VendorTrip(new IntPtr(1), new ClickAimMover()) && ClickAimInput.Clicks == 0, "failed mesh route cannot interact");
             Setup(5); Combat = false; ObjectManager.WowB!.Selected = TargetGuid;
             Require(ClearFactionSelection(new IntPtr(1), ObjectManager.WowB, PlayerGuid, TargetGuid) && ObjectManager.WowB.Selected == PlayerGuid, "unlisted selection cleared and verified");
             Setup(5); Combat = false; ObjectManager.WowB!.Selected = new WowBGuid(999);

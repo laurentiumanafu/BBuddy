@@ -23,6 +23,7 @@ approach_policy = source[source.index("    private static bool ShouldApproachPoo
 approach = source[source.index("    private static string ApproachPoolCandidate("):source.index("    /// <summary>\n    /// Drops a target the fight could not walk to")]
 dismiss = source[source.index("    private static void DismissRejectedSelection("):source.index("    /// <summary>\n    /// Whether a mob of")]
 click_unit = source[source.index("    private static bool TryClickUnit(IntPtr hwnd, WowBObservedUnit unit, double px, double py,\n"):source.index("    /// <summary>\n    /// Finds the screen pixel")]
+vendor_policy = source[source.index("    private static bool WaitVendorSafe("):source.index("    /// <summary>\n    /// Walks to one corpse")]
 chase = source[source.index("    private sealed class ChaseWatch"):source.index("    // A pool unit's position is only a navigation lead")]
 # Guard the control-flow wiring as well: approach is before pixel search and
 # both outer loops retry after it, rather than treating movement as a fight.
@@ -48,13 +49,20 @@ start_profile = source[source.index("    public static bool Start("):source.inde
 start_roaming = source[source.index("    internal static bool StartRoaming("):source.index("    private static", source.index("    internal static bool StartRoaming(") + 30)]
 assert "WowBGrindFactions.PrepareForGrind" in start_profile and "WowBGrindFactions.PrepareForGrind" in start_roaming
 assert fixture.count("// __PRODUCTION_METHODS__") == 1
-fixture = fixture.replace("// __PRODUCTION_METHODS__", level + "\n" + selection + "\n" + current_selection + "\n" + dismissible + "\n" + pull + "\n" + nearest + "\n" + approach_policy + "\n" + defence + "\n" + approach + "\n" + dismiss + "\n" + click_unit + "\n" + chase)
+vendor_due = source[source.index("    private static bool VendorDue("):source.index("    /// <summary>\n    /// The original CopilotBuddy selling procedure")]
+vendor_trip = source[source.index("    private static bool VendorTrip("):source.index("    private static bool WaitVendorSafe(")]
+assert "RouteRunner.RequireMeshDuringSession = true" in vendor_trip
+assert "TryClickRecordedMerchant(hwnd, point, npc" in vendor_trip
+assert "ChaseStep(hwnd, vendorWatch, npc" in vendor_trip
+assert "TryClickUnit(hwnd, npc" not in vendor_trip
+assert "return _lootsSinceTrip >= after;" in source
+fixture = fixture.replace("// __PRODUCTION_METHODS__", vendor_due + "\n" + vendor_trip + "\n" + vendor_policy + "\n" + level + "\n" + selection + "\n" + current_selection + "\n" + dismissible + "\n" + pull + "\n" + nearest + "\n" + approach_policy + "\n" + defence + "\n" + approach + "\n" + dismiss + "\n" + click_unit + "\n" + chase)
 # Read constants from production so boundary and movement tests cannot pass
 # against stale copies of the thresholds or watchdog limits.
 constants = []
 for name in ("LevelAbovePlayer", "LevelBelowPlayer", "SearchYd", "PullYd", "GiveUpYd", "PoolApproachYd", "FactionApproachYd",
              "PoolApproachTimeoutMs", "GatherDefenceRadius", "TabVk", "TabSettleMs", "NotAFightFlag",
-             "StuckMoveYd", "StuckMs", "StuckEscapes", "ChaseNoClosingMs"):
+             "StuckMoveYd", "StuckMs", "StuckEscapes", "ChaseNoClosingMs", "VendorReachYd", "SellPlanMaxSteps", "VendorWalkMs", "VendorRetryMs", "VendorRetryAfterFightMs", "VendorNpcAttempts", "InterruptRetryMs"):
     matches = re.findall(r"^\s*private const (?:int|uint|double) " + name + r"\s*=[^;\r\n]+;", source, re.MULTILINE)
     if len(matches) != 1:
         raise ValueError("Expected exactly one production constant " + name)

@@ -2417,3 +2417,32 @@ In Grind, unknown/changed/blocked keys are withheld from voluntary pulls **and d
 ### Target Info for vendor investigation (70291)
 
 Stop the bot, select an NPC, and press **Combat settings → Selling → Target Info**. The button writes a read-only, bounded snapshot to the bot log: GUIDs and process addresses, position, distance, health, level, flags, power, faction key, and uninterpreted record/unit memory words. It sends no keys, clicks or Lua. The sampled target and attachment are checked before and after capture; changes discard the report, but non-atomic reads can still miss transient changes. Unreadable windows are marked. NPC name, merchant status, inventories and attacker identity are not established. The log contains process addresses and GUIDs; review it before sharing. This diagnostic does not fix or verify selling.
+
+### Town hotspot and confirmed merchants (70291)
+
+This replaces the previous nearby-NPC guess for Grind selling. **It does not
+identify merchant types automatically:** the merchant capture's candidate flag
+is not independently validated. Instead, stop the bot, select an existing
+vendor plan in **Combat settings → Selling** (or add one), stand in town and
+press **Record town hotspot**. This preserves the plan's recorded steps but
+clears any merchants previously registered to that point. Select a merchant you
+have personally verified and press **Remember selected merchant**, confirming
+the warning. Repeat for other merchants on the same map; the nearest *recorded,
+currently live* one in the configured search radius is used. The full 128-bit
+GUID is saved; if it changes or the NPC is unloaded, it must be selected and
+remembered again. A recorded GUID is not proof that the unit is a merchant.
+Existing plans without a recorded map and confirmed merchant are not used.
+
+Enable automatic selling and set the threshold to **40** (40 is the new default;
+existing saved settings are preserved), or press **Sell now** during a Grind
+run. The count represents corpse loot interactions, not independently verified
+loot or bag contents; kills alone do not trigger a trip. A complete plan on the
+current map is chosen, and both the town leg and final approach require mesh
+navigation. The bot rechecks combat, map, identity, selection and ~5 yd range,
+then sends a right-click and replays the existing recorded client-window
+click/key/wait steps. STOP and combat/unknown combat interrupt the route and
+plan; interrupted trips keep their counters and manual requests can retry. A
+partial plan may already have sent clicks before an interruption. The merchant
+window, bag contents and actual sales are **not verified**; replaying a plan is
+not evidence that selling succeeded. Match window size and UI layout to the
+recording. This flow requires live Windows/game validation.

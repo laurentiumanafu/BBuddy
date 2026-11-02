@@ -254,9 +254,9 @@ internal static class GrindRunner
 
     /// <summary>
     /// How close the character has to be before the vendor is right-clicked. Interaction range is
-    /// about 5 yd; 6 gives a yard of slack for a click that arrives a step late.
+    /// no more than 5 yd; the interaction is withheld if it is farther away.
     /// </summary>
-    private const double VendorReachYd = 6.0;
+    private const double VendorReachYd = 5.0;
 
     /// <summary>Snapshots taken at the vendor point before deciding there is no NPC there.</summary>
     private const int VendorNpcAttempts = 3;
@@ -381,6 +381,7 @@ internal static class GrindRunner
 
     /// <summary>Set when a trip cannot work at all (no point, no plan); selling stops for the run.</summary>
     private static bool _vendorImpossible;
+    private static bool _vendorManualPending;
 
     /// <summary>TickCount before which no trip is attempted again.</summary>
     private static int _vendorRetryAt;
@@ -629,6 +630,7 @@ internal static class GrindRunner
         _loots = 0;
         _lootProbed = false;
         _vendorDue = false;
+        _vendorManualPending = false;
         _vendorImpossible = false;
         _vendorRetryAt = 0;
         _lootsSinceTrip = 0;
@@ -2579,15 +2581,13 @@ internal static class GrindRunner
         if (_vendorImpossible) return false;
         if (unchecked(Environment.TickCount - _vendorRetryAt) < 0) return false;
 
+        if (_vendorManualPending) return true;
         if (!ClickAimSettings.AutoSell) return false;
         int after = ClickAimSettings.SellAfterLoots;
         if (after <= 0) return false;
 
-        /* "20 monsters are defeated" is the user's own rule, and a kill and a loot are the same
-         * corpse. Counted separately and compared separately: whichever number gets there first
-         * is the one that decides, so an unlootable body still fills a bag slot and a body cannot
-         * be counted twice. */
-        return _killsSinceTrip >= after || _lootsSinceTrip >= after;
+        // Count looted bodies only: kills alone do not imply a bag item was acquired.
+        return _lootsSinceTrip >= after;
     }
 
     /// <summary>
@@ -2614,7 +2614,9 @@ internal static class GrindRunner
     /// </summary>
     private static bool VendorTrip(IntPtr hwnd, ClickAimMover mover)
     {
+        _vendorManualPending |= _vendorDue;
         _vendorDue = false;
+        _vendorImpossible = false;
 
         /* A malformed file must not take the whole run down with it: this is a plan, not a
          * requirement, and the loop has a fight to get back to. */
@@ -2644,20 +2646,24 @@ internal static class GrindRunner
             return false;
         }
 
-        int at = VendorFile.Nearest(points, px, py);
-        if (at < 0) return false;
-        VendorFile.VendorPoint point = points[at];
-
-        if (point.Steps.Count == 0)
+        WowBReader? vendorReader = ObjectManager.WowB;
+        if (vendorReader == null || !vendorReader.TryReadMapId(out uint currentMap))
+        { _vendorRetryAt = Environment.TickCount + VendorRetryAfterFightMs; Logging.Write("[Grind] map unreadable; town trip held"); return false; }
+        int at = -1; double closest = double.MaxValue;
+        for (int i = 0; i < points.Count; i++)
+        {
+            if (points[i].TownMap != currentMap || points[i].MerchantGuids.Count == 0 ||
+                points[i].Steps.Count == 0 || points[i].Steps.Count > SellPlanMaxSteps) continue;
+            double townDistance = ClickAimMath.Len(points[i].X - px, points[i].Y - py);
+            if (double.IsFinite(townDistance) && townDistance < closest) { closest = townDistance; at = i; }
+        }
+        if (at < 0)
         {
             _vendorImpossible = true;
-            Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                "[Grind] the nearest vendor point ({0}) has no sell steps, so nothing would happen there. "
-                + "Record them in Combat settings -> Selling: the merchant window, then the items in the bags. "
-                + "Selling is off for the rest of this run.", point));
+            Logging.Write("[Grind] no complete sell plan has a town hotspot on this map, a user-confirmed merchant, and a nonempty plan within the step limit. Existing plans are unchanged; configure them under Selling.");
             return false;
         }
-
+        VendorFile.VendorPoint point = points[at];
         Logging.Write(string.Format(CultureInfo.InvariantCulture,
             "[Grind] selling first, before the next hotspot: {0} is {1:F0} yd away and has {2} recorded "
             + "step(s); {3} kill(s) and {4} looted bodie(s) since the last trip", point,
@@ -2670,12 +2676,17 @@ internal static class GrindRunner
          * trip is taken again afterwards, because the bags are still full. */
         // A pending vendor trip outranks new pulls; only actual/unknown combat
         // interrupts this leg. Do not reset the active session's STOP state.
-        RouteRunner.ShouldInterrupt = () => !TryReadGatherCombat(out bool fighting) || fighting;
+        var previousInterrupt = RouteRunner.ShouldInterrupt;
+        bool previousPoll = RouteRunner.PollInterruptDuringWalk;
+        bool previousRequireMesh = RouteRunner.RequireMeshDuringSession;
+        RouteRunner.ShouldInterrupt = () => !TryReadGatherCombat(out bool fighting) || fighting ||
+            ObjectManager.WowB != vendorReader || !vendorReader.TryReadMapId(out uint routeMap) || routeMap != currentMap;
         RouteRunner.PollInterruptDuringWalk = true;
+        RouteRunner.RequireMeshDuringSession = true;
         bool arrived = false;
         try { arrived = RouteRunner.RunWithinSession(mover, route, 1); }
-        catch (Exception ex) { Logging.Write("[Grind] the walk to the vendor failed: " + ex.Message); }
-        finally { RouteRunner.ShouldInterrupt = null; RouteRunner.PollInterruptDuringWalk = false; }
+        catch (Exception ex) { Logging.Write("[Grind] the walk to the town hotspot failed: " + ex.Message); }
+        finally { RouteRunner.ShouldInterrupt = previousInterrupt; RouteRunner.PollInterruptDuringWalk = previousPoll; RouteRunner.RequireMeshDuringSession = previousRequireMesh; }
 
         if (!arrived)
         {
@@ -2687,8 +2698,7 @@ internal static class GrindRunner
                  * character in place - the same brake a hotspot leg uses. */
                 _interruptQuietUntil = Environment.TickCount + InterruptRetryMs;
                 _vendorRetryAt = 0;
-                Logging.Write("[Grind] the walk to the vendor was cut short: there is something to fight on the "
-                              + "way. The trip is taken again as soon as that is dealt with.");
+                Logging.Write("[Grind] the town walk was interrupted by STOP, combat, an unreadable state or a map change. The trip remains pending.");
             }
             else
             {
@@ -2704,7 +2714,7 @@ internal static class GrindRunner
         bool found = false;
         for (int attempt = 0; attempt < VendorNpcAttempts && !_stop && !found; attempt++)
         {
-            if (TryFindVendorNpc(out npc, out npcYd)) { found = true; break; }
+            if (TryFindVendorNpc(point, out npc, out npcYd)) { found = true; break; }
             ClickAimAbort.Wait(400);
         }
 
@@ -2712,78 +2722,59 @@ internal static class GrindRunner
         {
             _vendorRetryAt = Environment.TickCount + VendorRetryMs;
             Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                "[Grind] standing on the vendor point {0} and no NPC answers within {1} yd. The point was "
-                + "captured {2:F0} yd away, so either the walk stopped short or the vendor is not there any more.",
+                "[Grind] no user-confirmed live merchant was found within {1} yd of the character at town point {0}. The point was {2:F0} yd away at departure.",
                 point, ClickAimSettings.VendorSearchYd, ClickAimMath.Len(point.X - px, point.Y - py)));
             return false;
         }
 
+        // Track the exact user-confirmed GUID and live object identity while
+        // following a complete mesh path. Never walk directly to a stale position.
         int walkStart = Environment.TickCount;
-        while (unchecked(Environment.TickCount - walkStart) < VendorWalkMs && !_stop)
+        var vendorWatch = new ChaseWatch(walkStart);
+        try
         {
-            if (!ClickAimPositions.TryRead(out px, out py)) break;
-            double d = ClickAimMath.Len(npc.Location.X - px, npc.Location.Y - py);
-            if (d <= VendorReachYd) break;
-
-            if (UnderAttack())
+            while (unchecked(Environment.TickCount - walkStart) < VendorWalkMs && !_stop && !ClickAimAbort.Requested)
             {
-                ClickAimKeySteer.ReleaseHeld();
-                _vendorRetryAt = Environment.TickCount + VendorRetryAfterFightMs;
-                Logging.Write("[Grind] something attacked the character on the way to the vendor - the trip "
-                              + "waits for the fight");
-                return false;
+                if (!VendorCandidateStillValid(point, npc, out WowBObservedUnit currentNpc, out WowBObservedUnit currentPlayer, out double distance))
+                { _vendorRetryAt = Environment.TickCount + VendorRetryAfterFightMs; Logging.Write("[Grind] merchant, map or combat state changed; town trip stopped"); return false; }
+                npc = currentNpc;
+                if (distance <= VendorReachYd) break;
+                if (!ChaseStep(hwnd, vendorWatch, npc, out string why, true))
+                { _vendorRetryAt = Environment.TickCount + VendorRetryMs; Logging.Write("[Grind] merchant mesh approach stopped: " + why); return false; }
             }
-
-            double remaining;
-            ClickAimKeySteer.Steer(npc.Location.X, npc.Location.Y, hwnd, true, out remaining);
-            Thread.Sleep(90);
         }
-
-        ClickAimKeySteer.ReleaseHeld();
-        StopAndSettle(hwnd);
-
-        if (!ClickAimPositions.TryRead(out px, out py))
-        {
-            _vendorRetryAt = Environment.TickCount + VendorRetryAfterFightMs;
-            return false;
-        }
-
-        double reach = ClickAimMath.Len(npc.Location.X - px, npc.Location.Y - py);
-        if (reach > VendorReachYd + 2.0)
-        {
-            _vendorRetryAt = Environment.TickCount + VendorRetryMs;
-            Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                "[Grind] could not get within {0:F0} yd of the vendor NPC - still {1:F1} yd away, so no click was "
-                + "sent (a right-click from there is a walk order, not an interaction)", VendorReachYd, reach));
-            return false;
-        }
-
+        finally { ClickAimKeySteer.ReleaseHeld(); }
+        if (!StopForRest(hwnd) || !VendorCandidateStillValid(point, npc, out npc, out WowBObservedUnit nearPlayer, out double reach) || reach > VendorReachYd)
+        { _vendorRetryAt = Environment.TickCount + VendorRetryMs; Logging.Write("[Grind] merchant is not safely reachable within 5 yd; no interaction sent"); return false; }
         ClickAimKeySteer.Face(npc.Location.X, npc.Location.Y, hwnd, 25.0, 4);
-
-        /* Selection of the guessed NPC does not prove it is friendly or a vendor, nor
-         * that the merchant window opened. A right-click on the wrong unit can attack.
-         * The existing point/flag heuristic is not a reaction classifier. */
+        // Always require a fresh left-click selection; never fall back to an
+        // unverified projected right-click, even when the faction filter is off.
         string how;
-        if (!TryClickUnit(hwnd, npc, px, py, true, out how))
-        {
-            _vendorRetryAt = Environment.TickCount + VendorRetryMs;
-            Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                "[Grind] could not put the cursor on the vendor {0} - the client never selected it: {1}",
-                npc.Guid, how));
-            return false;
-        }
+        if (!TryClickRecordedMerchant(hwnd, point, npc, out how))
+        { _vendorRetryAt = Environment.TickCount + VendorRetryMs; Logging.Write("[Grind] merchant interaction withheld: " + how); return false; }
         _clicks++;
 
         Logging.Write(string.Format(CultureInfo.InvariantCulture,
-            "[Grind] the vendor {0} (seen {1:F1} yd away, clicked at {2:F1} yd) answered the click; giving the "
-            + "merchant window {3} ms, then running {4} recorded step(s)",
+            "[Grind] sent right-click at user-confirmed merchant {0} (seen {1:F1} yd away, clicked at {2:F1} yd); waiting "
+            + "{3} ms before {4} recorded step(s). Merchant window is not verified",
             npc.Guid, npcYd, reach, ClickAimSettings.VendorWaitMs, point.Steps.Count));
-        Thread.Sleep(ClickAimSettings.VendorWaitMs);
+        GreenMagic.Memory? vendorMemory = ObjectManager.Wow;
+        if (vendorMemory == null) return false;
+        using var vendorUncached = vendorMemory.TemporaryCacheState(false);
+        if (ObjectManager.Wow != vendorMemory || ObjectManager.WowB != vendorReader || !WaitVendorSafe(ClickAimSettings.VendorWaitMs) ||
+            !VendorCandidateStillValid(point, npc, out _, out _, out double waitDistance) || waitDistance > VendorReachYd ||
+            ObjectManager.WowB == null || ObjectManager.WowB.ReadTargetGuid() != npc.Guid)
+        { _vendorRetryAt = Environment.TickCount + VendorRetryAfterFightMs; Logging.Write("[Grind] merchant wait interrupted; sell plan not replayed"); return false; }
 
-        int sent = RunSellPlan(hwnd, point);
+        int sent = RunSellPlan(hwnd, point, npc);
+        if (sent != point.Steps.Count || _stop || ClickAimAbort.Requested || !TryReadGatherCombat(out bool finalCombat) || finalCombat ||
+            !VendorCandidateStillValid(point, npc, out _, out _, out double finalDistance) || finalDistance > VendorReachYd ||
+            ObjectManager.Wow != vendorMemory || ObjectManager.WowB != vendorReader || vendorReader.ReadTargetGuid() != npc.Guid)
+        { _vendorRetryAt = Environment.TickCount + VendorRetryAfterFightMs; Logging.Write("[Grind] sell plan incomplete; keeping the trip counters"); return false; }
 
         _lootsSinceTrip = 0;
         _killsSinceTrip = 0;
+        _vendorManualPending = false;
         _vendorRetryAt = 0;
 
         // A replay does not establish that the merchant opened or any items sold.
@@ -2799,28 +2790,41 @@ internal static class GrindRunner
     /// waits that were recorded with them. Nothing here guesses a position - every click is a
     /// fraction of the client rectangle that was captured with the cursor over the real thing.
     /// </summary>
-    private static int RunSellPlan(IntPtr hwnd, VendorFile.VendorPoint point)
+    private static bool WaitVendorSafe(int milliseconds)
+    {
+        int started = Environment.TickCount;
+        do
+        {
+            if (_stop || ClickAimAbort.Requested || !TryReadGatherCombat(out bool fighting) || fighting) return false;
+            int left = milliseconds - unchecked(Environment.TickCount - started);
+            if (left <= 0) return true;
+            if (ClickAimAbort.Wait(Math.Min(100, left))) return false;
+        } while (true);
+    }
+
+    private static int RunSellPlan(IntPtr hwnd, VendorFile.VendorPoint point, WowBObservedUnit merchant)
     {
         int sent = 0;
         int max = Math.Min(point.Steps.Count, SellPlanMaxSteps);
 
-        for (int i = 0; i < max && !_stop; i++)
+        for (int i = 0; i < max && !_stop && !ClickAimAbort.Requested; i++)
         {
             VendorFile.Step step = point.Steps[i];
 
             /* A fight outranks the shopping. The merchant window closes by itself when the
              * character walks away, and walking away is what the loop does next. */
-            if (UnderAttack())
+            if (!VendorCandidateStillValid(point, merchant, out _, out _, out double stepDistance) || stepDistance > VendorReachYd ||
+                ObjectManager.WowB == null || ObjectManager.WowB.ReadTargetGuid() != merchant.Guid)
             {
                 Logging.Write("[Grind] the sell plan stopped at step "
                               + (i + 1).ToString(CultureInfo.InvariantCulture)
-                              + ": something started fighting");
+                              + ": combat, merchant identity, selection or range is no longer safe");
                 break;
             }
 
             if (step.IsWait)
             {
-                Thread.Sleep(step.WaitMs);
+                if (!WaitVendorSafe(step.WaitMs)) break;
                 sent++;
                 continue;
             }
@@ -2848,89 +2852,59 @@ internal static class GrindRunner
                 continue;                      // a kind this build does not know: skip it, do not fail
             }
 
+            if (!WaitVendorSafe(Math.Max(60, step.WaitMs))) break;
             sent++;
-            Thread.Sleep(Math.Max(60, step.WaitMs));
         }
 
         return sent;
     }
 
-    /// <summary>
-    /// Existing vendor-point heuristic: prefer a nearby unit with an exclusion-mask
-    /// bit; otherwise try a sole nearby living unit. Neither result proves that the
-    /// unit is friendly, is a merchant, or is safe to right-click.
-    /// </summary>
-    private static bool TryFindVendorNpc(out WowBObservedUnit npc, out double yards)
+    // The only known merchants are full GUIDs explicitly confirmed by the user.
+    // Faction ID, proximity and exclusion flags cannot establish merchant type.
+    private static bool TryFindVendorNpc(VendorFile.VendorPoint point, out WowBObservedUnit npc, out double yards)
     {
-        npc = default(WowBObservedUnit);
-        yards = double.MaxValue;
-
-        WowBWorldSnapshot? snap;
-        if (!Capture(out snap) || snap == null) return false;
-
-        WowBObservedUnit me;
-        if (!snap.TryGetLocalPlayer(out me)) return false;
-
-        Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
-        if (reader == null) return false;
-
-        double search = ClickAimSettings.VendorSearchYd;
-        WowBObservedUnit friendly = default(WowBObservedUnit);
-        double friendlyYd = double.MaxValue;
-        WowBObservedUnit only = default(WowBObservedUnit);
-        double onlyYd = double.MaxValue;
-        int living = 0;
-
-        for (int i = 0; i < snap.Units.Count; i++)
+        npc = default; yards = double.MaxValue;
+        if (!TryReadGatherCombat(out bool fighting) || fighting ||
+            !Capture(out WowBWorldSnapshot? snap) || snap == null || !snap.TryGetLocalPlayer(out WowBObservedUnit me)) return false;
+        var reader = ObjectManager.WowB; var memory = ObjectManager.Wow;
+        if (reader == null || memory == null || !reader.TryReadMapId(out uint map) || point.TownMap != map) return false;
+        foreach (WowBObservedUnit candidate in snap.Units)
         {
-            WowBObservedUnit candidate = snap.Units[i];
-            if (candidate.IsLocalPlayer) continue;
-            if (candidate.HasPlayerVtable) continue;
-
-            double d = ClickAimMath.Len(candidate.Location.X - me.Location.X,
-                                        candidate.Location.Y - me.Location.Y);
-            if (d <= 0.4 || d > search) continue;
-
-            Styx.WoWInternals.WowBReader.WowBUnitFields f;
-            if (!reader.TryGetUnitFields(candidate.UnitAddress, out f)) continue;
-            if (f.Health == 0) continue;               // a corpse is not a vendor
-
-            living++;
-            if (d < 8.0 && d < onlyYd) { only = candidate; onlyYd = d; }
-
-            if ((f.UnitFlags & NotAFightFlag) == 0) continue;
-
-            if (friendlyYd == double.MaxValue)
-            {
-                Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                    "[Grind] possible vendor (unverified flag heuristic) {0} (level {1}, hp {2}/{3}, flags 0x{4:X}) {5:F1} yd away",
-                    candidate.Guid, f.Level, f.Health, f.MaxHealth, f.UnitFlags, d));
-            }
-
-            if (d < friendlyYd) { friendly = candidate; friendlyYd = d; }
+            double d = ClickAimMath.Len(candidate.Location.X - me.Location.X, candidate.Location.Y - me.Location.Y);
+            if (!double.IsFinite(d) || d <= 0.4 || d > ClickAimSettings.VendorSearchYd || d >= yards) continue;
+            if (!WowBKnownMerchants.IsRecordedLive(point, candidate, memory, reader)) continue;
+            npc = candidate; yards = d;
         }
+        return !npc.Guid.IsEmpty;
+    }
 
-        if (friendlyYd < double.MaxValue)
-        {
-            npc = friendly;
-            yards = friendlyYd;
-            return true;
-        }
+    private static bool VendorCandidateStillValid(VendorFile.VendorPoint point, WowBObservedUnit original,
+        out WowBObservedUnit npc, out WowBObservedUnit player, out double distance)
+    {
+        npc = default; player = default; distance = double.MaxValue;
+        if (_stop || ClickAimAbort.Requested || _vendorDue || !TryReadGatherCombat(out bool fighting) || fighting) return false;
+        var memory = ObjectManager.Wow; var reader = ObjectManager.WowB;
+        if (memory == null || reader == null || !reader.TryReadMapId(out uint map) || point.TownMap != map ||
+            !Capture(out WowBWorldSnapshot? snap) || snap == null || !snap.TryGetLocalPlayer(out player) ||
+            !snap.TryGetUnit(original.Guid, out npc) || npc.RecordAddress != original.RecordAddress || npc.UnitAddress != original.UnitAddress ||
+            !WowBKnownMerchants.IsRecordedLive(point, npc, memory, reader)) return false;
+        distance = ClickAimMath.Len(npc.Location.X - player.Location.X, npc.Location.Y - player.Location.Y);
+        return double.IsFinite(distance) && !_stop && !ClickAimAbort.Requested && !_vendorDue && ObjectManager.Wow == memory && ObjectManager.WowB == reader;
+    }
 
-        if (living == 1 && onlyYd < double.MaxValue)
-        {
-            Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                "[Grind] no unit at the vendor point matches the exclusion-mask heuristic, but there is exactly "
-                + "one living unit within 8 yd ({0:F1} yd) - trying it as the vendor", onlyYd));
-            npc = only;
-            yards = onlyYd;
-            return true;
-        }
-
-        Logging.Write(string.Format(CultureInfo.InvariantCulture,
-            "[Grind] {0} living unit(s) within {1:F0} yd of the vendor point; the vendor heuristic found "
-            + "no candidate. Merchant identity and friendliness are not known.", living, search));
-        return false;
+    private static bool TryClickRecordedMerchant(IntPtr hwnd, VendorFile.VendorPoint point, WowBObservedUnit original, out string how)
+    {
+        how = "merchant identity or combat state unavailable";
+        if (!VendorCandidateStillValid(point, original, out WowBObservedUnit npc, out WowBObservedUnit me, out double distance) || distance > VendorReachYd) return false;
+        WowBReader? reader = ObjectManager.WowB; GreenMagic.Memory? memory = ObjectManager.Wow;
+        if (reader == null || memory == null || !ClearNonSelfFactionSelection(hwnd, reader, me.Guid)) return false;
+        if (!FindUnitPixel(hwnd, npc, me.Location.X, me.Location.Y, out int x, out int y, out how,
+            () => !VendorCandidateStillValid(point, original, out _, out _, out double probeDistance) || probeDistance > VendorReachYd)) return false;
+        if (!VendorCandidateStillValid(point, original, out _, out _, out double finalDistance) || finalDistance > VendorReachYd ||
+            ObjectManager.Wow != memory || ObjectManager.WowB != reader || reader.ReadTargetGuid() != original.Guid)
+        { how = "merchant or selection changed after the left-click probe"; return false; }
+        ClickAimInput.Click(hwnd, x, y);
+        return true;
     }
 
     /// <summary>

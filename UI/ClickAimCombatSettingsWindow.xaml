@@ -162,13 +162,13 @@
                 </Grid.RowDefinitions>
 
                 <TextBlock Grid.Row="0" Grid.ColumnSpan="3" TextWrapping="Wrap" Margin="0,0,0,10"
-                           Text="The bags cannot be counted on this build, so the bot counts what it has dealt with: after that many kills or looted bodies it walks to a vendor before taking another hotspot. The place to walk to is captured where the character stands; the clicks that sell the loot are recorded once, below."/>
+                           Text="After the configured number of corpse loot interactions (not verified bag contents), Grind walks to the recorded town hotspot. Select a saved plan, stand in town and record its hotspot; then select each known merchant and remember it. The nearest recorded merchant is approached by mesh before the existing click plan is replayed."/>
 
                 <CheckBox x:Name="chkAutoSell" Grid.Row="1" Grid.ColumnSpan="3" Margin="0,0,0,8"
                           Content="Walk to the vendor and sell when the bags are due"/>
 
                 <TextBlock Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2" VerticalAlignment="Center" Margin="0,0,8,8"
-                           Text="...after this many kills or looted bodies"/>
+                           Text="...after this many corpse loot interactions"/>
                 <TextBox x:Name="txtSellAfter" Grid.Row="2" Grid.Column="2" HorizontalAlignment="Left"
                          Width="80" Margin="0,0,0,8"/>
 
@@ -213,13 +213,15 @@
                         </ListView.View>
                     </ListView>
 
-                    <StackPanel Grid.Row="2" Grid.Column="0" Orientation="Horizontal" Margin="0,0,0,4">
+                    <WrapPanel Grid.Row="2" Grid.Column="0" Margin="0,0,0,4">
                         <Button Content="Add vendor here" Height="24" Padding="8,0" Click="btnVendorAdd_Click"
                                 ToolTip="Stand at the vendor in town and press this: that spot becomes the place the bot walks to when the bags are due."/>
                         <Button Content="Delete vendor" Height="24" Padding="8,0" Margin="8,0,0,0"
                                 Click="btnVendorDelete_Click"
                                 ToolTip="Removes the selected point and every step recorded under it."/>
-                    </StackPanel>
+                        <Button Content="Record town hotspot" Height="24" Padding="8,0" Margin="0,4,4,0" Click="btnRecordTown_Click"/>
+                        <Button Content="Remember selected merchant" Height="24" Padding="8,0" Margin="0,4,0,0" Click="btnRememberMerchant_Click"/>
+                    </WrapPanel>
 
                     <TextBlock Grid.Row="0" Grid.Column="2" Text="The sell plan (in order)" Margin="0,0,0,4" FontWeight="SemiBold"/>
                     <ListView x:Name="lstSteps" Grid.Row="1" Grid.Column="2" Margin="0,0,0,6"

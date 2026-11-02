@@ -9,6 +9,8 @@
   <ItemGroup>
     <Compile Include="../../Styx/Offsets/WowBOffsets.cs" Link="WowBOffsets.cs" />
     <Compile Include="../../Styx/Logic/Pathing/ClickAim/GrindFactionSettings.cs" Link="GrindFactionSettings.cs" />
+    <Compile Include="../../Styx/Logic/Pathing/ClickAim/VendorFile.cs" Link="VendorFile.cs" />
+    <Compile Include="../../Styx/Logic/Pathing/ClickAim/WowBKnownMerchants.cs" Link="WowBKnownMerchants.cs" />
     <Compile Include="../../Styx/Logic/Pathing/ClickAim/WowBTargetInfo.cs" Link="WowBTargetInfo.cs" />
     <Compile Include="../../Styx/Logic/Pathing/ClickAim/WowBGrindFactions.cs" Link="WowBGrindFactions.cs" />
     <Compile Include="../../Styx/Logic/Pathing/ClickAim/WowBReactionProbe.cs" Link="WowBReactionProbe.cs" />

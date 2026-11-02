@@ -83,13 +83,11 @@ internal static class ClickAimSettings
     public static bool AutoSell = true;
 
     /// <summary>
-    /// Sell after this many kills or looted bodies; 0 means only when the window's "Sell now"
-    /// button is pressed. A level-3 character gets one or two items a body and the backpack holds
-    /// 16, so 20 is a full bag plus a few - the trip is a long walk and doing it twice an hour is
-    /// better than doing it every five minutes. Counted both ways and compared separately, so an
-    /// unlootable corpse still counts and nothing is counted twice.
+    /// Sell after this many looted bodies; 0 means only when the window's "Sell now"
+    /// button is pressed. This is a count of corpse loot interactions, not verified items or
+    /// successful auto-loot; it is only a proxy for bag contents.
     /// </summary>
-    public static int SellAfterLoots = 20;
+    public static int SellAfterLoots = 40;
 
     /// <summary>
     /// How long the merchant window is given to appear after the vendor was clicked, before the
@@ -150,7 +148,7 @@ internal static class ClickAimSettings
         DotRefreshSeconds = 12;
         RestMs = 20000;
         AutoSell = true;
-        SellAfterLoots = 20;
+        SellAfterLoots = 40;
         VendorWaitMs = 2500;
         VendorSearchYd = 25;
         BagSlotHunt = true;
@@ -365,7 +363,7 @@ internal static class ClickAimSettings
         return string.Format(CultureInfo.InvariantCulture,
             "heal at {0}% (0 = never) and only above {8}% power, eat at {1}%, drink at {2}%, "
             + "damage over time {3}, buffs {4}, food slot {5}, drink slot {6}, "
-            + "{7} spell role(s) set by hand; selling {9} (after {10} kill(s) or looted bodie(s), "
+            + "{7} spell role(s) set by hand; selling {9} (after {10} corpse loot interaction(s), "
             + "{11} ms for the merchant window, vendor NPC looked for within {12} yd; bag offset hunt {13})",
             HealBelowPercent, EatBelowPercent, DrinkBelowPercent,
             UseDamageOverTime ? "on" : "off", UseBuffs ? "on" : "off",
@@ -426,7 +424,7 @@ internal static class ClickAimSettings
         check(VendorSearchYd == 5, "clampVendorSearch");
 
         ResetDefaults();
-        check(AutoSell && SellAfterLoots == 20 && VendorWaitMs == 2500 && VendorSearchYd == 25
+        check(AutoSell && SellAfterLoots == 40 && VendorWaitMs == 2500 && VendorSearchYd == 25
               && BagSlotHunt, "vendorDefaults");
         check(Describe().IndexOf("heal at 60%", StringComparison.Ordinal) >= 0, "describe");
 
