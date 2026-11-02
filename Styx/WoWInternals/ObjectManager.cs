@@ -16,8 +16,8 @@ namespace Styx.WoWInternals
     public static class ObjectManager
     {
         #region Constants - WoW 3.3.5a Build 12340
-        internal const int SupportedBuild = 12340;
-        internal const int SupportedBuildWowB = 70291;
+        internal const int SupportedBuild = ClientAttachPolicy.SupportedLegacyBuild;
+        internal const int SupportedBuildWowB = ClientAttachPolicy.SupportedModernBuild;
         internal static bool IsSupportedBuild(int build) => build == SupportedBuild || build == SupportedBuildWowB;
 
         /// <summary>
@@ -281,18 +281,28 @@ namespace Styx.WoWInternals
             if (memory == null)
                 throw new ArgumentNullException(nameof(memory));
             
+            // Check the experimental build before publishing any attached state.
+            Process? targetProcess = Process.GetProcesses()
+                .FirstOrDefault(p => p.Id == memory.ProcessId);
+            int initialBuild = targetProcess == null ? -1 : GetBuildNumber(targetProcess);
+            if (initialBuild == ClientAttachPolicy.ExperimentalBuild)
+            {
+                if (!ClientAttachPolicy.ExperimentalEnabled)
+                    throw new InvalidOperationException("Build 70707 requires " + ClientAttachPolicy.ExperimentalArgument + ".");
+                if (!memory.Is64BitTarget)
+                    throw new InvalidOperationException("Experimental build 70707 requires a 64-bit client.");
+                Logging.Write("[Attach] EXPERIMENTAL 70707: using known-incompatible 70291 offsets. Memory reads and bot actions can be incorrect; this is not validated support.");
+            }
+
             Wow = memory;
             WowB = null;
             WowBWorld = null;
-            
-            // Trouver le processus WoW
-            WoWProcess = Process.GetProcesses()
-                .FirstOrDefault(p => p.Id == memory.ProcessId);
-            
+            WoWProcess = targetProcess;
+
             if (WoWProcess != null)
             {
                 WoWProcess.EnableRaisingEvents = true;
-                
+
                 // Check the build
                 try
                 {
@@ -301,12 +311,15 @@ namespace Styx.WoWInternals
                     // WowB.exe reports FileVersion 1.60.1.70291 as raw parts 160.1.7029.1;
                     // GetBuildNumber recombines those into 70291.
                     bool isWowBByName = WoWProcess.ProcessName.Equals("WowB", StringComparison.OrdinalIgnoreCase);
-                    if (!IsSupportedBuild(build) && !isWowBByName)
+                    bool experimental = build == ClientAttachPolicy.ExperimentalBuild && ClientAttachPolicy.ExperimentalEnabled;
+                    if (!IsSupportedBuild(build) && !isWowBByName && !experimental)
                     {
                         Logging.Write($"[ObjectManager] Build {build} not supported (expected: {SupportedBuild} or {SupportedBuildWowB})");
                         throw new Exception($"WoW build {build} not supported. Required build: {SupportedBuild} or {SupportedBuildWowB}");
                     }
-                    Logging.WriteDebug($"[ObjectManager] WoW build {build} detected - OK{(isWowBByName ? " (WowB client, accepted by process name)" : "")}");
+                    Logging.WriteDebug(experimental
+                        ? "[ObjectManager] Build 70707 explicitly accepted for an unvalidated experiment."
+                        : $"[ObjectManager] WoW build {build} detected - OK{(isWowBByName ? " (WowB client, accepted by process name)" : "")}");
                 }
                 catch (Exception ex) when (ex is not InvalidOperationException)
                 {
@@ -367,7 +380,15 @@ namespace Styx.WoWInternals
                         }
                     }
                 }
-                Logging.Write($"[ObjectManager] WowB snapshot: {WowB.DescribeSnapshot()}");
+                try
+                {
+                    Logging.Write($"[ObjectManager] WowB snapshot: {WowB.DescribeSnapshot()}");
+                }
+                catch (Exception ex) when (initialBuild == ClientAttachPolicy.ExperimentalBuild)
+                {
+                    // These optional 70291 diagnostic reads are not a 70707 attach prerequisite.
+                    Logging.Write($"[ObjectManager] Experimental 70707 snapshot unavailable: {ex.Message}");
+                }
                 Logging.WriteDebug("[ObjectManager] Initialized successfully (WowB read-only)");
                 return;
             }

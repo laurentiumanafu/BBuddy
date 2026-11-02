@@ -4,6 +4,20 @@ using Styx.Logic.Pathing;
 using Styx.Offsets;
 using Styx.WoWInternals;
 
+// Discovery policy only; these assertions do not validate any client offsets.
+Require(!ClientAttachPolicy.ExperimentalEnabled || ClientAttachPolicy.HasExperimentalArgument(Environment.GetCommandLineArgs()), "experimental argument lookup");
+Require(ClientAttachPolicy.HasExperimentalArgument(new[] { "bot.exe", "/UNSAFE-WOW70707" }), "case-insensitive experimental opt-in");
+Require(!ClientAttachPolicy.HasExperimentalArgument(new[] { "bot.exe", "/pid=70707" }), "PID is not opt-in");
+foreach (string name in new[] { "Wow", "WowB", "Wow-decoded", "other" })
+{
+    Require(!ClientAttachPolicy.IsCandidate(70707, name, false), "70707 blocked without opt-in: " + name);
+    Require(ClientAttachPolicy.IsCandidate(70707, name, true), "70707 accepted with opt-in: " + name);
+}
+Require(!ClientAttachPolicy.ProcessNames(false).Contains("Wow-decoded") && ClientAttachPolicy.ProcessNames(true).Contains("Wow-decoded"), "experimental process discovery");
+Require(ClientAttachPolicy.IsCandidate(12340, "Wow", false) && ClientAttachPolicy.IsCandidate(70291, "WowB", false), "supported builds unchanged");
+Require(ClientAttachPolicy.IsCandidate(0, "Luacct", false) && ClientAttachPolicy.IsCandidate(70450, "WowB", false), "existing unversioned and name exceptions preserved");
+Require(!ClientAttachPolicy.IsCandidate(70450, "Wow", true) && !ClientAttachPolicy.IsCandidate(-1, "WowB", true), "opt-in does not unlock other builds or unreadable version");
+
 // A deterministic byte-addressed process-memory substitute. No game or native
 // calls: exercises the real pool reader and snapshot filtering logic.
 var mem = new Memory();

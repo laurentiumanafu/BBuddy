@@ -423,7 +423,7 @@ namespace CopilotBuddy.UI
             {
                 // Find ALL Wow processes (covers the standard client, the WoW.exe spelling,
                 // and the Luacct.exe variant used by some private-server clients)
-                string[] wowProcessNames = { "Wow", "WoW", "Luacct", "WowB" };
+                string[] wowProcessNames = ClientAttachPolicy.ProcessNames(ClientAttachPolicy.ExperimentalEnabled);
                 var wowProcesses = wowProcessNames.SelectMany(n => Process.GetProcessesByName(n))
                     .DistinctBy(p => p.Id).ToArray();
                 wowProcessesFound = wowProcesses.Length;
@@ -446,12 +446,9 @@ namespace CopilotBuddy.UI
                             continue;
                         }
 
-                        // build == 0 means no version resource (custom/private server client).
-                        // WowB.exe reports FileVersion 1.60.1.x (FilePrivatePart = 1) — its
-                        // real build number (70291) is NOT in that field, so accept WowB by
-                        // process name: only the Classic Beta client is named WowB.
-                        if (ObjectManager.IsSupportedBuild(build) || build == 0
-                            || proc.ProcessName.Equals("WowB", StringComparison.OrdinalIgnoreCase))
+                        // Preserve the existing unversioned/WowB discovery rules, but
+                        // require explicit opt-in for the known-incompatible 70707 build.
+                        if (ClientAttachPolicy.IsCandidate(build, proc.ProcessName, ClientAttachPolicy.ExperimentalEnabled))
                         {
                             candidates.Add(proc);
                             Logging.WriteDebug("Candidate: {0} (PID {1}), build {2}", proc.ProcessName, proc.Id, build);
@@ -460,6 +457,8 @@ namespace CopilotBuddy.UI
                         {
                             Logging.Write(Colors.Orange, "{0} (PID {1}) skipped: unsupported build {2} (expected {3} or {4}).",
                                 proc.ProcessName, proc.Id, build, ObjectManager.SupportedBuild, ObjectManager.SupportedBuildWowB);
+                            if (build == ClientAttachPolicy.ExperimentalBuild)
+                                Logging.Write(Colors.Orange, "To experiment with build 70707, restart with {0}; 70291 offsets are known not to match.", ClientAttachPolicy.ExperimentalArgument);
                         }
                     }
                     catch { /* Access denied or process exited */ }
@@ -483,11 +482,14 @@ namespace CopilotBuddy.UI
                                 if (!Environment.Is64BitProcess)
                                     Logging.Write(Colors.Orange, "CopilotBuddy is running as x86 — use the x64 build to attach to a 64-bit client.");
                             }
-                            else if (ObjectManager.IsSupportedBuild(build) || build == 0
-                                || proc.ProcessName.Equals("WowB", StringComparison.OrdinalIgnoreCase))
+                            else if (ClientAttachPolicy.IsCandidate(build, proc.ProcessName, ClientAttachPolicy.ExperimentalEnabled))
                                 candidates.Add(proc);
                             else
+                            {
                                 Logging.Write(Colors.Orange, "PID {0} skipped: unsupported build {1} (expected {2} or {3}).", pid, build, ObjectManager.SupportedBuild, ObjectManager.SupportedBuildWowB);
+                                if (build == ClientAttachPolicy.ExperimentalBuild)
+                                    Logging.Write(Colors.Orange, "To experiment with build 70707, restart with {0}; 70291 offsets are known not to match.", ClientAttachPolicy.ExperimentalArgument);
+                            }
                         }
                     }
                     catch
@@ -514,6 +516,11 @@ namespace CopilotBuddy.UI
                 try
                 {
                         using var tempMemory = new Memory(proc.Id);
+                        if (ObjectManager.GetBuildNumber(proc) == ClientAttachPolicy.ExperimentalBuild && !tempMemory.Is64BitTarget)
+                        {
+                            Logging.Write(Colors.Orange, "PID {0}: experimental build 70707 requires a 64-bit client.", proc.Id);
+                            continue;
+                        }
 
                         // Check if player is logged in
                         bool isLoggedIn;

@@ -88,7 +88,7 @@ namespace CopilotBuddy.UI
             _processes.Clear();
             cbProcesses.Items.Clear();
 
-            Process[] wowProcesses = new[] { "Wow", "WoW", "Luacct", "WowB" }
+            Process[] wowProcesses = ClientAttachPolicy.ProcessNames(ClientAttachPolicy.ExperimentalEnabled)
                 .SelectMany(n => Process.GetProcessesByName(n))
                 .DistinctBy(p => p.Id)
                 .ToArray();
@@ -101,16 +101,14 @@ namespace CopilotBuddy.UI
                     if (wowProcesses[i].HasExited)
                         continue;
 
-                    // Match the auto-attach discovery rules, including build
-                    // 70291's split version number and the WowB process name.
+                    // Match auto-attach, including the explicit 70707 opt-in.
                     Process process = wowProcesses[i];
                     int build = ObjectManager.GetBuildNumber(process);
-                    if (build < 0 || (!ObjectManager.IsSupportedBuild(build) && build != 0 &&
-                        !process.ProcessName.Equals("WowB", StringComparison.OrdinalIgnoreCase)))
+                    if (!ClientAttachPolicy.IsCandidate(build, process.ProcessName, ClientAttachPolicy.ExperimentalEnabled))
                         continue;
 
                     using var memory = new Memory(process.Id);
-                    if (!memory.IsProcessOpen)
+                    if (!memory.IsProcessOpen || (build == ClientAttachPolicy.ExperimentalBuild && !memory.Is64BitTarget))
                         continue;
 
                     string? characterName;
