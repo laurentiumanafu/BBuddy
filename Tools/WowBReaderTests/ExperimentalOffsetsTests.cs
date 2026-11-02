@@ -183,7 +183,17 @@ internal static class ExperimentalOffsetsTests
         memory.Guid(module + Wow70707Offsets.PlayerTargetGuid, default); // no selection required
         string candidateScan = WowBGrindFactions.ScanNearby();
         Require(candidateScan.Contains("RESEARCH ONLY") && candidateScan.Contains("Candidate 36 | 1 unit(s)") &&
-                candidateScan.Contains("explicit Allow list") && candidateScan.Contains(target.ToString()), "70707 candidate scan without target");
+                candidateScan.Contains("candidate level 2") && candidateScan.Contains("explicit Allow list") && candidateScan.Contains(target.ToString()), "70707 candidate scan and level without target");
+        int levelReads = 0;
+        memory.OnRead = (address, count) =>
+        {
+            if (address == targetUnit + Wow70707Offsets.LevelCandidateOffset && count == 4 && ++levelReads == 2)
+                memory.U32(address, 3);
+        };
+        candidateScan = WowBGrindFactions.ScanNearby();
+        memory.OnRead = null;
+        Require(candidateScan.Contains("candidate level ?"), "unstable 70707 level marked unknown");
+        memory.U32(targetUnit + Wow70707Offsets.LevelCandidateOffset, 2);
         int reads = 0;
         memory.OnRead = (address, count) =>
         {

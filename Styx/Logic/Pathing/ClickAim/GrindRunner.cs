@@ -475,6 +475,14 @@ internal static class GrindRunner
     /// verdict never ran. The trial belongs to the UNIT, not to the one fight that started it.
     /// </summary>
     private static WowBGuid _unverifiedGuid;
+    // The bot's most recently engaged target, not a claim about attacker identity.
+    private static WowBGuid _focusedFightGuid;
+    private static bool _focusedDamageObserved;
+    private static void MarkFocusedAttack(WowBGuid guid)
+    {
+        if (_focusedFightGuid != guid) _focusedDamageObserved = false;
+        _focusedFightGuid = guid;
+    }
 
     /// <summary>
     /// Pool units whose pixel selection failed once. A second miss starts a
@@ -692,6 +700,8 @@ internal static class GrindRunner
         _poolMisses.Clear();
         _lastPoolSelectMs = 0;
         _unverifiedGuid = default(WowBGuid);
+        _focusedFightGuid = default(WowBGuid);
+        _focusedDamageObserved = false;
         _looted.Clear();
         _loots = 0;
         _lootProbed = false;
@@ -806,6 +816,12 @@ internal static class GrindRunner
                  * class buffs itself with (Mark of the Wild, Arcane Intellect, ...). */
                 string buffed = ApplyBuffsIfNeeded(hwnd);
                 if (buffed.Length > 0) Logging.Write("[Grind] " + buffed);
+
+                // A nearby resource can be gathered before chasing a distant
+                // candidate, but never while in combat or an eligible pull is
+                // close. The same safety check interrupts the detour/cast.
+                if (gatherDuringGrind && GatherRunner.GatherForGrind(hwnd, mover, GatherAreaSafe)) continue;
+                if (_stop || ClickAimAbort.Requested) break;
 
                 string combatReport;
                 if (TryEngage(hwnd, out combatReport))
@@ -1320,10 +1336,6 @@ internal static class GrindRunner
          * target. Nothing is walked yet: this is a facing change only. */
         if (!haveNearest)
             NearestKillable(snap, px, py, SearchYd, out nearest, out nearestYd, out live, out unread);
-        if (haveNearest && nearestYd > 2.0 &&
-            (!GrindFactionSettings.Rules.Enabled || nearestYd <= FactionApproachYd))
-            ClickAimKeySteer.Face(nearest.Location.X, nearest.Location.Y, hwnd, 25.0, 4);
-
         Styx.WoWInternals.WowBReader? selReader = ObjectManager.WowB;
 
         /* The walk may already have selected the mob it stopped for (TryPullOnTheWay presses
@@ -1363,6 +1375,10 @@ internal static class GrindRunner
                 return false;
             }
         }
+
+        if (!have && haveNearest && nearestYd > 2.0 &&
+            (!GrindFactionSettings.Rules.Enabled || nearestYd <= FactionApproachYd))
+            ClickAimKeySteer.Face(nearest.Location.X, nearest.Location.Y, hwnd, 25.0, 4);
 
         WowBGuid rejectedGuid = default(WowBGuid);
         for (int i = 0; i < TabTries && !have && !_stop && !ClickAimAbort.Requested && !_vendorDue; i++)
@@ -3317,12 +3333,18 @@ internal static class GrindRunner
         catch { return false; }
     }
 
-    // Fail closed: this client cannot establish hostility from pool records. Every
-    // living NPC within Grind's 100-yard radius (including friendly/neutral NPCs)
-    // blocks the optional detour; unknown reads and pending vendor/stop requests do too.
-    private static bool GatherUnitBlocks(bool local, bool player, double distance, bool readable, uint health)
+    // Nearby NPCs can be attackers even when unlisted. Further out, retain
+    // priority for level-viable allowed pulls; an unreadable key/health blocks
+    // conservatively. Neither proximity nor an allowlist proves hostility.
+    private const double GatherNpcSafetyYd = 12.0, GatherPullPriorityYd = 40.0;
+    private static bool GatherUnitBlocks(bool local, bool player, double distance, bool readable, uint health,
+                                         bool eligible, bool factionUnknown)
     {
-        return !local && !player && distance <= SearchYd && (!readable || health > 0);
+        if (local || player || distance > GatherPullPriorityYd) return false;
+        if (!double.IsFinite(distance)) return true;
+        if (!readable) return true;
+        if (health == 0) return false;
+        return distance <= GatherNpcSafetyYd || factionUnknown || eligible;
     }
 
     private static bool GatherAreaSafe()
@@ -3342,9 +3364,12 @@ internal static class GrindRunner
             {
                 if (unit.IsLocalPlayer || unit.HasPlayerVtable) continue;
                 double distance = ClickAimMath.Len(unit.Location.X - player.Location.X, unit.Location.Y - player.Location.Y);
-                if (distance > SearchYd) continue;
+                if (distance > GatherPullPriorityYd) continue;
                 bool readable = reader.TryGetUnitFields(unit.UnitAddress, out WowBReader.WowBUnitFields fields);
-                if (GatherUnitBlocks(unit.IsLocalPlayer, unit.HasPlayerVtable, distance, readable, readable ? fields.Health : 0))
+                bool unknown = false;
+                bool eligible = readable && fields.Health > 0 && LevelViable(fields.Level, (int)self.Level) &&
+                    WowBGrindFactions.AllowsPull(reader, unit, out unknown);
+                if (GatherUnitBlocks(unit.IsLocalPlayer, unit.HasPlayerVtable, distance, readable, readable ? fields.Health : 0, eligible, unknown))
                     return false;
             }
             return !_stop && !ClickAimAbort.Requested && !_vendorDue && ObjectManager.Wow == memory && ObjectManager.WowB == reader;
@@ -3362,6 +3387,8 @@ internal static class GrindRunner
         _unreachableUntil.Clear();
         _tabRefusedUntil.Clear();
         _unverifiedGuid = default(WowBGuid);
+        _focusedFightGuid = default(WowBGuid);
+        _focusedDamageObserved = false;
         _gaveUpAt = 0;
         ClickAimSettings.Load();
         _manaPeak = 0;
@@ -3380,8 +3407,9 @@ internal static class GrindRunner
         return RestIfNeeded(hwnd);
     }
 
-    private static bool ShouldYieldRemotePull(double targetYd, double castRange, bool nearbyOther)
-        => targetYd > GatherDefenceRadius && (targetYd > Math.Max(castRange, MeleeEngageYd) || nearbyOther);
+    private static bool ShouldYieldRemotePull(double targetYd, double castRange, bool nearbyOther, bool attackInitiated = false)
+        => targetYd > GatherDefenceRadius &&
+           (targetYd > Math.Max(castRange, MeleeEngageYd) || (nearbyOther && !attackInitiated));
 
     // An NPC nearby is only a reason to reconsider a remote pull, never an
     // assertion that it is hostile or the attacker.
@@ -3442,6 +3470,20 @@ internal static class GrindRunner
         }
         nearby.Sort((a, b) => ClickAimMath.Len(a.Location.X - player.Location.X, a.Location.Y - player.Location.Y)
             .CompareTo(ClickAimMath.Len(b.Location.X - player.Location.X, b.Location.Y - player.Location.Y)));
+        WowBObservedUnit focused = default;
+        if (_focusedDamageObserved && !_focusedFightGuid.IsEmpty && snap.TryGetSelectedTarget(out focused) && focused.Guid == _focusedFightGuid &&
+            !focused.IsLocalPlayer && !focused.HasPlayerVtable &&
+            ClickAimMath.Len(focused.Location.X - player.Location.X, focused.Location.Y - player.Location.Y) <= ClickAimCombat.CasterRangeYd &&
+            reader.TryGetUnitFields(focused.UnitAddress, out WowBReader.WowBUnitFields focusFields) &&
+            DefenceFieldsValid(focusFields.Health, focusFields.UnitFlags, grindMode && _notViable.Contains(focused.Guid)) &&
+            (!grindMode || WowBGrindFactions.AllowsPull(reader, focused, out _)))
+        {
+            Logging.Write("[Grind] continuing the already damaged selected target " + focused.Guid + "; attacker identity remains unknown");
+            if (grindMode) LogFactionFight(reader, focused, true);
+            engaged = true;
+            try { return Fight(hwnd, player.Location.X, player.Location.Y, false, true, focused.Guid, focused, grindMode); }
+            finally { ClickAimKeySteer.ReleaseHeld(); }
+        }
         if (nearby.Count == 0)
             return string.Format(CultureInfo.InvariantCulture,
                 "no eligible live NPC within 12 yd; holding position (nearby {0}, unreadable {1}, dead {2}, excluded flags {3}, previously refused {4}, faction blocked {5}); {6}",
@@ -3831,6 +3873,11 @@ internal static class GrindRunner
     {
         why = "";
         if (_stop || ClickAimAbort.Requested) { why = "stopped"; return false; }
+        if (ObjectManager.WowB?.IsExperimental70707 == true &&
+            !ClickAimKeySteer.EnsureChaseTurnKeys(hwnd,
+                () => !_stop && !ClickAimAbort.Requested &&
+                      (!approachOnly || (TryReadGatherCombat(out bool combat) && !combat)), out string calibration))
+        { ClickAimKeySteer.ReleaseHeld(); why = "turn-only calibration failed or was interrupted: " + calibration; return false; }
         if (!ClickAimPositions.TryRead(out double px, out double py))
         { ClickAimKeySteer.ReleaseHeld(); why = "player position unreadable"; return false; }
         int now = Environment.TickCount;
@@ -4090,6 +4137,7 @@ internal static class GrindRunner
             return "target or faction key changed before the pull; not attacking";
         WowBGuid defenceTarget = target.Guid;
         lastHealth = Health(target);
+        int initialTargetHealth = lastHealth;
 
         /* The kill leaves the corpse selected, and TAB keeps a target when there is nothing
          * else to move to - so the next "engage" is the body of the mob that just died. The
@@ -4148,6 +4196,7 @@ internal static class GrindRunner
             if (!Capture(out snap) || snap == null) break;
             if (!snap.TryGetSelectedTarget(out target))
             {
+                if (_focusedFightGuid == defenceTarget) _focusedFightGuid = default;
                 /* A mob that dies takes the target with it, and so does one that runs out of
                  * range, so this is "killed or fled". Saying only "gone" made a run with real
                  * kills report zero of them. */
@@ -4158,7 +4207,10 @@ internal static class GrindRunner
             }
 
             if (target.Guid != defenceTarget)
+            {
+                if (reader?.IsExperimental70707 == true) { _stop = true; ClickAimAbort.Request(); }
                 return "target changed during the fight; stopping rather than attacking another unit";
+            }
             if (target.HasPlayerVtable)
                 return "the target turned out to be a player - disengaged";
 
@@ -4166,21 +4218,29 @@ internal static class GrindRunner
             if (reader?.IsExperimental70707 == true && health < 0)
             { _stop = true; ClickAimAbort.Request(); return "70707 target health became unreadable; stopping"; }
             if (health >= 0 && lastHealth > 0 && health == 0)
+            {
+                if (_focusedFightGuid == target.Guid) _focusedFightGuid = default;
                 return "killed" + (worked.Count == 0 ? "" : " with " + string.Join(", ", worked.ToArray()));
+            }
+            if (initialTargetHealth > 0 && health > 0 && health < initialTargetHealth)
+            { MarkFocusedAttack(target.Guid); _focusedDamageObserved = true; }
             if ((!defenceOnly || defenceFactionFilter) && !FactionPullStillAllowed(reader, expectedPull, target))
             { ClickAimKeySteer.ReleaseHeld(); return "faction key or unit identity became unavailable during pull; stopping"; }
 
             WowBObservedUnit me;
             if (!snap.TryGetLocalPlayer(out me)) break;
             double d = ClickAimMath.Len(target.Location.X - me.Location.X, target.Location.Y - me.Location.Y);
-            if (defenceOnly && d > GatherDefenceRadius + 3.0)
-                return "defensive target moved more than 15 yd away; not chasing a distant unit";
+            double defenceLimit = target.Guid == _focusedFightGuid
+                ? Math.Max(GatherDefenceRadius + 3.0, castRange) : GatherDefenceRadius + 3.0;
+            if (defenceOnly && d > defenceLimit)
+                return "defensive target moved beyond its permitted range; not chasing a distant unit";
 
             if (!defenceOnly)
             {
                 if (!TryReadGatherCombat(out bool combatNow))
                 { ClickAimKeySteer.ReleaseHeld(); return "combat state unreadable; stopping the pull"; }
-                if (combatNow && ShouldYieldRemotePull(d, castRange, HasNearbyOtherNpc(snap, me, target.Guid, reader)))
+                bool committed = _focusedFightGuid == target.Guid || (initialTargetHealth > 0 && health >= 0 && health < initialTargetHealth);
+                if (combatNow && ShouldYieldRemotePull(d, castRange, HasNearbyOtherNpc(snap, me, target.Guid, reader), committed))
                 {
                     ClickAimKeySteer.ReleaseHeld();
                     return "combat detected during a remote pull; stopping the chase and checking nearby TAB targets";
@@ -4476,16 +4536,28 @@ internal static class GrindRunner
                  * is not necessarily the thing that is hitting us. Cycle until the guid
                  * matches, and give up after four tries rather than churning the target. */
                 WowBGuid wanted = target.Guid;
+                bool recovered = false;
                 for (int tries = 0; tries < 4; tries++)
                 {
                     if (_stop || ClickAimAbort.Requested) return "stopped";
                     WowBWorldSnapshot? back;
                     WowBObservedUnit selected;
                     if (Capture(out back) && back != null && back.TryGetSelectedTarget(out selected)
-                        && selected.Guid == wanted)
-                        break;
+                        && selected.Guid == wanted &&
+                        (defenceOnly && !defenceFactionFilter || FactionPullStillAllowed(reader, expectedPull, selected)))
+                    { recovered = true; break; }
                     ClickAimInput.TapKey(hwnd, TabVk, 40);
                     if (ClickAimAbort.Wait(TabSettleMs)) return "stopped";
+                }
+                if (!recovered)
+                {
+                    // Check once more after the last TAB, then stop instead of
+                    // allowing defence to attack whichever different mob it chose.
+                    recovered = Capture(out WowBWorldSnapshot? finalBack) && finalBack != null &&
+                        finalBack.TryGetSelectedTarget(out WowBObservedUnit finalTarget) && finalTarget.Guid == wanted &&
+                        (defenceOnly && !defenceFactionFilter || FactionPullStillAllowed(reader, expectedPull, finalTarget));
+                    if (!recovered)
+                    { _stop = true; ClickAimAbort.Request(); return "could not recover the same target after healing; stopped rather than switching mobs"; }
                 }
                 continue;
             }
@@ -4513,6 +4585,7 @@ internal static class GrindRunner
                 if (!FactionAttackInputAllowed(reader, expectedPull, !defenceOnly || defenceFactionFilter))
                 { ClickAimKeySteer.ReleaseHeld(); return "selected target or faction changed; attack input withheld"; }
                 ClickAimInput.TapKey(hwnd, dot.KeyVk, 40);
+                MarkFocusedAttack(target.Guid);
                 presses++;
                 _presses++;
                 _dotGuid = target.Guid;
@@ -4610,6 +4683,7 @@ internal static class GrindRunner
                 if (!FactionAttackInputAllowed(reader, expectedPull, !defenceOnly || defenceFactionFilter))
                 { ClickAimKeySteer.ReleaseHeld(); return "selected target or faction changed; attack input withheld"; }
                 ClickAimInput.TapKey(hwnd, damage.KeyVk, 40);
+                MarkFocusedAttack(target.Guid);
                 presses++;
                 _presses++;
 
@@ -4632,7 +4706,7 @@ internal static class GrindRunner
                         && reader.TryGetUnitFields(me3.UnitAddress, out mine))
                         manaAfter = mine.Power;
                     WowBObservedUnit t3;
-                    if (afterCast.TryGetSelectedTarget(out t3)) mobAfter = Health(t3);
+                    if (afterCast.TryGetSelectedTarget(out t3) && t3.Guid == defenceTarget) mobAfter = Health(t3);
 
                     spentMana = manaAfter > 0 && manaAfter < manaBefore;
                     hurtMob = mobAfter >= 0 && mobBeforeHealth >= 0 && mobAfter < mobBeforeHealth;
@@ -4821,6 +4895,7 @@ internal static class GrindRunner
                     if (!FactionAttackInputAllowed(reader, expectedPull, !defenceOnly || defenceFactionFilter))
                     { ClickAimKeySteer.ReleaseHeld(); return "selected target or faction changed; attack input withheld"; }
                     ClickAimInput.TapKey(hwnd, auto.KeyVk, 40);
+                    MarkFocusedAttack(target.Guid);
                     lastAttackPressMs = Environment.TickCount;
                     presses++;
                     _presses++;
@@ -4836,6 +4911,7 @@ internal static class GrindRunner
                 lastMeleeClickMs = Environment.TickCount;
                 if (TryClickUnit(hwnd, target, me.Location.X, me.Location.Y))
                 {
+                    MarkFocusedAttack(target.Guid);
                     _clicks++;
                     presses++;
                     attacked = true;
@@ -4858,6 +4934,7 @@ internal static class GrindRunner
                 if (!FactionAttackInputAllowed(reader, expectedPull, !defenceOnly || defenceFactionFilter))
                 { ClickAimKeySteer.ReleaseHeld(); return "selected target or faction changed; attack input withheld"; }
                 ClickAimInput.TapKey(hwnd, meleeHit.KeyVk, 40);
+                MarkFocusedAttack(target.Guid);
                 presses++;
                 _presses++;
                 if (!worked.Contains(meleeHit.Name + " (pressed at arm's length)"))
@@ -5133,6 +5210,8 @@ internal static class GrindRunner
                                      && ShouldYieldRemotePull(94, 28, false));
             check("nearAddYields", ShouldYieldRemotePull(20, 28, true));
             check("inRangeTargetWithoutAdd", !ShouldYieldRemotePull(20, 28, false));
+            check("damagedTargetWithAddStays", !ShouldYieldRemotePull(20, 28, true, true));
+            check("damagedButRemoteStillYields", ShouldYieldRemotePull(94, 28, true, true));
             check("closeTargetNotAbandoned", !ShouldYieldRemotePull(5, 28, true));
 
             check("viableSameLevel", LevelViable(2, 2));
@@ -5180,11 +5259,14 @@ internal static class GrindRunner
              * walks as far as the search accepts, and the walk-off path stops for the same
              * radius. The 13:23 log lost a mob at 48 yd to a 40 yd radius. */
             check("engagementRadius", Math.Abs(SearchYd - 100.0) < 0.001);
-            check("gatherSafetyNearbyAlive", GatherUnitBlocks(false, false, 100.0, true, 1));
-            check("gatherSafetyUnknown", GatherUnitBlocks(false, false, 10.0, false, 0));
-            check("gatherSafetyCorpse", !GatherUnitBlocks(false, false, 10.0, true, 0));
-            check("gatherSafetyOutOfRange", !GatherUnitBlocks(false, false, 100.1, true, 1));
-            check("gatherSafetyPlayer", !GatherUnitBlocks(false, true, 10.0, true, 1));
+            check("gatherSafetyNearbyAlive", GatherUnitBlocks(false, false, 12.0, true, 1, false, false));
+            check("gatherSafetyAllowedPull", GatherUnitBlocks(false, false, 40.0, true, 1, true, false));
+            check("gatherSafetyUnknown", GatherUnitBlocks(false, false, 35.0, false, 0, false, true));
+            check("gatherSafetyUnknownFaction", GatherUnitBlocks(false, false, 35.0, true, 1, false, true));
+            check("gatherSafetyUnlistedAtDistance", !GatherUnitBlocks(false, false, 35.0, true, 1, false, false));
+            check("gatherSafetyCorpse", !GatherUnitBlocks(false, false, 10.0, true, 0, true, false));
+            check("gatherSafetyOutOfRange", !GatherUnitBlocks(false, false, 40.1, true, 1, true, false));
+            check("gatherSafetyPlayer", !GatherUnitBlocks(false, true, 10.0, true, 1, true, false));
             check("chaseReachesTheSearch", ChaseYd >= SearchYd - 0.001);
             check("pullUsesTheSameRadius", Math.Abs(PullYd - SearchYd) < 0.001);
 

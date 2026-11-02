@@ -64,6 +64,8 @@ internal static class ClickAimKeySteer
 
     // ---- learned convention -------------------------------------------------
     private static bool _calibrated;
+    private static bool _turnKeysReady;
+    private static IntPtr _turnKeysWindow;
     // Measured per key, because the two arrows are not interchangeable: one turns the
     // facing up and one down, and they need not turn at the same rate.
     private static IntPtr _lastHwnd = IntPtr.Zero;  // the window the keys went to
@@ -322,6 +324,8 @@ internal static class ClickAimKeySteer
             return false;
         }
 
+        _turnKeysReady = true;
+        _turnKeysWindow = hwnd;
         // ---- is the walked bearing the facing? --------------------------------
         double sx, sy;
         if (!ClickAimPositions.TryRead(out sx, out sy)) { report = "cannot read the position"; return false; }
@@ -459,10 +463,52 @@ internal static class ClickAimKeySteer
         report = "";
         double a, b;
         if (!TryReadFacing(out a)) { report = "cannot read the facing field"; return double.NaN; }
+        if (ClickAimAbort.Requested) return double.NaN;
         ClickAimInput.TapKey(hwnd, vk, ms);
-        Thread.Sleep(180);
+        if (ClickAimAbort.Wait(180)) return double.NaN;
         if (!TryReadFacing(out b)) { report = "lost the facing field"; return double.NaN; }
         return ClickAimMath.WrapDeg((b - a) * 180.0 / Math.PI);
+    }
+
+    // Pool chases can start before RouteRunner has performed its full walking
+    // calibration. Measure the arrow directions in place rather than relying on
+    // defaults that may be backwards on the attached client.
+    internal static bool EnsureChaseTurnKeys(IntPtr hwnd, Func<bool> safe, out string report)
+    {
+        report = "";
+        if (_turnKeysReady && _turnKeysWindow == hwnd) return true;
+        ReleaseHeld();
+        if (hwnd != IntPtr.Zero) _lastHwnd = hwnd; // STOP can release an in-progress arrow tap.
+        if (hwnd == IntPtr.Zero || !safe()) { report = "turn calibration interrupted"; return false; }
+        double r1 = TurnFor(hwnd, TurnRightVk, CalibrateTapMs, out report);
+        if (double.IsNaN(r1) || !safe()) return false;
+        double r2 = TurnFor(hwnd, TurnRightVk, CalibrateTapMs, out report);
+        if (double.IsNaN(r2) || !safe()) return false;
+        double l1 = TurnFor(hwnd, TurnLeftVk, CalibrateTapMs, out report);
+        if (double.IsNaN(l1) || !safe()) return false;
+        double l2 = TurnFor(hwnd, TurnLeftVk, CalibrateTapMs, out report);
+        if (double.IsNaN(l2) || !safe()) return false;
+        double right = Math.Abs(r2) >= Math.Abs(r1) ? r2 : r1;
+        double left = Math.Abs(l2) >= Math.Abs(l1) ? l2 : l1;
+        if (!TryTurnDirections(right, left, out int pos, out int neg, out double posRate, out double negRate))
+        { report = "turn keys did not produce reliable opposite directions"; return false; }
+        _turnPosVk = pos; _turnNegVk = neg; _turnPosRate = posRate; _turnNegRate = negRate;
+        _turnKeysWindow = hwnd; _turnKeysReady = true;
+        BeginMeshPoint();
+        report = string.Format(CultureInfo.InvariantCulture, "turn-only calibration: right {0:+0.0;-0.0}, left {1:+0.0;-0.0} degrees per 200 ms", right, left);
+        Logging.Write("[Keys] " + report);
+        return true;
+    }
+
+    private static bool TryTurnDirections(double right, double left, out int pos, out int neg, out double posRate, out double negRate)
+    {
+        pos = neg = 0; posRate = negRate = 0;
+        if (!double.IsFinite(right) || !double.IsFinite(left) || Math.Abs(right) < 1 || Math.Abs(left) < 1 || Math.Sign(right) == Math.Sign(left)) return false;
+        pos = right > 0 ? TurnRightVk : TurnLeftVk;
+        neg = right > 0 ? TurnLeftVk : TurnRightVk;
+        posRate = (right > 0 ? right : left) / CalibrateTapMs;
+        negRate = -(right > 0 ? left : right) / CalibrateTapMs;
+        return posRate >= 0.002 && posRate <= 1.0 && negRate >= 0.002 && negRate <= 1.0;
     }
 
     /// <summary>
@@ -592,8 +638,8 @@ internal static class ClickAimKeySteer
     ///      sane range, and re-measures every tick;
     ///   2. releases BOTH arrow keys after every tap, so a key that the client treats as
     ///      still held cannot keep spinning the character while a 3.2 s cast is waited out;
-    ///   3. if a tap moves the facing the wrong way, swaps the two keys and carries on -
-    ///      that is the failure that ends with the character's back to the mob.
+    ///   3. if a tap appears to move the wrong way, tries the opposite keys locally,
+    ///      without overwriting the independently measured walk calibration.
     ///
     /// Returns true when the facing is within <paramref name="toleranceDeg"/> of the bearing
     /// to the point, or when the facing cannot be read at all (the caller has nothing better
@@ -618,7 +664,7 @@ internal static class ClickAimKeySteer
         double rate = Math.Max(0.05, Math.Min(_turnPosRate, _turnNegRate));
         int lastTapMs = 0;
         double lastDelta = 0;
-        bool swapped = false;      // swap the key pair at most once per call
+        bool swapped = false;      // try the opposite direction locally; never corrupt walk calibration
 
         for (int tick = 0; tick <= maxTicks; tick++)
         {
@@ -658,7 +704,7 @@ internal static class ClickAimKeySteer
             if (ms > 220) ms = 220;                   // overshoot costs a whole tick to undo
 
             bool up = error > 0;
-            int vk = up ? _turnPosVk : _turnNegVk;
+            int vk = up != swapped ? _turnPosVk : _turnNegVk;
 
             ReleaseArrows(hwnd);
             ClickAimInput.TapKey(hwnd, vk, (int)Math.Round(ms));
@@ -673,19 +719,11 @@ internal static class ClickAimKeySteer
             {
                 swapped = true;
 
-                /* The key turned it the wrong way: swap the pair, permanently, and say so.
-                 * This is the difference between turning onto a mob and turning one's back
-                 * on it. */
-                int swap = _turnPosVk;
-                _turnPosVk = _turnNegVk;
-                _turnNegVk = swap;
-                double swapRate = _turnPosRate;
-                _turnPosRate = -_turnNegRate;
-                _turnNegRate = -swapRate;
-
+                // One sample may be stale or affected by drift. Try the other
+                // key only for this face call; preserve calibrated walk rates.
                 Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                    "[Keys] the turn keys were the wrong way round (a {0:F0} ms tap moved the facing "
-                    + "{1:+0;-0} deg while {2:+0;-0} was wanted) - swapped them", ms, delta, error));
+                    "[Keys] a {0:F0} ms face tap moved the facing {1:+0;-0} deg while {2:+0;-0} was wanted; trying opposite keys for this turn",
+                    ms, delta, error));
             }
 
             lastTapMs = (int)Math.Round(ms);
@@ -912,6 +950,11 @@ internal static class ClickAimKeySteer
         check("bearingChangeNotOvershoot", !TurnOvershot(30, -50, 90, 180));
         check("bearingWrapStable", TurnOvershot(30, -5, 179, -179));
         check("firstTurnNotOvershoot", !TurnOvershot(double.NaN, 40, double.NaN, 90));
+        check("observed70707TurnKeys", TryTurnDirections(-36, 36, out int pos, out int neg, out double posRate, out double negRate)
+            && pos == TurnLeftVk && neg == TurnRightVk && posRate > 0 && negRate > 0);
+        check("oppositeTurnKeys", TryTurnDirections(36, -36, out pos, out neg, out posRate, out negRate)
+            && pos == TurnRightVk && neg == TurnLeftVk && posRate > 0 && negRate > 0);
+        check("rejectAmbiguousTurnKeys", !TryTurnDirections(36, 36, out _, out _, out _, out _));
 
         // Uncalibrated: the client's facing is taken to be the bearing.
         _calibrated = false;

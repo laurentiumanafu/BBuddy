@@ -306,6 +306,18 @@ internal static class WowBGrindFactions
         return true;
     }
 
+    private static uint ExperimentalLevelCandidate(Memory memory, WowBReader reader, WowBObservedUnit unit, uint expectedKey)
+    {
+        if (!Experimental70707Key(memory, reader, unit, out uint firstKey) || firstKey != expectedKey) return 0;
+        byte[]? first = memory.ReadBytes64(unit.UnitAddress + Wow70707Offsets.LevelCandidateOffset, 4);
+        byte[]? second = memory.ReadBytes64(unit.UnitAddress + Wow70707Offsets.LevelCandidateOffset, 4);
+        if (first == null || second == null || first.Length != 4 || second.Length != 4) return 0;
+        uint level = BitConverter.ToUInt32(first, 0);
+        if (level == 0 || level > 255 || level != BitConverter.ToUInt32(second, 0) ||
+            !Experimental70707Key(memory, reader, unit, out uint lastKey) || lastKey != expectedKey) return 0;
+        return level;
+    }
+
     private static string ScanExperimental70707(Memory memory, WowBReader reader)
     {
         if (!reader.TryCaptureWorldSnapshot(out WowBWorldSnapshot? before) || before == null ||
@@ -335,6 +347,7 @@ internal static class WowBGrindFactions
                 current.RecordAddress != row.Unit.RecordAddress || current.UnitAddress != row.Unit.UnitAddress ||
                 !Experimental70707Key(memory, reader, current, out uint key) || key != row.Key)
             { unreadable++; continue; }
+            row.Level = ExperimentalLevelCandidate(memory, reader, current, key);
             if (!groups.TryGetValue(key, out List<Row>? group))
             { group = new List<Row>(); groups.Add(key, group); }
             group.Add(row);
@@ -347,7 +360,8 @@ internal static class WowBGrindFactions
         {
             result.AppendFormat(CultureInfo.InvariantCulture, "Candidate {0} | {1} unit(s) | nearest approximately {2:F1} yd\n", group.Key, group.Value.Count, group.Value[0].Distance);
             foreach (Row row in group.Value)
-                result.AppendFormat(CultureInfo.InvariantCulture, "  approximately {0:F1} yd | GUID {1}\n", row.Distance, row.Unit.Guid);
+                result.AppendFormat(CultureInfo.InvariantCulture, "  approximately {0:F1} yd | candidate level {1} | GUID {2}\n",
+                    row.Distance, row.Level == 0 ? "?" : row.Level.ToString(CultureInfo.InvariantCulture), row.Unit.Guid);
         }
         result.AppendFormat(CultureInfo.InvariantCulture,
             "Unreadable/changed candidates: {0}. Vtable, position and field meanings remain unverified; no code signatures checked here. These observations do not establish NPC names, friendliness or attackability. Experimental 70707 Grind uses an explicit Allow list. Reads are non-atomic and can omit units.", unreadable);

@@ -20,6 +20,11 @@ internal static class GatherNodeScanner
     private const ulong NodeVtableCandidate = 0x50B1838;
     private const int HeaderSize = 0x94;
 
+    internal struct ScanStats
+    {
+        public int KnownGuidEntries, HeaderRejected, OutsideRadius, Changed;
+    }
+
     internal readonly struct Node
     {
         public readonly WowBGuid Guid;
@@ -108,8 +113,12 @@ internal static class GatherNodeScanner
     /// area. Uses no Lua, interaction, process writes or legacy object wrappers.
     /// </summary>
     public static bool TryCapture(double radius, out List<Node> nodes)
+        => TryCapture(radius, out nodes, out _);
+
+    internal static bool TryCapture(double radius, out List<Node> nodes, out ScanStats stats)
     {
         nodes = new List<Node>();
+        stats = default;
         Memory? memory = ObjectManager.Wow;
         WowBReader? reader = ObjectManager.WowB;
         if (memory == null || reader == null || (reader.IsExperimental70707 && !reader.ExperimentalGrindActive) || !memory.Is64BitTarget || radius <= 0 || !double.IsFinite(radius))
@@ -126,13 +135,14 @@ internal static class GatherNodeScanner
                 uint guidEntry = GuidEntry(record.Guid);
                 GatherableNode? kind = Classify(guidEntry, out bool herb);
                 if (kind == null) continue;
+                stats.KnownGuidEntries++;
                 byte[]? ptrBytes = memory.ReadBytes64(record.RecordPtr + WowBOffsets.RecordDataBlockPtrOffset, 8);
-                if (ptrBytes == null || ptrBytes.Length != 8) continue;
+                if (ptrBytes == null || ptrBytes.Length != 8) { stats.HeaderRejected++; continue; }
                 ulong ptr = BitConverter.ToUInt64(ptrBytes, 0);
-                if (ptr <= 0x10000UL || ptr >= 0x00007FFFFFFFFF00UL || (ptr & 3UL) != 0) continue;
+                if (ptr <= 0x10000UL || ptr >= 0x00007FFFFFFFFF00UL || (ptr & 3UL) != 0) { stats.HeaderRejected++; continue; }
                 byte[]? header = memory.ReadBytes64(ptr, HeaderSize);
                 if (!MatchingHeader(header, memory.ImageBase64, record.RecordPtr, record.Guid, out uint entry, reader.IsExperimental70707)
-                    || entry != kind.Entry) continue;
+                    || entry != kind.Entry) { stats.HeaderRejected++; continue; }
                 byte[]? position = memory.ReadBytes64(record.RecordPtr + WowBOffsets.RecordPositionOffset, 12);
                 if (position == null || position.Length != 12) continue;
                 float x = BitConverter.ToSingle(position, 0), y = BitConverter.ToSingle(position, 4),
@@ -141,7 +151,7 @@ internal static class GatherNodeScanner
                     || Math.Abs(x) >= 100000 || Math.Abs(y) >= 100000 || Math.Abs(z) >= 100000) continue;
                 double dx = x - player.Location.X, dy = y - player.Location.Y, dz = z - player.Location.Z;
                 double distance = Math.Sqrt(dx * dx + dy * dy + dz * dz);
-                if (distance > radius) continue;
+                if (distance > radius) { stats.OutsideRadius++; continue; }
                 // Reduce stale-pointer risk. Full GUID and pool-slot rechecks do not
                 // eliminate ABA races or prove future validity.
                 byte[]? ptrAfter = memory.ReadBytes64(record.RecordPtr + WowBOffsets.RecordDataBlockPtrOffset, 8);
@@ -151,7 +161,7 @@ internal static class GatherNodeScanner
                     || guidAfter == null || guidAfter.Length != 16
                     || new WowBGuid(BitConverter.ToUInt64(guidAfter, 0), BitConverter.ToUInt64(guidAfter, 8)) != record.Guid
                     || !MatchingHeader(headerAfter, memory.ImageBase64, record.RecordPtr, record.Guid, out uint entryAfter, reader.IsExperimental70707)
-                    || entryAfter != entry || !reader.IsPoolRecordCurrent(record)) continue;
+                    || entryAfter != entry || !reader.IsPoolRecordCurrent(record)) { stats.Changed++; continue; }
                 found.Add(record.Guid);
                 nodes.Add(new Node(record.Guid, kind, herb, new WoWPoint(x, y, z), distance));
             }

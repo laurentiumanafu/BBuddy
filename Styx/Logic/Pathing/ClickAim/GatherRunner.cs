@@ -13,6 +13,8 @@ namespace Styx.Logic.Pathing;
 internal static class GatherRunner
 {
     private const double SearchYd = 100.0;
+    // Optional Grind detours stay local; standalone GatherBuddy keeps 100 yd.
+    private const double GrindSearchYd = 25.0;
     private const double InteractYd = 5.0;
     private const int RetryMs = 90000;
     private const int InteractionRetryMs = 20000;
@@ -45,6 +47,7 @@ internal static class GatherRunner
     private static int _lastScan;
     private static int _lastCombatCheck;
     private static int _lastSummary;
+    private static int _lastSafetySummary;
     private static GatherNodeScanner.Node? _pending;
     private static uint _sessionMap;
 
@@ -180,10 +183,10 @@ internal static class GatherRunner
         return !Retry.TryGetValue(node.Guid, out int until) || unchecked(Environment.TickCount - until) >= 0;
     }
 
-    private static bool FindNode(out GatherNodeScanner.Node node)
+    private static bool FindNode(out GatherNodeScanner.Node node, double radius = SearchYd)
     {
         node = default;
-        bool scanOk = GatherNodeScanner.TryCapture(SearchYd, out List<GatherNodeScanner.Node> nodes);
+        bool scanOk = GatherNodeScanner.TryCapture(radius, out List<GatherNodeScanner.Node> nodes, out GatherNodeScanner.ScanStats stats);
         int eligible = 0, blackspotted = 0, coolingDown = 0, skillExcluded = 0;
         foreach (GatherNodeScanner.Node candidate in nodes)
         {
@@ -197,9 +200,11 @@ internal static class GatherRunner
         {
             _lastSummary = Environment.TickCount;
             if (!scanOk) Logging.Write("[Gather] node scan failed; no conclusion about nearby resources");
-            else Logging.Write("[Gather] scan within 100 yd: " + nodes.Count + " recognized, " + eligible
+            else Logging.Write("[Gather] scan within " + radius.ToString("F0", CultureInfo.InvariantCulture) + " yd: " + nodes.Count + " recognized, " + eligible
                 + " eligible, " + skillExcluded + " profession/skill/blacklist excluded, "
                 + blackspotted + " profile-blackspot excluded, " + coolingDown + " on retry cooldown; "
+                + "known GUID-entry candidates in pool=" + stats.KnownGuidEntries + ", header rejected=" + stats.HeaderRejected
+                + ", outside radius=" + stats.OutsideRadius + ", changed=" + stats.Changed + "; "
                 + "an empty scan is not proof no nodes exist");
         }
         return scanOk && eligible > 0;
@@ -400,7 +405,10 @@ internal static class GatherRunner
             _stop = false;
             _lastScan = unchecked(Environment.TickCount - 1500);
             _lastSummary = unchecked(Environment.TickCount - 15000);
-            Logging.Write("[Grind gather] enabled; configured professions only. Living NPCs within 100 yd block gathering because hostility is unknown.");
+            _lastSafetySummary = unchecked(Environment.TickCount - 15000);
+            Logging.Write("[Grind gather] enabled: Mining=" + GatherSettings.Mining + " skill=" + GatherSettings.MiningSkill +
+                ", Herbalism=" + GatherSettings.Herbalism + " skill=" + GatherSettings.HerbalismSkill +
+                "; resources within 25 yd, combat and nearby NPCs take priority. Hostility and 70707 node layout remain unverified.");
             return true;
         }
         catch (Exception ex) { Logging.Write("[Grind gather] disabled: " + ex.Message); return false; }
@@ -410,13 +418,24 @@ internal static class GatherRunner
     {
         if (_stop || ClickAimAbort.Requested || unchecked(Environment.TickCount - _lastScan) < 1500) return false;
         _lastScan = Environment.TickCount;
-        return MapStillCurrent() && safe() && FindNode(out _);
+        return MapStillCurrent() && safe() && FindNode(out _, GrindSearchYd);
     }
 
     // Returns true if a node was attempted, not whether it was successfully looted.
     internal static bool GatherForGrind(IntPtr hwnd, ClickAimMover mover, Func<bool> safe)
     {
-        if (_stop || ClickAimAbort.Requested || !MapStillCurrent() || !safe() || !FindNode(out GatherNodeScanner.Node node)) return false;
+        if (_stop || ClickAimAbort.Requested || !MapStillCurrent() ||
+            !GrindRunner.TryReadGatherCombat(out bool fighting) || fighting ||
+            !FindNode(out GatherNodeScanner.Node node, GrindSearchYd)) return false;
+        if (!safe())
+        {
+            if (unchecked(Environment.TickCount - _lastSafetySummary) >= 15000)
+            {
+                _lastSafetySummary = Environment.TickCount;
+                Logging.Write("[Grind gather] a resource is in range, but combat, a nearby NPC, an eligible pull or unreadable safety state takes priority");
+            }
+            return false;
+        }
         bool oldQuiet = mover.QuietKeyStop;
         mover.QuietKeyStop = true;
         try
