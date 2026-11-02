@@ -81,6 +81,16 @@ internal static class ExperimentalOffsetsTests
         memory.U64(module + Wow70707Offsets.StoredActionArrayCandidate, 6603);
         memory.U64(module + Wow70707Offsets.StoredActionArrayCandidate + 8, 5176);
         Require(experimental.ReadActionBar().Count == 0, "70707 candidate action bar cannot drive gameplay");
+        memory.U64(module + Wow70707Offsets.StoredActionArrayCandidate + 10 * 8, 0x800000000000009FUL);
+        memory.U64(module + Wow70707Offsets.StoredActionArrayCandidate + 11 * 8, 0x20000000001UL);
+        Require(experimental.TryReadExperimentalActionPreview(out var preview) && preview.Count == 3 &&
+                preview[0].IdLow32 == 6603 && preview[1].IdLow32 == 5176 &&
+                ClickAimCombat.TryReadExperimentalBarPreview(experimental, out var actions) && actions.Count == 3 &&
+                actions[0].Name == "Attack" && actions[1].Name == "Wrath" && actions[2].Kind == ClickAimActionKind.Item && actions[2].Id == 159 &&
+                !experimental.HasExperimentalGrindSession && experimental.ReadActionBar().Count == 0,
+                "stopped UI preview decodes spells/items without granting gameplay access or exposing unsupported slots");
+        memory.U64(module + Wow70707Offsets.StoredActionArrayCandidate + 10 * 8, 0);
+        memory.U64(module + Wow70707Offsets.StoredActionArrayCandidate + 11 * 8, 0);
         Require(experimental.DescribeExperimentalActionBar().Contains("1:0x00000000000019CB 2:0x0000000000001438"),
                 "raw candidate action array is reported");
         int actionReads = 0;
@@ -92,12 +102,29 @@ internal static class ExperimentalOffsetsTests
         Require(experimental.DescribeExperimentalActionBar().Contains("changed; discarded"), "unstable action array discarded");
         memory.OnRead = null;
         memory.U64(module + Wow70707Offsets.StoredActionArrayCandidate, 6603);
+        actionReads = 0;
+        memory.OnRead = (address, count) =>
+        {
+            if (address == module + Wow70707Offsets.StoredActionArrayCandidate && count == 96 && ++actionReads == 2)
+                memory.U64(address, 42);
+        };
+        Require(!experimental.TryReadExperimentalActionPreview(out _) && !experimental.HasExperimentalGrindSession, "unstable UI preview discarded");
+        memory.OnRead = null;
+        memory.U64(module + Wow70707Offsets.StoredActionArrayCandidate, 6603);
         memory.OnRead = (address, count) =>
         {
             if (address == module + Wow70707Offsets.StoredActionArrayCandidate && count == 96)
                 memory.Guid(module + Wow70707Offsets.PlayerGuid, default);
         };
         Require(experimental.DescribeExperimentalActionBar().Contains("unavailable/changed"), "changed action-bar player discarded");
+        memory.OnRead = null;
+        memory.Guid(module + Wow70707Offsets.PlayerGuid, player);
+        memory.OnRead = (address, count) =>
+        {
+            if (address == module + Wow70707Offsets.StoredActionArrayCandidate && count == 96)
+                memory.Guid(module + Wow70707Offsets.PlayerGuid, default);
+        };
+        Require(!experimental.TryReadExperimentalActionPreview(out _), "changed preview player discarded");
         memory.OnRead = null;
         memory.Guid(module + Wow70707Offsets.PlayerGuid, player);
         memory.EnableCache();
@@ -183,7 +210,7 @@ internal static class ExperimentalOffsetsTests
         memory.Guid(module + Wow70707Offsets.PlayerTargetGuid, default); // no selection required
         string candidateScan = WowBGrindFactions.ScanNearby();
         Require(candidateScan.Contains("RESEARCH ONLY") && candidateScan.Contains("Candidate 36 | 1 unit(s)") &&
-                candidateScan.Contains("candidate level 2") && candidateScan.Contains("explicit Allow list") && candidateScan.Contains(target.ToString()), "70707 candidate scan and level without target");
+                candidateScan.Contains("candidate level 2") && candidateScan.Contains("Allow or Blacklist") && candidateScan.Contains(target.ToString()), "70707 candidate scan and level without target");
         int levelReads = 0;
         memory.OnRead = (address, count) =>
         {
@@ -230,6 +257,17 @@ internal static class ExperimentalOffsetsTests
         memory.U32(0x24000000 + 0x1E20, 0x100);
         Require(!WowBGrindFactions.PrepareForGrind(out _) && !experimental.TryReadMapId(out _), "unsupported power type rejects and revokes session");
         memory.U32(0x24000000 + 0x1E20, 0);
+        memory.Remove(module + 0x2890305);
+        memory.Remove(module + 0xA538FD);
+        Require(WowBGrindFactions.PrepareForGrind(out string partialError), "two matches with unreadable anchors allow guarded session: " + partialError);
+        WowBGrindFactions.EndExperimental70707();
+        memory.Remove(module + 0x20AAF97);
+        Require(!WowBGrindFactions.PrepareForGrind(out string tooFew) && tooFew.Contains("unreadable") && tooFew.Contains("1/4"), "one readable anchor refuses start with details");
+        memory.Bytes(module + 0x20AAF97, Convert.FromHexString("F2480F2A83281E0000"));
+        memory.Bytes(module + 0x2890305, Convert.FromHexString("0000000000000000"));
+        Require(!WowBGrindFactions.PrepareForGrind(out string mismatch) && mismatch.Contains("mismatch="), "readable signature mismatch refuses start even with two matches");
+        memory.Bytes(module + 0x2890305, Convert.FromHexString("448B8C86C01B0000"));
+        memory.Bytes(module + 0xA538FD, Convert.FromHexString("488D0D5CB32E06488D34C1488B04C1"));
         Require(WowBGrindFactions.PrepareForGrind(out string trialError), "70707 synthetic start without selected target: " + trialError);
         Require(!WowBGrindFactions.PrepareForGrind(out _) && experimental.TryReadMapId(out _), "overlapping sessions rejected without revoking current session");
         Require(experimental.TryReadMapId(out mapCandidate) && mapCandidate == 7 && experimental.TryGetPlayerObject(out _) &&
@@ -288,6 +326,19 @@ internal static class ExperimentalOffsetsTests
         WowBGrindFactions.EndExperimental70707();
         Require(!experimental.TryReadMapId(out _) && !experimental.TryGetPlayerObject(out _) && experimental.ReadActionBar().Count == 0 &&
                 !experimental.TryGetUnitFields(targetUnit, out _), "session revocation closes gameplay reads");
+        Require(GrindFactionSettings.Save(GrindFactionMode.Blacklist, "36", "31", out _), "save 70707 blacklist");
+        Require(WowBGrindFactions.PrepareForGrind(out string blacklistError), "70707 blacklist starts: " + blacklistError);
+        Require(WowBGrindFactions.AllowsPull(experimental, selectedUnit, out _) &&
+                !WowBGrindFactions.AllowsPull(experimental, secondUnit, out bool blockedUnknown) && !blockedUnknown,
+                "70707 blacklist allows other stable keys and denies blacklisted key");
+        memory.U32(targetUnit + Wow70707Offsets.FactionKeyCandidateOffset, 0);
+        Require(!WowBGrindFactions.AllowsPull(experimental, selectedUnit, out bool unknownKey) && unknownKey, "70707 blacklist denies unknown key");
+        memory.U32(targetUnit + Wow70707Offsets.FactionKeyCandidateOffset, 36);
+        memory.U64(targetUnit + 8, secondRecord);
+        Require(!WowBGrindFactions.AllowsPull(experimental, selectedUnit, out bool unknownIdentity) && unknownIdentity, "70707 blacklist denies changed identity");
+        memory.U64(targetUnit + 8, 0x23001000);
+        WowBGrindFactions.EndExperimental70707();
+        Require(GrindFactionSettings.Save(GrindFactionMode.Allow, "36", "31", out _), "restore allowlist");
         Require(WowBKnownMerchants.TryReadExperimentalTown(out uint townMap, out double tx, out double ty, out _) &&
                 townMap == 7 && tx == 100 && ty == 200, "stopped 70707 town candidate captured");
         memory.U64(secondAddress + Wow70707Offsets.HealthCandidateOffset, 100);

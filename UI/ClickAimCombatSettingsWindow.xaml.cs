@@ -255,13 +255,26 @@ namespace CopilotBuddy.UI
             string note;
 
             List<ClickAimAction>? bar = null;
+            bool experimentalPreview = false;
+            bool previewUnavailable = false;
             WowBReader? reader = ObjectManager.WowB;
             if (reader != null)
             {
-                try { bar = ClickAimCombat.ReadBar(reader); }
+                try
+                {
+                    if (reader.IsExperimental70707)
+                    {
+                        experimentalPreview = true;
+                        if (ClickAimCombat.TryReadExperimentalBarPreview(reader, out List<ClickAimAction> candidate) && ObjectManager.WowB == reader)
+                            bar = candidate;
+                        else previewUnavailable = true;
+                    }
+                    else bar = ClickAimCombat.ReadBar(reader);
+                }
                 catch (Exception ex)
                 {
                     bar = null;
+                    previewUnavailable = experimentalPreview;
                     Logging.Write("[Grind] combat settings: action bar unreadable: " + ex.Message);
                 }
             }
@@ -275,7 +288,8 @@ namespace CopilotBuddy.UI
                     _rows.Add(RowOf(action));
                 }
                 note = string.Format(CultureInfo.InvariantCulture,
-                    "{0} spell(s) on the bar, {1} set by hand.", _rows.Count, overrides);
+                    "{0} spell(s) on the bar, {1} set by hand.{2}", _rows.Count, overrides,
+                    experimentalPreview ? " 70707 preview: candidate slots and default keys are unverified; no gameplay session was started." : "");
             }
             else
             {
@@ -289,10 +303,12 @@ namespace CopilotBuddy.UI
                     row.Source = "hand";
                     _rows.Add(row);
                 }
-                note = ids.Count == 0
-                    ? "Attach to the game to see the action bar. Nothing is set by hand yet."
-                    : "Not attached: showing the " + ids.Count.ToString(CultureInfo.InvariantCulture)
-                      + " spell(s) set by hand.";
+                note = previewUnavailable
+                    ? "70707 candidate action bar unavailable or changed; press Refresh. Showing any hand-set roles only."
+                    : ids.Count == 0
+                        ? "Attach to the game to see the action bar. Nothing is set by hand yet."
+                        : "Not attached: showing the " + ids.Count.ToString(CultureInfo.InvariantCulture)
+                          + " spell(s) set by hand.";
             }
 
             lstSpells.ItemsSource = null;

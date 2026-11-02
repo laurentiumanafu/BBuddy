@@ -662,7 +662,7 @@ internal static class GrindRunner
         int started = Environment.TickCount;
         int budgetMs = minutes <= 0 ? int.MaxValue : minutes * 60000;
         if (trialReader != null)
-            Logging.Write("[Grind] EXPERIMENTAL 70707: continuous allowlist-filtered Grind. Candidate stats, reaction, flags, hotkeys and movement remain unverified. Monitor closely; use STOP if anything is wrong.");
+            Logging.Write("[Grind] EXPERIMENTAL 70707: continuous faction-filtered Grind. Candidate stats, reaction, flags, hotkeys and movement remain unverified. Monitor closely; use STOP if anything is wrong.");
 
         IntPtr hwnd = Handle();
         if (hwnd == IntPtr.Zero) { Logging.Write("[Grind] no game window"); return; }
@@ -2573,7 +2573,7 @@ internal static class GrindRunner
             if (unit.HasPlayerVtable) continue;
             if (_looted.Contains(unit.Guid)) continue;
             // 70707 corpse classifications are candidates; never probe a body
-            // outside the same explicit faction allowlist used for combat.
+            // outside the same active faction filter used for combat.
             if (reader.IsExperimental70707 && !WowBGrindFactions.AllowsPull(reader, unit, out _)) continue;
 
             double d = ClickAimMath.Len(unit.Location.X - me.Location.X, unit.Location.Y - me.Location.Y);

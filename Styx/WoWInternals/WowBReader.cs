@@ -1174,14 +1174,38 @@ namespace Styx.WoWInternals
                 byte[]? again = _memory.ReadBytes64(Abs(rva), count * 8);
                 if (again == null || again.Length != bytes.Length || Convert.ToHexString(again) != Convert.ToHexString(bytes) || !ExperimentalGrindActive) return slots;
             }
-            for (int i = 0; i < count; i++)
+            return DecodeActionSlots(bytes, _experimental70707);
+        }
+
+        private static List<WowBActionSlot> DecodeActionSlots(byte[] bytes, bool experimental)
+        {
+            var slots = new List<WowBActionSlot>();
+            for (int i = 0; i < bytes.Length / 8; i++)
             {
                 ulong raw = BitConverter.ToUInt64(bytes, i * 8);
                 if (raw == 0) continue;
-                if (_experimental70707 && ((uint)raw == 0 || ((raw >> 32) != 0 && (raw >> 32) != 0x80000000UL))) continue;
+                if (experimental && ((uint)raw == 0 || ((raw >> 32) != 0 && (raw >> 32) != 0x80000000UL))) continue;
                 slots.Add(new WowBActionSlot(i + 1, raw));
             }
             return slots;
+        }
+
+        // Display-only candidate. This never arms a session or opens gameplay
+        // access from the UI thread; the real rotation still uses ReadActionBar.
+        internal bool TryReadExperimentalActionPreview(out List<WowBActionSlot> slots)
+        {
+            slots = new List<WowBActionSlot>();
+            if (!_experimental70707) return false;
+            using var uncached = _memory.TemporaryCacheState(false);
+            if (!TryReadGuid(Abs(PlayerGuidRva), out WowBGuid before) || before.IsEmpty) return false;
+            ulong address = Abs(Wow70707Offsets.StoredActionArrayCandidate);
+            byte[]? first = _memory.ReadBytes64(address, 96);
+            byte[]? second = _memory.ReadBytes64(address, 96);
+            if (first == null || second == null || first.Length != 96 || second.Length != 96 ||
+                Convert.ToHexString(first) != Convert.ToHexString(second) ||
+                !TryReadGuid(Abs(PlayerGuidRva), out WowBGuid after) || before != after) return false;
+            slots = DecodeActionSlots(first, true);
+            return true;
         }
 
         /// <summary>

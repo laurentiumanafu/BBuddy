@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
 using GreenMagic;
+using Styx.Helpers;
 using Styx.WoWInternals;
 using Styx.Offsets;
 
@@ -66,8 +67,8 @@ internal static class WowBGrindFactions
     private static bool PrepareExperimental70707(GrindFactionRules rules, out string reason)
     {
         reason = "";
-        if (rules.Mode != GrindFactionMode.Allow)
-        { reason = "70707 requires Allow mode and an explicitly approved faction list"; return false; }
+        if (!rules.Enabled)
+        { reason = "70707 requires a nonempty Allow or Blacklist faction filter"; return false; }
         Memory? memory = ObjectManager.Wow;
         WowBReader? reader = ObjectManager.WowB;
         if (memory == null || reader == null || !reader.IsExperimental70707 || !memory.Is64BitTarget)
@@ -77,8 +78,9 @@ internal static class WowBGrindFactions
         {
             using var uncached = memory.TemporaryCacheState(false);
             // These image-specific anchors are partial guards, not full build validation.
-            if (!CheckExperimentalBuild(memory))
-            { reason = "70707 experimental signatures did not match"; return false; }
+            if (!CheckExperimentalBuild(memory, out string signatureReport))
+            { reason = "70707 experimental signature check failed: " + signatureReport; return false; }
+            Logging.Write("[70707] partial signature check: " + signatureReport);
             if (!reader.TryCaptureWorldSnapshot(out WowBWorldSnapshot? snapshot) || snapshot == null ||
                 !snapshot.TryGetLocalPlayer(out WowBObservedUnit player))
             { reason = "70707 player snapshot unavailable"; return false; }
@@ -111,16 +113,33 @@ internal static class WowBGrindFactions
         return true;
     }
 
-    private static bool CheckExperimentalBuild(Memory memory)
-        => memory.Is64BitTarget && Signature(memory, 0x2080D2C, "488D0DCD38A004E808A843FE8B93541E0000") &&
-           Signature(memory, 0x20AAF97, "F2480F2A83281E0000") &&
-           Signature(memory, 0x2890305, "448B8C86C01B0000") &&
-           Signature(memory, 0xA538FD, "488D0D5CB32E06488D34C1488B04C1");
+    private static bool CheckExperimentalBuild(Memory memory) => CheckExperimentalBuild(memory, out _);
 
-    private static bool Signature(Memory memory, ulong rva, string expected)
+    // Code pages in this client can become unreadable after having matched. A
+    // failed read is not a contradictory signature. Require at least two
+    // independently matching anchors, but never overlook a readable mismatch.
+    // The subsequent player, map, action bar and per-target checks still apply.
+    private static bool CheckExperimentalBuild(Memory memory, out string report)
     {
-        byte[]? raw = memory.ReadBytes64(memory.GetAbsolute64(rva), expected.Length / 2);
-        return raw != null && raw.Length * 2 == expected.Length && Convert.ToHexString(raw) == expected;
+        if (!memory.Is64BitTarget) { report = "target is not x64"; return false; }
+        ulong[] rvas = { 0x2080D2C, 0x20AAF97, 0x2890305, 0xA538FD };
+        string[] expected = { "488D0DCD38A004E808A843FE8B93541E0000", "F2480F2A83281E0000",
+                              "448B8C86C01B0000", "488D0D5CB32E06488D34C1488B04C1" };
+        int matches = 0, mismatches = 0;
+        var observations = new List<string>();
+        for (int i = 0; i < rvas.Length; i++)
+        {
+            byte[]? raw = memory.ReadBytes64(memory.GetAbsolute64(rvas[i]), expected[i].Length / 2);
+            if (raw == null || raw.Length * 2 != expected[i].Length)
+                raw = memory.ReadBytes64(memory.GetAbsolute64(rvas[i]), expected[i].Length / 2);
+            string status;
+            if (raw == null || raw.Length * 2 != expected[i].Length) status = "unreadable";
+            else if (Convert.ToHexString(raw) == expected[i]) { matches++; status = "match"; }
+            else { mismatches++; status = "mismatch=" + Convert.ToHexString(raw); }
+            observations.Add("0x" + rvas[i].ToString("X", CultureInfo.InvariantCulture) + ":" + status);
+        }
+        report = string.Join(", ", observations) + "; " + matches.ToString(CultureInfo.InvariantCulture) + "/4 matched (minimum 2; no mismatches)";
+        return matches >= 2 && mismatches == 0;
     }
 
     internal static WowBReader? ExperimentalBoundReader => _boundReader?.IsExperimental70707 == true ? _boundReader : null;
@@ -285,8 +304,8 @@ internal static class WowBGrindFactions
         catch (Exception ex) { return "Faction scan failed: " + ex.Message; }
     }
 
-    // A repeated raw word is not proof of a faction key or reaction. The
-    // The 70707 session requires an allowlist; each unit is independently revalidated.
+    // A repeated raw word is not proof of a faction key or reaction.
+    // Each 70707 unit is independently revalidated for the active filter.
     private static bool Experimental70707Key(Memory memory, WowBReader reader, WowBObservedUnit unit, out uint key)
     {
         key = 0;
@@ -364,7 +383,7 @@ internal static class WowBGrindFactions
                     row.Distance, row.Level == 0 ? "?" : row.Level.ToString(CultureInfo.InvariantCulture), row.Unit.Guid);
         }
         result.AppendFormat(CultureInfo.InvariantCulture,
-            "Unreadable/changed candidates: {0}. Vtable, position and field meanings remain unverified; no code signatures checked here. These observations do not establish NPC names, friendliness or attackability. Experimental 70707 Grind uses an explicit Allow list. Reads are non-atomic and can omit units.", unreadable);
+            "Unreadable/changed candidates: {0}. Vtable, position and field meanings remain unverified; no code signatures checked here. These observations do not establish NPC names, friendliness or attackability. Experimental 70707 Grind uses the selected Allow or Blacklist filter. Reads are non-atomic and can omit units.", unreadable);
         return result.ToString();
     }
 }

@@ -717,7 +717,21 @@ internal static class ClickAimCombat
         var result = new List<ClickAimAction>();
         if (reader == null) return result;
 
-        List<WowBReader.WowBActionSlot> raw = reader.ReadActionBar();
+        return DecodeBar(reader.ReadActionBar());
+    }
+
+    // UI preview is read-only and does not authorize 70707 gameplay reads.
+    public static bool TryReadExperimentalBarPreview(WowBReader reader, out List<ClickAimAction> actions)
+    {
+        actions = new List<ClickAimAction>();
+        if (!reader.TryReadExperimentalActionPreview(out List<WowBReader.WowBActionSlot> raw)) return false;
+        actions = DecodeBar(raw);
+        return true;
+    }
+
+    private static List<ClickAimAction> DecodeBar(List<WowBReader.WowBActionSlot> raw)
+    {
+        var result = new List<ClickAimAction>();
         for (int i = 0; i < raw.Count; i++)
         {
             WowBReader.WowBActionSlot slot = raw[i];

@@ -83,7 +83,7 @@ internal static class GatherRunner
                 { Logging.Write("[Gather] 70707 preparation failed: " + reason); return false; }
                 experimentalReader = WowBGrindFactions.ExperimentalBoundReader;
                 if (experimentalReader == null) return false;
-                Logging.Write("[Gather] EXPERIMENTAL 70707: static node vtable candidate, allowlisted defence only; monitor closely and use STOP.");
+                Logging.Write("[Gather] EXPERIMENTAL 70707: static node vtable candidate, faction-filtered defence only; monitor closely and use STOP.");
             }
             started = StartPrepared(profile, generation, experimentalReader);
             return started;
