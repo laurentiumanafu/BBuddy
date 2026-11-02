@@ -2,8 +2,8 @@
 
 These are **research candidates**, not a usable or validated offset table. They
 were derived without executing the client, changing game memory, or invoking
-Lua. An explicitly opted-in 70707 attachment now uses the candidate globals in
-its reader and prints a read-only candidate summary; this is not a completed
+Lua. A 70707 attachment now uses the candidate globals in its reader and
+prints a read-only candidate summary; this is not a completed
 port. A decoded file need not match
 the bytes and protection state of the running process; static matches also do
 not establish live pointer validity, object identity, or safe actions.
@@ -37,7 +37,8 @@ file offsets or fixed process addresses. Actual runtime base can change.
 | Current target GUID | `0x7BDFF38` | `0x6B1DFB8` | 37 unique-reference matches in the first 80 sampled xrefs. Several may belong to the same logical path; this is not 37 independent validations. |
 | Object-manager global | `0x7B7B738` | `0x6D20538` | Two nearby matches in a shared reset path and one separate match. Pointer semantics and pool relationship remain unverified. |
 | Handle-pool table root | `0x582D150` | `0x481CBE0` | Two matched references from the first 80 sampled xrefs. One other match pointed elsewhere; treat as a lower-confidence lead. |
-| Map-root global | `0x7B7B4F8` | `0x6D204B8` | Four matched references in the first 80 sampled xrefs; one conflicting match. Dereference chain and map field must not be assumed. |
+| Map-root global | `0x7B7B4F8` | `0x6D204B8` | Four matched references in the first 80 sampled xrefs; one conflicting match. |
+| Map-root field candidate | `+0x28` | `+0x20` | Corresponding instructions at 70291 `0x205452` and 70707 `0x21BCD9` read these fields after loading the corresponding roots. Diagnostic-only: semantic identity and live behavior are unverified. |
 | Camera world-frame global | `0x5FF99F0` | `0x4F48610` | 70707 `GetCameraZoom` registration points to `0x2835700`; that code reads this global. |
 | Camera pointer within frame | `+0x490` | `+0x480` | Directly visible in the 70707 `GetCameraZoom` handler. This is a structure offset, **not** a module RVA. |
 | Zoom field within camera object | `+0x274` | `+0x274` | Directly visible in that handler. Other camera fields are not established by this observation. |
@@ -77,6 +78,6 @@ position/facing fields, health/level/faction fields, map ID chain, cursor and
 movement controls, bag capacity/contents, and reaction semantics have **not**
 been established for 70707. Old 70291 member offsets are not safe to carry over
 just because one related field or instruction remains the same. The candidate
-roots are wired into the explicitly opted-in 70707 reader; its map ID and camera
-position remain unavailable until their member fields are established. Existing
+roots are wired into the 70707 reader; its map ID and camera position remain
+unavailable until their member fields are established. Existing
 70291 faction signatures and identity checks have not been bypassed.

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
@@ -423,7 +423,7 @@ namespace CopilotBuddy.UI
             {
                 // Find ALL Wow processes (covers the standard client, the WoW.exe spelling,
                 // and the Luacct.exe variant used by some private-server clients)
-                string[] wowProcessNames = ClientAttachPolicy.ProcessNames(ClientAttachPolicy.ExperimentalEnabled);
+                string[] wowProcessNames = ClientAttachPolicy.ProcessNames();
                 var wowProcesses = wowProcessNames.SelectMany(n => Process.GetProcessesByName(n))
                     .DistinctBy(p => p.Id).ToArray();
                 wowProcessesFound = wowProcesses.Length;
@@ -446,19 +446,16 @@ namespace CopilotBuddy.UI
                             continue;
                         }
 
-                        // Preserve the existing unversioned/WowB discovery rules, but
-                        // require explicit opt-in for the known-incompatible 70707 build.
-                        if (ClientAttachPolicy.IsCandidate(build, proc.ProcessName, ClientAttachPolicy.ExperimentalEnabled))
+                        // Keep existing unversioned/WowB discovery rules and discover 70707 automatically.
+                        if (ClientAttachPolicy.IsCandidate(build, proc.ProcessName))
                         {
                             candidates.Add(proc);
                             Logging.WriteDebug("Candidate: {0} (PID {1}), build {2}", proc.ProcessName, proc.Id, build);
                         }
                         else
                         {
-                            Logging.Write(Colors.Orange, "{0} (PID {1}) skipped: unsupported build {2} (expected {3} or {4}).",
-                                proc.ProcessName, proc.Id, build, ObjectManager.SupportedBuild, ObjectManager.SupportedBuildWowB);
-                            if (build == ClientAttachPolicy.ExperimentalBuild)
-                                Logging.Write(Colors.Orange, "To experiment with build 70707, restart with {0}; 70291 offsets are known not to match.", ClientAttachPolicy.ExperimentalArgument);
+                            Logging.Write(Colors.Orange, "{0} (PID {1}) skipped: unsupported build {2} (expected {3}, {4}, or experimental {5}).",
+                                proc.ProcessName, proc.Id, build, ObjectManager.SupportedBuild, ObjectManager.SupportedBuildWowB, ClientAttachPolicy.ExperimentalBuild);
                         }
                     }
                     catch { /* Access denied or process exited */ }
@@ -482,13 +479,11 @@ namespace CopilotBuddy.UI
                                 if (!Environment.Is64BitProcess)
                                     Logging.Write(Colors.Orange, "CopilotBuddy is running as x86 — use the x64 build to attach to a 64-bit client.");
                             }
-                            else if (ClientAttachPolicy.IsCandidate(build, proc.ProcessName, ClientAttachPolicy.ExperimentalEnabled))
+                            else if (ClientAttachPolicy.IsCandidate(build, proc.ProcessName))
                                 candidates.Add(proc);
                             else
                             {
-                                Logging.Write(Colors.Orange, "PID {0} skipped: unsupported build {1} (expected {2} or {3}).", pid, build, ObjectManager.SupportedBuild, ObjectManager.SupportedBuildWowB);
-                                if (build == ClientAttachPolicy.ExperimentalBuild)
-                                    Logging.Write(Colors.Orange, "To experiment with build 70707, restart with {0}; 70291 offsets are known not to match.", ClientAttachPolicy.ExperimentalArgument);
+                                Logging.Write(Colors.Orange, "PID {0} skipped: unsupported build {1} (expected {2}, {3}, or experimental {4}).", pid, build, ObjectManager.SupportedBuild, ObjectManager.SupportedBuildWowB, ClientAttachPolicy.ExperimentalBuild);
                             }
                         }
                     }

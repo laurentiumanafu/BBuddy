@@ -582,13 +582,23 @@ namespace Styx.WoWInternals
         /// not the same atomic sample; the target may change during the scan.
         /// Never use the result to infer hostility or permission to interact.
         /// </summary>
-        public string DiagnoseTarget(WowBGuid expected)
+        public string DiagnoseTarget(WowBGuid expected) => DiagnoseGuid(expected, false);
+
+        /// <summary>Read-only 70707 local-record investigation; never used for movement.</summary>
+        public string DiagnoseExperimentalPlayer()
+        {
+            if (!_experimental70707) return "70707 candidate profile is not active";
+            return DiagnoseGuid(ReadLocalGuid(), true);
+        }
+
+        private string DiagnoseGuid(WowBGuid expected, bool localPlayer)
         {
             using var uncached = _memory.TemporaryCacheState(false);
             if (expected.IsEmpty)
-                return "no-target";
-            if (!TryReadGuid(Abs(TargetGuidRva), out WowBGuid before) || before != expected)
-                return "target-changed-or-unreadable-before-scan";
+                return localPlayer ? "no-local-guid" : "no-target";
+            ulong guidRva = localPlayer ? PlayerGuidRva : TargetGuidRva;
+            if (!TryReadGuid(Abs(guidRva), out WowBGuid before) || before != expected)
+                return localPlayer ? "local-changed-or-unreadable-before-scan" : "target-changed-or-unreadable-before-scan";
 
             List<WowBPoolObject> records = EnumeratePoolObjects();
             int matches = 0;
@@ -673,8 +683,19 @@ namespace Styx.WoWInternals
                 }
             }
 
-            if (!TryReadGuid(Abs(TargetGuidRva), out WowBGuid after) || after != expected)
-                return "target-changed-or-unreadable-after-scan; discard diagnostic";
+            if (!TryReadGuid(Abs(guidRva), out WowBGuid after) || after != expected)
+                return localPlayer ? "local-changed-or-unreadable-after-scan; discard diagnostic" :
+                    "target-changed-or-unreadable-after-scan; discard diagnostic";
+            if (_experimental70707 && matches == 1 && IsPoolRecordCurrent(found))
+            {
+                // Diagnostic-only old-layout candidate; never authorize movement from it.
+                byte[]? transformCandidate = _memory.ReadBytes64(found.RecordPtr + WowBOffsets.RecordPositionOffset, 20);
+                if (transformCandidate != null && transformCandidate.Length == 20)
+                    detail += string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                        " rawRecord+0x60=({0:R},{1:R},{2:R}); +0x70={3:R} (unverified)",
+                        BitConverter.ToSingle(transformCandidate, 0), BitConverter.ToSingle(transformCandidate, 4),
+                        BitConverter.ToSingle(transformCandidate, 8), BitConverter.ToSingle(transformCandidate, 16));
+            }
             // The record can change even if the selected GUID stays the same.
             return detail;
         }
@@ -1198,13 +1219,20 @@ namespace Styx.WoWInternals
             ulong pool0 = _memory.ReadPointer64(Abs(HandlePoolsRva));
             ulong pool1 = _memory.ReadPointer64(Abs(HandlePoolsRva) + 8);
             ulong mapRoot = _memory.ReadPointer64(Abs(Wow70707Offsets.MapRoot));
+            byte[]? mapFirst = IsUserPointer(mapRoot) ? _memory.ReadBytes64(mapRoot + Wow70707Offsets.MapIdCandidateOffset, 4) : null;
+            byte[]? mapSecond = IsUserPointer(mapRoot) ? _memory.ReadBytes64(mapRoot + Wow70707Offsets.MapIdCandidateOffset, 4) : null;
+            byte[]? mapRootAfter = _memory.ReadBytes64(Abs(Wow70707Offsets.MapRoot), 8);
+            string mapCandidate = mapFirst != null && mapSecond != null && mapRootAfter != null &&
+                mapFirst.Length == 4 && mapSecond.Length == 4 && mapRootAfter.Length == 8 &&
+                BitConverter.ToUInt32(mapFirst, 0) == BitConverter.ToUInt32(mapSecond, 0) && BitConverter.ToUInt64(mapRootAfter, 0) == mapRoot
+                ? BitConverter.ToUInt32(mapFirst, 0).ToString(System.Globalization.CultureInfo.InvariantCulture) : "unreadable-or-unstable";
             ulong frame = _memory.ReadPointer64(Abs(Wow70707Offsets.CameraWorldFrameGlobal));
             ulong camera = IsUserPointer(frame) ? _memory.ReadPointer64(frame + Wow70707Offsets.CameraPointerOffset) : 0;
             byte[]? zoomBytes = IsUserPointer(camera) ? _memory.ReadBytes64(camera + Wow70707Offsets.CameraZoomOffset, 4) : null;
             string zoom = zoomBytes == null || zoomBytes.Length != 4 ? "unreadable" :
                 BitConverter.ToSingle(zoomBytes, 0).ToString("R", System.Globalization.CultureInfo.InvariantCulture);
             return $"[70707 candidates] playerGuid={player}; targetGuid={target}; playerName=\"{name}\"; " +
-                $"objectManager=0x{manager:X}; pool0=0x{pool0:X}; pool1=0x{pool1:X}; mapRoot=0x{mapRoot:X}; " +
+                $"objectManager=0x{manager:X}; pool0=0x{pool0:X}; pool1=0x{pool1:X}; mapRoot=0x{mapRoot:X}; mapRoot+0x20Candidate={mapCandidate}; " +
                 $"cameraFrame=0x{frame:X}; camera=0x{camera:X}; zoomCandidate={zoom}. " +
                 "Unverified observations; pointer 0 can mean zero or unreadable. Map ID, camera position and unit layouts are not established.";
         }

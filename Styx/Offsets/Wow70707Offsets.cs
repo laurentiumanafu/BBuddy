@@ -3,7 +3,7 @@ namespace Styx.Offsets
     /// <summary>
     /// Experimental 70707 image-relative candidates from static analysis only.
     /// No member layouts, vtables or safe gameplay behavior have been verified.
-    /// Selected only for an explicitly opted-in 70707 attachment.
+    /// Selected only when attached to build 70707.
     /// </summary>
     internal static class Wow70707Offsets
     {
@@ -13,6 +13,7 @@ namespace Styx.Offsets
         internal const ulong ObjectManager = 0x6D20538;
         internal const ulong HandlePools = 0x481CBE0;
         internal const ulong MapRoot = 0x6D204B8;
+        internal const ulong MapIdCandidateOffset = 0x20; // static counterpart; diagnostic only
         internal const ulong CameraWorldFrameGlobal = 0x4F48610;
         internal const ulong CameraPointerOffset = 0x480;
         internal const ulong CameraZoomOffset = 0x274;

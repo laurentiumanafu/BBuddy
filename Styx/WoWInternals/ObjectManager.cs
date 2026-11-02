@@ -287,11 +287,9 @@ namespace Styx.WoWInternals
             int initialBuild = targetProcess == null ? -1 : GetBuildNumber(targetProcess);
             if (initialBuild == ClientAttachPolicy.ExperimentalBuild)
             {
-                if (!ClientAttachPolicy.ExperimentalEnabled)
-                    throw new InvalidOperationException("Build 70707 requires " + ClientAttachPolicy.ExperimentalArgument + ".");
                 if (!memory.Is64BitTarget)
                     throw new InvalidOperationException("Experimental build 70707 requires a 64-bit client.");
-                Logging.Write("[Attach] EXPERIMENTAL 70707: using known-incompatible 70291 offsets. Memory reads and bot actions can be incorrect; this is not validated support.");
+                Logging.Write("[Attach] EXPERIMENTAL 70707: using candidate globals with unvalidated 70291 layouts. Memory reads and bot actions can be incorrect; this is not validated support.");
             }
 
             Wow = memory;
@@ -311,14 +309,14 @@ namespace Styx.WoWInternals
                     // WowB.exe reports FileVersion 1.60.1.70291 as raw parts 160.1.7029.1;
                     // GetBuildNumber recombines those into 70291.
                     bool isWowBByName = WoWProcess.ProcessName.Equals("WowB", StringComparison.OrdinalIgnoreCase);
-                    bool experimental = build == ClientAttachPolicy.ExperimentalBuild && ClientAttachPolicy.ExperimentalEnabled;
+                    bool experimental = build == ClientAttachPolicy.ExperimentalBuild;
                     if (!IsSupportedBuild(build) && !isWowBByName && !experimental)
                     {
                         Logging.Write($"[ObjectManager] Build {build} not supported (expected: {SupportedBuild} or {SupportedBuildWowB})");
                         throw new Exception($"WoW build {build} not supported. Required build: {SupportedBuild} or {SupportedBuildWowB}");
                     }
                     Logging.WriteDebug(experimental
-                        ? "[ObjectManager] Build 70707 explicitly accepted for an unvalidated experiment."
+                        ? "[ObjectManager] Build 70707 automatically accepted; its reader offsets remain experimental."
                         : $"[ObjectManager] WoW build {build} detected - OK{(isWowBByName ? " (WowB client, accepted by process name)" : "")}");
                 }
                 catch (Exception ex) when (ex is not InvalidOperationException)
@@ -357,9 +355,21 @@ namespace Styx.WoWInternals
                 Update();
                 Logging.Write("[ObjectManager] Attached to a 64-bit client (WowB) — read-only mode.");
                 WowBWorldSnapshot? world = WowBWorld;
+                int initialSnapshotSlots = WowB.LastPoolSlotsScanned;
+                if (initialBuild == ClientAttachPolicy.ExperimentalBuild)
+                {
+                    // Research-only rescans. Nothing here authorizes gameplay.
+                    try
+                    {
+                        Logging.Write("[70707 player record] " + WowB.DiagnoseExperimentalPlayer());
+                        WowBGuid selectedGuid = WowB.ReadTargetGuid();
+                        Logging.Write("[70707 selected record] " + WowB.DiagnoseTarget(selectedGuid));
+                    }
+                    catch (Exception ex) { Logging.Write("[70707 record diagnostics] unavailable: " + ex.Message); }
+                }
                 Logging.Write(world == null
                     ? initialBuild == ClientAttachPolicy.ExperimentalBuild
-                        ? $"[ObjectManager] 70707 pool snapshot unavailable (capture failed or changed); {WowB.LastPoolSlotsScanned} slots scanned with the unverified 70291 layout."
+                        ? $"[ObjectManager] 70707 pool snapshot unavailable (capture failed or changed); {initialSnapshotSlots} slots scanned with the unverified 70291 layout."
                         : "[ObjectManager] WowB pool snapshot unavailable (capture failed or changed during scan)."
                     : $"[ObjectManager] WowB pool snapshot: {world.Units.Count} validated units, {world.PoolSlotsScanned} slots scanned, local={world.LocalGuid}, target={world.TargetGuid}.");
                 if (world != null && !world.TargetGuid.IsEmpty)

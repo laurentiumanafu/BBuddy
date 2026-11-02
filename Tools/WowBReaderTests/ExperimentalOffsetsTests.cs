@@ -25,6 +25,7 @@ internal static class ExperimentalOffsetsTests
         memory.U64(module + Wow70707Offsets.HandlePools, 0x21000000);
         memory.U64(module + Wow70707Offsets.HandlePools + 8, 0x20000000);
         memory.U64(module + Wow70707Offsets.MapRoot, 0x30000000);
+        memory.U32(0x30000000 + Wow70707Offsets.MapIdCandidateOffset, 7);
         memory.U64(module + WowBOffsets.MapRoot, 0x31000000);
         memory.U32(0x31000000 + WowBOffsets.MapIdOffset, 1);
         memory.U64(module + Wow70707Offsets.CameraWorldFrameGlobal, 0x32000000);
@@ -57,7 +58,22 @@ internal static class ExperimentalOffsetsTests
         string diagnostic = experimental.DescribeExperimental70707();
         Require(memory.CacheEnabled, "candidate diagnostic restores cache state");
         Require(diagnostic.Contains("objectManager=0x20000000") && diagnostic.Contains("pool1=0x20000000") &&
-                diagnostic.Contains("camera=0x33000000") && diagnostic.Contains("zoomCandidate=15"), "candidate diagnostic uses roots");
+                diagnostic.Contains("camera=0x33000000") && diagnostic.Contains("zoomCandidate=15") &&
+                diagnostic.Contains("mapRoot+0x20Candidate=7"), "candidate diagnostic uses roots");
+        memory.U64(0x23000000 + WowBOffsets.RecordDataBlockPtrOffset, 0x24000000);
+        memory.U64(0x24000000, module + 0x41DA390);
+        memory.U64(0x24000008, 0x23000000);
+        memory.Guid(0x24000010, player);
+        memory.F32(0x23000000 + WowBOffsets.RecordPositionOffset, 100);
+        memory.F32(0x23000000 + WowBOffsets.RecordPositionOffset + 4, 200);
+        memory.F32(0x23000000 + WowBOffsets.RecordPositionOffset + 8, 300);
+        memory.F32(0x23000000 + WowBOffsets.RecordPositionOffset + 12, 1);
+        memory.F32(0x23000000 + WowBOffsets.RecordPositionOffset + 16, 2);
+        string recordDiagnostic = experimental.DiagnoseExperimentalPlayer();
+        Require(recordDiagnostic.Contains("vtable-not-in-unit-filter") && recordDiagnostic.Contains("vtableRva=0x41DA390") &&
+                recordDiagnostic.Contains("rawRecord+0x60=(100,200,300)"), "player record diagnostic does not require known vtable");
+        Require(!experimental.TryGetPlayerObject(out _), "diagnostic does not authorize unverified player vtable");
+        Require(memory.CacheEnabled, "player record diagnostic restores cache state");
         Require(legacy.DescribeExperimental70707() == "70707 candidate profile is not active", "legacy profile not switched");
     }
 }

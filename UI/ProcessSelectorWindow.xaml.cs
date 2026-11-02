@@ -88,7 +88,7 @@ namespace CopilotBuddy.UI
             _processes.Clear();
             cbProcesses.Items.Clear();
 
-            Process[] wowProcesses = ClientAttachPolicy.ProcessNames(ClientAttachPolicy.ExperimentalEnabled)
+            Process[] wowProcesses = ClientAttachPolicy.ProcessNames()
                 .SelectMany(n => Process.GetProcessesByName(n))
                 .DistinctBy(p => p.Id)
                 .ToArray();
@@ -101,10 +101,10 @@ namespace CopilotBuddy.UI
                     if (wowProcesses[i].HasExited)
                         continue;
 
-                    // Match auto-attach, including the explicit 70707 opt-in.
+                    // Match auto-attach, including experimental build 70707.
                     Process process = wowProcesses[i];
                     int build = ObjectManager.GetBuildNumber(process);
-                    if (!ClientAttachPolicy.IsCandidate(build, process.ProcessName, ClientAttachPolicy.ExperimentalEnabled))
+                    if (!ClientAttachPolicy.IsCandidate(build, process.ProcessName))
                         continue;
 
                     using var memory = new Memory(process.Id);
@@ -114,13 +114,14 @@ namespace CopilotBuddy.UI
                     string? characterName;
                     if (memory.Is64BitTarget)
                     {
-                        // The 3.3.5a InGame and PlayerName offsets do not
-                        // apply to WowB. Like auto-attach, do not assume a
-                        // login offset; read the known name only for 70291.
-                        characterName = build == ObjectManager.SupportedBuildWowB &&
-                            process.ProcessName.Equals("WowB", StringComparison.OrdinalIgnoreCase)
-                            ? memory.ReadString64(memory.GetAbsolute64(WowBOffsets.PlayerNamePrimary), 48)
-                            : null;
+                        // The 70707 name is a candidate read, not login validation.
+                        // Keep the existing 70291 selector behavior unchanged.
+                        characterName = build == ClientAttachPolicy.ExperimentalBuild
+                            ? memory.ReadString64(memory.GetAbsolute64(Wow70707Offsets.PlayerNamePrimary), 32)
+                            : build == ObjectManager.SupportedBuildWowB &&
+                              process.ProcessName.Equals("WowB", StringComparison.OrdinalIgnoreCase)
+                                ? memory.ReadString64(memory.GetAbsolute64(WowBOffsets.PlayerNamePrimary), 48)
+                                : null;
                     }
                     else
                     {
