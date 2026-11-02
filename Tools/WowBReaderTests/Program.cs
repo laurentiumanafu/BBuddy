@@ -17,6 +17,7 @@ RotationTests.Run(); // hotbar/priority logic only, not client-state validation
 CombatResearchTests.Run(); // bounded read-only trace fixtures, not live offsets
 GatherSettingsTests.Run(); // persistence and default policy, not live mouse isolation
 DeathCheckpointTests.Run(); // synthetic recording policy, not a live death test
+CorpseDialogTests.Run(); // image matching only; no live capture or click
 
 // Foreground classification for the opt-in gather diagnostic; no native calls.
 IntPtr gameWindow = new IntPtr(42), otherWindow = new IntPtr(43);

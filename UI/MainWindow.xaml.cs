@@ -1404,6 +1404,11 @@ namespace CopilotBuddy.UI
                 }),
                 ("Gather hover test", "Test hover tracking without clicking", () => btnGatherHoverTest_Click(this, new RoutedEventArgs())),
                 ("Gather background test", "Observe node hover while moving the mouse in another application; no clicks", () => btnGatherBackgroundHoverTest_Click(this, new RoutedEventArgs())),
+                ("Corpse dialog test", "Read-only visual check for English death and resurrection prompts; no clicks", () => {
+                    if (Styx.Logic.Pathing.WowBCorpseDialogProbe.Start())
+                        SetStatus("Focus the game within 10 seconds; see the log for the dialog test result");
+                    else SetStatus("Stop the bot first, or wait for the current dialog test");
+                }),
                 ("Combat probe", "Compare idle and combat memory samples", () => btnCombatProbe_Click(this, new RoutedEventArgs())),
                 ("NPC reaction samples", "Capture user-labelled NPC memory without attacking", () => {
                     var probe = new WowBReactionProbeWindow { Owner = this }; probe.Show();
