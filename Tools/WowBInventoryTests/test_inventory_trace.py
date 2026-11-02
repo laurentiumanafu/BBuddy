@@ -15,6 +15,15 @@ class InventoryTraceTests(unittest.TestCase):
         for name, rva in seeds:
             self.assertRegex(registry, r"(?m)^\s*\+0x[0-9A-F]+\s+" + name + r"\s+0x" + rva + r"\s*$")
 
+    def test_followup_targets_observed_static_leads(self):
+        script = (ROOT / "hunt/WowBInventoryLookup70291.java").read_text()
+        self.assertIn("class WowBInventoryLookup70291 extends GhidraScript", script)
+        self.assertIn('dir.resolve("WowBInventoryLookup70291-"', script)
+        for rva in ("290CFC0", "290BDD0", "290ABC0", "316C660", "2F5D710"):
+            self.assertIn("0x" + rva + "L", script)
+        self.assertIn("private static final int MAX_CALL_TARGETS = 0;", script)
+        self.assertIn("new PseudoDisassembler(currentProgram)", script)
+
     def test_name_addresses_match_recorded_dump_and_bounds_exist(self):
         script = (ROOT / "hunt/WowBInventoryTrace70291.java").read_text()
         names = (ROOT / "hunt/api_names_runtime.txt").read_text()

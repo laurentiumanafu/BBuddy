@@ -74,3 +74,29 @@ A future mail feature needs verified slot-to-item identities and counts, then
 separate verification of recipient, mail window, binding/trade restrictions,
 attachment and send result. Reading inventory alone neither proves an item is
 mailable nor sends mail. Preserve the existing manual plan and STOP safeguards.
+
+## First static trace: 2026-11-02
+
+The supplied bounded report was from `wowb-decoded.exe`, image base
+`0x140000000`, and the 16-byte UnitHealth marker matched. This is a useful
+sanity check, not complete build authentication. The two item-name strings
+were present, but Ghidra reported no exact xrefs for them; absence of xrefs is
+not evidence that the APIs or inventory data are absent. The 80 KB report was
+truncated by the connector; the findings below use the visible portions only.
+
+In the `GetInventoryItemID` handler (RVA `0x2F5F2B0`), one branch passes
+`RDI + 0x9440` and a slot-like argument to `0x290CFC0`; if it returns non-null,
+the handler reads a dword at the returned pointer `+0x90`. The provenance of
+`RDI`, object type, slot numbering and meaning of the dword are **not yet
+established**. A separate branch uses a `0x260` stride after a `< 0x13` guard;
+it may be a different data source, so it must not be conflated with a bag list.
+The visible `GetInventoryItemCount` path calls `0x290BDD0` with callback
+`0x290ABC0`, which may shed light on enumeration but is not yet identified as
+bag traversal. The original trace's first-callee limit spent its budget on
+framework code and did not show these leads' bodies.
+
+`WowBInventoryLookup70291.java` focuses on those three addresses and the two
+preceding context/argument helpers from the same ID handler. It is another
+bounded, static Ghidra trace: it does not attach to or call the client. It has
+not been run locally. Do not treat any listed displacement as a bag, free-slot
+or item-ID offset until static dataflow and controlled live observations agree.
