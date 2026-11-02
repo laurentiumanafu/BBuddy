@@ -96,8 +96,13 @@ A later attach contained `+0x1E28` qwords 148 for the player and 55 for the
 selected Rockjaw Trogg, matching the user's reported current HP. `+0x1E30`
 had the same respective values; maximum HP was not independently reported, so
 the sample does not distinguish current from maximum. The `+0x1E38` dwords
-were 4 and 2, plausible levels but not user-confirmed. The `+0x1E54` dwords
-were 3 and 36; neither value alone proves reaction or attackability.
+were 4 and 2, which the user confirmed matched the displayed levels. The
+`+0x1E54` dwords were 3 and 36; neither value alone proves reaction or attackability.
+A subsequent selection-free scan reported candidate 31 for 6 units, 32 for 27,
+36 for 33, and 57 for 1, with 0 unreadable/changed among the scanned candidates.
+The selected Trogg was in the 36 group. These are observations, not verified
+relations or exhaustive counts. In that later attach the raw player health pair
+was 118/118, but no corresponding displayed health was supplied.
 
 Static evidence: `UnitHealth` at `0x17F7390` calls `0x288FF50`, whose unit
 path tail-jumps to `0x20AAE60`; at `0x20AAF97` one path reads a signed qword

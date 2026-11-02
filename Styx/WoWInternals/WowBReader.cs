@@ -104,6 +104,30 @@ namespace Styx.WoWInternals
             catch { return false; }
         }
 
+        /// <summary>
+        /// Diagnostic-only 70707 map-root candidate. A stable sample does not
+        /// establish a map ID and must never be used to authorize navigation.
+        /// </summary>
+        public bool TryReadExperimentalMapCandidate(out uint candidate)
+        {
+            candidate = 0;
+            if (!_experimental70707) return false;
+            try
+            {
+                using var uncached = _memory.TemporaryCacheState(false);
+                ulong address = Abs(Wow70707Offsets.MapRoot);
+                byte[]? pointer = _memory.ReadBytes64(address, 8);
+                if (pointer == null || pointer.Length != 8) return false;
+                ulong root = BitConverter.ToUInt64(pointer, 0);
+                if (root <= 0x10000UL || root >= 0x00007FFFFFFFF000UL || (root & 3UL) != 0) return false;
+                byte[]? first = _memory.ReadBytes64(root + Wow70707Offsets.MapIdCandidateOffset, 4);
+                byte[]? second = _memory.ReadBytes64(root + Wow70707Offsets.MapIdCandidateOffset, 4);
+                byte[]? after = _memory.ReadBytes64(address, 8);
+                return DecodeMapSamples(root, first, second, after, out candidate);
+            }
+            catch { candidate = 0; return false; }
+        }
+
         private static bool DecodeMapSamples(ulong root, byte[]? first, byte[]? second, byte[]? after, out uint mapId)
         {
             mapId = 0;
@@ -1255,13 +1279,8 @@ namespace Styx.WoWInternals
             ulong pool0 = _memory.ReadPointer64(Abs(HandlePoolsRva));
             ulong pool1 = _memory.ReadPointer64(Abs(HandlePoolsRva) + 8);
             ulong mapRoot = _memory.ReadPointer64(Abs(Wow70707Offsets.MapRoot));
-            byte[]? mapFirst = IsUserPointer(mapRoot) ? _memory.ReadBytes64(mapRoot + Wow70707Offsets.MapIdCandidateOffset, 4) : null;
-            byte[]? mapSecond = IsUserPointer(mapRoot) ? _memory.ReadBytes64(mapRoot + Wow70707Offsets.MapIdCandidateOffset, 4) : null;
-            byte[]? mapRootAfter = _memory.ReadBytes64(Abs(Wow70707Offsets.MapRoot), 8);
-            string mapCandidate = mapFirst != null && mapSecond != null && mapRootAfter != null &&
-                mapFirst.Length == 4 && mapSecond.Length == 4 && mapRootAfter.Length == 8 &&
-                BitConverter.ToUInt32(mapFirst, 0) == BitConverter.ToUInt32(mapSecond, 0) && BitConverter.ToUInt64(mapRootAfter, 0) == mapRoot
-                ? BitConverter.ToUInt32(mapFirst, 0).ToString(System.Globalization.CultureInfo.InvariantCulture) : "unreadable-or-unstable";
+            string mapCandidate = TryReadExperimentalMapCandidate(out uint observedMap)
+                ? observedMap.ToString(System.Globalization.CultureInfo.InvariantCulture) : "unreadable-or-unstable";
             ulong frame = _memory.ReadPointer64(Abs(Wow70707Offsets.CameraWorldFrameGlobal));
             ulong camera = IsUserPointer(frame) ? _memory.ReadPointer64(frame + Wow70707Offsets.CameraPointerOffset) : 0;
             byte[]? zoomBytes = IsUserPointer(camera) ? _memory.ReadBytes64(camera + Wow70707Offsets.CameraZoomOffset, 4) : null;

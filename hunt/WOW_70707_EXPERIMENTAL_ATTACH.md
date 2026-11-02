@@ -29,6 +29,11 @@ those candidates, disable existing safety checks, or enable Lua.
    including Off, until its required movement and combat layouts are validated.
    Gathering also refuses to start and the 70291 node scanner rejects 70707.
    The existing 70291 faction-signature and identity checks are unchanged.
+5. When the navigation library is available, the startup log includes a
+   `[70707 mesh research]` nearest-polygon check using the candidate map and
+   positions. It loads tiles into the shared navigation cache but does not send
+   input or perform a route search. This does not validate the map, prove a
+   path exists or allow movement. It skips if observations or bot state change.
 
 The 70707 client must be x64 and its version resource must be readable. The
 selector, explicit PID and automatic attachment apply the same build policy;

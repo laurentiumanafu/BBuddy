@@ -735,12 +735,81 @@ public static class ClickAimDiagnostics
         }
     }
 
+    // Research-only 70707 mesh query. This does not expose the candidate map
+    // or coordinates to the mover, issue input, or run FindPath (which changes
+    // the shared Navigator.CurrentMapId). Tile loads affect the navmesh cache.
+    private static void Experimental70707MeshProbe(WowBReader reader)
+    {
+        try
+        {
+            var memory = ObjectManager.Wow;
+            if (memory == null || ClickAimUi.Running || ClickAimUi.Paused || ObjectManager.WowB != reader ||
+                !reader.TryReadExperimentalMapCandidate(out uint map) ||
+                !reader.TryCaptureWorldSnapshot(out WowBWorldSnapshot? before) || before == null ||
+                !before.TryGetLocalPlayer(out WowBObservedUnit player) ||
+                !reader.TryReadExperimentalMapCandidate(out uint mapAfter) || map != mapAfter ||
+                !reader.TryCaptureWorldSnapshot(out WowBWorldSnapshot? after) || after == null ||
+                !after.TryGetLocalPlayer(out WowBObservedUnit current) ||
+                !reader.TryReadExperimentalMapCandidate(out uint mapFinal) || map != mapFinal ||
+                current.Guid != player.Guid || current.RecordAddress != player.RecordAddress || current.UnitAddress != player.UnitAddress ||
+                ObjectManager.Wow != memory || ObjectManager.WowB != reader || ClickAimUi.Running || ClickAimUi.Paused)
+            {
+                Logging.Write("[70707 mesh research] skipped: candidate map/player or bot state is unavailable or changed");
+                return;
+            }
+            double moved = player.Location.Distance(current.Location);
+            if (!double.IsFinite(moved) || moved > 2.0)
+            {
+                Logging.Write("[70707 mesh research] skipped: player position candidate changed during capture");
+                return;
+            }
+            string mmapsDir = Path.Combine(AppContext.BaseDirectory, "mmaps");
+            if (!MapsWithParams(mmapsDir).Contains(map))
+            {
+                Logging.Write("[70707 mesh research] skipped: no mesh parameters for candidate map " + map);
+                return;
+            }
+            var from = new System.Numerics.Vector3(current.Location.X, current.Location.Y, current.Location.Z);
+            Tripper.Navigation.Navigator nav = Navigator.TripperNavigator;
+            if (ClickAimUi.Running || ClickAimUi.Paused || ObjectManager.WowB != reader || ObjectManager.Wow != memory) return;
+            nav.EnsureTilesAroundPosition(map, from, 1);
+            bool found = nav.FindNearestPolyRef(map, from, 5f, 40f, out _, out System.Numerics.Vector3 nearest);
+            double correction = found ? System.Numerics.Vector3.Distance(from, nearest) : double.NaN;
+            Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                "[70707 mesh research] candidate map={0}, player=({1:F1},{2:F1},{3:F1}); nearest polygon found={4}, correction={5:F2} yd. Read-only query; map and transform unverified, no movement or path authorization.",
+                map, from.X, from.Y, from.Z, found, correction));
+            if (ClickAimUi.Running || ClickAimUi.Paused || ObjectManager.WowB != reader || ObjectManager.Wow != memory) return;
+            if (before.TargetGuid.IsEmpty || before.TargetGuid != after.TargetGuid ||
+                !before.TryGetSelectedTarget(out WowBObservedUnit targetBefore) ||
+                !after.TryGetSelectedTarget(out WowBObservedUnit targetAfter) ||
+                targetAfter.IsLocalPlayer || targetAfter.HasPlayerVtable ||
+                targetBefore.Guid != targetAfter.Guid || targetBefore.RecordAddress != targetAfter.RecordAddress ||
+                targetBefore.UnitAddress != targetAfter.UnitAddress) return;
+            double distance = current.Location.Distance(targetAfter.Location);
+            if (!double.IsFinite(distance) || distance > 100.0) return;
+            var to = new System.Numerics.Vector3(targetAfter.Location.X, targetAfter.Location.Y, targetAfter.Location.Z);
+            nav.EnsureTilesAroundPosition(map, to, 1);
+            bool targetFound = nav.FindNearestPolyRef(map, to, 5f, 40f, out _, out System.Numerics.Vector3 targetNearest);
+            double targetCorrection = targetFound ? System.Numerics.Vector3.Distance(to, targetNearest) : double.NaN;
+            Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                "[70707 mesh research] selected unit candidate distance={0:F1} yd; nearest polygon found={1}, correction={2:F2} yd. This is not a path, reaction, attackability, or reachability test.",
+                distance, targetFound, targetCorrection));
+        }
+        catch (Exception ex) { Logging.Write("[70707 mesh research] query failed: " + ex.Message); }
+    }
+
     private static void MeshProbe()
     {
         try
         {
             // Let the client settle: attach happens before the world finishes loading.
             Thread.Sleep(3000);
+            WowBReader? experimentalReader = ObjectManager.WowB;
+            if (experimentalReader?.IsExperimental70707 == true)
+            {
+                Experimental70707MeshProbe(experimentalReader);
+                return;
+            }
 
             for (int attempt = 0; attempt < 5; attempt++)
             {

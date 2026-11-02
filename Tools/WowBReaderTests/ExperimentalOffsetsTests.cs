@@ -54,6 +54,28 @@ internal static class ExperimentalOffsetsTests
         Require(!experimental.TryGetPlayerObject(out _), "unverified player record is not accepted for movement");
         Require(legacy.TryReadMapId(out uint map) && map == 1, "legacy map path preserved");
         Require(!experimental.TryReadMapId(out _), "unknown 70707 map field fails closed");
+        Require(!legacy.TryReadExperimentalMapCandidate(out _) && experimental.TryReadExperimentalMapCandidate(out uint mapCandidate) && mapCandidate == 7,
+                "candidate map is available only as a 70707 diagnostic");
+        memory.U32(0x30000000 + Wow70707Offsets.MapIdCandidateOffset, 0);
+        Require(experimental.TryReadExperimentalMapCandidate(out mapCandidate) && mapCandidate == 0, "candidate map zero is a valid observation");
+        int mapReads = 0;
+        memory.OnRead = (address, count) =>
+        {
+            if (address == 0x30000000 + Wow70707Offsets.MapIdCandidateOffset && count == 4 && ++mapReads == 2) memory.U32(address, 1);
+        };
+        Require(!experimental.TryReadExperimentalMapCandidate(out _), "changing candidate map is rejected");
+        memory.OnRead = null;
+        memory.U32(0x30000000 + Wow70707Offsets.MapIdCandidateOffset, 100001);
+        Require(!experimental.TryReadExperimentalMapCandidate(out _), "out-of-range candidate map rejected");
+        memory.U32(0x30000000 + Wow70707Offsets.MapIdCandidateOffset, 7);
+        int mapRootReads = 0;
+        memory.OnRead = (address, count) =>
+        {
+            if (address == module + Wow70707Offsets.MapRoot && count == 8 && ++mapRootReads == 2) memory.U64(address, 0x30001000);
+        };
+        Require(!experimental.TryReadExperimentalMapCandidate(out _), "changing candidate root rejected");
+        memory.OnRead = null;
+        memory.U64(module + Wow70707Offsets.MapRoot, 0x30000000);
         Require(!experimental.TryGetCameraPosition(out _, out _, out _), "unknown 70707 camera position fails closed");
         memory.EnableCache();
         string diagnostic = experimental.DescribeExperimental70707();
