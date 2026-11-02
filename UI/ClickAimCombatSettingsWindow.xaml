@@ -182,6 +182,9 @@
                 <TextBox x:Name="txtVendorSearch" Grid.Row="4" Grid.Column="2" HorizontalAlignment="Left"
                          Width="80" Margin="0,0,0,8"/>
 
+                <Button x:Name="btnTargetInfo" Grid.Row="4" Grid.Column="2" Content="Target Info" Height="24" Padding="10,0" HorizontalAlignment="Left" Margin="100,0,0,8"
+                        Click="btnTargetInfo_Click" ToolTip="Stop the bot, select an NPC and log a read-only 70291 snapshot for vendor investigation."/>
+
                 <TextBlock x:Name="lblVendorNote" Grid.Row="5" Grid.ColumnSpan="3" TextWrapping="Wrap"
                            Margin="0,2,0,8" FontSize="11" Opacity="0.9"/>
 
@@ -255,6 +258,27 @@
                 <TextBlock x:Name="lblVendorPlan" Grid.Row="7" Grid.ColumnSpan="3" TextWrapping="Wrap"
                            Margin="0,6,0,0" FontSize="11" Opacity="0.75" VerticalAlignment="Top"/>
             </Grid>
+        </TabItem>
+
+        <TabItem Header="Factions">
+            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                <StackPanel Margin="12">
+                    <TextBlock TextWrapping="Wrap" Text="70291 Grind only. Stop the bot and scan nearby NPC faction-template IDs without selecting them. IDs are not names or proof of hostility or merchant status."/>
+                    <Button x:Name="btnFactionScan" Content="Scan nearby NPC factions (100 horizontal yd)" Height="30" Margin="0,10,0,0" Click="btnFactionScan_Click"/>
+                    <TextBox x:Name="txtFactionReport" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" Height="145" Margin="0,8,0,8"/>
+                    <TextBlock Text="Filter mode (only one applies)" FontWeight="SemiBold" Margin="0,2,0,4"/>
+                    <WrapPanel>
+                        <RadioButton x:Name="rbFactionOff" GroupName="FactionMode" Content="Off" Margin="0,0,16,0"/>
+                        <RadioButton x:Name="rbFactionAllow" GroupName="FactionMode" Content="Allow list only" Margin="0,0,16,0"/>
+                        <RadioButton x:Name="rbFactionBlacklist" GroupName="FactionMode" Content="Blacklist"/>
+                    </WrapPanel>
+                    <TextBlock Text="Allowed attack IDs (decimal; commas or spaces)" Margin="0,10,0,3"/>
+                    <TextBox x:Name="txtFactionAllowed"/>
+                    <TextBlock Text="Blacklist faction IDs (decimal; commas or spaces)" Margin="0,10,0,3"/>
+                    <TextBox x:Name="txtFactionBlacklist"/>
+                    <TextBlock TextWrapping="Wrap" Margin="0,10,0,0" Text="Blacklist allows every other readable faction key, including potentially friendly NPCs. Neither mode proves attackability. Unknown keys are blocked. Both lists are saved but only the selected mode applies. The selected list must not be empty. Blocked attackers cannot be identified and may not be fought; GatherBuddy defence is unchanged. Save below, then restart Grind. Put Attack on the action bar; some unsafe clicks are withheld."/>
+                </StackPanel>
+            </ScrollViewer>
         </TabItem>
 
         </TabControl>

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using Styx.Logic.Profiles;
 using Styx.WoWInternals;
@@ -165,8 +165,8 @@ internal static class ClickAimUi
 
     private static string FactionStatus()
         => GrindFactionSettings.Rules.Enabled
-            ? "Faction attack filter ON: " + GrindFactionSettings.Rules.KeyText + "; attack inputs for unlisted attackers are withheld."
-            : "Faction attack filter OFF: saved ID list is empty.";
+            ? "Faction attack filter " + GrindFactionSettings.Rules.Mode + ": " + GrindFactionSettings.Rules.KeyText + "; blocked and unknown attackers are withheld."
+            : "Faction attack filter OFF.";
 
     public static string ClearProfile()
     {

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using MahApps.Metro.Controls;
@@ -58,9 +59,73 @@ namespace CopilotBuddy.UI
             CaptureOriginalRoles();
             LoadFromSettings();
             LoadSpells();
+            LoadFactionSettings();
 
             try { lblFile.Text = "Saved to " + ClickAimSettings.Path; }
             catch (Exception ex) { lblFile.Text = "Settings file: " + ex.Message; }
+        }
+
+        private GrindFactionRules _originalFaction = GrindFactionRules.Disabled();
+        private bool _factionLoaded;
+
+        private void LoadFactionSettings()
+        {
+            _factionLoaded = GrindFactionSettings.TryLoad(out _originalFaction, out string error);
+            txtFactionAllowed.Text = _originalFaction.AllowedKeyText;
+            txtFactionBlacklist.Text = _originalFaction.BlacklistKeyText;
+            rbFactionOff.IsChecked = _originalFaction.Mode == GrindFactionMode.Off;
+            rbFactionAllow.IsChecked = _originalFaction.Mode == GrindFactionMode.Allow;
+            rbFactionBlacklist.IsChecked = _originalFaction.Mode == GrindFactionMode.Blacklist;
+            txtFactionReport.Text = _factionLoaded ? "Press Scan to observe nearby NPCs without selecting them." : "Faction settings could not be loaded: " + error + ". Fix the file before saving.";
+        }
+
+        private async void btnFactionScan_Click(object sender, RoutedEventArgs e)
+        {
+            if (ClickAimUi.Running || ClickAimUi.Paused) { txtFactionReport.Text = "Stop the bot and any route before scanning."; return; }
+            btnFactionScan.IsEnabled = false;
+            txtFactionReport.Text = "Reading nearby NPC faction keys...";
+            try { txtFactionReport.Text = await Task.Run(() => WowBGrindFactions.ScanNearby()); }
+            catch (Exception ex) { txtFactionReport.Text = "Faction scan failed: " + ex.Message; }
+            finally { btnFactionScan.IsEnabled = true; }
+        }
+
+        private async void btnTargetInfo_Click(object sender, RoutedEventArgs e)
+        {
+            if (ClickAimUi.Running || ClickAimUi.Paused) { lblVendorNote.Text = "Stop the bot before capturing target info."; return; }
+            btnTargetInfo.IsEnabled = false;
+            lblVendorNote.Text = "Reading the selected NPC; keep the same target selected...";
+            try
+            {
+                string report = await Task.Run(() => WowBTargetInfo.Capture());
+                foreach (string line in report.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+                    Logging.Write("[Target Info] " + line);
+                lblVendorNote.Text = report.StartsWith("70291 read-only", StringComparison.Ordinal)
+                    ? "Target info written to the bot log. It includes process addresses and GUIDs."
+                    : report;
+            }
+            catch (Exception ex) { lblVendorNote.Text = "Target info failed: " + ex.Message; Logging.Write("[Target Info] " + lblVendorNote.Text); }
+            finally { btnTargetInfo.IsEnabled = true; }
+        }
+
+        private bool SaveFactionSettings()
+        {
+            if (!_factionLoaded)
+            { System.Windows.MessageBox.Show("Faction settings could not be loaded. Fix the settings file before saving.", "Combat settings", MessageBoxButton.OK, MessageBoxImage.Warning); return false; }
+            GrindFactionMode mode = rbFactionAllow.IsChecked == true ? GrindFactionMode.Allow :
+                rbFactionBlacklist.IsChecked == true ? GrindFactionMode.Blacklist : GrindFactionMode.Off;
+            if (!GrindFactionRules.TryCreate(mode, txtFactionAllowed.Text, txtFactionBlacklist.Text, out GrindFactionRules proposed, out string error))
+            { System.Windows.MessageBox.Show(error, "Grind factions", MessageBoxButton.OK, MessageBoxImage.Warning); return false; }
+            bool changed = proposed.Mode != _originalFaction.Mode || proposed.AllowedKeyText != _originalFaction.AllowedKeyText || proposed.BlacklistKeyText != _originalFaction.BlacklistKeyText;
+            if (!changed) return true;
+            if (ClickAimUi.Running || ClickAimUi.Paused)
+            { System.Windows.MessageBox.Show("Stop the bot before changing faction settings.", "Grind factions", MessageBoxButton.OK, MessageBoxImage.Warning); return false; }
+            if (mode == GrindFactionMode.Blacklist && (_originalFaction.Mode != mode || _originalFaction.BlacklistKeyText != proposed.BlacklistKeyText) &&
+                System.Windows.MessageBox.Show("Blacklist mode permits all other readable faction IDs, including potentially friendly NPCs. It cannot identify blocked attackers for self-defence. Use only with supervision. Enable this blacklist?", "Grind faction safety", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
+                return false;
+            if (!GrindFactionSettings.Save(mode, proposed.AllowedKeyText, proposed.BlacklistKeyText, out error))
+            { System.Windows.MessageBox.Show(error, "Grind factions", MessageBoxButton.OK, MessageBoxImage.Warning); return false; }
+            _originalFaction = proposed;
+            return true;
         }
 
         // ---------------------------------------------------------------- numbers
@@ -735,7 +800,7 @@ namespace CopilotBuddy.UI
 
         private void btnSave_Click(object sender, RoutedEventArgs e)
         {
-            if (!ApplyToSettings()) return;
+            if (!ApplyToSettings() || !SaveFactionSettings()) return;
 
             bool numbers = ClickAimSettings.Save();
             bool roles = ClickAimCombat.SaveRoleOverrides();

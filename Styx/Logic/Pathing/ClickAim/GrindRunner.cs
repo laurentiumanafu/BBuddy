@@ -46,7 +46,7 @@ internal static class GrindRunner
     private const int TabVk = 0x09;
     private const int TabTries = 3;
     private const int TabSettleMs = 250;
-    // With a manual allowlist, move close to an allowed candidate on mesh
+    // With a manual faction filter, move close to a permitted candidate on mesh
     // rather than using indiscriminate pixel probes to search around it.
     private const double FactionApproachYd = 15.0;
     private const int FactionTabRetryMs = 5000;
@@ -521,8 +521,8 @@ internal static class GrindRunner
         if (!WowBGrindFactions.PrepareForGrind(out string factionError))
         { Logging.Write("[Grind] faction filter could not start: " + factionError); return false; }
         Logging.Write(GrindFactionSettings.Rules.Enabled
-            ? "[Grind] faction attack allowlist ON: " + GrindFactionSettings.Rules.KeyText + "; attack inputs for unlisted/unknown NPCs are withheld, even in defence; this is not proof of hostility"
-            : "[Grind] faction attack allowlist OFF (saved list is empty); normal targeting remains active");
+            ? "[Grind] faction attack " + GrindFactionSettings.Rules.Mode + " filter ON: " + GrindFactionSettings.Rules.KeyText + "; blocked/unknown NPCs are withheld, even in defence; this is not proof of hostility"
+            : "[Grind] faction attack filter OFF; normal targeting remains active");
 
         List<ProfileGrindArea> areas = ProfileRoute.LoadGrindAreas(profilePath);
         if (areas.Count == 0)
@@ -563,8 +563,8 @@ internal static class GrindRunner
         if (!WowBGrindFactions.PrepareForGrind(out string factionError))
         { Logging.Write("[Grind] faction filter could not start: " + factionError); return false; }
         Logging.Write(GrindFactionSettings.Rules.Enabled
-            ? "[Grind] faction attack allowlist ON: " + GrindFactionSettings.Rules.KeyText + "; attack inputs for unlisted/unknown NPCs are withheld, even in defence; this is not proof of hostility"
-            : "[Grind] faction attack allowlist OFF (saved list is empty); normal targeting remains active");
+            ? "[Grind] faction attack " + GrindFactionSettings.Rules.Mode + " filter ON: " + GrindFactionSettings.Rules.KeyText + "; blocked/unknown NPCs are withheld, even in defence; this is not proof of hostility"
+            : "[Grind] faction attack filter OFF; normal targeting remains active");
         if (!MeshRoam.TryCreate(out MeshRoam? roam) || roam == null) return false;
         var area = new ProfileGrindArea { Name = "Profile-free local roaming" };
         // The existing area-selection loop expects at least one hotspot; actual
@@ -1260,7 +1260,7 @@ internal static class GrindRunner
                 ClickAimMath.Len(target.Location.X - px, target.Location.Y - py)));
         }
 
-        // An allowlisted pool candidate is a navigation lead, not proof of
+        // A filter-permitted pool candidate is a navigation lead, not proof of
         // hostility. Do not click-screen-search or TAB around distant NPCs.
         // Move toward the exact allowed record on the validated mesh first.
         if (GrindFactionSettings.Rules.Enabled && !have)
@@ -1741,7 +1741,7 @@ internal static class GrindRunner
         string observed = WowBGrindFactions.TryReadBoundKey(reader, unit, out uint key)
             ? key.ToString(CultureInfo.InvariantCulture) : "unreadable";
         Logging.Write("[Grind] " + (defence ? "defensive" : "voluntary") + " target " + unit.Guid +
-            " faction key " + observed + "; allowed list " + GrindFactionSettings.Rules.KeyText +
+            " faction key " + observed + "; filter " + GrindFactionSettings.Rules.Mode + " " + GrindFactionSettings.Rules.KeyText +
             "; attack checks will re-read identity, selection and key");
     }
 
@@ -1797,7 +1797,7 @@ internal static class GrindRunner
         catch { Logging.Write("[Grind] could not verify the rejected target was dismissed"); }
     }
 
-    // TAB may keep or select a non-allowlisted unit. Clear it before looking
+    // TAB may keep or select a blocked unit. Clear it before looking
     // for a new target; F1 is not trusted unless the player's GUID is observed.
     private static bool ClearFactionSelection(IntPtr hwnd, WowBReader? reader, WowBGuid player, WowBGuid selected)
     {
@@ -1996,7 +1996,7 @@ internal static class GrindRunner
         if (!reader.TryGetUnitFields(candidate.UnitAddress, out f)) return false;
         if (f.Health == 0 || (f.UnitFlags & NotAFightFlag) != 0) return false;
         if (!WowBGrindFactions.AllowsPull(reader, candidate, out bool factionUnknown))
-        { why = factionUnknown ? "faction key unreadable or changed" : "faction key is not on the allowed list"; return false; }
+        { why = factionUnknown ? "faction key unreadable or changed" : "faction key is blocked by the active filter"; return false; }
         if (_tabRefusedUntil.TryGetValue(candidate.Guid, out int refusedUntil)
             && unchecked(Environment.TickCount - refusedUntil) < 0) return false;
 
@@ -3373,7 +3373,7 @@ internal static class GrindRunner
                 else refused++;
                 continue;
             }
-            // The attacker is not known. With the Grind allowlist enabled, a
+            // The attacker is not known. With the Grind faction filter enabled, a
             // nearby TAB pick is not enough to override the user's hard limit.
             if (grindMode && !WowBGrindFactions.AllowsPull(reader, unit, out _))
             { factionBlocked++; continue; }
@@ -3385,7 +3385,7 @@ internal static class GrindRunner
             return string.Format(CultureInfo.InvariantCulture,
                 "no eligible live NPC within 12 yd; holding position (nearby {0}, unreadable {1}, dead {2}, excluded flags {3}, previously refused {4}, faction blocked {5}); {6}",
                 inRange, unreadable, dead, flagged, refused, factionBlocked,
-                grindMode && GrindFactionSettings.Rules.Enabled ? "attacker identity is unknown; unlisted NPCs cannot be safely identified as attackers" : "attacker may be ranged or missing from the snapshot");
+                grindMode && GrindFactionSettings.Rules.Enabled ? "attacker identity is unknown; blocked NPCs cannot be safely identified as attackers" : "attacker may be ranged or missing from the snapshot");
         int candidates = Math.Min(nearby.Count, 6);
         for (int i = 0; i < candidates && !_stop && !ClickAimAbort.Requested; i++)
         {
@@ -4168,7 +4168,7 @@ internal static class GrindRunner
                 verifyAsked = true;
                 if (GrindFactionSettings.Rules.Enabled)
                 {
-                    // TAB can switch to an unlisted unit while auto-attack is
+                    // TAB can switch to a blocked unit while auto-attack is
                     // already active. Keep the combat/damage timeout below,
                     // but do not issue another TAB from inside this fight.
                     Logging.Write("[Grind] filtered pool check: no in-fight TAB; using the damage/combat timeout");

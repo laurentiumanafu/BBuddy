@@ -114,7 +114,7 @@ namespace Styx.Logic.Pathing
             }
         }
     }
-    static class GrindFactionSettings { public static class Rules { public static bool Enabled; public static string KeyText = "189"; } }
+    static class GrindFactionSettings { public static class Rules { public static bool Enabled; public static string Mode = "Allow"; public static string KeyText = "189"; } }
     static class WowBGrindFactions
     {
         public static bool Allowed = true;

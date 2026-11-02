@@ -74,6 +74,20 @@ internal static class WowBGrindFactions
         return true;
     }
 
+    // Diagnostic reads must not depend on whether a Grind session has bound a reader.
+    // Verify build and identity each time; this is not a merchant/hostility verdict.
+    internal static bool ValidateDiagnosticUnit(Memory memory, WowBReader reader, WowBObservedUnit unit)
+    {
+        try
+        {
+            using var uncached = memory.TemporaryCacheState(false);
+            return ObjectManager.Wow == memory && ObjectManager.WowB == reader &&
+                   CheckBuild(memory) && SameIdentity(memory, unit) &&
+                   ObjectManager.Wow == memory && ObjectManager.WowB == reader;
+        }
+        catch { return false; }
+    }
+
     public static bool TryReadBoundKey(WowBReader? reader, WowBObservedUnit unit, out uint key)
     {
         key = 0;
