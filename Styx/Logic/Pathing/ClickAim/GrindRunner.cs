@@ -1257,6 +1257,17 @@ internal static class GrindRunner
             return false;
         }
 
+        // Defence always takes precedence above. On 70707 the player reader only
+        // permits the observed mana-type-0 layout, so it is safe to use this
+        // threshold even if an empty drink still has an action-bar icon.
+        if (trialReader != null)
+        {
+            if (!WaitForManaBeforePull(hwnd, trialReader)) { _combatHold = true; return false; }
+            // The wait may have lasted minutes; recheck before even acquiring a target.
+            if (!TryReadGatherCombat(out bool combatAfterRecovery) || combatAfterRecovery)
+            { _combatHold = true; return false; }
+        }
+
         WowBWorldSnapshot? snap;
         if (!Capture(out snap) || snap == null)
         {
@@ -2378,6 +2389,47 @@ internal static class GrindRunner
 
         int percent = (int)Math.Round(f.Power * 100.0 / max);
         return percent > 100 ? 100 : percent;
+    }
+
+    // Between voluntary pulls, the drink percentage is also the minimum mana
+    // to resume. We cannot know whether a hotbar item still exists in the bags,
+    // so this applies regardless of whether a drink icon was present or pressed.
+    // Currently limited to 70707: its player field reader requires mana type 0;
+    // the 70291 power type is not yet reliably identified (rage must not wait).
+    private static bool ManaRecoveryNeeded(int threshold, int mana)
+        => threshold > 0 && (mana < 0 || mana < threshold);
+
+    private static bool WaitForManaBeforePull(IntPtr hwnd, WowBReader reader)
+    {
+        int threshold = ClickAimSettings.DrinkBelowPercent;
+        if (threshold <= 0) return true;
+        int mana = ManaPercent();
+        if (!ManaRecoveryNeeded(threshold, mana)) return true;
+        if (_stop || ClickAimAbort.Requested || _vendorDue) return false;
+        ClickAimKeySteer.ReleaseHeld();
+        if (!StopForRest(hwnd)) return false;
+        Logging.Write("[Rest] holding before another pull until mana reaches " + threshold +
+                      "% (currently " + (mana < 0 ? "unreadable" : mana + "%") + "); combat, vendor and STOP interrupt the wait");
+        int loggedAt = Environment.TickCount;
+        while (!_stop && !ClickAimAbort.Requested && !_vendorDue && ObjectManager.WowB == reader && reader.ExperimentalGrindActive)
+        {
+            if (!WowBGrindFactions.Experimental70707BarSafe(reader)) return false;
+            if (!TryReadGatherCombat(out bool fighting) || fighting) return false;
+            mana = ManaPercent();
+            if (!ManaRecoveryNeeded(threshold, mana))
+            {
+                Logging.Write("[Rest] mana recovered to " + mana + "%; voluntary pulls may resume");
+                return true;
+            }
+            if (unchecked(Environment.TickCount - loggedAt) >= 15000)
+            {
+                loggedAt = Environment.TickCount;
+                Logging.Write("[Rest] still waiting for mana " + threshold + "% (currently " +
+                              (mana < 0 ? "unreadable" : mana + "%") + ")");
+            }
+            if (ClickAimAbort.Wait(500)) return false;
+        }
+        return false;
     }
 
     /// <summary>
@@ -5258,6 +5310,10 @@ internal static class GrindRunner
              * short-sighted again: 100 yd around the CHARACTER is what it fights in, the fight
              * walks as far as the search accepts, and the walk-off path stops for the same
              * radius. The 13:23 log lost a mob at 48 yd to a 40 yd radius. */
+            check("manaWaitBelow", ManaRecoveryNeeded(35, 12));
+            check("manaWaitUnknown", ManaRecoveryNeeded(35, -1));
+            check("manaWaitReached", !ManaRecoveryNeeded(35, 35));
+            check("manaWaitDisabled", !ManaRecoveryNeeded(0, 0));
             check("engagementRadius", Math.Abs(SearchYd - 100.0) < 0.001);
             check("gatherSafetyNearbyAlive", GatherUnitBlocks(false, false, 12.0, true, 1, false, false));
             check("gatherSafetyAllowedPull", GatherUnitBlocks(false, false, 40.0, true, 1, true, false));

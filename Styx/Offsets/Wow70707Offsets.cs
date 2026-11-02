@@ -10,6 +10,7 @@ namespace Styx.Offsets
         internal const ulong PlayerGuid = 0x5110D50;
         internal const ulong PlayerNamePrimary = 0x5110D60;
         internal const ulong PlayerTargetGuid = 0x6B1DFB8;
+        internal const ulong MouseoverGuidCandidate = 0x51C7A78; // static counterpart of 70291 hover GUID; live transition not yet validated
         internal const ulong ObjectManager = 0x6D20538;
         internal const ulong HandlePools = 0x481CBE0;
         internal const ulong MapRoot = 0x6D204B8;

@@ -10,13 +10,11 @@ namespace Styx.Logic.Pathing;
 /// <summary>Exploratory posted-hover search. A matched GUID is not proof of a successful gather.</summary>
 internal static class GatherInteraction
 {
-    private static bool ReadHover(Memory memory, out WowBGuid guid)
+    private static bool ReadHover(Memory memory, WowBReader reader, out WowBGuid guid)
     {
         guid = default;
-        byte[]? bytes = memory.ReadBytes64(memory.GetAbsolute64(WowBOffsets.MouseoverGuidCandidate), 16);
-        if (bytes == null || bytes.Length != 16) return false;
-        guid = new WowBGuid(BitConverter.ToUInt64(bytes, 0), BitConverter.ToUInt64(bytes, 8));
-        return true;
+        if (ObjectManager.Wow != memory || ObjectManager.WowB != reader) return false;
+        return reader.TryReadMouseoverGuidCandidate(out guid) && ObjectManager.Wow == memory && ObjectManager.WowB == reader;
     }
 
     private const int HoverSearchBudgetMs = 45000;
@@ -142,17 +140,21 @@ internal static class GatherInteraction
         cursorMoved = false;
         reason = "game window or desktop cursor unavailable";
         Memory? memory = ObjectManager.Wow;
-        if (memory == null || memory.WindowHandle != hwnd || !memory.Is64BitTarget
+        WowBReader? reader = ObjectManager.WowB;
+        if (memory == null || reader == null || memory.WindowHandle != hwnd || !memory.Is64BitTarget
             || !ClickAimInput.ClientSize(hwnd, out int width, out int height)
             || !ClickAimInput.TryCursorScreen(out int realX, out int realY)) return false;
         using var uncached = memory.TemporaryCacheState(false);
+        if (reader.IsExperimental70707)
+            Logging.Write("[Gather] 70707 hover GUID candidate RVA 0x" + reader.MouseoverGuidCandidateRva.ToString("X") +
+                          "; click still requires a changed hover matching a fresh eligible node");
         // First demand an away transition, so an old/stuck candidate cannot authorize a click.
         reason = "failed to post hover-away mouse move";
         if (!ClickAimInput.PostMouseMoveFraction(hwnd, 0.05, 0.05)) return false;
         reason = "Stop requested while waiting for hover-away";
         if (ClickAimAbort.Wait(400)) return false;
         reason = "hover-away GUID could not be read";
-        if (!ReadHover(memory, out WowBGuid away)) return false;
+        if (!ReadHover(memory, reader, out WowBGuid away)) return false;
         reason = "hover-away GUID remained on the node";
         if (away == node.Guid) return false;
         // Two interleaved grids cover gaps in the first pass. They still cannot guarantee
@@ -184,7 +186,7 @@ internal static class GatherInteraction
             if (ClickAimAbort.Wait(350)) return false;
             sampled++;
             reason = "hover GUID could not be read during search";
-            if (!ReadHover(memory, out WowBGuid hover)) return false;
+            if (!ReadHover(memory, reader, out WowBGuid hover)) return false;
             GatherNodeScanner.Node hoveredNode = node;
             if (hover != node.Guid)
             {
@@ -238,7 +240,7 @@ internal static class GatherInteraction
                 if (extraSafety != null && !extraSafety()) { validation = "Grind safety check failed before interaction"; return false; }
                 if (!CursorStill(realX, realY, out cursorReason, out moved))
                 { validation = cursorReason; movedDuringValidation = moved; return false; }
-                if (!ReadHover(memory, out WowBGuid final)) { validation = "final hover read failed"; return false; }
+                if (!ReadHover(memory, reader, out WowBGuid final)) { validation = "final hover read failed"; return false; }
                 if (final != hoveredNode.Guid) { validation = "final hover changed to " + final; return false; }
                 return true;
             }, out string clickReason);

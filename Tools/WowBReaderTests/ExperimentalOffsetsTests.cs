@@ -19,6 +19,10 @@ internal static class ExperimentalOffsetsTests
         var legacyPlayer = new WowBGuid(1, 2);
         var player = new WowBGuid(3, 4);
         var target = new WowBGuid(5, 6);
+        var hover707 = new WowBGuid(0x4FBD, 0x2C0118000280C840);
+        var hover702 = new WowBGuid(0x1295, 0x2C0118002001B0C0);
+        memory.Guid(module + Wow70707Offsets.MouseoverGuidCandidate, hover707);
+        memory.Guid(module + WowBOffsets.MouseoverGuidCandidate, hover702);
         memory.Guid(module + WowBOffsets.PlayerGuid, legacyPlayer);
         memory.Guid(module + Wow70707Offsets.PlayerGuid, player);
         memory.Guid(module + Wow70707Offsets.PlayerTargetGuid, target);
@@ -44,6 +48,11 @@ internal static class ExperimentalOffsetsTests
 
         var legacy = new WowBReader(memory);
         var experimental = new WowBReader(memory, experimental70707: true);
+        Require(legacy.MouseoverGuidCandidateRva == WowBOffsets.MouseoverGuidCandidate &&
+                legacy.TryReadMouseoverGuidCandidate(out WowBGuid oldHover) && oldHover == hover702 &&
+                experimental.MouseoverGuidCandidateRva == Wow70707Offsets.MouseoverGuidCandidate &&
+                experimental.TryReadMouseoverGuidCandidate(out WowBGuid newHover) && newHover == hover707,
+                "mouseover candidate selects the attached build, never the other image's RVA");
         Require(legacy.ReadLocalGuid() == legacyPlayer, "legacy reads original player RVA");
         Require(experimental.ReadLocalGuid() == player && experimental.ReadTargetGuid() == target, "candidate GUID RVAs");
         Require(experimental.ReadLastTargetGuid().IsEmpty, "unknown last-target RVA is not guessed");

@@ -69,6 +69,9 @@ namespace Styx.WoWInternals
                 throw new InvalidOperationException("WowBReader requires a native 64-bit target process.");
         }
 
+        // Build-specific read-only candidate. A value alone never authorizes a click.
+        internal ulong MouseoverGuidCandidateRva => _experimental70707 ? Wow70707Offsets.MouseoverGuidCandidate : WowBOffsets.MouseoverGuidCandidate;
+        internal bool TryReadMouseoverGuidCandidate(out WowBGuid guid) => TryReadGuid(Abs(MouseoverGuidCandidateRva), out guid);
         private ulong PlayerGuidRva => _experimental70707 ? Wow70707Offsets.PlayerGuid : WowBOffsets.PlayerGuid;
         private ulong PlayerNameRva => _experimental70707 ? Wow70707Offsets.PlayerNamePrimary : WowBOffsets.PlayerNamePrimary;
         private ulong TargetGuidRva => _experimental70707 ? Wow70707Offsets.PlayerTargetGuid : WowBOffsets.PlayerTargetGuid;

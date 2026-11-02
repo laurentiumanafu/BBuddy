@@ -50,6 +50,10 @@ Concrete corresponding sequences include 70291 `0x24287C1` versus 70707
 70291 `0x1FC37F0` and 70707 `0x19FAE20` respectively, making the latter a
 candidate counterpart of the existing GUID-to-unit helper, not a proven ABI.
 
+## 2026-11-02 mouseover lead
+
+The 70707 gather log showed a pointer-shaped value at the **70291** mouseover RVA `0x6283898`; the gather loop was incorrectly using that address on both builds. Static comparison of the two decoded images gives candidate 70707 RVA **`0x51C7A78`**. In 70291, `movups` at `0x2994647` stores a 16-byte value to `0x6283898`; its matching 70707 sequence at `0x21E4727` stores to `0x51C7A78`. The 70291 GUID resolver call sequence at `0x2A906FD` has a corresponding 70707 sequence at `0x22B9B6A`, and both load those respective addresses. These are related static references, not independent live proof of mouseover semantics. The runtime hover search still requires an away transition, an exact full-GUID match against a fresh eligible nearby node, a final reread, and STOP/combat/cursor checks before posting right-button down. No node click, cast, or harvest on 70707 has yet been validated.
+
 ## Registered 70707 handler anchors
 
 The registration instructions directly associate the names below with these

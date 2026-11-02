@@ -36,7 +36,9 @@ internal static class GatherHoverTest
     private static bool ReadHover(Memory memory, out WowBGuid guid)
     {
         guid = default(WowBGuid);
-        byte[]? bytes = memory.ReadBytes64(memory.GetAbsolute64(WowBOffsets.MouseoverGuidCandidate), 16);
+        WowBReader? reader = ObjectManager.WowB;
+        if (reader == null || ObjectManager.Wow != memory) return false;
+        byte[]? bytes = memory.ReadBytes64(memory.GetAbsolute64(reader.MouseoverGuidCandidateRva), 16);
         if (bytes == null || bytes.Length != 16) return false;
         guid = new WowBGuid(BitConverter.ToUInt64(bytes, 0), BitConverter.ToUInt64(bytes, 8));
         return true;

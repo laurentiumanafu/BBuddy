@@ -132,7 +132,7 @@ internal static class GatherProbe
                 return;
             }
             using var uncached = memory.TemporaryCacheState(false);
-            ulong address = memory.GetAbsolute64(WowBOffsets.MouseoverGuidCandidate);
+            ulong address = memory.GetAbsolute64(reader.MouseoverGuidCandidateRva);
             byte[]? baseline = memory.ReadBytes64(address, 16);
             // Census first; the eight-second hover interval starts only after it completes.
             PrintNearbyCandidates(reader, memory);
@@ -169,7 +169,7 @@ internal static class GatherProbe
             string before = baseline != null && baseline.Length == 16
                 ? new WowBGuid(BitConverter.ToUInt64(baseline, 0), BitConverter.ToUInt64(baseline, 8)).ToString()
                 : "unreadable";
-            Logging.Write("[Gather probe] candidate RVA 0x" + WowBOffsets.MouseoverGuidCandidate.ToString("X")
+            Logging.Write("[Gather probe] candidate RVA 0x" + reader.MouseoverGuidCandidateRva.ToString("X")
                           + " before=" + before + " hovered=" + guid
                           + " (candidate only; a value is not proof of a node)");
             if (guid.IsEmpty || !reader.TryFindObjectByGuid(guid, out WowBReader.WowBPoolObject obj))
