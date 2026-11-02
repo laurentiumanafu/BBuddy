@@ -16,6 +16,7 @@ internal static class WowBGrindFactions
     private const string LookupSignature = "488D0DCC553505E8F7A7E6FD8B935C1E0000";
     private static Memory? _boundMemory;
     private static WowBReader? _boundReader;
+    private static WowBGuid _experimentalTarget;
 
     private static bool CheckBuild(Memory memory)
     {
@@ -28,12 +29,10 @@ internal static class WowBGrindFactions
 
     public static bool PrepareForGrind(out string reason)
     {
-        _boundMemory = null; _boundReader = null; reason = "";
+        _boundMemory = null; _boundReader = null; _experimentalTarget = default; reason = "";
         if (!GrindFactionSettings.TryLoad(out GrindFactionRules rules, out reason)) return false;
-        // Snapshot vtables on 70707 are experimental diagnostics, not a safe
-        // combat layout. Off must not bypass this guard or the faction rules.
         if (ObjectManager.WowB?.IsExperimental70707 == true)
-        { reason = "70707 Grind is blocked: faction, stats and movement layouts are not validated"; return false; }
+            return PrepareExperimental70707(rules, out reason);
         if (!rules.Enabled) { GrindFactionSettings.Activate(rules); return true; }
         try
         {
@@ -48,6 +47,79 @@ internal static class WowBGrindFactions
             return true;
         }
         catch (Exception ex) { reason = "faction filter initialization failed: " + ex.Message; return false; }
+    }
+
+    private static bool PrepareExperimental70707(GrindFactionRules rules, out string reason)
+    {
+        reason = "";
+        if (rules.Mode != GrindFactionMode.Allow)
+        { reason = "70707 trial requires Allow mode and an explicitly approved faction list"; return false; }
+        Memory? memory = ObjectManager.Wow;
+        WowBReader? reader = ObjectManager.WowB;
+        if (memory == null || reader == null || !reader.IsExperimental70707 || !memory.Is64BitTarget)
+        { reason = "70707 attachment unavailable"; return false; }
+        bool armed = false;
+        try
+        {
+            using var uncached = memory.TemporaryCacheState(false);
+            // These image-specific anchors are partial guards, not full build validation.
+            if (!Signature(memory, 0x2080D2C, "488D0DCD38A004E808A843FE8B93541E0000") ||
+                !Signature(memory, 0x20AAF97, "F2480F2A83281E0000") ||
+                !Signature(memory, 0x2890305, "448B8C86C01B0000") ||
+                !Signature(memory, 0xA538FD, "488D0D5CB32E06488D34C1488B04C1"))
+            { reason = "70707 experimental signatures did not match"; return false; }
+            if (!reader.TryCaptureWorldSnapshot(out WowBWorldSnapshot? snapshot) || snapshot == null ||
+                !snapshot.TryGetLocalPlayer(out WowBObservedUnit player) ||
+                !snapshot.TryGetSelectedTarget(out WowBObservedUnit target) || target.IsLocalPlayer || target.HasPlayerVtable ||
+                !Experimental70707Key(memory, reader, target, out uint key) || !rules.Allows(true, key))
+            { reason = "select the intended monster and add its candidate faction to Allow mode"; return false; }
+            double distance = ClickAimMath.Len(target.Location.X - player.Location.X, target.Location.Y - player.Location.Y);
+            if (!double.IsFinite(distance) || distance > 15.0)
+            { reason = "70707 trial requires the selected monster within 15 yards"; return false; }
+            reader.SetExperimentalGrindActive(true);
+            if (!Experimental70707BarSafe(reader))
+            { reason = "70707 trial requires slots 1 Attack, 2 Lightning Bolt and 3 Healing Wave"; return false; }
+            if (!reader.TryReadMapId(out _) || !reader.TryGetPlayerObject(out _) ||
+                !reader.TryGetUnitFields(player.UnitAddress, out WowBReader.WowBUnitFields self) || self.Health == 0 ||
+                !reader.TryGetUnitFields(target.UnitAddress, out WowBReader.WowBUnitFields enemy) || enemy.Health == 0 ||
+                ObjectManager.Wow != memory || ObjectManager.WowB != reader ||
+                reader.ReadTargetGuid() != target.Guid || !Experimental70707Key(memory, reader, target, out uint again) || key != again)
+            { reason = "70707 candidate map, player, mana, action bar or selected monster did not validate"; return false; }
+            _experimentalTarget = target.Guid; _boundMemory = memory; _boundReader = reader;
+            GrindFactionSettings.Activate(rules);
+            armed = true;
+            return true;
+        }
+        catch (Exception ex) { reason = "70707 trial initialization failed: " + ex.Message; return false; }
+        finally { if (!armed) reader.SetExperimentalGrindActive(false); }
+    }
+
+    internal static bool Experimental70707BarSafe(WowBReader reader)
+    {
+        if (!reader.IsExperimental70707 || !reader.ExperimentalGrindActive) return false;
+        var bar = reader.ReadActionBar();
+        return bar.Count == 3 && bar[0].Index == 1 && bar[0].Raw == 6603 &&
+            bar[1].Index == 2 && bar[1].Raw == 403 && bar[2].Index == 3 && bar[2].Raw == 331;
+    }
+
+    private static bool Signature(Memory memory, ulong rva, string expected)
+    {
+        byte[]? raw = memory.ReadBytes64(memory.GetAbsolute64(rva), expected.Length / 2);
+        return raw != null && raw.Length * 2 == expected.Length && Convert.ToHexString(raw) == expected;
+    }
+
+    internal static WowBReader? ExperimentalBoundReader => _boundReader?.IsExperimental70707 == true ? _boundReader : null;
+
+    internal static void ClaimExperimentalGrindThread()
+    {
+        _boundReader?.ClaimExperimentalGrindThread();
+    }
+
+    internal static void EndExperimental70707()
+    {
+        WowBReader? reader = _boundReader;
+        if (reader?.IsExperimental70707 == true) reader.SetExperimentalGrindActive(false);
+        _experimentalTarget = default;
     }
 
     // Recheck full GUID, object back-pointer and pool record pointer. Even this
@@ -98,7 +170,9 @@ internal static class WowBGrindFactions
         try
         {
             return reader != null && _boundMemory != null && reader == _boundReader &&
-                StableKey(_boundMemory, reader, unit, out key);
+                (reader.IsExperimental70707
+                    ? reader.ExperimentalGrindActive && !_experimentalTarget.IsEmpty && unit.Guid == _experimentalTarget && Experimental70707Key(_boundMemory, reader, unit, out key)
+                    : StableKey(_boundMemory, reader, unit, out key));
         }
         catch { key = 0; return false; }
     }
@@ -189,11 +263,12 @@ internal static class WowBGrindFactions
         catch (Exception ex) { return "Faction scan failed: " + ex.Message; }
     }
 
-    // 70707 is research-only. A repeated raw word is not proof of a faction
-    // key, reaction or permission to attack. Never bind it to Grind rules.
+    // A repeated raw word is not proof of a faction key or reaction. The
+    // 70707 trial additionally requires explicit selection and an allowlist.
     private static bool Experimental70707Key(Memory memory, WowBReader reader, WowBObservedUnit unit, out uint key)
     {
         key = 0;
+        using var uncached = memory.TemporaryCacheState(false);
         if (!reader.IsExperimental70707 || unit.Guid.IsEmpty || unit.IsLocalPlayer || unit.HasPlayerVtable ||
             ObjectManager.Wow != memory || ObjectManager.WowB != reader || !SameIdentity(memory, unit)) return false;
         byte[]? vt = memory.ReadBytes64(unit.UnitAddress, 8);
@@ -253,7 +328,7 @@ internal static class WowBGrindFactions
                 result.AppendFormat(CultureInfo.InvariantCulture, "  approximately {0:F1} yd | GUID {1}\n", row.Distance, row.Unit.Guid);
         }
         result.AppendFormat(CultureInfo.InvariantCulture,
-            "Unreadable/changed candidates: {0}. Vtable, position and field meanings remain unverified; no code signatures checked. These observations do not authorize combat or establish NPC names, friendliness or attackability. Grind remains blocked on 70707. Reads are non-atomic and can omit units.", unreadable);
+            "Unreadable/changed candidates: {0}. Vtable, position and field meanings remain unverified; no code signatures checked here. These observations do not establish NPC names, friendliness or attackability. The separate 70707 trial requires an explicitly selected allowlisted monster. Reads are non-atomic and can omit units.", unreadable);
         return result.ToString();
     }
 }

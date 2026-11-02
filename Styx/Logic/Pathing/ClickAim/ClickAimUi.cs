@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using Styx.Logic.Profiles;
 using Styx.WoWInternals;
@@ -185,9 +185,10 @@ internal static class ClickAimUi
         _paused = null;
         ClickAimAbort.Request();
         ClickAimDiagnostics.RequestStop();
+        // Also cancel a Grind startup that has not yet published Running.
+        GrindRunner.Stop();
         if (!Running) return "nothing is running";
         GatherRunner.Stop();
-        GrindRunner.Stop();
         return "stopped: the walk and the turn loop end on this tick";
     }
 

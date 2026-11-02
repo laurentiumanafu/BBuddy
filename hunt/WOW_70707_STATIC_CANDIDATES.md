@@ -89,8 +89,9 @@ FactionTemplate), while 70707 reads `+0x1E54` (e.g. `0x2080BE2`). A nearby
 70291 `0x27EE199`. The adjacent flag test shifts from `+0x1E60` to `+0x1E58`.
 This is a **static candidate**, not a proven key or reaction. Attach diagnostics
 print 16 uninterpreted dwords from unit `+0x1E20` through `+0x1E5C` for the
-local and selected records when readable and structurally matched; these are
-never used for targeting. The 70291 faction filter remains unchanged.
+local and selected records when readable and structurally matched. The separate
+single-target experimental trial uses the candidate key with explicit selection
+and an allowlist; it does not establish hostility. The 70291 filter is unchanged.
 
 A later attach contained `+0x1E28` qwords 148 for the player and 55 for the
 selected Rockjaw Trogg, matching the user's reported current HP. `+0x1E30`
@@ -132,13 +133,16 @@ The `UnitPower` path in 70707 can use `[unit+index*4+0x1BC0]` at `0x2890305`;
 safe to assume index zero is current mana or reuse 70291's contiguous max-power
 field. The attach log prints the first eight raw dwords from each candidate
 array and the raw `+0x1E21` byte only when the local unit identity and repeated
-samples are stable. These values cannot drive gameplay or prove a power type.
+samples are stable. A later 171/171-mana sample matched index zero and action
+slots 1–3 matched 6603/403/331, but this does not prove dynamic behavior or
+actual bindings. The supervised single-target trial uses these candidates;
+see `WOW_70707_EXPERIMENTAL_ATTACH.md` for its restrictions.
 
 The stopped-bot **Combat Settings → Factions → Scan nearby** button now shows
 70707 candidate `+0x1E54` words without selection. It rechecks identity and
 stable values, but uses unverified vtables and transforms and does not verify
-code signatures. The output is explicitly research-only, is also written to the
-log, and never binds these candidates to the Grind filter.
+code signatures. The scan output is explicitly research-only and also written to
+the log; it does not by itself authorize a target for the separate trial.
 
 ## Still unknown
 
@@ -147,6 +151,6 @@ position/facing fields, health/level/faction fields, map ID chain, cursor and
 movement controls, bag capacity/contents, and reaction semantics have **not**
 been established for 70707. Old 70291 member offsets are not safe to carry over
 just because one related field or instruction remains the same. The candidate
-roots are wired into the 70707 reader; its map ID and camera position remain
-unavailable until their member fields are established. Existing
-70291 faction signatures and identity checks have not been bypassed.
+map is only exposed to the authorized experimental Grind thread; camera
+position remains unavailable. Existing 70291 faction signatures and identity
+checks have not been bypassed.

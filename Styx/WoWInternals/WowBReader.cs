@@ -43,7 +43,21 @@ namespace Styx.WoWInternals
 
         private readonly Memory _memory;
         private readonly bool _experimental70707;
+        private volatile bool _experimentalGrindActive;
+        private volatile int _experimentalGrindThread;
         public bool IsExperimental70707 => _experimental70707;
+        internal bool ExperimentalGrindActive => _experimental70707 && _experimentalGrindActive && _experimentalGrindThread == System.Threading.Thread.CurrentThread.ManagedThreadId;
+        internal void SetExperimentalGrindActive(bool active)
+        {
+            if (!_experimental70707) return;
+            if (active) _experimentalGrindThread = System.Threading.Thread.CurrentThread.ManagedThreadId;
+            _experimentalGrindActive = active;
+        }
+        internal void ClaimExperimentalGrindThread()
+        {
+            if (_experimental70707 && _experimentalGrindActive)
+                _experimentalGrindThread = System.Threading.Thread.CurrentThread.ManagedThreadId;
+        }
 
         public WowBReader(Memory memory, bool experimental70707 = false)
         {
@@ -86,8 +100,8 @@ namespace Styx.WoWInternals
         public bool TryReadMapId(out uint mapId)
         {
             mapId = 0;
-            // The 70707 root is a candidate; its +0x28 map field was not established.
-            if (_experimental70707) return false;
+            if (_experimental70707)
+                return ExperimentalGrindActive && TryReadExperimentalMapCandidate(out mapId);
             try
             {
                 using var uncached = _memory.TemporaryCacheState(false);
@@ -442,16 +456,16 @@ namespace Styx.WoWInternals
         public bool TryGetPlayerObject(out WowBPoolObject obj)
         {
             obj = default;
-            // The 70707 snapshot is diagnostic only until its transform and
-            // remaining gameplay fields have been verified. Do not let the
-            // record-only path feed movement or clicks in the meantime.
-            if (_experimental70707) return false;
-
+            using IDisposable? uncached = _experimental70707 ? _memory.TemporaryCacheState(false) : null;
             WowBGuid guid = ReadLocalGuid();
-            if (guid.IsEmpty)
-                return false;
-
-            return TryFindObjectByGuid(guid, out obj);
+            if (guid.IsEmpty) return false;
+            if (!_experimental70707) return TryFindObjectByGuid(guid, out obj);
+            // 70707 movement is enabled only during a supervised Grind session.
+            if (!ExperimentalGrindActive || !TryFindObjectByGuid(guid, out WowBPoolObject found) ||
+                !IsPoolRecordCurrent(found) || !TryGetUnitObject(found.RecordPtr, out _, out _, out bool playerVtable) ||
+                !playerVtable || ReadLocalGuid() != guid || !ExperimentalGrindActive) return false;
+            obj = found;
+            return true;
         }
 
         /// <summary>
@@ -929,7 +943,7 @@ namespace Styx.WoWInternals
         public bool TryGetUnitFields(ulong unitPtr, out WowBUnitFields fields)
         {
             fields = default;
-            if (_experimental70707) return false; // 70291 stat/flag fields do not carry over safely.
+            if (_experimental70707) return TryGetExperimentalGrindFields(unitPtr, out fields);
             // Not IsUserPointer: a monster unit object is legitimately 4-byte aligned on
             // this build (TryGetFourByteUnitCandidate exists for exactly that), and the
             // 8-byte rule would refuse to read the mobs the grind loop has to fight.
@@ -970,6 +984,47 @@ namespace Styx.WoWInternals
             return true;
         }
 
+        // Experimental 70707 live path: only the observed mana-type-0 player
+        // layout is supported. Reject uncertain data rather than supplying zeros.
+        private bool TryGetExperimentalGrindFields(ulong unitPtr, out WowBUnitFields fields)
+        {
+            fields = default;
+            if (!ExperimentalGrindActive || unitPtr <= 0x10000UL || unitPtr >= 0x00007FFFFFFFF000UL || (unitPtr & 3UL) != 0) return false;
+            using var uncached = _memory.TemporaryCacheState(false);
+            byte[]? header = _memory.ReadBytes64(unitPtr, 0x20);
+            if (header == null || header.Length != 0x20) return false;
+            ulong vt = BitConverter.ToUInt64(header, 0);
+            bool player = vt == Abs(Wow70707Offsets.PlayerVtable);
+            if (!player && vt != Abs(Wow70707Offsets.UnitVtable)) return false;
+            ulong record = BitConverter.ToUInt64(header, 8);
+            var guid = new WowBGuid(BitConverter.ToUInt64(header, 0x10), BitConverter.ToUInt64(header, 0x18));
+            if (guid.IsEmpty || !IsUserPointer(record)) return false;
+            byte[]? hpBytes = _memory.ReadBytes64(unitPtr + Wow70707Offsets.HealthCandidateOffset, 16);
+            byte[]? levelBytes = _memory.ReadBytes64(unitPtr + Wow70707Offsets.LevelCandidateOffset, 4);
+            byte[]? flagsBytes = _memory.ReadBytes64(unitPtr + 0x1E58, 4);
+            if (hpBytes == null || hpBytes.Length != 16 || levelBytes == null || levelBytes.Length != 4 || flagsBytes == null || flagsBytes.Length != 4) return false;
+            ulong hp = BitConverter.ToUInt64(hpBytes, 0), max = BitConverter.ToUInt64(hpBytes, 8);
+            uint level = BitConverter.ToUInt32(levelBytes, 0), flags = BitConverter.ToUInt32(flagsBytes, 0);
+            if (max == 0 || max > uint.MaxValue || hp > max || level == 0 || level > 100) return false;
+            uint power = 0, maxPower = 0;
+            if (player)
+            {
+                byte[]? type = _memory.ReadBytes64(unitPtr + 0x1E21, 1);
+                if (type == null || type.Length != 1 || type[0] != 0 || guid != ReadLocalGuid() ||
+                    !TryReadUInt32(unitPtr + Wow70707Offsets.PowerArrayCandidateOffset, out power) ||
+                    !TryReadUInt32(unitPtr + Wow70707Offsets.MaxPowerArrayCandidateOffset, out maxPower) ||
+                    maxPower == 0 || power > maxPower) return false;
+            }
+            byte[]? pointerAfter = _memory.ReadBytes64(record + WowBOffsets.RecordDataBlockPtrOffset, 8);
+            byte[]? recordGuid = _memory.ReadBytes64(record + WowBOffsets.RecordGuidLoOffset, 16);
+            byte[]? headerAfter = _memory.ReadBytes64(unitPtr, 0x20);
+            if (pointerAfter == null || pointerAfter.Length != 8 || BitConverter.ToUInt64(pointerAfter, 0) != unitPtr ||
+                recordGuid == null || recordGuid.Length != 16 || new WowBGuid(BitConverter.ToUInt64(recordGuid, 0), BitConverter.ToUInt64(recordGuid, 8)) != guid ||
+                headerAfter == null || headerAfter.Length != 0x20 || Convert.ToHexString(headerAfter) != Convert.ToHexString(header) || !ExperimentalGrindActive) return false;
+            fields = new WowBUnitFields((uint)hp, (uint)max, level, flags, power, maxPower, unitPtr);
+            return true;
+        }
+
         /// <summary>
         /// Reads the 70291 faction-template key at unit +0x1E5C. This is a
         /// diagnostic only: it does not resolve reputation, reaction, or attackability.
@@ -979,10 +1034,11 @@ namespace Styx.WoWInternals
         public bool TryReadFactionTemplateId(ulong unitPtr, out uint factionTemplateId)
         {
             factionTemplateId = 0;
-            if (_experimental70707) return false; // 70707 faction candidate is not yet validated.
-            if (unitPtr <= 0x10000UL || unitPtr >= 0x00007FFFFFFFFFFFUL - WowBOffsets.UnitDataFactionTemplateOffset - 4UL)
+            if (_experimental70707 && !ExperimentalGrindActive) return false;
+            ulong offset = _experimental70707 ? Wow70707Offsets.FactionKeyCandidateOffset : WowBOffsets.UnitDataFactionTemplateOffset;
+            if (unitPtr <= 0x10000UL || unitPtr >= 0x00007FFFFFFFFFFFUL - offset - 4UL)
                 return false;
-            byte[]? raw = _memory.ReadBytes64(unitPtr + WowBOffsets.UnitDataFactionTemplateOffset, 4);
+            byte[]? raw = _memory.ReadBytes64(unitPtr + offset, 4);
             if (raw == null || raw.Length != 4) return false;
             factionTemplateId = BitConverter.ToUInt32(raw, 0);
             return true;
@@ -1088,16 +1144,24 @@ namespace Styx.WoWInternals
         public List<WowBActionSlot> ReadActionBar()
         {
             var slots = new List<WowBActionSlot>();
-            // The 70291 array is outside the 70707 image; the replacement is
-            // research-only until its live layout and hotkeys are verified.
-            if (_experimental70707) return slots;
-            byte[]? bytes = _memory.ReadBytes64(Abs(WowBOffsets.StoredActionArray), ActionSlotCount * 8);
-            if (bytes == null || bytes.Length != ActionSlotCount * 8)
-                return slots;
-            for (int i = 0; i < ActionSlotCount; i++)
+            if (_experimental70707 && !ExperimentalGrindActive) return slots;
+            using IDisposable? uncached = _experimental70707 ? _memory.TemporaryCacheState(false) : null;
+            // The observed 70707 sample confirmed only the first three slots;
+            // expose no others to the experimental combat rotation.
+            int count = _experimental70707 ? 3 : ActionSlotCount;
+            ulong rva = _experimental70707 ? Wow70707Offsets.StoredActionArrayCandidate : WowBOffsets.StoredActionArray;
+            byte[]? bytes = _memory.ReadBytes64(Abs(rva), count * 8);
+            if (bytes == null || bytes.Length != count * 8) return slots;
+            if (_experimental70707)
+            {
+                byte[]? again = _memory.ReadBytes64(Abs(rva), count * 8);
+                if (again == null || again.Length != bytes.Length || Convert.ToHexString(again) != Convert.ToHexString(bytes) || !ExperimentalGrindActive) return slots;
+            }
+            for (int i = 0; i < count; i++)
             {
                 ulong raw = BitConverter.ToUInt64(bytes, i * 8);
                 if (raw == 0) continue;
+                if (_experimental70707 && ((uint)raw == 0 || ((raw >> 32) != 0 && (raw >> 32) != 0x80000000UL))) continue;
                 slots.Add(new WowBActionSlot(i + 1, raw));
             }
             return slots;

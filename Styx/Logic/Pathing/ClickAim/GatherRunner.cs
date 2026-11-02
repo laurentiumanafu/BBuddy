@@ -345,6 +345,8 @@ internal static class GatherRunner
     // Grind owns the thread, mover and stop state. This does not start a second bot.
     internal static bool PrepareForGrind(string profile)
     {
+        if (ObjectManager.WowB?.IsExperimental70707 == true)
+        { Logging.Write("[Grind gather] disabled for the 70707 trial"); return false; }
         if (_running || ClickAimAbort.Requested) return false;
         try
         {
