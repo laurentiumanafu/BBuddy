@@ -15,7 +15,7 @@ namespace Styx.Logic.Pathing;
 // chasing or gameplay offset promotion. The raw windows may miss the state.
 internal static class WowBCombatResearch
 {
-    internal const int WindowSize = 0x2400, ChunkSize = 0x100;
+    internal const int WindowSize = 0x2800, ChunkSize = 0x100;
     private const ulong UserLimit = 0x00007FFFFFFFFFFFUL;
     private static int _running;
     internal static bool Running => Volatile.Read(ref _running) != 0;
@@ -148,7 +148,7 @@ internal static class WowBCombatResearch
                 output.WriteLine("player=" + player.Guid + " unit=0x" + player.UnitAddress.ToString("X", CultureInfo.InvariantCulture) +
                     " record=0x" + player.RecordAddress.ToString("X", CultureInfo.InvariantCulture) + "; target=" + snapshot.TargetGuid +
                     (target.HasValue ? " targetUnit=0x" + target.Value.UnitAddress.ToString("X", CultureInfo.InvariantCulture) : " target window not captured"));
-                output.WriteLine("Player and optional selected NPC: unit+0x0000..0x23FF; 256-byte chunks; baseline hex bytes or 32-bit LE changes; unreadable != zero.");
+                output.WriteLine("Player and optional selected NPC: unit+0x0000..0x27FF; 256-byte chunks; baseline hex bytes or 32-bit LE changes; unreadable != zero.");
                 output.WriteLine("Reads are non-atomic; game events, effects and other causes can change fields. No keyboard, mouse, Lua or game writes were used.");
                 foreach (var slot in bar)
                     output.WriteLine("bar slot=" + slot.Index.ToString(CultureInfo.InvariantCulture) + " raw=0x" + slot.Raw.ToString("X16", CultureInfo.InvariantCulture));

@@ -12,9 +12,8 @@ internal static class GatherSettings
     public static bool Herbalism;
     // Opt-in: legacy settings files do not enable gathering during Grind.
     public static bool GatherWhileGrinding;
-    // Experimental: only relax the desktop-cursor stillness check while WoW is
-    // verifiably in the background; foreground and final node checks remain.
-    public static bool AllowBackgroundCursorMovement;
+    // User-confirmed background behavior; foreground and final node checks remain.
+    public static bool AllowBackgroundCursorMovement = true;
     // Opt-in only when no profile is loaded; normal profiles always take precedence.
     public static bool RoamWithoutProfile;
     public static int RoamRadiusYd = 250;
@@ -25,8 +24,8 @@ internal static class GatherSettings
 
     public static void Load()
     {
-        // Missing, unreadable or old settings never silently enable this experiment.
-        AllowBackgroundCursorMovement = false;
+        // Old or absent settings use the background default; an explicit false is respected.
+        AllowBackgroundCursorMovement = true;
         try
         {
             if (!File.Exists(PathName)) return;

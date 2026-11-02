@@ -283,6 +283,7 @@ internal static class ExperimentalOffsetsTests
                 experimental.TryGetUnitFields(0x24000000, out var selfFields) && selfFields.Health == 148 && selfFields.Power == 10 && selfFields.MaxPower == 20 &&
                 experimental.TryGetUnitFields(targetUnit, out var targetFields) && targetFields.Health == 55 && targetFields.Level == 2 &&
                 experimental.ReadActionBar().Count == 4 && experimental.ReadActionBar()[3].Index == 12, "candidate gameplay reads include slot twelve");
+        DeathCheckpointTests.RunActive70707(memory, 0x24000000, player);
         WowBObservedUnit selectedUnit = default;
         Require(experimental.TryCaptureWorldSnapshot(out snapshot) && snapshot != null && snapshot.TryGetUnit(target, out selectedUnit) &&
                 WowBGrindFactions.AllowsPull(experimental, selectedUnit, out _), "allowlisted target found without selection");

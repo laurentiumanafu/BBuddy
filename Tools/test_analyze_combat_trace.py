@@ -90,7 +90,11 @@ class TraceTests(unittest.TestCase):
             path.write_text('other\n', encoding='utf-8')
             with self.assertRaises(ValueError): read_trace(path)
             path.write_text('70707 COMBAT RESEARCH v1: test\nsample=0 startMs=0 endMs=0 utc=x\n'
-                            'player changes +0x2400:00000000>00000001\n', encoding='utf-8')
+                            'player changes +0x26D8:00000000>00000010\n', encoding='utf-8')
+            changes, _, _, _ = read_trace(path)
+            self.assertIn(('player', 0x26D8), changes)
+            path.write_text('70707 COMBAT RESEARCH v1: test\nsample=0 startMs=0 endMs=0 utc=x\n'
+                            'player changes +0x2800:00000000>00000001\n', encoding='utf-8')
             with self.assertRaises(ValueError): read_trace(path)
 
 

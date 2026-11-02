@@ -15,6 +15,7 @@
     <Compile Include="../../Styx/Logic/Pathing/ClickAim/ClickAimCombat.cs" Link="ClickAimCombat.cs" />
     <Compile Include="../../Styx/Logic/Pathing/ClickAim/ClickAimClassRotation.cs" Link="ClickAimClassRotation.cs" />
     <Compile Include="../../Styx/Logic/Pathing/ClickAim/WowBCombatResearch.cs" Link="WowBCombatResearch.cs" />
+    <Compile Include="../../Styx/Logic/Pathing/ClickAim/WowBDeathCheckpoint.cs" Link="WowBDeathCheckpoint.cs" />
     <Compile Include="../../Styx/Logic/Pathing/ClickAim/ClickAimSettings.cs" Link="ClickAimSettings.cs" />
     <Compile Include="../../Styx/Logic/Pathing/ClickAim/VendorFile.cs" Link="VendorFile.cs" />
     <Compile Include="../../Styx/Logic/Pathing/ClickAim/WowBInventoryProbe.cs" Link="WowBInventoryProbe.cs" />

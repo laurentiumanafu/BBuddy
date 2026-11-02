@@ -312,6 +312,18 @@ internal static class GrindRunner
 
     private static volatile bool _stop;
     private static bool _running;
+    private static WowBDeathCheckpoint? _deathCheckpoint;
+
+    private static bool CheckDeathCheckpoint()
+    {
+        bool observed = false;
+        bool dead = _deathCheckpoint != null && _deathCheckpoint.Poll(out observed);
+        if (!dead && (observed || !PlayerDead())) return false;
+        _stop = true;
+        ClickAimKeySteer.ReleaseHeld();
+        Logging.Write("[Grind] 0-health candidate; stopping for manual recovery (automatic recovery is not yet enabled)");
+        return true;
+    }
     private static int _presses;    // action-bar presses this session, for the summary
     /* No Lua, on purpose. Taking the client's own Lua thread over - the only way to send
      * UseAction without tripping FrameScript_IsLuaThread - crashed wowb twice on 2026-10-30:
@@ -654,11 +666,12 @@ internal static class GrindRunner
             Run(areas, minutes, profilePath, roam, trialReader);
         }
         catch (Exception ex) { Logging.Write("[Grind] worker stopped on error: " + ex.Message); }
-        finally { WowBGrindFactions.EndExperimental70707(); _running = false; }
+        finally { _deathCheckpoint = null; WowBGrindFactions.EndExperimental70707(); _running = false; }
     }
 
     private static void Run(List<ProfileGrindArea> areas, int minutes, string profilePath, MeshRoam? roam, WowBReader? trialReader)
     {
+        _deathCheckpoint = new WowBDeathCheckpoint();
         int started = Environment.TickCount;
         int budgetMs = minutes <= 0 ? int.MaxValue : minutes * 60000;
         if (trialReader != null)
@@ -739,6 +752,7 @@ internal static class GrindRunner
         {
             while (!_stop && !ClickAimAbort.Requested && unchecked(Environment.TickCount - started) < budgetMs)
             {
+                if (CheckDeathCheckpoint()) break;
                 if (trialReader != null && (ObjectManager.WowB != trialReader || !trialReader.ExperimentalGrindActive))
                 { Logging.Write("[Grind] 70707 attachment or session authorization changed; stopping"); break; }
                 if (trialReader != null && !WowBGrindFactions.Experimental70707BarSafe(trialReader))
@@ -779,13 +793,6 @@ internal static class GrindRunner
                  * between them, so checking before each hop is checking every few
                  * seconds - close enough to catch an add without stopping mid-stride,
                  * which the mover cannot do yet (WalkTo has no interrupt hook). */
-                if (PlayerDead())
-                {
-                    Logging.Write("[Grind] the local player reads 0 health - the character is dead or "
-                                  + "being resurrected. Stopping instead of walking a corpse round the ring.");
-                    break;
-                }
-
                 /* The table before the road. The 15:50 run walked 200 yd to the vendor at 17 of
                  * 167 power with food and drink on the bar and never took a bite, because the
                  * rest check sat BELOW this one and the trip returns to the top of the loop on
@@ -890,7 +897,7 @@ internal static class GrindRunner
                     if (unchecked(Environment.TickCount - lastFightCheck) >= 500)
                     {
                         lastFightCheck = Environment.TickCount;
-                        if (FightNeeded(hwnd, SearchYd)) return true;
+                        if (CheckDeathCheckpoint() || FightNeeded(hwnd, SearchYd)) return true;
                     }
                     if (gatherDuringGrind && GatherRunner.HasGrindResource(GatherAreaSafe))
                     { resourceInterrupt = true; return true; }
@@ -3403,6 +3410,7 @@ internal static class GrindRunner
             if (!Capture(out WowBWorldSnapshot? snap) || snap == null
                 || !snap.TryGetLocalPlayer(out WowBObservedUnit player)
                 || !reader.TryGetUnitFields(player.UnitAddress, out WowBReader.WowBUnitFields fields)
+                || fields.MaxHealth == 0 || fields.Health == 0
                 || ObjectManager.Wow != memory || ObjectManager.WowB != reader) return false;
             fighting = (fields.UnitFlags & PlayerCombatFlagCandidate) != 0;
             return true;
@@ -4262,8 +4270,15 @@ internal static class GrindRunner
         string attackWords = AttackWords(target.UnitAddress);
         if (attackWords.Length > 0) Logging.Write("[Grind] target words:" + attackWords);
 
+        int lastDeathCheck = unchecked(Environment.TickCount - 500);
         while (!_stop && !ClickAimAbort.Requested && unchecked(Environment.TickCount - started) < EngageTimeoutMs)
         {
+            if (unchecked(Environment.TickCount - lastDeathCheck) >= 500)
+            {
+                lastDeathCheck = Environment.TickCount;
+                if (CheckDeathCheckpoint())
+                    return "0-health candidate; stopping fight for manual recovery";
+            }
             if (defenceOnly && (!TryReadGatherCombat(out bool fighting) || !fighting))
                 return "combat ended or state unreadable; ending defence";
             if (!Capture(out snap) || snap == null) break;

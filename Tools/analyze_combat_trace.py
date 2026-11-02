@@ -46,7 +46,7 @@ def read_trace(path, spell_id=None):
                     continue
                 for item in CHANGE.finditer(line):
                     offset, old, new = (int(v, 16) for v in item.groups())
-                    if offset >= 0x2400 or offset % 4:
+                    if offset >= 0x2800 or offset % 4:
                         raise ValueError("change offset outside trace window")
                     changes[(actor, offset)].append((sample, old, new))
     return changes, baseline_matches, count, status

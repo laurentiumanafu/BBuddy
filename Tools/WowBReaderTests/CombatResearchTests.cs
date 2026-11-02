@@ -66,7 +66,8 @@ internal static class CombatResearchTests
             int reads = 0;
             mem.OnRead = (address, count) =>
             {
-                if (address == playerUnit && count == WowBCombatResearch.WindowSize && ++reads == 2) mem.U32(playerUnit + 0x150, 123);
+                if (address == playerUnit && count == WowBCombatResearch.WindowSize && ++reads == 2)
+                { mem.U32(playerUnit + 0x150, 123); mem.U32(playerUnit + 0x26D8, 0x10); }
             };
             string result = WowBCombatResearch.Capture("mage Fireball\nnot a second line", CancellationToken.None, 3, 10);
             mem.OnRead = null;
@@ -75,6 +76,7 @@ internal static class CombatResearchTests
             string data = File.ReadAllText(path);
             Check(data.Contains("label=mage Fireball not a second line") && data.Contains("bar slot=1 raw=0x0000000000000193") &&
                 data.Contains("player+0x0000 baseline") && data.Contains("target+0x0000 baseline") &&
+                data.Contains("player+0x2600 baseline") && data.Contains("+0x26D8:00000000>00000010") &&
                 data.Contains("+0x0150:00000000>0000007B") && data.Contains("sample=2 ") &&
                 data.Contains("end: completed; samples=3"), "baseline, change, timestamps, action bar and label");
             Check(!reader.HasExperimentalGrindSession && reader.ReadActionBar().Count == 0, "trace does not arm gameplay");

@@ -14,14 +14,14 @@ internal static class GatherSettingsTests
         {
             Styx.Helpers.Logging.ApplicationPath = folder;
             string settings = Path.Combine(folder, "Settings", "clickaim-gather.txt");
-            GatherSettings.AllowBackgroundCursorMovement = true;
+            GatherSettings.AllowBackgroundCursorMovement = false;
             GatherSettings.Load();
-            Check(!GatherSettings.AllowBackgroundCursorMovement, "missing file defaults to strict cursor guard");
+            Check(GatherSettings.AllowBackgroundCursorMovement, "missing file enables background default");
             Directory.CreateDirectory(Path.GetDirectoryName(settings)!);
             File.WriteAllText(settings, "Mining=True\n");
-            GatherSettings.AllowBackgroundCursorMovement = true;
+            GatherSettings.AllowBackgroundCursorMovement = false;
             GatherSettings.Load();
-            Check(!GatherSettings.AllowBackgroundCursorMovement, "legacy file defaults to strict cursor guard");
+            Check(GatherSettings.AllowBackgroundCursorMovement, "legacy file enables background default");
             File.WriteAllText(settings, "AllowBackgroundCursorMovement=True\nAllowBackgroundCursorMovement=invalid\n");
             GatherSettings.Load();
             Check(!GatherSettings.AllowBackgroundCursorMovement, "invalid setting defaults to strict cursor guard");

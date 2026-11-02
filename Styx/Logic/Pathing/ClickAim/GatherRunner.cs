@@ -50,6 +50,15 @@ internal static class GatherRunner
     private static int _lastSafetySummary;
     private static GatherNodeScanner.Node? _pending;
     private static uint _sessionMap;
+    private static WowBDeathCheckpoint? _deathCheckpoint;
+
+    private static bool StopIfDead()
+    {
+        if (_deathCheckpoint == null || !_deathCheckpoint.Poll(out _)) return false;
+        _stop = true;
+        Logging.Write("[Gather] 0-health candidate; stopping for manual recovery (automatic recovery is not yet enabled)");
+        return true;
+    }
 
     public static bool Running => _running;
     private static readonly object StartStopGate = new object();
@@ -217,7 +226,7 @@ internal static class GatherRunner
         if (unchecked(Environment.TickCount - _lastCombatCheck) >= 500)
         {
             _lastCombatCheck = Environment.TickCount;
-            if (!MapStillCurrent()) return true;
+            if (StopIfDead() || !MapStillCurrent()) return true;
             if (!GrindRunner.TryReadGatherCombat(out bool fighting) || fighting) return true;
         }
         if (!checkNodes || unchecked(Environment.TickCount - _lastScan) < 1500) return false;
@@ -509,6 +518,7 @@ internal static class GatherRunner
         catch (Exception ex) { Logging.Write("[Gather] worker stopped on error: " + ex.Message); }
         finally
         {
+            _deathCheckpoint = null;
             if (experimentalReader != null) WowBGrindFactions.EndExperimental70707();
             _running = false;
         }
@@ -516,6 +526,7 @@ internal static class GatherRunner
 
     private static void Run(List<RoutePoint> points, MeshRoam? roam)
     {
+        _deathCheckpoint = new WowBDeathCheckpoint();
         var mover = new ClickAimMover { QuietKeyStop = true };
         int index = 0, failures = 0, fastHotspots = 0, sampleFailures = 0;
         try
@@ -540,6 +551,7 @@ internal static class GatherRunner
             }
             while (!_stop && !ClickAimAbort.Requested)
             {
+                if (StopIfDead()) break;
                 if (reader.IsExperimental70707 && !WowBGrindFactions.Experimental70707BarSafe(reader))
                 { Logging.Write("[Gather] 70707 action bar changed or became unreadable; stopping"); break; }
                 if (!MapStillCurrent() || (roam != null && !roam.MapCurrent())) break;
