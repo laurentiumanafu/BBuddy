@@ -263,7 +263,9 @@ internal static class GatherRunner
                 return;
             }
             Logging.Write("[Gather] hover search attempt " + attempt + "/" + MaxGatherAttempts
-                          + "; keep the real mouse still");
+                          + (GatherSettings.AllowBackgroundCursorMovement
+                              ? "; real mouse movement allowed only while WoW is in the background"
+                              : "; keep the real mouse still"));
             if (!MapStillCurrent()) return;
             bool clicked = GatherInteraction.TryInteract(hwnd, node, candidate => MapStillCurrent() && Ready(candidate), extraSafety, out GatherNodeScanner.Node clickedNode,
                                                           out string reason, out bool hoverMiss, out bool cursorMoved);

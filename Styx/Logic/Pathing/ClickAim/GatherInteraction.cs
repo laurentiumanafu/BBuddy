@@ -94,6 +94,31 @@ internal static class GatherInteraction
         return true;
     }
 
+    // In the opt-in background mode only desktop cursor stillness is relaxed.
+    // Each check fails closed if focus, window geometry or client size changes.
+    // A foreground transition requires a fresh search with the normal guard.
+    private static bool CursorGuard(IntPtr hwnd, bool background, int realX, int realY,
+                                    int width, int height, int originX, int originY,
+                                    out string reason, out bool moved)
+    {
+        if (!background) return CursorStill(realX, realY, out reason, out moved);
+        moved = false;
+        GatherBackgroundFocus.State focus = GatherBackgroundFocus.Current(hwnd);
+        if (focus != GatherBackgroundFocus.State.OtherApplication)
+        {
+            moved = focus == GatherBackgroundFocus.State.Game;
+            reason = focus == GatherBackgroundFocus.State.Game
+                ? "WoW regained focus during background search; restarting with foreground cursor checks"
+                : "background focus could not be confirmed";
+            return false;
+        }
+        if (!ClickAimInput.ClientSize(hwnd, out int w, out int h) || w != width || h != height ||
+            !GatherBackgroundFocus.TryClientOrigin(hwnd, out int x, out int y) || x != originX || y != originY)
+        { reason = "background game window minimized, moved, resized or unreadable"; return false; }
+        reason = "";
+        return true;
+    }
+
     private static bool Near(GatherNodeScanner.Node a, GatherNodeScanner.Node b)
     {
         double dx = a.Position.X - b.Position.X, dy = a.Position.Y - b.Position.Y, dz = a.Position.Z - b.Position.Z;
@@ -149,11 +174,26 @@ internal static class GatherInteraction
         if (memory == null || reader == null || memory.WindowHandle != hwnd || !memory.Is64BitTarget
             || !ClickAimInput.ClientSize(hwnd, out int width, out int height)
             || !ClickAimInput.TryCursorScreen(out int realX, out int realY)) return false;
+        int originX = 0, originY = 0;
+        bool background = false;
+        if (GatherSettings.AllowBackgroundCursorMovement)
+        {
+            GatherBackgroundFocus.State initialFocus = GatherBackgroundFocus.Current(hwnd);
+            if (initialFocus == GatherBackgroundFocus.State.OtherApplication)
+            {
+                bool geometryAvailable = GatherBackgroundFocus.TryClientOrigin(hwnd, out originX, out originY);
+                if (!geometryAvailable) { reason = "background game window minimized or unreadable"; return false; }
+                background = GatherBackgroundFocus.MayRelax(GatherSettings.AllowBackgroundCursorMovement, initialFocus, geometryAvailable);
+                Logging.Write("[Gather] experimental background mouse movement enabled for this search; final hover and node checks remain");
+            }
+        }
         using var uncached = memory.TemporaryCacheState(false);
         if (reader.IsExperimental70707)
             Logging.Write("[Gather] 70707 hover GUID candidate RVA 0x" + reader.MouseoverGuidCandidateRva.ToString("X") +
                           "; click still requires a changed hover matching a fresh eligible node");
         // First demand an away transition, so an old/stuck candidate cannot authorize a click.
+        if (!CursorGuard(hwnd, background, realX, realY, width, height, originX, originY, out reason, out bool initialMoved))
+        { cursorMoved = initialMoved; return false; }
         reason = "failed to post hover-away mouse move";
         if (!ClickAimInput.PostMouseMoveFraction(hwnd, 0.05, 0.05)) return false;
         reason = "Stop requested while waiting for hover-away";
@@ -176,7 +216,8 @@ internal static class GatherInteraction
             if (extraSafety != null && !extraSafety()) { reason = "Grind safety check interrupted hover search"; return false; }
             if (ObjectManager.Wow != memory) { reason = "attached client changed during hover search"; return false; }
             if (memory.WindowHandle != hwnd) { reason = "game window handle changed during hover search"; return false; }
-            if (!CursorStill(realX, realY, out reason, out bool sampleCursorMoved)) { cursorMoved = sampleCursorMoved; return false; }
+            if (!CursorGuard(hwnd, background, realX, realY, width, height, originX, originY, out reason, out bool sampleCursorMoved))
+            { cursorMoved = sampleCursorMoved; return false; }
             if (unchecked(Environment.TickCount - started) >= HoverSearchBudgetMs)
             {
                 hoverMiss = true;
@@ -230,7 +271,7 @@ internal static class GatherInteraction
             bool sent = ClickAimInput.ConfirmedRightClick(hwnd, pixelX, pixelY, width, height, () =>
             {
                 if (ObjectManager.Wow != memory || memory.WindowHandle != hwnd) { validation = "client changed"; return false; }
-                if (!CursorStill(realX, realY, out string cursorReason, out bool moved))
+                if (!CursorGuard(hwnd, background, realX, realY, width, height, originX, originY, out string cursorReason, out bool moved))
                 { validation = cursorReason; movedDuringValidation = moved; return false; }
                 if (!GrindRunner.TryReadGatherCombat(out bool fighting)) { validation = "combat state unreadable"; return false; }
                 if (fighting) { validation = "combat detected"; return false; }
@@ -245,10 +286,12 @@ internal static class GatherInteraction
                 if (!present) { validation = "eligible node not observed in reach near the intended resource"; return false; }
                 if (!GrindRunner.TryReadGatherCombat(out fighting) || fighting) { validation = "combat detected or unreadable after node scan"; return false; }
                 if (extraSafety != null && !extraSafety()) { validation = "Grind safety check failed before interaction"; return false; }
-                if (!CursorStill(realX, realY, out cursorReason, out moved))
+                if (!CursorGuard(hwnd, background, realX, realY, width, height, originX, originY, out cursorReason, out moved))
                 { validation = cursorReason; movedDuringValidation = moved; return false; }
                 if (!ReadHover(memory, reader, out WowBGuid final)) { validation = "final hover read failed"; return false; }
                 if (final != hoveredNode.Guid) { validation = "final hover changed to " + final; return false; }
+                if (!CursorGuard(hwnd, background, realX, realY, width, height, originX, originY, out cursorReason, out moved))
+                { validation = cursorReason; movedDuringValidation = moved; return false; }
                 return true;
             }, out string clickReason);
             reason = validation.Length > 0 ? validation : clickReason;

@@ -18,6 +18,7 @@ namespace CopilotBuddy.UI
         private readonly CheckBox _herbalism = new CheckBox { Content = "Herbalism", Margin = new Thickness(0, 8, 0, 4) };
         private readonly CheckBox _roam = new CheckBox { Content = "Roam on the mesh when no profile is loaded", Margin = new Thickness(0, 10, 0, 4) };
         private readonly CheckBox _grind = new CheckBox { Content = "Gather nearby resources while grinding", Margin = new Thickness(0, 10, 0, 4) };
+        private readonly CheckBox _backgroundMouse = new CheckBox { Content = new TextBlock { Text = "Allow desktop mouse movement while WoW is in the background (experimental)", TextWrapping = TextWrapping.Wrap, MaxWidth = 390 }, Margin = new Thickness(0, 10, 0, 4) };
         private readonly TextBox _roamRadius = new TextBox { Width = 90, HorizontalAlignment = HorizontalAlignment.Left };
         private readonly TextBox _miningSkill = new TextBox { Width = 90, HorizontalAlignment = HorizontalAlignment.Left };
         private readonly TextBox _herbSkill = new TextBox { Width = 90, HorizontalAlignment = HorizontalAlignment.Left };
@@ -29,6 +30,7 @@ namespace CopilotBuddy.UI
             Width = 460; Height = 550; ResizeMode = ResizeMode.NoResize;
             WindowStartupLocation = WindowStartupLocation.CenterOwner;
             _grind.IsChecked = GatherSettings.GatherWhileGrinding;
+            _backgroundMouse.IsChecked = GatherSettings.AllowBackgroundCursorMovement;
             _roam.IsChecked = GatherSettings.RoamWithoutProfile;
             _roamRadius.Text = GatherSettings.RoamRadiusYd.ToString(CultureInfo.InvariantCulture);
             _mining.IsChecked = GatherSettings.Mining;
@@ -49,6 +51,8 @@ namespace CopilotBuddy.UI
             panel.Children.Add(new TextBlock { Text = "Experimental: zone borders are unknown. Combat, resources and route detours can go beyond this radius or into another zone. Loaded profiles take priority.", TextWrapping = TextWrapping.Wrap });
             panel.Children.Add(_grind);
             panel.Children.Add(new TextBlock { Text = "Grind fights first. Gathering waits if combat or a nearby living NPC is detected; friendly NPCs can also block it because hostility is not known (100 yd).", TextWrapping = TextWrapping.Wrap });
+            panel.Children.Add(_backgroundMouse);
+            panel.Children.Add(new TextBlock { Text = "Experimental: ignores desktop mouse movement only while a different application is focused. Hover, node, combat and STOP checks remain. Turn off if it misclicks.", TextWrapping = TextWrapping.Wrap });
             var save = new Button { Content = "Save", Width = 110, Height = 28, Margin = new Thickness(0, 12, 0, 0), HorizontalAlignment = HorizontalAlignment.Right };
             save.Click += SaveClick;
             panel.Children.Add(save);
@@ -73,6 +77,7 @@ namespace CopilotBuddy.UI
                 return;
             }
             GatherSettings.GatherWhileGrinding = _grind.IsChecked == true;
+            GatherSettings.AllowBackgroundCursorMovement = _backgroundMouse.IsChecked == true;
             GatherSettings.RoamWithoutProfile = _roam.IsChecked == true;
             GatherSettings.RoamRadiusYd = roamRadius;
             GatherSettings.Mining = _mining.IsChecked == true;
