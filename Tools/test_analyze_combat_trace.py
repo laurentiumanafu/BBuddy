@@ -52,6 +52,22 @@ class TraceTests(unittest.TestCase):
         changes[('player', 0x41c)] = [(5.75, 0, 10000)]
         self.assertEqual(candidate_events(changes), [])  # zero-length timing
 
+    def test_split_sample_candidate_requires_matching_bounded_fields(self):
+        changes = {
+            ('player', 0x3c0): [(13.52, 0, 133), (14.77, 133, 0)],
+            ('player', 0x3ec): [(13.77, 0, 133), (14.77, 133, 0)],
+            ('player', 0x418): [(13.77, 0, 10000), (14.77, 10000, 0)],
+            ('player', 0x41c): [(13.77, 0, 11500), (14.77, 11500, 0)],
+        }
+        events = candidate_events(changes)
+        self.assertEqual(len(events), 2)
+        self.assertIn('possible split-sample', events[0][1])
+        changes[('player', 0x3c0)].insert(1, (13.6, 133, 0))
+        self.assertFalse(any('split-sample' in text for _, text in candidate_events(changes)))
+        changes[('player', 0x3c0)].pop(1)
+        changes[('player', 0x3ec)][0] = (14.03, 0, 133)
+        self.assertFalse(any('split-sample' in text for _, text in candidate_events(changes)))
+
     def test_alternate_cluster_is_not_called_a_channel(self):
         changes = {
             ('player', 0x424): [(2.0, 0, 403)],

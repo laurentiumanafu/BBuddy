@@ -1403,6 +1403,7 @@ namespace CopilotBuddy.UI
                     Logging.Write("{0}", report); SetStatus(report);
                 }),
                 ("Gather hover test", "Test hover tracking without clicking", () => btnGatherHoverTest_Click(this, new RoutedEventArgs())),
+                ("Gather background test", "Observe node hover while moving the mouse in another application; no clicks", () => btnGatherBackgroundHoverTest_Click(this, new RoutedEventArgs())),
                 ("Combat probe", "Compare idle and combat memory samples", () => btnCombatProbe_Click(this, new RoutedEventArgs())),
                 ("NPC reaction samples", "Capture user-labelled NPC memory without attacking", () => {
                     var probe = new WowBReactionProbeWindow { Owner = this }; probe.Show();
@@ -1450,6 +1451,21 @@ namespace CopilotBuddy.UI
             catch (Exception ex)
             {
                 Logging.Write("[Gather hover test] could not start: " + ex.Message);
+            }
+        }
+
+        private void btnGatherBackgroundHoverTest_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                if (Styx.Logic.Pathing.GatherHoverTest.StartBackground())
+                    SetStatus("Hover a resource in the game; follow the background test instructions in the log");
+                else
+                    SetStatus("Stop the bot first, or wait for the current hover test");
+            }
+            catch (Exception ex)
+            {
+                Logging.Write("[Gather background test] could not start: " + ex.Message);
             }
         }
 

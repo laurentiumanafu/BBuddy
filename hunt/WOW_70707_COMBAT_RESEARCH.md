@@ -46,7 +46,20 @@ The two subsequent user-supplied traces are labeled **Shaman Nothing** and **Sha
 - The Shaman **Nothing** trace did not show the Lightning Bolt pattern. It was not a perfectly static control: around 10.27 s the candidate maximum health changed `118 → 148`, and a raw player word `+0x1280` changed `0 → 1243`, with subsequent health increases. Their cause is unknown; the no-action label alone does not establish why these changes happened. They illustrate why a control can contain external or passive events.
 - The no-action and Lightning Bolt NPCs differ; comparing their target memory directly would confound NPC-specific activity with spell effects. The available traces do not establish a general cooldown, universal GCD, aura layout, cancellation or channel behavior. A fixed raw `+0x20C8` still must not be used as a combo counter.
 
-No candidate above has been wired into combat or used to remove the existing mana-type gate. For additional read-only validation, compare another cast-time spell, a cancelled cast and a channel if available; record visible behavior and note interruptions. A self-buff trace starting with the buff absent and another after expiration would help distinguish application from refresh.
+## Cancellation comparison (2026-11-02)
+
+Four more supplied traces have the following labels and recorded outcomes (the labels describe the intended scenario, not independently verified input):
+
+| Label | Samples / end | Observation |
+| --- | --- | --- |
+| shaman lightning spell normal cast | 12 / incomplete, generic identity or state change | No cast-like cluster appeared before the recording stopped at about 2.75 s. The recorded stop reason does not say which guard changed. |
+| shaman move to cancel lightning spell | 100 / complete | Two ID-403 cast-like intervals: approximately 6.51–7.51 s and 10.01–11.26 s, with 1500-unit timing-word differences. No `player+0x1BC0` changes were recorded in this trace. |
+| mage fireball normal cast | 67 / incomplete, generic identity or state change | The first ID-133 interval was approximately 6.76–8.26 s, with a 1500-unit timing-word difference. The candidate power word fell by 30 at clearing. Further activity followed; the recording stopped around 16.5 s. |
+| mage fireball cancel normal cast | 100 / complete | Eight `+0x03C0` start transitions appeared. Most corresponding clusters clear after roughly 1–1.5 s while the timing-word differences are 1500; candidate power increases only before the first interval, with no further changes observed during them. One start is split between samples: `+0x03C0` changes at 13.52 s and `+0x03EC/+0x0418/+0x041C` at 13.77 s. |
+
+The shorter intervals and lack of observed power spending in the cancellation-labeled traces are consistent with interrupted attempts, but do **not** prove exactly which attempts were cancelled, why, or that a normal completion always spends power. Sampling at roughly 250 ms, non-atomic reads, multiple actions and combat/pushback can obscure transitions. In the normal Mage trace the timing pair changed while active and the counter incremented without a sampled ID zero at one point; adjacent casts or timing changes cannot be reconstructed with certainty from that alone. Neither a clear nor a timing difference is proof of success or cancellation. The analyzer reports a closely spaced split-sample match only as a possible lead, not a verified start.
+
+No candidate above has been wired into combat or used to remove the existing mana-type gate. For additional read-only validation, compare another cast-time spell, a visibly confirmed single cancellation and a channel if available; record visible behavior and note interruptions. A self-buff trace starting with the buff absent and another after expiration would help distinguish application from refresh.
 
 ## Manual trace procedure
 

@@ -75,6 +75,7 @@ def candidate_events(changes):
         for time, old, new in events:
             grouped[(actor, time)][offset] = (old, new)
     results = []
+    player_times = sorted(time for actor, time in grouped if actor == "player")
     # These offsets were observed together in Mage Fireball and Shaman Lightning
     # Bolt traces. Require corroborating words in the same sampled interval;
     # absent != inactive, and the extra counter is only supporting evidence.
@@ -91,6 +92,27 @@ def candidate_events(changes):
                     increment = counter is not None and counter[1] == ((counter[0] + 1) & 0xFFFFFFFF)
                     extra = "; +0x03E8 incremented" if increment else ""
                     results.append((time, f"player cast-like start: id={spell}, timing-word difference={duration}{extra} (unverified units)"))
+            elif old == 0 and spell != 0:
+                # The recorder reads non-atomically: one candidate start can be
+                # split across consecutive intervals. Mark this only as a lead;
+                # short gaps can still contain unrelated transitions.
+                for later in player_times:
+                    if later <= time:
+                        continue
+                    if later - time > 0.5:
+                        break
+                    after = grouped[("player", later)]
+                    if 0x3C0 in after:
+                        break
+                    second_id = after.get(0x3EC)
+                    second_start = after.get(0x418)
+                    second_end = after.get(0x41C)
+                    if (second_id == (0, spell) and second_start and second_start[0] == 0
+                            and second_end and second_end[0] == 0):
+                        duration = (second_end[1] - second_start[1]) & 0xFFFFFFFF
+                        if 0 < duration <= 60000:
+                            results.append((time, f"possible split-sample cast-like start: id={spell}, other fields at {later:.2f}s (not verified)"))
+                        break
             elif old != 0 and spell == 0 and mirrored == (old, 0) and start and end and start[1] == 0 and end[1] == 0:
                 results.append((time, f"player cast-like fields cleared: id={old}"))
         # A separate static branch writes these other words and clears the first
