@@ -313,19 +313,46 @@ internal static class GrindRunner
     private static volatile bool _stop;
     private static bool _running;
     private static WowBDeathCheckpoint? _deathCheckpoint;
+    private static bool _recoveryReady;
+    private static int _deathStopGeneration;
 
     private static bool CheckDeathCheckpoint()
     {
         // Standalone Gather uses this fight loop for defence and owns its tracker.
-        if (_deathCheckpoint == null && GatherRunner.Running && GatherRunner.StopIfDeadOrGhost())
-        { _stop = true; return true; }
+        if (_deathCheckpoint == null && GatherRunner.Running && GatherRunner.StopIfDeadOrGhost()) return true;
         bool observed = false;
         bool veto = _deathCheckpoint != null && _deathCheckpoint.Poll(out observed);
         if (!veto && (observed || !PlayerDead())) return false;
-        _stop = true;
+        lock (StartStopGate)
+        {
+            if (_stop || ClickAimAbort.Requested) return true;
+            _deathStopGeneration = _stopGeneration;
+            _recoveryReady = ObjectManager.WowB?.IsExperimental70707 == true && _deathCheckpoint?.Recorded != null;
+            _stop = true;
+        }
         ClickAimKeySteer.ReleaseHeld();
-        Logging.Write("[Grind] death/ghost safety check stopped the bot; automatic recovery is not yet enabled");
+        Logging.Write(_recoveryReady ? "[Grind] death checkpoint recorded; preparing experimental recovery" :
+            "[Grind] death/ghost safety check stopped the bot; no usable recovery checkpoint");
         return true;
+    }
+
+    private static bool RecoverIfPending(ClickAimMover mover)
+    {
+        WowBDeathCheckpoint.Candidate candidate;
+        lock (StartStopGate)
+        {
+            if (!WowBDeathCheckpoint.MayBeginRecovery(_recoveryReady, _deathCheckpoint?.Recorded != null,
+                    _deathStopGeneration, _stopGeneration, ClickAimAbort.Requested, RouteRunner.StopRequested)) return false;
+            candidate = _deathCheckpoint!.Recorded!.Value;
+            _recoveryReady = false;
+            _stop = false; // only our own death stop, never a user STOP
+        }
+        bool recovered = WowBCorpseRecovery.TryRecover(candidate, mover, () => !_stop && !ClickAimAbort.Requested);
+        if (!recovered) { _stop = true; return false; }
+        _deathCheckpoint = new WowBDeathCheckpoint();
+        _focusedFightGuid = default; _focusedDamageObserved = false; _unverifiedGuid = default;
+        _combatHold = false; _poolApproachHandled = false;
+        return !_stop && !ClickAimAbort.Requested;
     }
     private static int _presses;    // action-bar presses this session, for the summary
     /* No Lua, on purpose. Taking the client's own Lua thread over - the only way to send
@@ -675,6 +702,7 @@ internal static class GrindRunner
     private static void Run(List<ProfileGrindArea> areas, int minutes, string profilePath, MeshRoam? roam, WowBReader? trialReader)
     {
         _deathCheckpoint = new WowBDeathCheckpoint();
+        _recoveryReady = false;
         int started = Environment.TickCount;
         int budgetMs = minutes <= 0 ? int.MaxValue : minutes * 60000;
         if (trialReader != null)
@@ -753,6 +781,9 @@ internal static class GrindRunner
 
         try
         {
+            bool recovered;
+            do
+            {
             while (!_stop && !ClickAimAbort.Requested && unchecked(Environment.TickCount - started) < budgetMs)
             {
                 if (CheckDeathCheckpoint()) break;
@@ -961,6 +992,8 @@ internal static class GrindRunner
 
                 Thread.Sleep(150);
             }
+            recovered = _recoveryReady && !ClickAimAbort.Requested && RecoverIfPending(mover);
+            } while (recovered && !_stop && !ClickAimAbort.Requested && unchecked(Environment.TickCount - started) < budgetMs);
         }
         catch (Exception ex)
         {
@@ -3469,7 +3502,11 @@ internal static class GrindRunner
     // TAB confirms a changed selection, not that the selected NPC is the attacker.
     internal static void PrepareGatherDefence()
     {
-        _stop = false;
+        lock (StartStopGate)
+        {
+            if (ClickAimAbort.Requested) return;
+            _stop = false;
+        }
         _vendorDue = false;
         _notViable.Clear();
         _unreachableUntil.Clear();
@@ -3488,6 +3525,13 @@ internal static class GrindRunner
         int mana = ManaPercent();
         Logging.Write("[Gather] recovery uses Combat settings and configured food/drink hotbar slots; initial health="
                       + health + "% mana=" + mana + "% (power maximum is a candidate; session peak is also used)");
+    }
+
+    internal static void ClearGatherFightAfterRecovery()
+    {
+        // Do not touch _stop here: STOP may have arrived during recovery.
+        _focusedFightGuid = default; _focusedDamageObserved = false; _unverifiedGuid = default;
+        _combatHold = false; _poolApproachHandled = false;
     }
 
     internal static string RestForGather(IntPtr hwnd)

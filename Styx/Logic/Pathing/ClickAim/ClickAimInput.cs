@@ -179,6 +179,32 @@ internal static class ClickAimInput
         return true;
     }
 
+    // One dialog click only. Recheck the screen and state after the posted move;
+    // always release the button if down was sent, including after STOP.
+    internal static bool ConfirmedLeftClick(IntPtr hWnd, int x, int y, int expectedWidth, int expectedHeight,
+                                            Func<bool> confirm, out string reason)
+    {
+        reason = "stopped, cursor unavailable, or client size changed";
+        if (ClickAimAbort.Requested || !TryCursorScreen(out int oldX, out int oldY) ||
+            !ClientSize(hWnd, out int w, out int h) || w != expectedWidth || h != expectedHeight ||
+            x <= 0 || x >= w - 1 || y <= 0 || y >= h - 1) return false;
+        if (!PostMessageInternal(hWnd, WM_MOUSEMOVE, IntPtr.Zero, Lp(x, y))) { reason = "dialog mouse move failed"; return false; }
+        if (ClickAimAbort.Wait(80)) { reason = "stopped"; return false; }
+        if (!confirm() || ClickAimAbort.Requested || !TryCursorScreen(out int newX, out int newY) ||
+            Math.Abs(newX - oldX) > 3 || Math.Abs(newY - oldY) > 3 ||
+            !ClientSize(hWnd, out w, out h) || w != expectedWidth || h != expectedHeight)
+        { reason = "dialog, state, cursor, focus or client geometry changed"; return false; }
+        if (ClickAimAbort.Requested) { reason = "stopped"; return false; }
+        if (!PostMessageInternal(hWnd, WM_LBUTTONDOWN, new IntPtr(MK_LBUTTON), Lp(x, y)))
+        { reason = "left-button down failed"; return false; }
+        Thread.Sleep(35);
+        bool up = PostMessageInternal(hWnd, WM_LBUTTONUP, IntPtr.Zero, Lp(x, y));
+        Thread.Sleep(5);
+        bool again = PostMessageInternal(hWnd, WM_LBUTTONUP, IntPtr.Zero, Lp(x, y));
+        reason = up || again ? "left-button messages posted" : "down posted; both button-up messages failed";
+        return true; // a down was sent even if the up posts failed; never retry blindly
+    }
+
     /// <summary>Right-click at a client-space pixel offset from the centre.</summary>
     public static void Click(IntPtr hWnd, int dx, int dy)
     {

@@ -23,6 +23,19 @@ internal static class CorpseDialogTests
         return image;
     }
 
+    private static void Overlay(byte[] image, byte[] source)
+    {
+        for (int i = 0; i < image.Length; i += 4)
+            if (source[i] != 0 || source[i + 1] != 0 || source[i + 2] != 0)
+                for (int j = 0; j < 4; j++) image[i + j] = source[i + j];
+    }
+
+    private static void ButtonBackground(byte[] image, int width, int x, int y)
+    {
+        foreach (int offset in new[] { -45, -35, 35, 45 })
+            image[((y - 7) * width + x + offset) * 4 + 2] = 100;
+    }
+
     internal static void Run()
     {
         const int width = 640, height = 480, stride = width * 4;
@@ -40,7 +53,34 @@ internal static class CorpseDialogTests
         Array.Fill<byte>(release, 255);
         var solid = WowBCorpseDialogPattern.Inspect(release, width, height, stride);
         if (solid.ReleaseText || solid.ResurrectText) throw new Exception("Solid overlay mistaken for prompt");
-        Console.WriteLine("Corpse dialog synthetic pattern fixtures passed (no live capture or input).");
+        // A label by itself may classify the diagnostic but must never authorize a click.
+        if (WowBCorpseDialogPattern.SuitableForClick(a, true, out _, out _) ||
+            WowBCorpseDialogPattern.SuitableForClick(b, false, out _, out _))
+            throw new Exception("Text alone authorized a dialog click");
+        string[] releasePattern = Pattern("ReleaseText"), heading = Pattern("ResurrectText"), accept = Pattern("AcceptText");
+        const int cx = 320;
+        int releaseX = cx - releasePattern[0].Length / 2, releaseY = 100;
+        var releaseButton = Draw(releasePattern, true, releaseX, releaseY, width, height);
+        ButtonBackground(releaseButton, width, cx, releaseY + releasePattern.Length / 2);
+        var releaseResult = WowBCorpseDialogPattern.Inspect(releaseButton, width, height, stride);
+        if (!WowBCorpseDialogPattern.SuitableForClick(releaseResult, true, out int rx, out _) || Math.Abs(rx - cx) > 1)
+            throw new Exception("Unique release button was not located");
+        Overlay(releaseButton, Draw(releasePattern, true, 420, releaseY, width, height));
+        if (WowBCorpseDialogPattern.SuitableForClick(WowBCorpseDialogPattern.Inspect(releaseButton, width, height, stride), true, out _, out _))
+            throw new Exception("Duplicate release labels authorized a click");
+        var resurrection = Draw(heading, false, cx - heading[0].Length / 2, 80, width, height);
+        int acceptY = 106;
+        Overlay(resurrection, Draw(accept, true, cx - accept[0].Length / 2, acceptY, width, height));
+        ButtonBackground(resurrection, width, cx, acceptY + accept.Length / 2);
+        var result = WowBCorpseDialogPattern.Inspect(resurrection, width, height, stride);
+        if (!WowBCorpseDialogPattern.SuitableForClick(result, false, out int ax, out _) || Math.Abs(ax - cx) > 1)
+            throw new Exception("Heading and unique Accept button were not located");
+        var wrongGeometry = Draw(heading, false, 240, 80, width, height);
+        Overlay(wrongGeometry, Draw(accept, true, cx - accept[0].Length / 2, acceptY, width, height));
+        ButtonBackground(wrongGeometry, width, cx, acceptY + accept.Length / 2);
+        if (WowBCorpseDialogPattern.SuitableForClick(WowBCorpseDialogPattern.Inspect(wrongGeometry, width, height, stride), false, out _, out _))
+            throw new Exception("Unrelated heading and button authorized a click");
+        Console.WriteLine("Corpse dialog synthetic pattern and click-eligibility fixtures passed (no live capture or input).");
     }
 }
 #endif

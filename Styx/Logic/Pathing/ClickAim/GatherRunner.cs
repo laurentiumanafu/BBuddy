@@ -51,19 +51,47 @@ internal static class GatherRunner
     private static GatherNodeScanner.Node? _pending;
     private static uint _sessionMap;
     private static WowBDeathCheckpoint? _deathCheckpoint;
+    private static bool _recoveryReady;
+    private static int _deathStopGeneration;
 
     internal static bool StopIfDeadOrGhost()
     {
         if (_deathCheckpoint == null || !_deathCheckpoint.Poll(out _)) return false;
-        _stop = true;
+        lock (StartStopGate)
+        {
+            if (_stop || ClickAimAbort.Requested) return true;
+            _deathStopGeneration = _stopGeneration;
+            _recoveryReady = ObjectManager.WowB?.IsExperimental70707 == true && _deathCheckpoint.Recorded.HasValue;
+            _stop = true;
+        }
         ClickAimKeySteer.ReleaseHeld();
-        Logging.Write("[Gather] death/ghost safety check stopped gathering; automatic recovery is not yet enabled");
+        Logging.Write(_recoveryReady ? "[Gather] death checkpoint recorded; preparing experimental recovery" :
+            "[Gather] death/ghost safety check stopped gathering; no usable recovery checkpoint");
         return true;
     }
 
     public static bool Running => _running;
     private static readonly object StartStopGate = new object();
     private static int _stopGeneration, _starting;
+
+    private static bool RecoverIfPending(ClickAimMover mover)
+    {
+        WowBDeathCheckpoint.Candidate candidate;
+        lock (StartStopGate)
+        {
+            if (!WowBDeathCheckpoint.MayBeginRecovery(_recoveryReady, _deathCheckpoint?.Recorded != null,
+                    _deathStopGeneration, _stopGeneration, ClickAimAbort.Requested, RouteRunner.StopRequested)) return false;
+            candidate = _deathCheckpoint!.Recorded!.Value;
+            _recoveryReady = false;
+            _stop = false; // only our own death stop, never a user STOP
+        }
+        bool recovered = WowBCorpseRecovery.TryRecover(candidate, mover, () => !_stop && !ClickAimAbort.Requested);
+        if (!recovered) { _stop = true; return false; }
+        _deathCheckpoint = new WowBDeathCheckpoint();
+        _pending = null;
+        GrindRunner.ClearGatherFightAfterRecovery();
+        return !_stop && !ClickAimAbort.Requested;
+    }
 
     public static void Stop()
     {
@@ -528,6 +556,7 @@ internal static class GatherRunner
     private static void Run(List<RoutePoint> points, MeshRoam? roam)
     {
         _deathCheckpoint = new WowBDeathCheckpoint();
+        _recoveryReady = false;
         var mover = new ClickAimMover { QuietKeyStop = true };
         int index = 0, failures = 0, fastHotspots = 0, sampleFailures = 0;
         try
@@ -550,6 +579,9 @@ internal static class GatherRunner
                 if (map == uint.MaxValue || map != _sessionMap) { Logging.Write("[Gather] client map changed or became unreadable; stopping"); return; }
                 MeshBlackspots.Mark(Navigator.TripperNavigator, map, spot.X, spot.Y, spot.Z, (float)spot.Radius);
             }
+            bool recovered;
+            do
+            {
             while (!_stop && !ClickAimAbort.Requested)
             {
                 if (StopIfDeadOrGhost()) break;
@@ -663,6 +695,8 @@ internal static class GatherRunner
                 GatherAtNode(hwnd, node);
 
             }
+            recovered = _recoveryReady && !ClickAimAbort.Requested && RecoverIfPending(mover);
+            } while (recovered && !_stop && !ClickAimAbort.Requested);
         }
         catch (Exception ex) { Logging.Write("[Gather] stopped on error: " + ex.Message); }
         finally

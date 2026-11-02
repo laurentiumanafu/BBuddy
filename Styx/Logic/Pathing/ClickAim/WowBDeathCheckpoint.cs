@@ -7,15 +7,28 @@ using Styx.WoWInternals;
 
 namespace Styx.Logic.Pathing;
 
-// Best-effort recording and 70707 ghost-candidate veto only. Never release,
-// move or resurrect the character. Both game fields and positions are non-atomic.
+// Best-effort recording and 70707 ghost-candidate veto. This class itself
+// never sends input. Both game fields and positions are non-atomic.
 internal sealed class WowBDeathCheckpoint
 {
+    internal readonly struct Candidate
+    {
+        internal readonly WowBGuid Player;
+        internal readonly uint Map;
+        internal readonly WoWPoint Position;
+        internal Candidate(WowBGuid player, uint map, WoWPoint position) { Player = player; Map = map; Position = position; }
+    }
+    internal Candidate? Recorded { get; private set; }
+
     private WowBGuid _aliveGuid;
     private uint _aliveMap;
     private int _aliveAt;
     private bool _hasAlive, _saved;
     private const int AliveEvidenceMaxMs = 30000;
+
+    internal static bool MayBeginRecovery(bool pending, bool hasCheckpoint, int deathGeneration, int currentGeneration,
+                                          bool abortRequested, bool routeStopped)
+        => pending && hasCheckpoint && deathGeneration == currentGeneration && !abortRequested && !routeStopped;
 
     internal static bool MayRecord(bool hasAlive, bool alreadySaved, WowBGuid aliveGuid, uint aliveMap,
                                    int ageMs, WowBGuid currentGuid, uint currentMap,
@@ -86,6 +99,7 @@ internal sealed class WowBDeathCheckpoint
             {
                 // One write per run; never overwrite an earlier candidate at a graveyard.
                 _saved = true;
+                Recorded = new Candidate(current.Guid, map, position);
                 Save(current.Guid, map, reader.IsExperimental70707, position);
             }
             else if (!_saved)
@@ -116,7 +130,7 @@ internal sealed class WowBDeathCheckpoint
                 "y=" + position.Y.ToString("R", CultureInfo.InvariantCulture),
                 "z=" + position.Z.ToString("R", CultureInfo.InvariantCulture)
             });
-            Logging.Write("[Corpse] saved a 0-health location candidate to " + path + "; automatic release and recovery are not yet enabled");
+            Logging.Write("[Corpse] saved a 0-health location candidate to " + path + "; location and state remain unverified candidates");
         }
         catch (Exception ex) { Logging.Write("[Corpse] could not save death location: " + ex.Message); }
     }

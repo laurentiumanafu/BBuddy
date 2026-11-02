@@ -57,6 +57,11 @@ internal static class DeathCheckpointTests
             if (tracker.Poll(out _)) throw new Exception("Living observation marked dead");
             memory.U64(unit + Wow70707Offsets.HealthCandidateOffset, 0);
             if (!tracker.Poll(out _)) throw new Exception("Dead observation missed");
+            var recorded = tracker.Recorded;
+            if (!recorded.HasValue || recorded.Value.Player != player || recorded.Value.Map != 7 ||
+                recorded.Value.Position.X != 100 || recorded.Value.Position.Y != 200 || recorded.Value.Position.Z != 300 ||
+                deadAtStart.Recorded.HasValue || changedMap.Recorded.HasValue || ghostTracker.Recorded.HasValue || transitionTracker.Recorded.HasValue)
+                throw new Exception("In-memory recovery candidate was missing or created without a valid death observation");
             string path = Directory.GetFiles(directory).Single();
             string data = File.ReadAllText(path);
             if (!data.Contains("player=" + player) || !data.Contains("map=7") || !data.Contains("x=100") || !data.Contains("y=200") || !data.Contains("z=300"))
@@ -86,7 +91,14 @@ internal static class DeathCheckpointTests
             Check(map: 8) || Check(age: -1) || Check(age: 30001) || !Check(age: 30000) || Check(hp: 1) ||
             Check(max: 0) || Check(x: double.NaN) || Check(y: double.PositiveInfinity) || Check(z: 100000))
             throw new Exception("Death checkpoint policy fixture failed");
-        Console.WriteLine("Death checkpoint policy fixtures passed (no live death or recovery test).");
+        if (!WowBDeathCheckpoint.MayBeginRecovery(true, true, 12, 12, false, false) ||
+            WowBDeathCheckpoint.MayBeginRecovery(false, true, 12, 12, false, false) ||
+            WowBDeathCheckpoint.MayBeginRecovery(true, false, 12, 12, false, false) ||
+            WowBDeathCheckpoint.MayBeginRecovery(true, true, 12, 13, false, false) ||
+            WowBDeathCheckpoint.MayBeginRecovery(true, true, 12, 12, true, false) ||
+            WowBDeathCheckpoint.MayBeginRecovery(true, true, 12, 12, false, true))
+            throw new Exception("Recovery must not clear a newer STOP or proceed without its checkpoint");
+        Console.WriteLine("Death checkpoint and recovery STOP policy fixtures passed (no live death or recovery test).");
     }
 }
 #endif

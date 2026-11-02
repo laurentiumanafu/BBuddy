@@ -99,6 +99,28 @@ internal static class WowBCorpseDialogProbe
         }
     }
 
+    // Recovery calls this only with a live-session guard. The image remains
+    // transient, and a match alone must never authorize input.
+    internal static bool TryInspectForRecovery(Memory memory, WowBReader reader, IntPtr hwnd, Func<bool> safety,
+                                               out WowBCorpseDialogPattern.Result result, out int width, out int height)
+    {
+        result = default; width = height = 0;
+        try
+        {
+            if (!safety() || ObjectManager.Wow != memory || ObjectManager.WowB != reader || memory.WindowHandle != hwnd ||
+                !WindowGeometry(hwnd, out Point origin, out width, out height)) return false;
+            byte[]? pixels = CopyVisibleClient(origin, width, height);
+            if (pixels == null || !safety() || ObjectManager.Wow != memory || ObjectManager.WowB != reader ||
+                !WindowGeometry(hwnd, out Point after, out int finalWidth, out int finalHeight) ||
+                after.X != origin.X || after.Y != origin.Y || finalWidth != width || finalHeight != height) return false;
+            result = WowBCorpseDialogPattern.Inspect(pixels, width, height, width * 4);
+            return safety() && ObjectManager.Wow == memory && ObjectManager.WowB == reader &&
+                   WindowGeometry(hwnd, out Point end, out int endWidth, out int endHeight) &&
+                   end.X == origin.X && end.Y == origin.Y && endWidth == width && endHeight == height;
+        }
+        catch { return false; }
+    }
+
     private static void Run(int generation)
     {
         try
