@@ -2,7 +2,7 @@
 import tempfile
 import unittest
 from pathlib import Path
-from analyze_combat_trace import read_trace
+from analyze_combat_trace import read_trace, candidate_events
 
 
 class TraceTests(unittest.TestCase):
@@ -23,6 +23,28 @@ class TraceTests(unittest.TestCase):
             self.assertEqual(status, 'completed; samples=2')
             self.assertEqual(matches, [('player', 0x10C, 0.0)])
             self.assertEqual(changes[('player', 0x110)], [(5.0, 0, 133)])
+
+    def test_correlated_candidates_require_matching_fields(self):
+        changes = {
+            ('player', 0x3c0): [(5.75, 0, 133), (7.0, 133, 0)],
+            ('player', 0x3ec): [(5.75, 0, 133), (7.0, 133, 0)],
+            ('player', 0x418): [(5.75, 0, 10000), (7.0, 10000, 0)],
+            ('player', 0x41c): [(5.75, 0, 11200), (7.0, 11200, 0)],
+            ('target', 0x6f0): [(7.75, 0, 133), (11.75, 133, 0)],
+            ('target', 0x6fc): [(7.75, 0, 4000), (11.75, 4000, 0)],
+            ('target', 0x700): [(7.75, 0, 16000), (11.75, 16000, 0)],
+        }
+        events = candidate_events(changes)
+        self.assertEqual(len(events), 4)
+        self.assertIn('id=133', events[0][1])
+        self.assertIn('1200', events[0][1])
+        self.assertIn('4000', events[2][1])
+        del changes[('player', 0x3ec)]
+        del changes[('target', 0x700)]
+        self.assertEqual(candidate_events(changes), [])
+        changes[('player', 0x3ec)] = [(5.75, 0, 133)]
+        changes[('player', 0x41c)] = [(5.75, 0, 10000)]
+        self.assertEqual(candidate_events(changes), [])  # zero-length timing
 
     def test_bad_header_and_out_of_bounds(self):
         with tempfile.TemporaryDirectory() as folder:

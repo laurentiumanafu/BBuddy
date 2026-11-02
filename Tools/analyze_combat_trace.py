@@ -52,6 +52,38 @@ def read_trace(path, spell_id=None):
     return changes, baseline_matches, count, status
 
 
+def candidate_events(changes):
+    """Recognize observed 70707 trace patterns, never a general-purpose state reader."""
+    grouped = defaultdict(dict)
+    for (actor, offset), events in changes.items():
+        for time, old, new in events:
+            grouped[(actor, time)][offset] = (old, new)
+    results = []
+    # These offsets were observed together in one Mage Fireball trace. Require
+    # corroborating words in the same sampled interval; absent != inactive.
+    for (actor, time), values in sorted(grouped.items(), key=lambda item: item[0][1]):
+        if actor == "player" and 0x3C0 in values:
+            old, spell = values[0x3C0]
+            mirrored = values.get(0x3EC)
+            start = values.get(0x418)
+            end = values.get(0x41C)
+            if old == 0 and spell != 0 and mirrored == (0, spell) and start and end and start[0] == 0 and end[0] == 0:
+                duration = (end[1] - start[1]) & 0xFFFFFFFF
+                if 0 < duration <= 60000:
+                    results.append((time, f"player cast-like start: id={spell}, timing-word difference={duration} (unverified units)"))
+            elif old != 0 and spell == 0 and mirrored == (old, 0) and start and end and start[1] == 0 and end[1] == 0:
+                results.append((time, f"player cast-like fields cleared: id={old}"))
+        if actor == "target" and 0x6F0 in values:
+            old, effect = values[0x6F0]
+            duration = values.get(0x6FC)
+            expiry = values.get(0x700)
+            if old == 0 and effect != 0 and duration and duration[0] == 0 and duration[1] != 0 and expiry and expiry[0] == 0 and expiry[1] != 0:
+                results.append((time, f"target effect-like slot populated: id={effect}, duration-word={duration[1]} (unverified units)"))
+            elif old != 0 and effect == 0 and duration and duration[1] == 0 and expiry and expiry[1] == 0:
+                results.append((time, f"target effect-like slot cleared: id={old}"))
+    return results
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("trace")
@@ -65,6 +97,10 @@ def main():
     changes, matches, count, status = read_trace(args.trace, args.spell_id)
     print(f"Samples: {count}; end: {status}")
     print("Uninterpreted dword changes; correlations and numeric matches do NOT establish spell state.")
+    events = candidate_events(changes)
+    print(f"Observed research patterns: {len(events)} (one-build candidates, not verified state)")
+    for time, description in events:
+        print(f"  {time:.2f}s {description}")
     if args.around is None:
         chosen = changes
     else:
