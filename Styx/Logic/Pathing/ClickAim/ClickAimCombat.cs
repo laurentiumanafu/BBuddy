@@ -377,7 +377,7 @@ internal static class ClickAimCombat
         { "Lesser Healing Wave", ClickAimSpellRole.Heal }, { "Holy Light", ClickAimSpellRole.Heal },
         { "Flash of Light", ClickAimSpellRole.Heal },
 
-        /* Buffs: pressed out of combat, once. */
+        /* Buffs: attempted out of combat on the session timer. */
         { "Thorns", ClickAimSpellRole.Buff }, { "Mark of the Wild", ClickAimSpellRole.Buff },
         { "Arcane Intellect", ClickAimSpellRole.Buff }, { "Frost Armor", ClickAimSpellRole.Buff },
         { "Power Word: Fortitude", ClickAimSpellRole.Buff },

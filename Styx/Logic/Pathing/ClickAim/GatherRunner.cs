@@ -590,7 +590,10 @@ internal static class GatherRunner
                 string rest = GrindRunner.RestForGather(hwnd);
                 if (rest.Length > 0) { fastHotspots = 0; Logging.Write("[Gather] " + rest); }
                 if (_stop || ClickAimAbort.Requested) break;
-                // Re-check combat after a meal or a slow state read, before moving.
+                // Buff only between gathering interactions and outside combat.
+                if (GrindRunner.BuffForGather(hwnd, mover, () => _stop)) fastHotspots = 0;
+                if (_stop || ClickAimAbort.Requested) break;
+                // Re-check combat after a meal, buff or slow state read, before moving.
                 if (!GrindRunner.TryReadGatherCombat(out fighting) || fighting) continue;
                 GatherNodeScanner.Node node;
                 if (_pending.HasValue) { node = _pending.Value; _pending = null; }

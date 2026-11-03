@@ -67,7 +67,8 @@
                 <TextBox x:Name="txtDotSeconds" Grid.Row="6" Grid.Column="1" Margin="0,0,0,8"/>
 
                 <CheckBox x:Name="chkBuffs" Grid.Row="7" Grid.ColumnSpan="2" Margin="0,4,0,12"
-                          Content="Apply self-buffs when the run starts"/>
+                          Content="Apply self-buffs on start, every 30 minutes, and after resurrection"
+                          ToolTip="Grind and GatherBuddy attempt recognized hotbar buffs outside combat. The timer tracks key presses, not verified buff duration or success."/>
 
                 <TextBlock Grid.Row="8" Grid.Column="0" VerticalAlignment="Center" Margin="0,0,8,8"
                            Text="Food slot (0 = find it on the bar)"/>

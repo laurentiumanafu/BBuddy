@@ -374,6 +374,7 @@ internal static class GrindRunner
         _deathCheckpoint = new WowBDeathCheckpoint();
         _focusedFightGuid = default; _defenceHandoffGuid = default; _focusedDamageObserved = false; _unverifiedGuid = default;
         _combatHold = false; _poolApproachHandled = false;
+        Buffs.Reset(); // confirmed revival; reapply at the next quiet opportunity
         return !_stop && !ClickAimAbort.Requested;
     }
     private static int _presses;    // action-bar presses this session, for the summary
@@ -879,10 +880,10 @@ internal static class GrindRunner
                     continue;
                 }
 
-                /* Once, before the first fight rather than in the middle of one: whatever this
-                 * class buffs itself with (Mark of the Wild, Arcane Intellect, ...). */
-                string buffed = ApplyBuffsIfNeeded(hwnd);
-                if (buffed.Length > 0) Logging.Write("[Grind] " + buffed);
+                // Initial, timed and post-resurrection buff attempts are made
+                // only at a quiet point, after resting/vendor priority.
+                Buffs.TryApply(hwnd, () => _stop, () => StopForBuff(hwnd, mover), () => _presses++);
+                if (_stop || ClickAimAbort.Requested) break;
 
                 // A nearby resource can be gathered before chasing a distant
                 // candidate, but never while in combat or an eligible pull is
@@ -1078,7 +1079,7 @@ internal static class GrindRunner
         _dotUntil = 0;
         _manaPeak = 0;
         _healthPeak = 0;
-        _buffsApplied = false;
+        Buffs.Reset();
         _healCostGuess = 0;
         _healCostSpellId = 0;
         _castCosts.Clear();
@@ -2306,47 +2307,21 @@ internal static class GrindRunner
             fought, killed, loot.Length == 0 ? "" : "; " + loot);
     }
 
-    /// <summary>
-    /// Presses the self-buffs on the bar once per run: Mark of the Wild, Thorns, Arcane
-    /// Intellect, Power Word: Fortitude - whatever this class has. The client's buff list is not
-    /// readable on this build, so "is it already up" cannot be asked; once per run is the honest
-    /// version of the question, and a duplicate buff costs one global cooldown.
-    /// </summary>
-    private static string ApplyBuffsIfNeeded(IntPtr hwnd)
+    // Grind and standalone Gather share this scheduler, but only one runner
+    // owns the client session at a time. Each start and confirmed resurrection
+    // resets it. The timer records key attempts, not aura or cast success.
+    private static readonly ClickAimBuffController Buffs = new ClickAimBuffController();
+
+    private static void StopForBuff(IntPtr hwnd, ClickAimMover mover)
     {
-        if (_buffsApplied || _stop || !ClickAimSettings.UseBuffs) return "";
-
-        /* Out of combat only: a buff is a cast, and a cast in a fight is a wasted global. The
-         * flag stays false until a quiet moment actually happens, so a run that starts next to
-         * a mob still gets its buffs on the first calm iteration. */
-        if (InRealCombat()) return "";
-        _buffsApplied = true;
-
-        Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
-        if (reader == null) return "";
-
-        List<ClickAimAction> bar = ClickAimCombat.ReadBar(reader);
-        ClickAimRotationClass buffClass = ClickAimClassRotation.Resolve(ClickAimSettings.RotationClass, bar);
-        var applied = new List<string>();
-        for (int i = 0; i < bar.Count && applied.Count < 2 && !_stop; i++)
-        {
-            if (!bar[i].IsBuff) continue;
-            // The caster druid profile cannot verify or cancel a form. Generic
-            // deliberately keeps the old behavior; explicit role overrides remain a choice.
-            string buffName = ClickAimCombat.NameOf(bar[i].Id);
-            if (buffClass == ClickAimRotationClass.Druid && ClickAimCombat.RoleOverrideOf(bar[i].Id) == ClickAimSpellRole.Unknown &&
-                (buffName == "Cat Form" || buffName == "Bear Form")) continue;
-            if (reader.IsExperimental70707 && !WowBGrindFactions.Experimental70707BarSafe(reader)) return "action bar changed; buff withheld";
-            ClickAimInput.TapKey(hwnd, bar[i].KeyVk, 40);
-            _presses++;
-            Thread.Sleep(ClickAimCombat.CastSettleMs);
-            applied.Add(bar[i].Name + " (slot " + bar[i].Slot + " '"
-                        + ClickAimCombat.KeyLabel(bar[i].KeyVk) + "')");
-        }
-
-        if (applied.Count == 0) return "";
-        return "buffed with " + string.Join(", ", applied.ToArray());
+        bool oldQuiet = mover.QuietKeyStop;
+        try { mover.QuietKeyStop = true; mover.MoveStop(); }
+        finally { mover.QuietKeyStop = oldQuiet; }
+        StopAndSettle(hwnd);
     }
+
+    internal static bool BuffForGather(IntPtr hwnd, ClickAimMover mover, Func<bool> stopped)
+        => Buffs.TryApply(hwnd, stopped, () => StopForBuff(hwnd, mover));
 
     // ------------------------------------------------------------------ the heal's price
 
@@ -3264,9 +3239,6 @@ internal static class GrindRunner
     private static uint _manaPeak;
     private static uint _healthPeak;
 
-    /// <summary>Buffs are pressed once per run; see <see cref="ApplyBuffsIfNeeded"/>.</summary>
-    private static bool _buffsApplied;
-
     /// <summary>
     /// Largest observed net power drop after this spell's heal key, reset for a different
     /// spell/rank and for each run. Regeneration or other effects can distort this estimate;
@@ -3533,6 +3505,7 @@ internal static class GrindRunner
         _focusedDamageObserved = false;
         _gaveUpAt = 0;
         ClickAimSettings.Load();
+        Buffs.Reset();
         _manaPeak = 0;
         _healthPeak = 0;
         _healCostGuess = 0;
@@ -3552,6 +3525,7 @@ internal static class GrindRunner
         // Do not touch _stop here: STOP may have arrived during recovery.
         _focusedFightGuid = default; _defenceHandoffGuid = default; _focusedDamageObserved = false; _unverifiedGuid = default;
         _combatHold = false; _poolApproachHandled = false;
+        Buffs.Reset(); // Gather calls this only after confirmed revival.
     }
 
     internal static string RestForGather(IntPtr hwnd)
