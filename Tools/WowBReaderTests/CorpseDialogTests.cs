@@ -65,6 +65,14 @@ internal static class CorpseDialogTests
         var releaseResult = WowBCorpseDialogPattern.Inspect(releaseButton, width, height, stride);
         if (!WowBCorpseDialogPattern.SuitableForClick(releaseResult, true, out int rx, out _) || Math.Abs(rx - cx) > 1)
             throw new Exception("Unique release button was not located");
+        var highlighted = Draw(releasePattern, false, releaseX, releaseY, width, height);
+        ButtonBackground(highlighted, width, cx, releaseY + releasePattern.Length / 2);
+        var highlightedResult = WowBCorpseDialogPattern.Inspect(highlighted, width, height, stride);
+        if (!WowBCorpseDialogPattern.SuitableForClick(highlightedResult, true, out int hx, out int hy) ||
+            hx != rx || !WowBCorpseDialogPattern.ButtonChanged(releaseButton, highlighted, width, height, hx, hy) ||
+            WowBCorpseDialogPattern.ButtonChanged(releaseButton, releaseButton, width, height, hx, hy) ||
+            WowBCorpseDialogPattern.ButtonChanged(releaseButton, new byte[1], width, height, hx, hy))
+            throw new Exception("Highlight matching or background freshness policy failed");
         Overlay(releaseButton, Draw(releasePattern, true, 420, releaseY, width, height));
         if (WowBCorpseDialogPattern.SuitableForClick(WowBCorpseDialogPattern.Inspect(releaseButton, width, height, stride), true, out _, out _))
             throw new Exception("Duplicate release labels authorized a click");
@@ -75,6 +83,15 @@ internal static class CorpseDialogTests
         var result = WowBCorpseDialogPattern.Inspect(resurrection, width, height, stride);
         if (!WowBCorpseDialogPattern.SuitableForClick(result, false, out int ax, out _) || Math.Abs(ax - cx) > 1)
             throw new Exception("Heading and unique Accept button were not located");
+        var highlightedAccept = Draw(heading, false, cx - heading[0].Length / 2, 80, width, height);
+        Overlay(highlightedAccept, Draw(accept, false, cx - accept[0].Length / 2, acceptY, width, height));
+        ButtonBackground(highlightedAccept, width, cx, acceptY + accept.Length / 2);
+        if (!WowBCorpseDialogPattern.SuitableForClick(WowBCorpseDialogPattern.Inspect(highlightedAccept, width, height, stride), false, out _, out _))
+            throw new Exception("Bright Accept button was not matched");
+        var changedOutside = (byte[])resurrection.Clone();
+        for (int i = 0; i < 80; i++) changedOutside[i * 4] = 200;
+        if (WowBCorpseDialogPattern.ButtonChanged(resurrection, changedOutside, width, height, ax, acceptY + accept.Length / 2))
+            throw new Exception("An unrelated frame change was mistaken for a button response");
         var wrongGeometry = Draw(heading, false, 240, 80, width, height);
         Overlay(wrongGeometry, Draw(accept, true, cx - accept[0].Length / 2, acceptY, width, height));
         ButtonBackground(wrongGeometry, width, cx, acceptY + accept.Length / 2);

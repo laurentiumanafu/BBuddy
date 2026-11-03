@@ -109,9 +109,9 @@ internal static class WowBCorpseDialogPattern
         if (bgra == null || width < 320 || height < 240 || width > 8192 || height > 8192 ||
             stride < width * 4 || (long)stride * height > bgra.Length)
             return default;
-        bool release = Find(bgra, width, height, stride, ReleasePatterns, true, out int rx, out int ry, out bool ru);
-        bool resurrect = Find(bgra, width, height, stride, ResurrectPatterns, false, out int tx, out int ty, out bool tu);
-        bool accept = Find(bgra, width, height, stride, AcceptPatterns, true, out int ax, out int ay, out bool au);
+        bool release = FindButton(bgra, width, height, stride, ReleasePatterns, out int rx, out int ry, out bool ru);
+        bool resurrect = Find(bgra, width, height, stride, ResurrectPatterns, 0, out int tx, out int ty, out bool tu);
+        bool accept = FindButton(bgra, width, height, stride, AcceptPatterns, out int ax, out int ay, out bool au);
         return new Result(release, resurrect, accept, rx, ry, tx, ty, ax, ay, ru, tu, au,
                           release && RedButton(bgra, width, height, stride, rx, ry),
                           accept && RedButton(bgra, width, height, stride, ax, ay));
@@ -133,6 +133,25 @@ internal static class WowBCorpseDialogPattern
         x = result.AcceptX; y = result.AcceptY; return true;
     }
 
+    // Background capture is accepted for input only when our posted hover
+    // causes a visible change on the already-matched button. This rejects
+    // black/unchanging or stale PrintWindow frames; it is not proof of identity.
+    internal static bool ButtonChanged(byte[] before, byte[] after, int width, int height, int x, int y)
+    {
+        if (before == null || after == null || width < 100 || height < 20 ||
+            (long)width * height * 4 > before.Length || (long)width * height * 4 > after.Length ||
+            x < 50 || x >= width - 50 || y < 8 || y >= height - 8) return false;
+        int changed = 0;
+        for (int row = y - 8; row <= y + 7; row++)
+        for (int col = x - 50; col <= x + 49; col++)
+        {
+            int i = (row * width + col) * 4;
+            if (Math.Abs(before[i] - after[i]) + Math.Abs(before[i + 1] - after[i + 1]) +
+                Math.Abs(before[i + 2] - after[i + 2]) >= 30 && ++changed >= 20) return true;
+        }
+        return false;
+    }
+
     private static bool RedButton(byte[] pixels, int width, int height, int stride, int x, int y)
     {
         int[] dx = { -45, -35, 35, 45 };
@@ -148,14 +167,30 @@ internal static class WowBCorpseDialogPattern
         return hits == dx.Length;
     }
 
-    private static bool InkAt(byte[] pixels, int pos, bool yellow)
+    private static bool InkAt(byte[] pixels, int pos, int palette)
     {
         int b = pixels[pos], g = pixels[pos + 1], r = pixels[pos + 2];
-        return yellow ? r > 140 && g > 90 && b < 110 && r > g && 10 * g > 13 * b
-                      : r > 155 && g > 155 && b > 155 && Math.Abs(r - g) < 45 && Math.Abs(g - b) < 45;
+        bool white = r > 155 && g > 155 && b > 155 && Math.Abs(r - g) < 45 && Math.Abs(g - b) < 45;
+        bool yellow = r > 140 && g > 90 && b < 110 && r > g && 10 * g > 13 * b;
+        return palette == 0 ? white : palette == 1 ? yellow : white || yellow;
     }
 
-    private static bool Find(byte[] pixels, int width, int height, int stride, Pattern[] patterns, bool yellow,
+    private static bool FindButton(byte[] pixels, int width, int height, int stride, Pattern[] patterns,
+                                   out int x, out int y, out bool unique)
+    {
+        // Keep the original yellow search independent of the brighter hover
+        // search so white neighboring text cannot invalidate an existing match.
+        bool yellow = Find(pixels, width, height, stride, patterns, 1, out int yx, out int yy, out bool yu);
+        bool white = Find(pixels, width, height, stride, patterns, 0, out int wx, out int wy, out bool wu);
+        if (!yellow && !white)
+            return Find(pixels, width, height, stride, patterns, 2, out x, out y, out unique);
+        x = yellow ? yx : wx; y = yellow ? yy : wy;
+        unique = (!yellow || yu) && (!white || wu) &&
+                 (!yellow || !white || (Math.Abs(yx - wx) <= 3 && Math.Abs(yy - wy) <= 3));
+        return true;
+    }
+
+    private static bool Find(byte[] pixels, int width, int height, int stride, Pattern[] patterns, int palette,
                              out int foundX, out int foundY, out bool unique)
     {
         foundX = foundY = 0;
@@ -174,21 +209,21 @@ internal static class WowBCorpseDialogPattern
                 foreach (int anchor in pattern.Anchors)
                 {
                     int row = anchor / pattern.Width, col = anchor % pattern.Width;
-                    if (InkAt(pixels, (y + row) * stride + (x + col) * 4, yellow)) matchedAnchors++;
+                    if (InkAt(pixels, (y + row) * stride + (x + col) * 4, palette)) matchedAnchors++;
                 }
                 if (matchedAnchors * 4 < pattern.Anchors.Length * 3) continue;
                 int blankHits = 0;
                 foreach (int anchor in pattern.BlankAnchors)
                 {
                     int row = anchor / pattern.Width, col = anchor % pattern.Width;
-                    if (InkAt(pixels, (y + row) * stride + (x + col) * 4, yellow)) blankHits++;
+                    if (InkAt(pixels, (y + row) * stride + (x + col) * 4, palette)) blankHits++;
                 }
                 if (blankHits * 4 > pattern.BlankAnchors.Length) continue;
                 int hits = 0, extras = 0;
                 for (int row = 0; row < pattern.Height; row++)
                 for (int col = 0; col < pattern.Width; col++)
                 {
-                    bool actual = InkAt(pixels, (y + row) * stride + (x + col) * 4, yellow);
+                    bool actual = InkAt(pixels, (y + row) * stride + (x + col) * 4, palette);
                     if (pattern.Pixels[row * pattern.Width + col]) { if (actual) hits++; }
                     else if (actual) extras++;
                 }

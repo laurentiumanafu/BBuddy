@@ -77,6 +77,9 @@ internal static class ClickAimInput
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool ScreenToClient(IntPtr hWnd, ref POINT point);
 
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+
     // Desktop coordinates are used only to detect a human moving the real cursor.
     // The posted gather messages still go exclusively to the game window.
     internal static bool TryCursorScreen(out int x, out int y)
@@ -182,18 +185,25 @@ internal static class ClickAimInput
     // One dialog click only. Recheck the screen and state after the posted move;
     // always release the button if down was sent, including after STOP.
     internal static bool ConfirmedLeftClick(IntPtr hWnd, int x, int y, int expectedWidth, int expectedHeight,
-                                            Func<bool> confirm, out string reason)
+                                            bool background, Func<string?> confirm, out string reason)
     {
         reason = "stopped, cursor unavailable, or client size changed";
-        if (ClickAimAbort.Requested || !TryCursorScreen(out int oldX, out int oldY) ||
+        int oldX = 0, oldY = 0;
+        if (ClickAimAbort.Requested || (!background && !TryCursorScreen(out oldX, out oldY)) ||
             !ClientSize(hWnd, out int w, out int h) || w != expectedWidth || h != expectedHeight ||
             x <= 0 || x >= w - 1 || y <= 0 || y >= h - 1) return false;
         if (!PostMessageInternal(hWnd, WM_MOUSEMOVE, IntPtr.Zero, Lp(x, y))) { reason = "dialog mouse move failed"; return false; }
-        if (ClickAimAbort.Wait(80)) { reason = "stopped"; return false; }
-        if (!confirm() || ClickAimAbort.Requested || !TryCursorScreen(out int newX, out int newY) ||
-            Math.Abs(newX - oldX) > 3 || Math.Abs(newY - oldY) > 3 ||
-            !ClientSize(hWnd, out w, out h) || w != expectedWidth || h != expectedHeight)
-        { reason = "dialog, state, cursor, focus or client geometry changed"; return false; }
+        if (ClickAimAbort.Wait(200)) { reason = "stopped"; return false; }
+        string? failed = confirm();
+        if (failed != null) { reason = failed; return false; }
+        if (ClickAimAbort.Requested) { reason = "stopped"; return false; }
+        if (!background && (!TryCursorScreen(out int newX, out int newY) ||
+            Math.Abs(newX - oldX) > 3 || Math.Abs(newY - oldY) > 3))
+        { reason = "foreground desktop cursor moved during final check"; return false; }
+        if (!ClientSize(hWnd, out w, out h) || w != expectedWidth || h != expectedHeight)
+        { reason = "client size changed before button down"; return false; }
+        if (background ? GatherBackgroundFocus.Current(hWnd) != GatherBackgroundFocus.State.OtherApplication : GetForegroundWindow() != hWnd)
+        { reason = "focus changed before button down"; return false; }
         if (ClickAimAbort.Requested) { reason = "stopped"; return false; }
         if (!PostMessageInternal(hWnd, WM_LBUTTONDOWN, new IntPtr(MK_LBUTTON), Lp(x, y)))
         { reason = "left-button down failed"; return false; }
