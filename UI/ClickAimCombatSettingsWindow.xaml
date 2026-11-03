@@ -104,13 +104,16 @@
 
                 <StackPanel Grid.Row="0" Margin="0,0,0,8">
                     <TextBlock TextWrapping="Wrap" Margin="0,0,0,6"
-                               Text="Stage 1: choose a low-level hotbar priority. Auto uses recognizable class spells; ambiguous bars use Generic. The lists do not read spec, cooldowns, auras, forms, runes, combo points or pets."/>
+                               Text="Stage 1: choose a low-level hotbar priority. Auto uses recognizable class spells; ambiguous bars use Generic. The rotation does not read spec, cooldowns, forms, runes, combo points or pets. Selected 70707 buffs use experimental aura candidates."/>
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="Rotation class:" VerticalAlignment="Center" Margin="0,0,8,0"/>
                         <ComboBox x:Name="cmbRotation" Width="145"/>
                     </StackPanel>
                     <TextBlock TextWrapping="Wrap" FontSize="11" Opacity="0.7" Margin="0,5,0,0"
                                Text="Generic retains the older first-spell behavior, including its limitations. Class profiles omit rune abilities, feral forms, finishers and pet actions unless manually overridden. On 70707 only verified mana-type characters pass the existing combat gate."/>
+                    <CheckBox x:Name="chkBuffsInCombat" Margin="0,8,0,0"
+                              Content="Re-cast supported buffs when they run out during combat"
+                              ToolTip="Requires Apply self-buffs. Experimental 70707 Lightning Shield and Frost Armor, observed ranks only. Uses mana estimates; exact cost and cast success are not verified. Other buffs remain out-of-combat only."/>
                 </StackPanel>
 
                 <ListView x:Name="lstSpells" Grid.Row="1" Margin="0,0,0,8"

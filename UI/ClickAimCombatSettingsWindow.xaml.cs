@@ -212,6 +212,7 @@ namespace CopilotBuddy.UI
             txtRestMs.Text = Text(ClickAimSettings.RestMs);
             chkDot.IsChecked = ClickAimSettings.UseDamageOverTime;
             chkBuffs.IsChecked = ClickAimSettings.UseBuffs;
+            chkBuffsInCombat.IsChecked = ClickAimSettings.UseBuffsInCombat;
 
             chkAutoSell.IsChecked = ClickAimSettings.AutoSell;
             txtSellAfter.Text = Text(ClickAimSettings.SellAfterLoots);
@@ -260,6 +261,7 @@ namespace CopilotBuddy.UI
             ClickAimSettings.RestMs = restMs;
             ClickAimSettings.UseDamageOverTime = chkDot.IsChecked == true;
             ClickAimSettings.UseBuffs = chkBuffs.IsChecked == true;
+            ClickAimSettings.UseBuffsInCombat = chkBuffsInCombat.IsChecked == true;
 
             ClickAimSettings.AutoSell = chkAutoSell.IsChecked == true;
             ClickAimSettings.SellAfterLoots = sellAfter;

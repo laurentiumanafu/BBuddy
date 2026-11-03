@@ -54,6 +54,9 @@ internal static class ClickAimSettings
     /// <summary>Attempt self-buffs out of combat on start, on the timer or experimental aura timing, and after confirmed resurrection.</summary>
     public static bool UseBuffs = true;
 
+    /// <summary>Allow supported, observed-expired self-buffs during combat; off by default.</summary>
+    public static bool UseBuffsInCombat = false;
+
     /// <summary>Bar slot holding food; 0 means "work it out from the item id on the bar".</summary>
     public static int FoodSlot;
 
@@ -148,6 +151,7 @@ internal static class ClickAimSettings
         HealMinManaPercent = 25;
         UseDamageOverTime = true;
         UseBuffs = true;
+        UseBuffsInCombat = false;
         FoodSlot = 0;
         DrinkSlot = 0;
         DotRefreshSeconds = 12;
@@ -253,6 +257,11 @@ internal static class ClickAimSettings
             UseBuffs = flag;
             return true;
         }
+        if (string.Equals(key, "UseBuffsInCombat", StringComparison.OrdinalIgnoreCase))
+        {
+            UseBuffsInCombat = flag;
+            return true;
+        }
         if (string.Equals(key, "FoodSlot", StringComparison.OrdinalIgnoreCase))
         {
             if (hasNumber) FoodSlot = number;
@@ -346,6 +355,7 @@ internal static class ClickAimSettings
         text.AppendLine("HealMinManaPercent = " + HealMinManaPercent.ToString(CultureInfo.InvariantCulture));
         text.AppendLine("UseDamageOverTime = " + (UseDamageOverTime ? "true" : "false"));
         text.AppendLine("UseBuffs = " + (UseBuffs ? "true" : "false"));
+        text.AppendLine("UseBuffsInCombat = " + (UseBuffsInCombat ? "true" : "false"));
         text.AppendLine("FoodSlot = " + FoodSlot.ToString(CultureInfo.InvariantCulture));
         text.AppendLine("DrinkSlot = " + DrinkSlot.ToString(CultureInfo.InvariantCulture));
         text.AppendLine("DotRefreshSeconds = " + DotRefreshSeconds.ToString(CultureInfo.InvariantCulture));
@@ -375,7 +385,7 @@ internal static class ClickAimSettings
     {
         return string.Format(CultureInfo.InvariantCulture,
             "heal at {0}% (0 = never) and only above {8}% power, eat at {1}%, drink at {2}%, "
-            + "damage over time {3}, buffs {4}, food slot {5}, drink slot {6}, "
+            + "damage over time {3}, buffs {4}, combat buffs {14}, food slot {5}, drink slot {6}, "
             + "{7} spell role(s) set by hand; selling {9} (after {10} corpse loot interaction(s), "
             + "{11} ms for the merchant window, vendor NPC looked for within {12} yd; bag offset hunt {13})",
             HealBelowPercent, EatBelowPercent, DrinkBelowPercent,
@@ -384,7 +394,7 @@ internal static class ClickAimSettings
             DrinkSlot == 0 ? "auto" : DrinkSlot.ToString(CultureInfo.InvariantCulture),
             ClickAimCombat.OverrideCount, HealMinManaPercent,
             AutoSell ? "on" : "off", SellAfterLoots, VendorWaitMs, VendorSearchYd,
-            BagSlotHunt ? "on" : "off");
+            BagSlotHunt ? "on" : "off", UseBuffsInCombat ? "on" : "off");
     }
 
     /// <summary>
@@ -406,12 +416,14 @@ internal static class ClickAimSettings
         check(EatBelowPercent == 55 && DrinkBelowPercent == 35 && HealBelowPercent == 60,
               "defaults");
         check(HealMinManaPercent == 25, "defaultHealMana");
+        check(!UseBuffsInCombat, "combatBuffDefaultOff");
 
         check(Apply("EatBelowPercent", "70") && EatBelowPercent == 70, "applyEat");
         check(Apply("HealBelowPercent", "0") && HealBelowPercent == 0, "applyHealZero");
         check(Apply("HealMinManaPercent", "40") && HealMinManaPercent == 40, "applyHealMana");
         check(Apply("UseDamageOverTime", "false") && !UseDamageOverTime, "applyFalse");
         check(Apply("UseBuffs", "true") && UseBuffs, "applyTrue");
+        check(Apply("UseBuffsInCombat", "true") && UseBuffsInCombat, "applyCombatBuff");
         check(!Apply("NoSuchKey", "1"), "unknownKey");
 
         EatBelowPercent = 900;

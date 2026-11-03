@@ -4254,6 +4254,7 @@ internal static class GrindRunner
         int castFailures = 0;
         int lastHealMs = 0;
         int lastCastMs = 0;
+        int lastCombatBuffCheckMs = unchecked(started - 1000);
         int quietRounds = 0;
         int faceFailures = 0;
         bool meleeOnce = false;
@@ -4796,6 +4797,24 @@ internal static class GrindRunner
                     _stop = true; ClickAimAbort.Request(); return reason;
                 }
                 continue;
+            }
+
+            // Optional observed-expired self-only buffs. The shared controller
+            // retains the enemy selection, checks the experimental 70707 aura,
+            // identity, mana estimate, combat and STOP, and revalidates before input.
+            if (ClickAimSettings.UseBuffsInCombat && unchecked(Environment.TickCount - lastCombatBuffCheckMs) >= 1000 &&
+                (lastCastMs == 0 || unchecked(Environment.TickCount - lastCastMs) >= ClickAimCombat.CastSettleMs))
+            {
+                lastCombatBuffCheckMs = Environment.TickCount;
+                if (Buffs.TryApplyInCombat(hwnd, () => _stop, me,
+                    () => FightAttackInputAllowed(reader, fightMemory, defenceTarget, expectedPull, !defenceOnly || defenceFactionFilter),
+                    () => _presses++))
+                {
+                    presses++;
+                    lastCastMs = Environment.TickCount;
+                    if (ClickAimAbort.Wait(ClickAimCombat.CastSettleMs)) return "stopped";
+                    continue;
+                }
             }
 
             /* ---- 1b. the damage-over-time spell, ONCE per target ----

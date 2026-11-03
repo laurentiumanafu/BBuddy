@@ -22,6 +22,12 @@ internal sealed class ClickAimBuffSchedule
         return elapsed >= RetryMs && candidateRemainingMs.Value <= RefreshBeforeMs;
     }
 
+    internal bool PastAttemptBackoff(int spellId, long now, long backoffMs)
+    {
+        if (spellId <= 0 || backoffMs < 0) return false;
+        return !_lastAttempt.TryGetValue(spellId, out long last) || now < last || now - last >= backoffMs;
+    }
+
     internal void RecordAttempt(int spellId, long now)
     {
         if (spellId > 0) _lastAttempt[spellId] = now;

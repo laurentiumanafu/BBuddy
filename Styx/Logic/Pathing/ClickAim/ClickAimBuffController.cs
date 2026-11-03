@@ -7,10 +7,15 @@ using Styx.WoWInternals;
 namespace Styx.Logic.Pathing;
 
 // Hotbar attempts; optional 70707 aura candidates are experimental and cannot
-// prove casts or costs. Never runs during combat/gathering.
+// prove casts or costs. Normal attempts are outside combat/gathering; the
+// separately guarded combat path permits only supported self-only buffs.
 internal sealed class ClickAimBuffController
 {
     private const long ScanIntervalMs = 5000;
+    private const long CombatRetryMs = 10_000;
+    // Observed net mana drops were 45 (Shield) and 60 (Armor). Actual costs
+    // and modifiers are unreadable; thresholds are not proof of affordability.
+    private static uint CombatManaEstimate(int spellId) => spellId == 324 ? 60U : spellId == 168 ? 80U : 0U;
     private readonly ClickAimBuffSchedule _schedule = new ClickAimBuffSchedule();
     private readonly Func<long> _clock;
     private readonly Dictionary<int, string> _reportedAuraState = new Dictionary<int, string>();
@@ -89,6 +94,73 @@ internal sealed class ClickAimBuffController
             if (now.Slot == action.Slot && now.Id == action.Id && now.Raw == action.Raw && now.KeyVk == action.KeyVk &&
                 Eligible(now)) return true;
         return false;
+    }
+
+    // Auras are only candidates; a successful check is not a cast result.
+    // Only the self-only Shield and Armor spells may be pressed on an enemy
+    // selection; do not send F1/TAB or assume targetable buffs self-cast.
+    private static bool CombatPlayerSafe(Memory memory, WowBReader reader, IntPtr hwnd, Func<bool> stopped,
+                                         WowBObservedUnit expected, out uint map, out uint mana)
+    {
+        map = 0; mana = 0;
+        try
+        {
+            if (!reader.IsExperimental70707 || !ClickAimSettings.UseBuffsInCombat || !Allowed(memory, reader, hwnd, stopped)) return false;
+            using var uncached = memory.TemporaryCacheState(false);
+            if (!reader.TryReadMapId(out map) || !reader.TryCaptureWorldSnapshot(out WowBWorldSnapshot? snapshot) || snapshot == null ||
+                !snapshot.TryGetLocalPlayer(out WowBObservedUnit me) || me.Guid != expected.Guid || me.Guid.IsEmpty ||
+                me.UnitAddress != expected.UnitAddress || me.RecordAddress != expected.RecordAddress ||
+                !reader.TryGetUnitFields(me.UnitAddress, out WowBReader.WowBUnitFields fields) ||
+                fields.MaxHealth == 0 || fields.Health == 0 || fields.Health > fields.MaxHealth ||
+                !WowBGrindFactions.TryReadGhostFlagCandidate(memory, reader, me, out bool ghost) || ghost ||
+                !GrindRunner.TryReadGatherCombat(out bool fighting) || !fighting ||
+                !reader.TryReadMapId(out uint mapAfter) || mapAfter != map) return false;
+            mana = fields.Power;
+            return ClickAimSettings.UseBuffsInCombat && Allowed(memory, reader, hwnd, stopped);
+        }
+        catch { return false; }
+    }
+
+    internal bool TryApplyInCombat(IntPtr hwnd, Func<bool> stopped, WowBObservedUnit expectedPlayer, Func<bool> targetSafe, Action? onAttempt = null)
+    {
+        Memory? memory = ObjectManager.Wow;
+        WowBReader? reader = ObjectManager.WowB;
+        if (memory == null || reader == null || hwnd == IntPtr.Zero || !reader.IsExperimental70707 ||
+            !ClickAimSettings.UseBuffsInCombat || !Allowed(memory, reader, hwnd, stopped)) return false;
+        try
+        {
+            using var uncached = memory.TemporaryCacheState(false);
+            List<ClickAimAction> bar = ClickAimCombat.ReadBar(reader);
+            if (!bar.Exists(action => CombatManaEstimate(action.Id) > 0 && Eligible(action))) return false;
+            if (!CombatPlayerSafe(memory, reader, hwnd, stopped, expectedPlayer, out uint map, out uint mana) || !targetSafe()) return false;
+            WowBInlineAuraCandidate? aura = WowBInlineAuraCandidate.Capture(memory, expectedPlayer);
+            if (aura == null) return false;
+            ClickAimAction? buff = null;
+            foreach (ClickAimAction action in bar)
+            {
+                uint minimum = CombatManaEstimate(action.Id);
+                int? remainingCandidate = aura.Remaining(action.Id);
+                if (minimum > 0 && mana >= minimum && Eligible(action) && remainingCandidate.HasValue && remainingCandidate.Value <= 0 &&
+                    _schedule.PastAttemptBackoff(action.Id, _clock(), CombatRetryMs)) { buff = action; break; }
+            }
+            if (buff == null) return false;
+            uint minimumMana = CombatManaEstimate(buff.Id);
+            // Recheck identity, aura, spell slot, target, combat and mana after
+            // the non-atomic reads and again before the key. Unknown is not absent.
+            if (!CombatPlayerSafe(memory, reader, hwnd, stopped, expectedPlayer, out uint afterMap, out mana) || map != afterMap || mana < minimumMana ||
+                !SameSlot(buff, ClickAimCombat.ReadBar(reader)) || !targetSafe()) return false;
+            int? remaining = WowBInlineAuraCandidate.Capture(memory, expectedPlayer)?.Remaining(buff.Id);
+            if (!remaining.HasValue || remaining.Value > 0 ||
+                !CombatPlayerSafe(memory, reader, hwnd, stopped, expectedPlayer, out afterMap, out mana) || map != afterMap || mana < minimumMana ||
+                !SameSlot(buff, ClickAimCombat.ReadBar(reader)) || !targetSafe() || !ClickAimSettings.UseBuffsInCombat ||
+                !Allowed(memory, reader, hwnd, stopped) || !_schedule.PastAttemptBackoff(buff.Id, _clock(), CombatRetryMs)) return false;
+            ClickAimInput.TapKey(hwnd, buff.KeyVk, 40);
+            _schedule.RecordAttempt(buff.Id, _clock());
+            onAttempt?.Invoke();
+            Logging.Write("[Buff] attempted " + buff.Name + " in combat; candidate expired/missing, mana gate is an estimate; success unverified");
+            return true;
+        }
+        catch { return false; }
     }
 
     // Returns true only if at least one buff key was attempted. Selecting self

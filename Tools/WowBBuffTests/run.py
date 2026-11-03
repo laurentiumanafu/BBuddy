@@ -26,6 +26,14 @@ gather_loop = gather[gather.index('    private static void Run(List<RoutePoint>'
 assert gather_loop.index('if (fighting)') < gather_loop.index('GrindRunner.RestForGather(hwnd)') < gather_loop.index('GrindRunner.BuffForGather(hwnd, mover, () => _stop)') < gather_loop.index('GatherAtNode(hwnd, node)')
 assert 'TryQuietPlayer' in controller and 'TryReadGhostFlagCandidate' in controller and 'SameSlot' in controller
 assert 'reader.ReadTargetGuid() != player.Guid' in controller
+fight = grind[grind.index('    private static string Fight('):grind.index('    private static bool TryRestoreHealTarget(')]
+assert fight.index('TryRestoreHealTarget(') < fight.index('Buffs.TryApplyInCombat(') < fight.index('/* ---- 1b. the damage-over-time spell')
+assert '() => FightAttackInputAllowed(reader, fightMemory, defenceTarget, expectedPull, !defenceOnly || defenceFactionFilter)' in fight
+assert 'report = Fight(hwnd, player.Location.X, player.Location.Y, false, true, target.Guid, target, grindMode)' in grind
+combat_method = controller[controller.index('    internal bool TryApplyInCombat('):controller.index('    // Returns true only if at least one buff key')]
+assert '0x70' not in combat_method and 'TabVk' not in combat_method
+assert 'CombatManaEstimate(action.Id)' in combat_method and 'reader.IsExperimental70707' in combat_method
+assert 'spellId == 324' in controller and 'spellId == 168' in controller
 project = '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><Nullable>enable</Nullable></PropertyGroup></Project>'
 with tempfile.TemporaryDirectory(prefix='wowb-buff-tests-') as directory:
     directory = Path(directory)

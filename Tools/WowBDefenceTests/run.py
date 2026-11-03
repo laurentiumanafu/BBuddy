@@ -39,6 +39,7 @@ assert "out near, out nearYd, out live2, out unread2, null, false" in source
 fight = source[source.index("    private static string Fight("):source.index("    private static", source.index("    private static string Fight(") + 20)]
 assert fight.count("(!defenceOnly || defenceFactionFilter) && !FactionPullStillAllowed(") == 2
 assert fight.count("!FightAttackInputAllowed(reader, fightMemory, defenceTarget, expectedPull, !defenceOnly || defenceFactionFilter)") == 4
+assert "() => FightAttackInputAllowed(reader, fightMemory, defenceTarget, expectedPull, !defenceOnly || defenceFactionFilter)" in fight
 assert "unverified melee right-click withheld" in fight
 assert "filtered pool check: no in-fight TAB" in fight
 assert "_running && GrindFactionSettings.Rules.Enabled" in source[source.index("    private static bool TryClickUnit(IntPtr hwnd, WowBObservedUnit unit, double px, double py,\n"):source.index("    private static bool FindUnitPixel(")]
