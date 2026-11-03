@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
+using System.Numerics;
 using GreenMagic;
 using Styx.Helpers;
 using Styx.WoWInternals;
@@ -12,7 +14,7 @@ internal static class WowBCorpseRecovery
 {
     private enum State { Unknown, Alive, Dead, Ghost }
     private const int PromptWaitMs = 45000, TransitionWaitMs = 30000, RouteLimitMs = 15 * 60 * 1000;
-    private const double MaxGhostDistance = 3000.0, CorpseTolerance = 8.0, MaxVerticalDistance = 15.0;
+    private const double MaxGhostDistance = 3000.0;
 
     private static bool Allowed(Memory memory, WowBReader reader, IntPtr hwnd, Func<bool> running)
         => running() && !ClickAimAbort.Requested && !RouteRunner.StopRequested &&
@@ -41,6 +43,174 @@ internal static class WowBCorpseRecovery
         catch { return State.Unknown; }
     }
 
+    // All observed non-player units are treated as potential threats, including
+    // unreadable/dead candidates: faction and hostility are not established.
+    // A successful scan is not proof the pool contains every nearby NPC.
+    private static bool TryNpcSnapshot(Memory memory, WowBReader reader, IntPtr hwnd,
+        WowBDeathCheckpoint.Candidate checkpoint, Func<bool> running, out WoWPoint position, out List<WoWPoint> npcs)
+    {
+        position = default; npcs = new List<WoWPoint>();
+        try
+        {
+            if (ReadState(memory, reader, hwnd, checkpoint, running, out WoWPoint before) != State.Ghost ||
+                !reader.TryCaptureWorldSnapshot(out WowBWorldSnapshot? snapshot) || snapshot == null ||
+                !snapshot.TryGetLocalPlayer(out WowBObservedUnit player) || player.Guid != checkpoint.Player ||
+                !reader.TryReadMapId(out uint map) || map != checkpoint.Map || !Allowed(memory, reader, hwnd, running)) return false;
+            foreach (WowBObservedUnit unit in snapshot.Units)
+            {
+                if (unit.IsLocalPlayer || unit.HasPlayerVtable || unit.Guid.IsEmpty) continue;
+                if (!float.IsFinite(unit.Location.X) || !float.IsFinite(unit.Location.Y) || !float.IsFinite(unit.Location.Z)) return false;
+                npcs.Add(unit.Location);
+            }
+            if (ReadState(memory, reader, hwnd, checkpoint, running, out WoWPoint after) != State.Ghost ||
+                WowBCorpseSpotPolicy.Distance(before, after) > 3 || WowBCorpseSpotPolicy.Distance(player.Location, after) > 3 ||
+                Math.Abs((double)player.Location.Z - after.Z) > 3) return false;
+            position = after;
+            return true;
+        }
+        catch { return false; }
+    }
+
+    private static bool SpotSafe(Memory memory, WowBReader reader, IntPtr hwnd,
+        WowBDeathCheckpoint.Candidate checkpoint, Func<bool> running)
+    {
+        if (!TryNpcSnapshot(memory, reader, hwnd, checkpoint, running, out WoWPoint p, out var npcs) ||
+            !WowBCorpseSpotPolicy.InRange(p, checkpoint.Position, WowBCorpseSpotPolicy.MaxClickRadius) ||
+            !WowBCorpseSpotPolicy.ClearEnough(p, npcs, WowBCorpseSpotPolicy.MinNpcClearance) ||
+            !TrySnapSafeSpot(checkpoint.Map, p, checkpoint.Position, out WoWPoint snapped) ||
+            WowBCorpseSpotPolicy.Distance(p, snapped) > 1.5 || Math.Abs((double)p.Z - snapped.Z) > 3) return false;
+        return Allowed(memory, reader, hwnd, running) && ReadState(memory, reader, hwnd, checkpoint, running, out _) == State.Ghost;
+    }
+
+    // True means a guarded image was obtained; visible distinguishes a missing
+    // prompt from unavailable focus/capture, which must not trigger blind roaming.
+    private static bool TryPromptAtSafeSpot(Memory memory, WowBReader reader, IntPtr hwnd,
+        WowBDeathCheckpoint.Candidate checkpoint, Func<bool> running, out bool visible)
+    {
+        visible = false;
+        bool Safety() => SpotSafe(memory, reader, hwnd, checkpoint, running);
+        if (!Safety() || !WowBCorpseDialogProbe.TryInspectForRecovery(memory, reader, hwnd, Safety,
+            out var result, out _, out _, out _, out _, out _) || !Safety()) return false;
+        visible = WowBCorpseDialogPattern.SuitableForClick(result, false, out _, out _);
+        return true;
+    }
+
+    private static bool TrySnapSafeSpot(uint map, WoWPoint candidate, WoWPoint corpse, out WoWPoint result)
+    {
+        result = default;
+        try
+        {
+            var nav = Navigator.TripperNavigator;
+            var point = new Vector3(candidate.X, candidate.Y, candidate.Z);
+            nav.EnsureTilesAroundPosition(map, point, Navigator.LoadTilesAroundRadius);
+            if (!nav.IsLoaded || !nav.FindNearestPolyRef(map, point, 2.5f, 5f, out Tripper.Navigation.PolygonReference poly, out Vector3 snapped) ||
+                !poly.IsValid || !float.IsFinite(snapped.X) || !float.IsFinite(snapped.Y) || !float.IsFinite(snapped.Z) ||
+                (nav.GetPolyArea(map, poly, out byte area) & 0x80000000U) != 0 || !WowBCorpseSpotPolicy.GroundArea(area)) return false;
+            result = new WoWPoint(snapped.X, snapped.Y, snapped.Z);
+            return WowBCorpseSpotPolicy.Distance(candidate, result) <= 2.5 && Math.Abs((double)candidate.Z - result.Z) <= 5 &&
+                   WowBCorpseSpotPolicy.InRange(result, corpse, WowBCorpseSpotPolicy.MaxClickRadius);
+        }
+        catch { return false; }
+    }
+
+    private static bool WalkGhostTo(Memory memory, WowBReader reader, IntPtr hwnd, WowBDeathCheckpoint.Candidate checkpoint,
+        Func<bool> running, ClickAimMover mover, RoutePoint goal, int started, bool stopNearCorpse)
+    {
+        var oldInterrupt = RouteRunner.ShouldInterrupt;
+        bool oldPoll = RouteRunner.PollInterruptDuringWalk, oldMesh = RouteRunner.RequireMeshDuringSession, oldQuiet = mover.QuietKeyStop;
+        bool reachedRange = false, arrived;
+        try
+        {
+            RouteRunner.ShouldInterrupt = () =>
+            {
+                if (!Allowed(memory, reader, hwnd, running) || unchecked(Environment.TickCount - started) >= RouteLimitMs ||
+                    ReadState(memory, reader, hwnd, checkpoint, running, out WoWPoint p) != State.Ghost) return true;
+                if (stopNearCorpse && WowBCorpseSpotPolicy.InRange(p, checkpoint.Position, WowBCorpseSpotPolicy.ArrivalRadius))
+                { reachedRange = true; return true; }
+                return false;
+            };
+            RouteRunner.PollInterruptDuringWalk = true; RouteRunner.RequireMeshDuringSession = true; mover.QuietKeyStop = true;
+            arrived = RouteRunner.RunWithinSession(mover, new List<RoutePoint> { goal }, 1);
+        }
+        finally
+        {
+            RouteRunner.ShouldInterrupt = oldInterrupt; RouteRunner.PollInterruptDuringWalk = oldPoll;
+            RouteRunner.RequireMeshDuringSession = oldMesh; ClickAimKeySteer.ReleaseHeld();
+            try { mover.MoveStop(); } catch { }
+            mover.QuietKeyStop = oldQuiet;
+        }
+        return Allowed(memory, reader, hwnd, running) && unchecked(Environment.TickCount - started) < RouteLimitMs &&
+               (arrived || (stopNearCorpse && reachedRange)) &&
+               ReadState(memory, reader, hwnd, checkpoint, running, out _) == State.Ghost;
+    }
+
+    private static bool FindSafeSpot(Memory memory, WowBReader reader, IntPtr hwnd, WowBDeathCheckpoint.Candidate checkpoint,
+        Func<bool> running, ClickAimMover mover, int started)
+    {
+        if (!TryNpcSnapshot(memory, reader, hwnd, checkpoint, running, out WoWPoint current, out var npcs) ||
+            !WowBCorpseSpotPolicy.InRange(current, checkpoint.Position, WowBCorpseSpotPolicy.MaxClickRadius)) return false;
+        double nearest = WowBCorpseSpotPolicy.Clearance(current, npcs);
+        Logging.Write(string.Format(CultureInfo.InvariantCulture,
+            "[Corpse] scouting {0} observed non-player units; nearest={1}; absence or faction does not prove safety",
+            npcs.Count, double.IsPositiveInfinity(nearest) ? "none observed" : nearest.ToString("F1", CultureInfo.InvariantCulture) + " yd"));
+        if (WowBCorpseSpotPolicy.ClearEnough(current, npcs, WowBCorpseSpotPolicy.PreferCurrentClearance) &&
+            TrySnapSafeSpot(checkpoint.Map, current, checkpoint.Position, out WoWPoint currentGround) &&
+            WowBCorpseSpotPolicy.Distance(current, currentGround) <= 1.5 && Math.Abs((double)current.Z - currentGround.Z) <= 3)
+        {
+            if (!TryPromptAtSafeSpot(memory, reader, hwnd, checkpoint, running, out bool visible))
+            { Logging.Write("[Corpse] cannot confirm current ground, NPC state or prompt capture; stopping"); return false; }
+            if (visible) { Logging.Write("[Corpse] current position has the prompt and preferred observed NPC clearance"); return true; }
+        }
+
+        int routeAttempts = 0;
+        foreach (double radius in WowBCorpseSpotPolicy.Rings)
+        {
+            if (!TryNpcSnapshot(memory, reader, hwnd, checkpoint, running, out current, out npcs) ||
+                !WowBCorpseSpotPolicy.InRange(current, checkpoint.Position, WowBCorpseSpotPolicy.MaxClickRadius)) return false;
+            List<WoWPoint> candidates = WowBCorpseSpotPolicy.RankRing(checkpoint.Position, current, npcs, radius);
+            int ringAttempts = 0;
+            foreach (WoWPoint candidate in candidates)
+            {
+                if (!Allowed(memory, reader, hwnd, running) || unchecked(Environment.TickCount - started) >= RouteLimitMs) return false;
+                if (routeAttempts >= 12 || ringAttempts >= 3) break;
+                if (!TrySnapSafeSpot(checkpoint.Map, candidate, checkpoint.Position, out WoWPoint spot) ||
+                    !WowBCorpseSpotPolicy.ClearEnough(spot, npcs, WowBCorpseSpotPolicy.MinNpcClearance) ||
+                    WowBCorpseSpotPolicy.Distance(spot, current) < 3) continue;
+                routeAttempts++; ringAttempts++;
+                var goal = new RoutePoint { X = spot.X, Y = spot.Y, Z = spot.Z, Kind = "Resurrection spot" };
+                WoWPoint[]? path = RouteRunner.TryCombatMeshPath(current.X, current.Y, goal);
+                if (path == null || !Allowed(memory, reader, hwnd, running)) continue;
+                double pathLength = 0;
+                for (int i = 1; i < path.Length; i++) pathLength += WowBCorpseSpotPolicy.Distance(path[i - 1], path[i]);
+                if (!double.IsFinite(pathLength) || pathLength > 120) continue;
+                Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                    "[Corpse] trying mesh spot {0:F1} yd from checkpoint, {1:F1} yd from nearest observed NPC",
+                    WowBCorpseSpotPolicy.Distance(spot, checkpoint.Position), WowBCorpseSpotPolicy.Clearance(spot, npcs)));
+                if (!WalkGhostTo(memory, reader, hwnd, checkpoint, running, mover, goal, started, false))
+                {
+                    if (!TryNpcSnapshot(memory, reader, hwnd, checkpoint, running, out current, out npcs)) return false;
+                    continue;
+                }
+                if (!TryNpcSnapshot(memory, reader, hwnd, checkpoint, running, out current, out npcs)) return false;
+                if (!WowBCorpseSpotPolicy.InRange(current, checkpoint.Position, WowBCorpseSpotPolicy.MaxClickRadius) ||
+                    !WowBCorpseSpotPolicy.ClearEnough(current, npcs, WowBCorpseSpotPolicy.MinNpcClearance)) continue;
+                if (ClickAimAbort.Wait(500)) return false;
+                if (!TryPromptAtSafeSpot(memory, reader, hwnd, checkpoint, running, out bool visible))
+                { Logging.Write("[Corpse] cannot confirm ground, NPC state or prompt capture at candidate; stopping"); return false; }
+                if (visible)
+                { Logging.Write("[Corpse] resurrection prompt visible at a mesh spot with NPC clearance; rechecking before click"); return true; }
+                Logging.Write("[Corpse] prompt not confirmed at this radius; trying closer safe candidates");
+                break;
+            }
+        }
+        if (TryNpcSnapshot(memory, reader, hwnd, checkpoint, running, out current, out npcs) &&
+            WowBCorpseSpotPolicy.InRange(current, checkpoint.Position, WowBCorpseSpotPolicy.MaxClickRadius) &&
+            WowBCorpseSpotPolicy.ClearEnough(current, npcs, WowBCorpseSpotPolicy.MinNpcClearance) &&
+            TryPromptAtSafeSpot(memory, reader, hwnd, checkpoint, running, out bool finalVisible) && finalVisible) return true;
+        Logging.Write("[Corpse] no reachable prompt position with the required observed NPC clearance; stopping rather than resurrecting beside an NPC");
+        return false;
+    }
+
     private static bool TryDialogClick(Memory memory, WowBReader reader, IntPtr hwnd,
         WowBDeathCheckpoint.Candidate checkpoint, Func<bool> running, bool release, out string problem)
     {
@@ -48,9 +218,8 @@ internal static class WowBCorpseRecovery
         State expected = release ? State.Dead : State.Ghost;
         bool Safety()
         {
-            if (!Allowed(memory, reader, hwnd, running) || ReadState(memory, reader, hwnd, checkpoint, running, out WoWPoint p) != expected) return false;
-            return release || (ClickAimMath.Len(p.X - checkpoint.Position.X, p.Y - checkpoint.Position.Y) <= CorpseTolerance &&
-                               Math.Abs(p.Z - checkpoint.Position.Z) <= MaxVerticalDistance);
+            if (!Allowed(memory, reader, hwnd, running) || ReadState(memory, reader, hwnd, checkpoint, running, out _) != expected) return false;
+            return release || SpotSafe(memory, reader, hwnd, checkpoint, running);
         }
         if (!Safety()) return false;
         if (!WowBCorpseDialogProbe.TryInspectForRecovery(memory, reader, hwnd, Safety,
@@ -152,39 +321,28 @@ internal static class WowBCorpseRecovery
         double distance = ClickAimMath.Len(ghostPos.X - checkpoint.Position.X, ghostPos.Y - checkpoint.Position.Y);
         if (!double.IsFinite(distance) || distance > MaxGhostDistance)
         { Logging.Write("[Corpse] checkpoint too far away or invalid; refusing route"); return false; }
-        Logging.Write("[Corpse] ghost candidate confirmed; planning a mesh-only route to the recorded location");
+        Logging.Write("[Corpse] ghost candidate confirmed; following the mesh toward the checkpoint, stopping short to scout");
         var goal = new RoutePoint { X = checkpoint.Position.X, Y = checkpoint.Position.Y, Z = checkpoint.Position.Z, Kind = "Corpse" };
-        var oldInterrupt = RouteRunner.ShouldInterrupt;
-        bool oldPoll = RouteRunner.PollInterruptDuringWalk, oldMesh = RouteRunner.RequireMeshDuringSession, oldQuiet = mover.QuietKeyStop;
-        started = Environment.TickCount;
-        bool arrived;
-        try
-        {
-            RouteRunner.ShouldInterrupt = () => !Allowed(memory, reader, hwnd, running) ||
-                unchecked(Environment.TickCount - started) >= RouteLimitMs ||
-                ReadState(memory, reader, hwnd, checkpoint, running, out _) != State.Ghost;
-            RouteRunner.PollInterruptDuringWalk = true; RouteRunner.RequireMeshDuringSession = true; mover.QuietKeyStop = true;
-            arrived = RouteRunner.RunWithinSession(mover, new List<RoutePoint> { goal }, 1);
-        }
-        finally
-        {
-            RouteRunner.ShouldInterrupt = oldInterrupt; RouteRunner.PollInterruptDuringWalk = oldPoll;
-            RouteRunner.RequireMeshDuringSession = oldMesh;
-            ClickAimKeySteer.ReleaseHeld();
-            try { mover.MoveStop(); } catch { }
-            mover.QuietKeyStop = oldQuiet;
-        }
-        if (!arrived || RouteRunner.LastRunInterrupted || ReadState(memory, reader, hwnd, checkpoint, running, out ghostPos) != State.Ghost ||
-            ClickAimMath.Len(ghostPos.X - checkpoint.Position.X, ghostPos.Y - checkpoint.Position.Y) > CorpseTolerance ||
-            Math.Abs(ghostPos.Z - checkpoint.Position.Z) > MaxVerticalDistance)
-        { Logging.Write("[Corpse] mesh route or final corpse proximity was not confirmed; stopping"); return false; }
+        int routeStarted = Environment.TickCount;
+        if (!WalkGhostTo(memory, reader, hwnd, checkpoint, running, mover, goal, routeStarted, true) ||
+            ReadState(memory, reader, hwnd, checkpoint, running, out ghostPos) != State.Ghost ||
+            !WowBCorpseSpotPolicy.InRange(ghostPos, checkpoint.Position, WowBCorpseSpotPolicy.MaxClickRadius))
+        { Logging.Write("[Corpse] mesh route or proximity was not confirmed; stopping"); return false; }
+        if (ClickAimAbort.Wait(800) || !FindSafeSpot(memory, reader, hwnd, checkpoint, running, mover, routeStarted)) return false;
         started = Environment.TickCount; lastProblem = unchecked(started - 6000);
         bool sentResurrect = false;
+        int replans = 0;
         while (unchecked(Environment.TickCount - started) < PromptWaitMs && Allowed(memory, reader, hwnd, running))
         {
-            if (ReadState(memory, reader, hwnd, checkpoint, running, out ghostPos) != State.Ghost ||
-                ClickAimMath.Len(ghostPos.X - checkpoint.Position.X, ghostPos.Y - checkpoint.Position.Y) > CorpseTolerance ||
-                Math.Abs(ghostPos.Z - checkpoint.Position.Z) > MaxVerticalDistance) break;
+            if (!TryNpcSnapshot(memory, reader, hwnd, checkpoint, running, out ghostPos, out var nearby) ||
+                !WowBCorpseSpotPolicy.InRange(ghostPos, checkpoint.Position, WowBCorpseSpotPolicy.MaxClickRadius)) break;
+            if (!WowBCorpseSpotPolicy.ClearEnough(ghostPos, nearby, WowBCorpseSpotPolicy.MinNpcClearance))
+            {
+                if (++replans > 3) { Logging.Write("[Corpse] NPCs repeatedly approached; stopping without resurrection"); break; }
+                Logging.Write("[Corpse] an observed NPC approached; scouting another resurrection spot");
+                if (!FindSafeSpot(memory, reader, hwnd, checkpoint, running, mover, routeStarted)) break;
+                continue;
+            }
             if (TryDialogClick(memory, reader, hwnd, checkpoint, running, false, out string problem)) { sentResurrect = true; break; }
             if (unchecked(Environment.TickCount - lastProblem) >= 5000)
             { Logging.Write("[Corpse] resurrection not clicked: " + problem); lastProblem = Environment.TickCount; }
