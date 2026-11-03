@@ -1,0 +1,146 @@
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Linq;
+using System.Numerics;
+using Styx.Helpers;
+
+namespace Styx.Helpers
+{
+    internal static class Logging { internal static void Write(string text) { } }
+}
+namespace Tripper.Navigation
+{
+    internal enum AreaType : byte { Ground = 1, Road = 4 }
+    internal struct PolygonReference { internal bool IsValid => true; }
+    internal sealed class FakeNav
+    {
+        internal bool IsLoaded = true;
+        internal byte Area = 1;
+        internal int Samples;
+        internal bool SampleEnabled = true;
+        internal Action? OnSample;
+        internal void EnsureTilesAroundPosition(uint map, Vector3 point, int radius) { }
+        internal bool FindNearestPolyRef(uint map, Vector3 point, float horizontal, float vertical,
+                                         out PolygonReference poly, out Vector3 snap)
+        { poly = new PolygonReference(); snap = point; return true; }
+        internal bool FindRandomPoint(uint map, Vector3 from, float radius, out Vector3 point)
+        {
+            int i = Samples++ % 12;
+            OnSample?.Invoke();
+            double angle = i * Math.PI / 6;
+            point = new Vector3((float)(from.X + 9 * Math.Cos(angle)), (float)(from.Y + 9 * Math.Sin(angle)), from.Z);
+            return SampleEnabled;
+        }
+        internal uint GetPolyArea(uint map, PolygonReference poly, out byte area) { area = Area; return 0; }
+    }
+}
+namespace Styx.Logic.Pathing
+{
+    internal sealed class RoutePoint { internal double X, Y, Z; internal string Kind = ""; }
+    internal sealed class ClickAimMover { }
+    internal static class Navigator
+    {
+        internal static Tripper.Navigation.FakeNav TripperNavigator = new Tripper.Navigation.FakeNav();
+        internal const int LoadTilesAroundRadius = 1;
+    }
+    internal static class ClickAimAbort { internal static bool Requested; }
+    internal static class ClickAimMath { internal static double Len(double x, double y) => Math.Sqrt(x*x + y*y); }
+    internal static class ClickAimPositions
+    {
+        internal static double X, Y;
+        internal static bool Readable = true;
+        internal static bool TryRead(out double x, out double y) { x = X; y = Y; return Readable; }
+        internal static double Z() => 0;
+    }
+    internal static class MeshRoam { internal static bool SafeDestinationArea(byte area) => area == 0 || area == 1 || area == 4; }
+    internal static class RouteRunner
+    {
+        internal static bool LastRunInterrupted;
+        internal static bool PathValid = true;
+        internal static object? TryCombatMeshPath(double x, double y, RoutePoint p) => PathValid ? new object() : null;
+    }
+    internal static class GatherRunner
+    {
+        private static bool _stop;
+        private static uint _sessionMap = 1;
+        internal static bool Combat, MapOk = true, Exclude;
+        internal static int InterruptCalls, InterruptAt = int.MaxValue;
+        internal static readonly List<RoutePoint> Walks = new List<RoutePoint>();
+        internal static readonly Queue<string> WalkResults = new Queue<string>();
+        private static bool MapStillCurrent() { if (!MapOk) _stop = true; return MapOk; }
+        private static bool IsBlackspot(double x, double y) => Exclude;
+        private static bool Interrupt(bool nodes)
+        {
+            InterruptCalls++;
+            if (InterruptCalls >= InterruptAt) Combat = true;
+            return _stop || ClickAimAbort.Requested || !MapStillCurrent() || Combat;
+        }
+        private static bool Walk(ClickAimMover mover, RoutePoint point, bool checkNodes)
+        {
+            if (!checkNodes) throw new Exception("node interruption disabled");
+            RouteRunner.LastRunInterrupted = false;
+            Walks.Add(point);
+            string result = WalkResults.Count == 0 ? "fail" : WalkResults.Dequeue();
+            if (result == "interrupt") RouteRunner.LastRunInterrupted = true;
+            if (result == "stop") ClickAimAbort.Requested = true;
+            return result == "ok";
+        }
+        internal static bool Run() => RelocateAndRetry(new ClickAimMover(), new RoutePoint { X = 40, Y = 0, Kind = "Hotspot" });
+        internal static void Reset()
+        {
+            _stop = false; ClickAimAbort.Requested = false; Combat = false; MapOk = true; Exclude = false;
+            RouteRunner.LastRunInterrupted = false; RouteRunner.PathValid = true;
+            ClickAimPositions.X = 0; ClickAimPositions.Y = 0; ClickAimPositions.Readable = true;
+            Navigator.TripperNavigator = new Tripper.Navigation.FakeNav();
+            InterruptCalls = 0; InterruptAt = int.MaxValue; Walks.Clear(); WalkResults.Clear();
+        }
+        // RELOCATION_METHOD
+    }
+    public static class Program
+    {
+        private static void Check(bool condition, string text) { if (!condition) throw new Exception(text); }
+        public static void Main()
+        {
+            GatherRunner.Reset();
+            Check(!GatherRunner.Run(), "all fail");
+            Check(GatherRunner.Walks.Count == 5, "five attempted locations");
+            for (int i=0; i<5; i++)
+            {
+                RoutePoint p = GatherRunner.Walks[i];
+                Check(p.Kind == "Relocate" && ClickAimMath.Len(p.X,p.Y) <= 50, "bounded alternate");
+                for (int j=0; j<i; j++) Check(ClickAimMath.Len(p.X-GatherRunner.Walks[j].X,p.Y-GatherRunner.Walks[j].Y) >= 5, "distinct locations");
+            }
+            GatherRunner.Reset(); GatherRunner.WalkResults.Enqueue("ok"); GatherRunner.WalkResults.Enqueue("ok");
+            Check(GatherRunner.Run() && GatherRunner.Walks.Count == 2 && GatherRunner.Walks[1].Kind == "Hotspot", "retry original after alternate");
+            GatherRunner.Reset();
+            foreach (string r in new[]{"ok", "fail", "ok", "ok"}) GatherRunner.WalkResults.Enqueue(r);
+            Check(GatherRunner.Run() && GatherRunner.Walks.Count == 4, "another location after failed original");
+            GatherRunner.Reset(); GatherRunner.WalkResults.Enqueue("interrupt");
+            Check(!GatherRunner.Run() && RouteRunner.LastRunInterrupted && GatherRunner.Walks.Count == 1, "walk interruption");
+            GatherRunner.Reset(); GatherRunner.WalkResults.Enqueue("stop");
+            Check(!GatherRunner.Run() && ClickAimAbort.Requested && GatherRunner.Walks.Count == 1, "stop during walk");
+            GatherRunner.Reset(); GatherRunner.InterruptAt = 6;
+            Check(!GatherRunner.Run() && RouteRunner.LastRunInterrupted && GatherRunner.Walks.Count == 0, "combat during sampling");
+            GatherRunner.Reset(); GatherRunner.MapOk = false;
+            Check(!GatherRunner.Run() && GatherRunner.Walks.Count == 0, "map change");
+            GatherRunner.Reset(); Navigator.TripperNavigator.OnSample = () => ClickAimAbort.Requested = true;
+            Check(!GatherRunner.Run() && GatherRunner.Walks.Count == 0, "stop during sampling");
+            GatherRunner.Reset(); Navigator.TripperNavigator.OnSample = () => GatherRunner.MapOk = false;
+            Check(!GatherRunner.Run() && GatherRunner.Walks.Count == 0, "map change during sampling");
+            GatherRunner.Reset(); ClickAimPositions.X = 60;
+            Check(!MeshRelocate.TryPick(1, 0, 0, new List<RoutePoint>(), (x,y) => false, () => false, out _), "anchored radius");
+            GatherRunner.Reset(); GatherRunner.Exclude = true;
+            Check(!GatherRunner.Run() && GatherRunner.Walks.Count == 0, "blackspot rejection");
+            GatherRunner.Reset(); Navigator.TripperNavigator.Area = 2;
+            Check(!GatherRunner.Run() && GatherRunner.Walks.Count == 0, "unsafe area rejection");
+            GatherRunner.Reset(); RouteRunner.PathValid = false;
+            Check(!GatherRunner.Run() && GatherRunner.Walks.Count == 0, "incomplete path rejection");
+            GatherRunner.Reset(); Navigator.TripperNavigator.SampleEnabled = false;
+            Check(!GatherRunner.Run() && GatherRunner.Walks.Count == 0, "no candidate");
+            GatherRunner.Reset(); ClickAimPositions.Readable = false;
+            Check(!GatherRunner.Run() && GatherRunner.Walks.Count == 0, "unreadable position");
+            Console.WriteLine("15 synthetic relocation cases passed (no live game or real mesh)");
+        }
+    }
+}

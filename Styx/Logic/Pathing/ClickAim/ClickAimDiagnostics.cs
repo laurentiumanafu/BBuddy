@@ -404,6 +404,9 @@ public static class ClickAimDiagnostics
         try { Logging.Write(GatherRunner.HotspotSelfTest()); }
         catch (Exception ex) { Logging.Write("[Gather] hotspot self-test threw: " + ex.Message); }
 
+        try { Logging.Write(MeshRelocate.SelfTest()); }
+        catch (Exception ex) { Logging.Write("[Relocate] self-test threw: " + ex.Message); }
+
         try { Logging.Write(GatherInteraction.SelfTest()); }
         catch (Exception ex) { Logging.Write("[Gather] hover self-test threw: " + ex.Message); }
 

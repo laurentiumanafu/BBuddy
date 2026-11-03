@@ -286,6 +286,73 @@ internal static class GatherRunner
         finally { RouteRunner.RequireMeshDuringSession = false; RouteRunner.PollInterruptDuringWalk = false; RouteRunner.ShouldInterrupt = null; }
     }
 
+    /// <summary>
+    /// A hotspot leg failed. Try up to <see cref="MeshRelocate.Attempts"/> other mesh-valid
+    /// locations within <see cref="MeshRelocate.RadiusYd"/> of the initial stuck position:
+    /// walk to each over the mesh and, once there, ask for the hotspot again.
+    /// Returns true when reached. On interruption, the caller returns to the main loop
+    /// for combat, death, map, node or user-stop handling.
+    /// </summary>
+    private static bool RelocateAndRetry(ClickAimMover mover, RoutePoint original)
+    {
+        if (!ClickAimPositions.TryRead(out double originX, out double originY))
+        {
+            Logging.Write("[Gather] relocation withheld: player position is unreadable");
+            return false;
+        }
+        var tried = new List<RoutePoint>();
+        // Sampling and path queries can take time; yield to combat/death/STOP
+        // even before any alternate movement starts.
+        bool Interrupted()
+        {
+            if (!Interrupt(false)) return false;
+            if (!_stop && !ClickAimAbort.Requested) RouteRunner.LastRunInterrupted = true;
+            return true;
+        }
+        Logging.Write(string.Format(CultureInfo.InvariantCulture,
+            "[Gather] could not reach ({0:F1}, {1:F1}); trying up to {2} other mesh locations within {3:F0} yd "
+            + "of the character before giving up", original.X, original.Y, MeshRelocate.Attempts, MeshRelocate.RadiusYd));
+
+        for (int attempt = 1; attempt <= MeshRelocate.Attempts; attempt++)
+        {
+            if (_stop || ClickAimAbort.Requested || !MapStillCurrent() || Interrupted()) return false;
+            if (!MeshRelocate.TryPick(_sessionMap, originX, originY, tried, IsBlackspot, Interrupted, out RoutePoint alternate))
+            {
+                if (!_stop && !ClickAimAbort.Requested && !RouteRunner.LastRunInterrupted)
+                    Logging.Write("[Gather] relocation " + attempt + "/" + MeshRelocate.Attempts
+                        + ": no additional candidate could be validated in the bounded sample");
+                return false;
+            }
+            if (Interrupted() || !MapStillCurrent()) return false;
+            tried.Add(alternate);
+
+            Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                "[Gather] relocation {0}/{1}: walking to ({2:F1}, {3:F1}) over the mesh",
+                attempt, MeshRelocate.Attempts, alternate.X, alternate.Y));
+            bool there = Walk(mover, alternate, true);
+            if (_stop || ClickAimAbort.Requested || RouteRunner.LastRunInterrupted) return false;
+            if (!there)
+            {
+                Logging.Write("[Gather] relocation " + attempt + "/" + MeshRelocate.Attempts
+                    + ": could not get there; trying another location");
+                continue;
+            }
+
+            Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                "[Gather] relocation {0}/{1}: arrived; asking for ({2:F1}, {3:F1}) again from here",
+                attempt, MeshRelocate.Attempts, original.X, original.Y));
+            if (Walk(mover, original, true))
+            {
+                Logging.Write("[Gather] reached the hotspot after relocation " + attempt + "/" + MeshRelocate.Attempts);
+                return true;
+            }
+            if (_stop || ClickAimAbort.Requested || RouteRunner.LastRunInterrupted) return false;
+        }
+
+        Logging.Write("[Gather] all " + MeshRelocate.Attempts + " alternate mesh locations were tried without reaching the hotspot");
+        return false;
+    }
+
     // No movement, turns, stop-key taps or extra clicks while a cast may be running.
     // A resource remaining in the pool can need another hit, or the attempt can have
     // failed; neither proves success. Bound attempts and revisit rather than spin forever.
@@ -625,6 +692,20 @@ internal static class GatherRunner
                     bool walked = Walk(mover, next, true);
                     if (_stop || ClickAimAbort.Requested) break;
                     if (RouteRunner.LastRunInterrupted) { fastHotspots = 0; continue; }
+                    if (!walked && roam == null)
+                    {
+                        // A profile hotspot is fixed; retrying it from the same
+                        // stuck position repeats the failure. Roaming already
+                        // chooses a different destination after a failed leg.
+                        walked = RelocateAndRetry(mover, next);
+                        if (_stop || ClickAimAbort.Requested) break;
+                        if (RouteRunner.LastRunInterrupted) { fastHotspots = 0; continue; }
+                        if (!walked)
+                        {
+                            Logging.Write("[Gather] relocation could not recover the hotspot; stopping");
+                            break;
+                        }
+                    }
                     if (walked)
                     {
                         if (roam == null) index = (index + 1) % points.Count;

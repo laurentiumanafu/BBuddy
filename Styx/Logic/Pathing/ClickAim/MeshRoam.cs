@@ -33,7 +33,7 @@ internal sealed class MeshRoam
 
     // Area 0 is emitted by our legacy grid-to-mmap builder; native ground and
     // road are 1 and 4. Do not intentionally choose water, lava or portals.
-    private static bool SafeDestinationArea(byte area)
+    internal static bool SafeDestinationArea(byte area)
         => area == 0 || area == (byte)Tripper.Navigation.AreaType.Ground
            || area == (byte)Tripper.Navigation.AreaType.Road;
 
