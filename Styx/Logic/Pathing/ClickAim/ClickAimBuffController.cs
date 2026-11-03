@@ -171,8 +171,8 @@ internal sealed class ClickAimBuffController
     }
 }
 
-// 70707 research candidate, bounded to the inline layout observed for one
-// Mage. No dynamic pointer dereference, Lua, calls into the client or writes.
+// 70707 research candidate, bounded to inline layouts observed for one
+// Mage and one Shaman. No dynamic pointer dereference, Lua, calls into the client or writes.
 // Unknown layouts, unstable fields and unsupported IDs retain the old timer.
 internal sealed class WowBInlineAuraCandidate
 {
@@ -188,9 +188,9 @@ internal sealed class WowBInlineAuraCandidate
     private static uint Word(byte[] bytes, int offset) => BitConverter.ToUInt32(bytes, offset - Header);
     private static ulong Qword(byte[] bytes, int offset) => BitConverter.ToUInt64(bytes, offset - Header);
 
-    // The only IDs corroborated in the traces. Other ranks/classes use the
-    // old scheduler rather than interpreting unverified aura/action ID pairs.
-    internal static bool Supported(int id) => id == 168 || id == 1459;
+    // Only the exact action/aura IDs observed in the traces. Other ranks and
+    // weapon enchants use the timer, not an assumed matching player aura ID.
+    internal static bool Supported(int id) => id == 168 || id == 1459 || id == 324;
 
     internal static WowBInlineAuraCandidate? Capture(Memory memory, WowBObservedUnit player)
     {
@@ -202,19 +202,22 @@ internal sealed class WowBInlineAuraCandidate
             byte[]? first = memory.ReadBytes64(player.UnitAddress + Header, DataSize);
             byte[]? second = memory.ReadBytes64(player.UnitAddress + Header, DataSize);
             if (first == null || second == null || first.Length != DataSize || second.Length != DataSize) return null;
-            // This representation, including the fixed inline pointer and 12
-            // entries, was observed in one session. External/grown arrays are
-            // not chased and must never be interpreted as an empty list.
+            // The inline pointer, 16-tagged capacity word and lengths 11/12
+            // were observed in two sessions. The length's meaning is not
+            // proven. Scan only that bounded range and require active-count
+            // agreement. External/grown arrays are never chased.
             ulong inline = player.UnitAddress + DataPointer;
+            ulong length = Qword(first, 0x5F8);
             if (Qword(first, 0x5F0) != inline || Qword(second, 0x5F0) != inline ||
-                Qword(first, 0x5F8) != Slots || Qword(second, 0x5F8) != Slots ||
+                (length != 11 && length != Slots) || Qword(second, 0x5F8) != length ||
                 Qword(first, 0x600) != 0x8000000000000010UL || Qword(second, 0x600) != 0x8000000000000010UL) return null;
             uint clock1 = Word(first, ClientClock), clock2 = Word(second, ClientClock);
             if (clock1 == 0 || clock2 == 0 || unchecked(clock2 - clock1) > 5000) return null;
-            uint[] id = new uint[Slots], duration = new uint[Slots], expiry = new uint[Slots];
+            int slotCount = (int)length;
+            uint[] id = new uint[slotCount], duration = new uint[slotCount], expiry = new uint[slotCount];
             var seen = new HashSet<uint>();
             int occupied = 0;
-            for (int i = 0; i < Slots; i++)
+            for (int i = 0; i < slotCount; i++)
             {
                 int offset = FirstId + i * Stride;
                 id[i] = Word(second, offset); duration[i] = Word(second, offset + 12); expiry[i] = Word(second, offset + 16);
@@ -233,7 +236,7 @@ internal sealed class WowBInlineAuraCandidate
     internal int? Remaining(int spellId)
     {
         if (!Supported(spellId)) return null;
-        for (int i = 0; i < Slots; i++)
+        for (int i = 0; i < _id.Length; i++)
         {
             if (_id[i] != (uint)spellId) continue;
             if (_duration[i] == 0 || _duration[i] > 24U * 60 * 60 * 1000) return null;

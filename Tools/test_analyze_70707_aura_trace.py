@@ -60,6 +60,16 @@ class AuraTraceTests(unittest.TestCase):
         self.assertEqual(result[7][3], 1698588)
         self.assertEqual(result[8][3], 3573483)
 
+    def test_observed_shaman_timing_values_as_synthetic_words(self):
+        shield = SLOT_ID + 2 * STRIDE
+        weapon_candidate = SLOT_ID + 3 * STRIDE
+        words = {CLOCK: 0x00FFF51B, shield: 324, shield + 12: 600000, shield + 16: 0x01091C62,
+                 weapon_candidate: 10400, weapon_candidate + 12: 0, weapon_candidate + 16: 0}
+        result = inspect(words, {324, 10400})
+        self.assertEqual(shield, 0x0940)
+        self.assertEqual(result[2], (324, 600000, 0x01091C62, 599879))
+        self.assertEqual(result[3][1:3], (0, 0))  # no proven enchant duration/expiry
+
     def test_inconsistent_old_value_invalidates_chunk(self):
         off = SLOT_ID + 7 * STRIDE
         with tempfile.TemporaryDirectory() as d:

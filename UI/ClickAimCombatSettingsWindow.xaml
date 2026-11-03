@@ -68,7 +68,7 @@
 
                 <CheckBox x:Name="chkBuffs" Grid.Row="7" Grid.ColumnSpan="2" Margin="0,4,0,12"
                           Content="Apply self-buffs on start, periodically, and after resurrection"
-                          ToolTip="Grind and GatherBuddy attempt hotbar buffs outside combat. On 70707, two Mage spells use experimental aura timing; other or uncertain cases use a 30-minute attempt timer. Cast success is not verified."/>
+                          ToolTip="Grind and GatherBuddy attempt hotbar buffs outside combat. On 70707, selected Mage and Shaman buffs use experimental aura timing; other or uncertain cases use a 30-minute attempt timer. Cast success is not verified."/>
 
                 <TextBlock Grid.Row="8" Grid.Column="0" VerticalAlignment="Center" Margin="0,0,8,8"
                            Text="Food slot (0 = find it on the bar)"/>

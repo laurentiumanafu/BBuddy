@@ -123,6 +123,16 @@ namespace Styx.Logic.Pathing
             Write32(data, 0x1030, 1459); Write32(data, 0x103C, 3600000); Write32(data, 0x1040, unchecked(clock + 2400000));
             return data;
         }
+        private static byte[] ShamanCandidate()
+        {
+            byte[] data = new byte[0x1624];
+            Write64(data, 0x5F0, 0x20608); Write64(data, 0x5F8, 11); Write64(data, 0x600, 0x8000000000000010UL);
+            Write32(data, 0x1C10, 0x00FFF51B); Write32(data, 0x1A60, 10);
+            uint[] ids = { 0x1338C7, 0x1338C9, 324, 10400, 0, 0x12B300, 0x12B312, 0x12B307, 0x12B305, 0x12B31C, 0x12B319 };
+            for (int i = 0; i < ids.Length; i++) Write32(data, 0x6F0 + i * 0x128, ids[i]);
+            Write32(data, 0x94C, 600000); Write32(data, 0x950, 0x01091C62);
+            return data;
+        }
         private static void Reset()
         {
             ObjectManager.Wow = new Memory(); ObjectManager.WowB = new WowBReader { Selected = new WowBGuid(8) };
@@ -205,6 +215,29 @@ namespace Styx.Logic.Pathing
             Check(WowBInlineAuraCandidate.Capture(ObjectManager.Wow, ObjectManager.WowB.Player) == null, "duplicate IDs are unknown");
             ObjectManager.Wow.AuraBytes = Candidate(0);
             Check(WowBInlineAuraCandidate.Capture(ObjectManager.Wow, ObjectManager.WowB.Player) == null, "zero clock is unknown");
+            Reset(); controller.Reset(); now = 0;
+            ObjectManager.Wow!.AuraBytes = ShamanCandidate();
+            snapshot = WowBInlineAuraCandidate.Capture(ObjectManager.Wow, ObjectManager.WowB!.Player);
+            Check(snapshot != null && snapshot.Remaining(324) == 599879 && snapshot.Remaining(8017) == null,
+                  "observed eleven-slot Shaman layout decodes Lightning Shield but not Rockbiter");
+            ClickAimCombat.Bar = new List<ClickAimAction> { Action(324, 1), Action(324, 2), Action(8017, 3) };
+            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 3,
+                  "Shaman fresh start deduplicates shield and attempts Rockbiter fallback");
+            ClickAimInput.Keys.Clear(); now = 30000;
+            Check(!controller.TryApply(new IntPtr(7), stopped, stopMovement), "active Lightning Shield is not refreshed early");
+            Write32(ObjectManager.Wow.AuraBytes!, 0x940, 0); Write32(ObjectManager.Wow.AuraBytes!, 0x94C, 0);
+            Write32(ObjectManager.Wow.AuraBytes!, 0x950, 0); Write32(ObjectManager.Wow.AuraBytes!, 0x1A60, 9); now += 5000;
+            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 1 && ClickAimInput.Keys[0] == 0x31,
+                  "removed Lightning Shield is retried, not Rockbiter or duplicate slot");
+            Write32(ObjectManager.Wow.AuraBytes!, 0x940, 324); Write32(ObjectManager.Wow.AuraBytes!, 0x94C, 600000);
+            Write32(ObjectManager.Wow.AuraBytes!, 0x950, 0x01091C62); Write32(ObjectManager.Wow.AuraBytes!, 0x1A60, 10);
+            ClickAimInput.Keys.Clear(); now = ClickAimBuffSchedule.RefreshMs;
+            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 1 && ClickAimInput.Keys[0] == 0x33,
+                  "Rockbiter retains thirty-minute fallback, independent of active Shield");
+            Write64(ObjectManager.Wow.AuraBytes!, 0x5F8, 10);
+            Check(WowBInlineAuraCandidate.Capture(ObjectManager.Wow, ObjectManager.WowB.Player) == null, "unobserved container length is unknown");
+            Write64(ObjectManager.Wow.AuraBytes!, 0x5F8, 11); Write32(ObjectManager.Wow.AuraBytes!, 0x1A60, 11);
+            Check(WowBInlineAuraCandidate.Capture(ObjectManager.Wow, ObjectManager.WowB.Player) == null, "out-of-bounds active count is unknown");
             Reset(); controller.Reset(); now = 0;
             ObjectManager.Wow!.AuraBytes = Candidate(); ObjectManager.WowB!.IsExperimental70707 = false;
             ClickAimCombat.Bar = new List<ClickAimAction> { Action(168, 1), Action(1459, 2) };
