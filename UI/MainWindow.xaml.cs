@@ -397,16 +397,16 @@ namespace CopilotBuddy.UI
         /// 
         /// Logic:
         ///   1. Check /pid= command line arg for explicit process selection
-        ///   2. Find all Wow.exe processes matching build 12340
-        ///   3. Filter: logged in + not claimed by another CopilotBuddy (via mutex)
+        ///   2. Find recognized client processes and the existing name-based exceptions
+        ///   3. Filter: logged in where checkable + not claimed by another CopilotBuddy (via mutex)
         ///   4. If 0 available: show error
         ///   5. If 1 available: auto-attach
-        ///   6. If 2+: show ProcessSelectorWindow
+        ///   6. If 2+: show ProcessSelectorWindow, defaulting to the newest registered build
         ///   7. Attach to selected process
         /// </summary>
         private bool FindAndAttachToWoW()
         {
-            Logging.Write("Searching for WoW process...");
+            Logging.Write("Searching for WoW process... default registered client build: {0}", ClientAttachPolicy.DefaultBuild);
             Logging.Write("[Attach] Executable: {0} ({1})",
                 Environment.ProcessPath ?? AppDomain.CurrentDomain.BaseDirectory,
                 Environment.Is64BitProcess ? "x64" : "x86");

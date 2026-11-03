@@ -142,9 +142,8 @@ namespace CopilotBuddy.UI
                     }
 
                     // Available! Add to list (keep mutex held so another instance can't grab it)
-                    var entry = new ProcessEntry(characterName, wowProcesses[i].Id, mutex);
+                    var entry = new ProcessEntry(characterName, wowProcesses[i].Id, build, mutex);
                     _processes.Add(entry);
-                    cbProcesses.Items.Add(entry);
                 }
                 catch
                 {
@@ -152,6 +151,13 @@ namespace CopilotBuddy.UI
                 }
             }
 
+            // The highest registered build is the default, not an arbitrary
+            // newer/unknown WowB executable accepted by the legacy name rule.
+            // Keep the selector for multiple processes, including multiple
+            // characters on the preferred build.
+            foreach (var entry in _processes.OrderByDescending(p => ClientAttachPolicy.SelectionPriority(p.Build))
+                                            .ThenBy(p => p.ProcessId))
+                cbProcesses.Items.Add(entry);
             if (cbProcesses.Items.Count > 0)
                 cbProcesses.SelectedIndex = 0;
         }
@@ -168,22 +174,28 @@ namespace CopilotBuddy.UI
         {
             private readonly string _characterName;
 
-            public ProcessEntry(string characterName, int processId, Mutex mutex)
+            public ProcessEntry(string characterName, int processId, int build, Mutex mutex)
             {
                 _characterName = characterName;
                 ProcessId = processId;
+                Build = build;
                 Mutex = mutex;
             }
 
             /// <summary>The WoW process ID.</summary>
             public readonly int ProcessId;
 
+            /// <summary>Observed executable build; 0 means unversioned.</summary>
+            public readonly int Build;
+
             /// <summary>The mutex claiming ownership of this process.</summary>
             public readonly Mutex Mutex;
 
             public override string ToString()
             {
-                return $"PID: {ProcessId} logged in on: {_characterName}";
+                string buildText = Build > 0 ? Build.ToString() : "unknown";
+                string preferred = Build == ClientAttachPolicy.DefaultBuild ? " (default)" : "";
+                return $"PID: {ProcessId}, build {buildText}{preferred}: {_characterName}";
             }
         }
 

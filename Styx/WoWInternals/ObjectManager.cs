@@ -18,7 +18,7 @@ namespace Styx.WoWInternals
         #region Constants - WoW 3.3.5a Build 12340
         internal const int SupportedBuild = ClientAttachPolicy.SupportedLegacyBuild;
         internal const int SupportedBuildWowB = ClientAttachPolicy.SupportedModernBuild;
-        internal static bool IsSupportedBuild(int build) => build == SupportedBuild || build == SupportedBuildWowB;
+        internal static bool IsSupportedBuild(int build) => ClientAttachPolicy.IsRegisteredBuild(build);
 
         /// <summary>
         /// Extracts the client build number from the process version resource.
@@ -310,10 +310,10 @@ namespace Styx.WoWInternals
                     // GetBuildNumber recombines those into 70291.
                     bool isWowBByName = WoWProcess.ProcessName.Equals("WowB", StringComparison.OrdinalIgnoreCase);
                     bool experimental = build == ClientAttachPolicy.ExperimentalBuild;
-                    if (!IsSupportedBuild(build) && !isWowBByName && !experimental)
+                    if (!IsSupportedBuild(build) && !isWowBByName)
                     {
-                        Logging.Write($"[ObjectManager] Build {build} not supported (expected: {SupportedBuild} or {SupportedBuildWowB})");
-                        throw new Exception($"WoW build {build} not supported. Required build: {SupportedBuild} or {SupportedBuildWowB}");
+                        Logging.Write($"[ObjectManager] Build {build} not registered (default: {ClientAttachPolicy.DefaultBuild})");
+                        throw new Exception($"WoW build {build} not registered. Default build: {ClientAttachPolicy.DefaultBuild}");
                     }
                     Logging.WriteDebug(experimental
                         ? "[ObjectManager] Build 70707 automatically accepted; its reader offsets remain experimental."

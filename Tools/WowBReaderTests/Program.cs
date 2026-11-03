@@ -11,6 +11,16 @@ Require(ClientAttachPolicy.ProcessNames().Contains("Wow-decoded"), "decoded proc
 Require(ClientAttachPolicy.IsCandidate(12340, "Wow") && ClientAttachPolicy.IsCandidate(70291, "WowB"), "supported builds unchanged");
 Require(ClientAttachPolicy.IsCandidate(0, "Luacct") && ClientAttachPolicy.IsCandidate(70450, "WowB"), "existing unversioned and name exceptions preserved");
 Require(!ClientAttachPolicy.IsCandidate(70450, "Wow") && !ClientAttachPolicy.IsCandidate(-1, "WowB"), "unsupported or unreadable build rejected");
+Require(ClientAttachPolicy.DefaultBuild == 70707 && ClientAttachPolicy.IsRegisteredBuild(70707), "70707 is the current default registered build");
+Require(ClientAttachPolicy.SelectionPriority(70707) > ClientAttachPolicy.SelectionPriority(70291) &&
+        ClientAttachPolicy.SelectionPriority(70291) > ClientAttachPolicy.SelectionPriority(12340), "latest registered build preferred");
+Require(ClientAttachPolicy.SelectionPriority(99999) < ClientAttachPolicy.SelectionPriority(12340) &&
+        ClientAttachPolicy.SelectionPriority(0) < ClientAttachPolicy.SelectionPriority(12340) &&
+        !ClientAttachPolicy.IsRegisteredBuild(99999), "unknown and name-only builds do not outrank supported builds");
+var selectionOrder = new[] { (build: 0, pid: 2), (build: 70291, pid: 3), (build: 70707, pid: 9),
+                             (build: 99999, pid: 1), (build: 70707, pid: 4), (build: 12340, pid: 5) }
+    .OrderByDescending(p => ClientAttachPolicy.SelectionPriority(p.build)).ThenBy(p => p.pid).ToArray();
+Require(selectionOrder.Select(p => p.pid).SequenceEqual(new[] { 4, 9, 3, 5, 1, 2 }), "process selection preference and deterministic ties");
 
 ExperimentalOffsetsTests.Run(); // synthetic routing checks, not live validation
 RotationTests.Run(); // hotbar/priority logic only, not client-state validation

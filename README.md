@@ -1,6 +1,6 @@
 # CopilotBuddy
 
-World of Warcraft 3.3.5a (Wrath of the Lich King, build 12340) bot written in C# (.NET 10, WPF, x86). The API surface and architecture are ported from Honorbuddy and adapted for WotLK private servers.
+World of Warcraft bot written in C# (.NET 10 and WPF). The default client is build **70707** (x64), with experimental offsets and ClickAim Grind/Gather support. Older 70291 (x64) and 3.3.5a build 12340 (x86) paths remain available. The original API surface and architecture were ported from Honorbuddy for WotLK private servers.
 
 ## Downloads (ready-to-play build)
 
@@ -63,10 +63,10 @@ CopilotBuddy grew out of the **Robot reVolt** community. All appropriate contrib
 
 ## Tech stack
 
-- Language: C# 10 / .NET 10, WPF for the UI, x86 to match the WoW 3.3.5a client
-- Injection and memory: custom EndScene hook, direct read/write into the WoW process
+- Language: C# / .NET 10, WPF for the UI, x64 by default; explicit x86 for the 32-bit 3.3.5a client
+- Memory and input: build-specific readers and native input; legacy 3.3.5a also has a custom EndScene hook
 - Pathfinding: Detour through a separate C++ wrapper (see `Navigation C++`)
-- Lua: executed in the game thread through a custom ASM/FASM layer
+- Legacy Lua infrastructure exists, but the modern ClickAim Grind/Gather paths do not use Lua
 - Profiles: XML, Honorbuddy-compatible format
 
 ## Release
@@ -123,19 +123,20 @@ The UI is translated into 15 languages (English, French, German, Spanish, Italia
 
 ## Build
 
-```
-dotnet build CopilotBuddy.csproj -c Release                  # x86 (default)
-dotnet build CopilotBuddy.csproj -c Release -p:Platform=x64  # x64
+```powershell
+dotnet build CopilotBuddy.csproj -c Release                  # x64 (default; 70707 / 70291)
+dotnet build CopilotBuddy.csproj -c Release -p:Platform=x64  # explicit x64
+dotnet build CopilotBuddy.csproj -c Release -p:Platform=x86  # 32-bit 3.3.5a
 ```
 
-The executable lands in `bin/<Platform>/Release/net10.0-windows7.0/CopilotBuddy.exe` with `Navigation.dll`, `data.bin`, and the `Bots/`, `Plugins/`, `Routines/`, `Profiles/`, `Settings/` and `Dungeon Scripts/` folders.
+The executable is under `bin/` in the configuration's `net10.0-windows7.0` output directory, with the matching architecture's `Navigation.dll` and runtime content. Visual Studio's solution `Any CPU` configuration maps to the x64 project configuration; choose x86 explicitly for 32-bit 3.3.5a.
 
-The solution builds for both `x86` and `x64`. The x86 build is the classic, fully functional configuration for the 32-bit WoW 3.3.5a client. The x64 build is the foundation for attaching to a native 64-bit WoW client: the memory layer, thread-context handling and PE parsing are 64-bit capable, but the offset tables, assembly injection engine and native libraries still need x64 work — see `X64_PORT_PLAN.md` for the full audit and status.
+Build 70707 is the newest registered client and is preferred in the process selector when several clients are available. A single available process attaches as before; the selector still allows choosing an older client or another character, and `/pid=` continues to select explicitly. To support a future client build, implement and verify its build-specific reader/offset routing before registering it in `ClientAttachPolicy`; the selector then prefers the highest registered build. Unknown newer versions are not automatically treated as compatible. The pre-existing unversioned/WowB-name discovery exceptions still exist and do not validate their offsets.
 
 The C++ navigation wrapper is built separately with Visual Studio 2022 (see `Navigation C++/README.md`).
 
 ## Limitations
 
-- Targets the WoW 3.3.5a client build 12340 only. No other clients or expansions are supported.
-- Features specific to Cataclysm and later are stubs that return neutral values. This is intentional; the bot targets WotLK.
-- Native 64-bit WoW client support is in progress: the bitness-agnostic memory/context/PE foundation has landed (see `X64_PORT_PLAN.md`), but offsets, the FASM injection engine and the x86-only native `Lib/*.dll` binaries still gate the x64 platform.
+- The 70707 client is the default, but its offsets, object layouts and some gameplay checks remain experimental; preference does not establish full client support or safety.
+- 70707 and 70291 use the modern ClickAim paths rather than the full 3.3.5a object model and behavior-tree botbases. Feature availability varies by client and has not all been validated in-game.
+- The legacy 3.3.5a client requires the explicit x86 build. Unknown client builds must not be assumed to share another build's offsets.
