@@ -9,7 +9,7 @@ gather = (src / 'GrindRunner.cs').read_text(encoding='utf-8-sig')
 methods = gather[gather.index('    private static bool SkinQuiet('):gather.index('    /// <summary>The click found no point on the body at all.')]
 fixture = (Path(__file__).parent / 'Fixture.cs.txt').read_text().replace('        // METHODS', methods)
 loot = gather[gather.index('    private static string LootNearby('):gather.index('    // ------------------------------------------------------------------ selling')]
-assert loot.index('TryLootOne(hwnd, corpse, out uint lootMap, out bool lootPixelConfirmed)') < loot.index('_lootsSinceTrip++') < loot.index('TrySkinLootedBeast(hwnd, reader, corpse, lootMap)')
+assert loot.index('TryLootOne(hwnd, corpse, out uint lootMap, out bool lootPixelConfirmed, recentOnly)') < loot.index('_lootsSinceTrip++') < loot.index('TrySkinLootedBeast(hwnd, reader, corpse, lootMap)')
 assert 'result == 0 && _running && GatherSettings.Skinning' in loot
 assert loot.index('if (!lootPixelConfirmed)') < loot.index('WowBSkinning.IsConfirmed') < loot.index('TrySkinLootedBeast(hwnd, reader, corpse, lootMap)')
 loot_one = gather[gather.index('    private static int TryLootOne('):gather.index('    // Skinning is separate')]

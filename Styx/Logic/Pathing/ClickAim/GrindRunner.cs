@@ -278,8 +278,10 @@ internal static class GrindRunner
 
     /// <summary>Corpses this run has already tried; a corpse that cannot be looted is not retried forever.</summary>
     private static readonly HashSet<WowBGuid> _looted = new HashSet<WowBGuid>();
+    private static readonly WowBRecentLoot RecentLoot = new WowBRecentLoot();
+    private static int _recentLootQuietAt;
 
-    /// <summary>Corpses successfully looted this session, for the summary.</summary>
+    /// <summary>Corpse loot interactions sent this session; item collection is unverified.</summary>
     private static int _loots;
 
     /// <summary>Set once the corpse word-diff has been printed; it is a discovery aid, not a log line.</summary>
@@ -372,6 +374,7 @@ internal static class GrindRunner
         bool recovered = WowBCorpseRecovery.TryRecover(candidate, mover, () => !_stop && !ClickAimAbort.Requested);
         if (!recovered) { _stop = true; return false; }
         _deathCheckpoint = new WowBDeathCheckpoint();
+        RecentLoot.Clear();
         _focusedFightGuid = default; _defenceHandoffGuid = default; _focusedDamageObserved = false; _unverifiedGuid = default;
         _combatHold = false; _poolApproachHandled = false;
         Buffs.Reset(); // confirmed revival; reapply at the next quiet opportunity
@@ -546,10 +549,16 @@ internal static class GrindRunner
     // eligibility checks. This is not evidence that the unit is an attacker.
     private static WowBGuid _defenceHandoffGuid;
     private static bool _focusedDamageObserved;
-    private static void MarkFocusedAttack(WowBGuid guid)
+    private static void MarkFocusedAttack(WowBObservedUnit unit)
     {
-        if (_focusedFightGuid != guid) _focusedDamageObserved = false;
-        _focusedFightGuid = guid;
+        if (_focusedFightGuid != unit.Guid) _focusedDamageObserved = false;
+        _focusedFightGuid = unit.Guid;
+        // Remember only an actually engaged Grind target, never an arbitrary
+        // nearby corpse or Gather defence target. The map is mandatory.
+        WowBReader? reader = ObjectManager.WowB;
+        if (_running && reader != null && reader.IsExperimental70707 &&
+            reader.TryReadMapId(out uint map) && !_looted.Contains(unit.Guid))
+            RecentLoot.Remember(unit, map, Environment.TickCount);
     }
 
     /// <summary>
@@ -774,6 +783,8 @@ internal static class GrindRunner
         _focusedFightGuid = default(WowBGuid);
         _focusedDamageObserved = false;
         _looted.Clear();
+        RecentLoot.Clear();
+        _recentLootQuietAt = unchecked(Environment.TickCount - 15000);
         _loots = 0;
         _lootProbed = false;
         _vendorDue = false;
@@ -846,6 +857,17 @@ internal static class GrindRunner
                     }
                 }
 
+                // Do not wait through a long meal and let a recent corpse expire.
+                // A manual or automatic vendor trip still has priority; resting
+                // before that trip is handled below as before.
+                if (trialReader != null && RecentLoot.Any(Environment.TickCount) &&
+                    !_vendorDue && !VendorDue() && !_stop && !ClickAimAbort.Requested && !RouteRunner.StopRequested &&
+                    TryReadGatherCombat(out bool preRestLootCombat) && !preRestLootCombat)
+                {
+                    string earlyLoot = LootNearby(hwnd, 3, recentOnly: true);
+                    if (earlyLoot.Length > 0) { Logging.Write("[Grind] " + earlyLoot); continue; }
+                }
+
                 /* No recovery step: healing needs a cast, a cast needs the action bar, and
                  * clicking a heal button 40 pixels wide on a 3D scene is a guess. Auto-attack
                  * plus the client's own swing is what a level-2 character does anyway. */
@@ -880,6 +902,17 @@ internal static class GrindRunner
                     continue;
                 }
 
+                // A dying NPC may clear selection or end combat before Fight can
+                // observe zero health. Revisit only recently engaged GUIDs, before
+                // gathering, a fresh pull or roaming. Combat and selling still win.
+                if (trialReader != null && RecentLoot.Any(Environment.TickCount) &&
+                    !_vendorDue && !_stop && !ClickAimAbort.Requested && !RouteRunner.StopRequested &&
+                    TryReadGatherCombat(out bool lootCombat) && !lootCombat)
+                {
+                    string pendingLoot = LootNearby(hwnd, 3, recentOnly: true);
+                    if (pendingLoot.Length > 0) { Logging.Write("[Grind] " + pendingLoot); continue; }
+                }
+
                 // Initial, timed and post-resurrection buff attempts are made
                 // only at a quiet point, after resting/vendor priority.
                 Buffs.TryApply(hwnd, () => _stop, () => StopForBuff(hwnd, mover), () => _presses++);
@@ -904,6 +937,7 @@ internal static class GrindRunner
                     }
                     Logging.Write("[Grind] " + combatReport);
                     if (combatReport.StartsWith("the character died", StringComparison.Ordinal)) break;
+                    if (trialReader != null) PollRecentLootAfterFight(hwnd, trialReader);
                     continue;
                 }
 
@@ -1038,7 +1072,7 @@ internal static class GrindRunner
         string killSummary = trialReader != null ? "target(s) observed at zero candidate health" : "kill(s) confirmed";
         Logging.Write(string.Format(CultureInfo.InvariantCulture,
             "[Grind] done: {0} hotspot(s) reached, {1} fight(s), {2} " + killSummary + ", "
-            + "{3} corpse(s) looted, {4} key press(es), {5} click(s) that landed, {6} area switch(es), "
+            + "{3} corpse loot interaction(s) sent (loot unverified), {4} key press(es), {5} click(s) that landed, {6} area switch(es), "
             + "{8} vendor trip(s), {9} sell click(s), {7:F0} s",
             hotspots, fights, kills, _loots, _presses, _clicks, switches,
             (Environment.TickCount - started) / 1000.0, vendorTrips, _sellClicks));
@@ -1329,6 +1363,19 @@ internal static class GrindRunner
         {
             report = "a vendor trip is waiting - not picking up a new fight before it";
             return false;
+        }
+
+        // DwellAtHotspot also calls TryEngage directly, without the outer
+        // roaming loop. Process recent bodies before it chooses another pull.
+        if (trialReader != null && RecentLoot.Any(Environment.TickCount))
+        {
+            string pendingLoot = LootNearby(hwnd, 3, recentOnly: true);
+            if (pendingLoot.Length > 0)
+            {
+                report = pendingLoot;
+                _poolApproachHandled = true;
+                return false;
+            }
         }
 
         // Defence always takes precedence above. On 70707 the player reader only
@@ -1697,7 +1744,7 @@ internal static class GrindRunner
                 }
                 else
                 {
-                    string loot = LootNearby(hwnd, 2);
+                    string loot = LootNearby(hwnd, 2, recentOnly: trialReader != null);
                     if (loot.Length > 0) Logging.Write("[Grind] " + loot);
                 }
 
@@ -1848,7 +1895,7 @@ internal static class GrindRunner
             }
             else
             {
-                string loot = LootNearby(hwnd, 3);
+                string loot = LootNearby(hwnd, 3, recentOnly: trialReader != null);
                 if (loot.Length > 0) Logging.Write("[Grind] " + loot);
             }
         }
@@ -2265,6 +2312,8 @@ internal static class GrindRunner
                 if (CountFightAsKill(report, ObjectManager.WowB?.IsExperimental70707 == true))
                 { kills++; killed++; _killsSinceTrip++; }
                 Logging.Write("[Grind] " + report);
+                WowBReader? recentReader = WowBGrindFactions.ExperimentalBoundReader;
+                if (recentReader != null) PollRecentLootAfterFight(hwnd, recentReader);
                 clearScans = 0;               // something was here: this hotspot is not finished
                 continue;
             }
@@ -2298,7 +2347,7 @@ internal static class GrindRunner
             Logging.Write("[Grind] leaving the hotspot with a vendor trip waiting: the bodies stay put, "
                           + "the trip goes first");
         else
-            loot = LootNearby(hwnd, 3);
+            loot = LootNearby(hwnd, 3, recentOnly: ObjectManager.WowB?.IsExperimental70707 == true);
 
         if (fought == 0 && loot.Length == 0) return "";
         if (fought == 0) return loot;
@@ -2656,13 +2705,36 @@ internal static class GrindRunner
     /// Nothing happens while something is attacking: a fight outranks loot, and the corpse
     /// is not going anywhere.
     /// </summary>
-    private static string LootNearby(IntPtr hwnd, int maxCorpses)
+    // Death/selection transitions and snapshots need not arrive on the same tick.
+    // Give the last engaged GUID a short observation window, without waiting
+    // through combat, a vendor request, death, an attachment change or STOP.
+    private static void PollRecentLootAfterFight(IntPtr hwnd, WowBReader reader)
     {
-        if (_stop || maxCorpses <= 0) return "";
-        if (UnderAttack()) return "";      // a fight outranks the loot, and the body keeps
+        for (int attempt = 0; attempt < 5; attempt++)
+        {
+            if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested || _vendorDue ||
+                ObjectManager.WowB != reader || !reader.ExperimentalGrindActive ||
+                !RecentLoot.Any(Environment.TickCount) || CheckDeathCheckpoint() ||
+                !TryReadGatherCombat(out bool fighting) || fighting || VendorDue()) return;
+            string loot = LootNearby(hwnd, 3, recentOnly: true);
+            if (loot.Length > 0) { Logging.Write("[Grind] " + loot); return; }
+            if (attempt < 4 && ClickAimAbort.Wait(200)) return;
+        }
+    }
+
+    private static string LootNearby(IntPtr hwnd, int maxCorpses, bool recentOnly = false)
+    {
+        if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested || _vendorDue || maxCorpses <= 0) return "";
+        if (recentOnly)
+        {
+            if (!TryReadGatherCombat(out bool fighting) || fighting) return "";
+        }
+        else if (UnderAttack()) return "";
 
         Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
         if (reader == null) return "";
+        uint recentMap = uint.MaxValue;
+        if (recentOnly && (!reader.TryReadMapId(out recentMap) || recentMap == uint.MaxValue)) return "";
 
         WowBWorldSnapshot? snap;
         if (!Capture(out snap) || snap == null) return "";
@@ -2678,12 +2750,14 @@ internal static class GrindRunner
             if (unit.IsLocalPlayer) continue;
             if (unit.HasPlayerVtable) continue;
             if (_looted.Contains(unit.Guid)) continue;
+            if (recentOnly && !RecentLoot.Matches(unit, recentMap, Environment.TickCount)) continue;
             // 70707 corpse classifications are candidates; never probe a body
             // outside the same active faction filter used for combat.
             if (reader.IsExperimental70707 && !WowBGrindFactions.AllowsPull(reader, unit, out _)) continue;
 
             double d = ClickAimMath.Len(unit.Location.X - me.Location.X, unit.Location.Y - me.Location.Y);
-            if (d <= 0.5 || d > LootYd) continue;
+            if (!double.IsFinite(d) || d > LootYd || (!recentOnly && d <= 0.5) ||
+                (recentOnly && Math.Abs(unit.Location.Z - me.Location.Z) > 5.0)) continue;
 
             Styx.WoWInternals.WowBReader.WowBUnitFields f;
             if (!reader.TryGetUnitFields(unit.UnitAddress, out f) || f.Health != 0) continue;
@@ -2696,24 +2770,54 @@ internal static class GrindRunner
             corpses.Insert(at, new KeyValuePair<double, WowBObservedUnit>(d, unit));
         }
 
-        if (corpses.Count == 0) return "";
+        if (corpses.Count == 0)
+        {
+            if (recentOnly && RecentLoot.Any(Environment.TickCount) &&
+                unchecked(Environment.TickCount - _recentLootQuietAt) >= 15000)
+            {
+                _recentLootQuietAt = Environment.TickCount;
+                Logging.Write("[Loot] no recently engaged GUID is currently an eligible nearby zero-health body; " +
+                    "it may be alive, missing, unreadable, blocked, out of range or already visited (loot not verified)");
+            }
+            return "";
+        }
 
         int clicked = 0, gone = 0, unreached = 0;
         for (int i = 0; i < corpses.Count && clicked + unreached < maxCorpses && !_stop; i++)
         {
             WowBObservedUnit corpse = corpses[i].Value;
+            if (recentOnly)
+            {
+                Logging.Write("[Loot] recently engaged GUID " + corpse.Guid +
+                    " is now observed at zero candidate health; loot ownership is unverified");
+                if (!ApproachRecentCorpse(hwnd, reader, recentMap, corpse, out string reason))
+                {
+                    if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested || _vendorDue || VendorDue() ||
+                        !TryReadGatherCombat(out bool stillFighting) || stillFighting) break;
+                    Logging.Write("[Loot] recent corpse approach withheld: " + reason);
+                    _looted.Add(corpse.Guid);
+                    RecentLoot.Forget(corpse.Guid);
+                    unreached++;
+                    continue;
+                }
+            }
             _looted.Add(corpse.Guid);          // one visit per body, whatever happens
 
-            int result = TryLootOne(hwnd, corpse, out uint lootMap, out bool lootPixelConfirmed);
+            int result = TryLootOne(hwnd, corpse, out uint lootMap, out bool lootPixelConfirmed, recentOnly);
             if (result == LootUnderAttack)
             {
                 /* Something started fighting while the body was being reached. Nothing is
                  * recorded against the corpse beyond the one visit: a fight outranks loot. */
+                if (recentOnly && (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested || _vendorDue || VendorDue() ||
+                    !TryReadGatherCombat(out bool interruptedCombat) || interruptedCombat))
+                    _looted.Remove(corpse.Guid); // retry only after the interruption clears
+                else if (recentOnly) RecentLoot.Forget(corpse.Guid);
                 Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                    "[Grind] gave up on the body of {0} ({1:F1} yd away) - something started fighting",
+                    "[Grind] deferred the body of {0} ({1:F1} yd away) - combat or another safety interruption",
                     corpse.Guid, corpses[i].Key));
                 break;
             }
+            if (recentOnly) RecentLoot.Forget(corpse.Guid);
             if (result == LootNoClick)
             {
                 unreached++;
@@ -3122,6 +3226,51 @@ internal static class GrindRunner
         return true;
     }
 
+    // Re-read the exact engaged body and player, not the current selection.
+    // The candidate fields and map are experimental and loot rights are unknown.
+    private static bool RecentCorpseCurrent(WowBReader reader, GreenMagic.Memory memory, uint map,
+        WowBObservedUnit original, out WowBObservedUnit corpse, out WowBObservedUnit player, out double distance)
+    {
+        corpse = default; player = default; distance = double.MaxValue;
+        if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested || _vendorDue || CheckDeathCheckpoint() ||
+            ObjectManager.WowB != reader || ObjectManager.Wow != memory ||
+            !TryReadGatherCombat(out bool fighting) || fighting || VendorDue() ||
+            !reader.TryReadMapId(out uint currentMap) || currentMap != map ||
+            !Capture(out WowBWorldSnapshot? snap) || snap == null || !snap.TryGetLocalPlayer(out player) ||
+            !snap.TryGetUnit(original.Guid, out corpse) || corpse.IsLocalPlayer || corpse.HasPlayerVtable ||
+            corpse.RecordAddress != original.RecordAddress || corpse.UnitAddress != original.UnitAddress ||
+            !RecentLoot.Matches(corpse, map, Environment.TickCount) ||
+            !reader.TryGetUnitFields(corpse.UnitAddress, out WowBReader.WowBUnitFields fields) || fields.Health != 0 ||
+            !WowBGrindFactions.AllowsPull(reader, corpse, out _)) return false;
+        distance = ClickAimMath.Len(corpse.Location.X - player.Location.X, corpse.Location.Y - player.Location.Y);
+        return double.IsFinite(distance) && distance <= LootYd &&
+            Math.Abs(corpse.Location.Z - player.Location.Z) <= 5.0 &&
+            !_stop && !ClickAimAbort.Requested && !RouteRunner.StopRequested && !_vendorDue &&
+            ObjectManager.WowB == reader && ObjectManager.Wow == memory;
+    }
+
+    private static bool ApproachRecentCorpse(IntPtr hwnd, WowBReader reader, uint map, WowBObservedUnit original, out string reason)
+    {
+        reason = "identity, zero health, map or combat state unavailable";
+        GreenMagic.Memory? memory = ObjectManager.Wow;
+        if (memory == null) return false;
+        int started = Environment.TickCount;
+        var watch = new ChaseWatch(started);
+        try
+        {
+            while (unchecked(Environment.TickCount - started) < LootWalkMs)
+            {
+                if (CheckDeathCheckpoint() || !RecentCorpseCurrent(reader, memory, map, original,
+                        out WowBObservedUnit corpse, out _, out double distance)) return false;
+                if (distance <= LootReachYd) return true;
+                if (!ChaseStep(hwnd, watch, corpse, out reason, true)) return false;
+            }
+            reason = "mesh approach timed out";
+            return false;
+        }
+        finally { ClickAimKeySteer.ReleaseHeld(); }
+    }
+
     /// <summary>
     /// Walks to one corpse and right-clicks it, and reports what happened: 1 when the body left
     /// the pool, 0 when the client confirmed the click by selecting the body and the body is
@@ -3130,12 +3279,18 @@ internal static class GrindRunner
     /// fighting. Walks only within <see cref="LootYd"/>, because a loot trip is not worth a
     /// fight with something else.
     /// </summary>
-    private static int TryLootOne(IntPtr hwnd, WowBObservedUnit corpse, out uint lootMap, out bool lootPixelConfirmed)
+    private static int TryLootOne(IntPtr hwnd, WowBObservedUnit corpse, out uint lootMap, out bool lootPixelConfirmed, bool recentOnly = false)
     {
         lootMap = uint.MaxValue;
         lootPixelConfirmed = false;
         WowBReader? lootReader = ObjectManager.WowB;
         if (lootReader != null && lootReader.TryReadMapId(out uint currentMap)) lootMap = currentMap;
+        GreenMagic.Memory? recentMemory = ObjectManager.Wow;
+        uint recentMap = lootMap;
+        Func<bool>? recentSafe = recentOnly && lootReader != null && recentMemory != null
+            ? () => RecentCorpseCurrent(lootReader, recentMemory, recentMap, corpse, out _, out _, out double verifiedDistance) && verifiedDistance <= LootReachYd + 1.0
+            : null;
+        if (recentOnly && (recentSafe == null || !recentSafe())) return LootUnderAttack;
         /* Get within reach first, and mean it. A right-click on a body further away is a walk
          * order, not a loot - the 18:44 run spent a whole loot window on that. */
         int walkStart = Environment.TickCount;
@@ -3145,6 +3300,7 @@ internal static class GrindRunner
             if (!ClickAimPositions.TryRead(out px, out py)) break;
             double d = ClickAimMath.Len(corpse.Location.X - px, corpse.Location.Y - py);
             if (d <= LootReachYd) break;
+            if (recentOnly) return LootNoClick; // recent bodies use the validated mesh approach only
             if (UnderAttack()) return LootUnderAttack;
             double remaining;
             ClickAimKeySteer.Steer(corpse.Location.X, corpse.Location.Y, hwnd, true, out remaining);
@@ -3186,10 +3342,12 @@ internal static class GrindRunner
         uint[][]? before = probe ? CaptureWords(corpse) : null;
 
         string how;
-        if (!TryClickUnit(hwnd, corpse, lx, ly, true, out how, out lootPixelConfirmed))
+        if (!TryClickUnit(hwnd, corpse, lx, ly, true, out how, out lootPixelConfirmed, recentSafe))
         {
             Logging.Write(string.Format(CultureInfo.InvariantCulture,
                 "[Loot] could not reach the body of {0} with the mouse: {1}", corpse.Guid, how));
+            if (recentOnly && (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested || _vendorDue || VendorDue() ||
+                !TryReadGatherCombat(out bool lootInterrupted) || lootInterrupted)) return LootUnderAttack;
             return LootNoClick;
         }
 
@@ -3927,7 +4085,7 @@ internal static class GrindRunner
         => TryClickUnit(hwnd, unit, px, py, mustSelect, out how, out _);
 
     private static bool TryClickUnit(IntPtr hwnd, WowBObservedUnit unit, double px, double py,
-                                     bool mustSelect, out string how, out bool pixelConfirmed)
+                                     bool mustSelect, out string how, out bool pixelConfirmed, Func<bool>? safeToClick = null)
     {
         how = "";
         pixelConfirmed = false;
@@ -3955,7 +4113,7 @@ internal static class GrindRunner
         // projected fallback. Move off it with verified F1 first, then search
         // for a fresh left-click selection as normal. Never do this in combat.
         WowBReader? clickReader = ObjectManager.WowB;
-        bool strictClick = _running && GrindFactionSettings.Rules.Enabled;
+        bool strictClick = _running && (GrindFactionSettings.Rules.Enabled || safeToClick != null);
         GreenMagic.Memory? clickMemory = ObjectManager.Wow;
         if (strictClick && (clickReader == null || clickMemory == null)) { how = "client attachment unavailable"; return false; }
         using var uncachedClick = strictClick ? clickMemory?.TemporaryCacheState(false) : null;
@@ -3969,13 +4127,23 @@ internal static class GrindRunner
 
         int fx, fy;
         if (FindUnitPixel(hwnd, unit, px, py, out fx, out fy, out how,
-                strictClick ? () => !TryReadGatherCombat(out bool probeFighting) || probeFighting : null))
+                strictClick ? () => !TryReadGatherCombat(out bool probeFighting) || probeFighting ||
+                    (safeToClick != null && !safeToClick()) : null))
         {
-            if (strictClick && (_stop || ClickAimAbort.Requested || clickReader == null || ObjectManager.WowB != clickReader ||
+            if (strictClick && (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested || _vendorDue ||
+                clickReader == null || ObjectManager.WowB != clickReader ||
                 ObjectManager.Wow != clickMemory || clickReader.ReadTargetGuid() != unit.Guid ||
-                !TryReadGatherCombat(out bool postProbeFighting) || postProbeFighting))
+                !TryReadGatherCombat(out bool postProbeFighting) || postProbeFighting ||
+                (safeToClick != null && !safeToClick())))
             { how += "; click withheld because selection or combat state changed"; return false; }
-            ClickAimInput.Click(hwnd, fx, fy);
+            if (safeToClick != null)
+            {
+                if (!ClickAimInput.ClientSize(hwnd, out int width, out int height) || clickReader == null ||
+                    !ClickAimInput.ConfirmedRightClick(hwnd, width / 2 + fx, height / 2 + fy, width, height,
+                        () => clickReader.ReadTargetGuid() == unit.Guid && safeToClick(), out _))
+                { how += "; final guarded right-click withheld"; return false; }
+            }
+            else ClickAimInput.Click(hwnd, fx, fy);
             pixelConfirmed = true;
             return true;
         }
@@ -3985,8 +4153,8 @@ internal static class GrindRunner
          * projected point anyway - it is a best effort and the caller is told so. */
         Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
         if (_stop || ClickAimAbort.Requested || reader == null || reader.ReadTargetGuid() != unit.Guid) return false;
-        if (_running && GrindFactionSettings.Rules.Enabled)
-        { how += "; unverified right-click withheld while the faction attack filter is active"; return false; }
+        if (strictClick)
+        { how += "; unverified right-click withheld for this guarded interaction"; return false; }
 
         int bx, by;
         if (!TryProject(hwnd, px, py, unit.Location.X, unit.Location.Y, unit.Location.Z, out bx, out by) ||
@@ -4496,7 +4664,7 @@ internal static class GrindRunner
                 return "killed" + (worked.Count == 0 ? "" : " with " + string.Join(", ", worked.ToArray()));
             }
             if (initialTargetHealth > 0 && health > 0 && health < initialTargetHealth)
-            { MarkFocusedAttack(target.Guid); _focusedDamageObserved = true; }
+            { MarkFocusedAttack(target); _focusedDamageObserved = true; }
             if ((!defenceOnly || defenceFactionFilter) && !FactionPullStillAllowed(reader, expectedPull, target))
             { ClickAimKeySteer.ReleaseHeld(); return "faction key or unit identity became unavailable during pull; stopping"; }
 
@@ -4940,7 +5108,7 @@ internal static class GrindRunner
                 ClickAimInput.TapKey(hwnd, dot.KeyVk, 40);
                 if (rotation.Class == ClickAimRotationClass.Shaman)
                     ClickAimClassRotation.Defer(_rotationCooldowns, ClickAimClassRotation.DotCooldownGroup(dot), 8000, Environment.TickCount);
-                MarkFocusedAttack(target.Guid);
+                MarkFocusedAttack(target);
                 presses++;
                 _presses++;
                 _dotGuid = target.Guid;
@@ -5069,7 +5237,7 @@ internal static class GrindRunner
                 ClickAimClassRotation.Defer(_rotationCooldowns,
                     supplemental ? rotation.SupplementalGroup : rotation.DamageGroup,
                     supplemental ? rotation.SupplementalIntervalMs : rotation.DamageIntervalMs, Environment.TickCount);
-                MarkFocusedAttack(target.Guid);
+                MarkFocusedAttack(target);
                 presses++;
                 _presses++;
 
@@ -5290,7 +5458,7 @@ internal static class GrindRunner
                     { return YieldForTargetChange(reader, fightMemory, defenceTarget); }
                     if (!auto.IsAttack) return "Attack role changed; attack withheld";
                     ClickAimInput.TapKey(hwnd, auto.KeyVk, 40);
-                    MarkFocusedAttack(target.Guid);
+                    MarkFocusedAttack(target);
                     lastAttackPressMs = Environment.TickCount;
                     presses++;
                     _presses++;
@@ -5306,7 +5474,7 @@ internal static class GrindRunner
                 lastMeleeClickMs = Environment.TickCount;
                 if (TryClickUnit(hwnd, target, me.Location.X, me.Location.Y))
                 {
-                    MarkFocusedAttack(target.Guid);
+                    MarkFocusedAttack(target);
                     _clicks++;
                     presses++;
                     attacked = true;
@@ -5334,7 +5502,7 @@ internal static class GrindRunner
                 ClickAimInput.TapKey(hwnd, meleeHit.KeyVk, 40);
                 ClickAimClassRotation.Defer(_rotationCooldowns, rotation.MeleeGroup, rotation.MeleeIntervalMs, Environment.TickCount);
                 if (rotation.MeleeIntervalMs > 0) { _pendingCastId = meleeHit.Id; _pendingCastMana = myMana; }
-                MarkFocusedAttack(target.Guid);
+                MarkFocusedAttack(target);
                 presses++;
                 _presses++;
                 if (!worked.Contains(meleeHit.Name + " (pressed at arm's length)"))
