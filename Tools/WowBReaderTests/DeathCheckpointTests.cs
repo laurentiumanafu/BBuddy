@@ -55,8 +55,11 @@ internal static class DeathCheckpointTests
             var tracker = new WowBDeathCheckpoint();
             memory.U64(unit + Wow70707Offsets.HealthCandidateOffset, 148);
             if (tracker.Poll(out _)) throw new Exception("Living observation marked dead");
-            memory.U64(unit + Wow70707Offsets.HealthCandidateOffset, 0);
-            if (!tracker.Poll(out _)) throw new Exception("Dead observation missed");
+            int samples = 0;
+            if (!WowBDeathCheckpoint.ObserveSafetyExit(
+                    () => { if (++samples == 3) memory.U64(unit + Wow70707Offsets.HealthCandidateOffset, 0); return tracker.Poll(out _); },
+                    () => false, ms => false) || samples != 3)
+                throw new Exception("A death after a combat safety exit must reach the real checkpoint tracker");
             var recorded = tracker.Recorded;
             if (!recorded.HasValue || recorded.Value.Player != player || recorded.Value.Map != 7 ||
                 recorded.Value.Position.X != 100 || recorded.Value.Position.Y != 200 || recorded.Value.Position.Z != 300 ||
@@ -98,7 +101,26 @@ internal static class DeathCheckpointTests
             WowBDeathCheckpoint.MayBeginRecovery(true, true, 12, 12, true, false) ||
             WowBDeathCheckpoint.MayBeginRecovery(true, true, 12, 12, false, true))
             throw new Exception("Recovery must not clear a newer STOP or proceed without its checkpoint");
-        Console.WriteLine("Death checkpoint and recovery STOP policy fixtures passed (no live death or recovery test).");
+        int polls = 0, waits = 0;
+        bool stopped = false;
+        bool Wait(int milliseconds) { if (milliseconds != 100) throw new Exception("Unexpected sampling interval"); waits++; return stopped; }
+        bool PollAfterDelay() { polls++; return polls == 4; }
+        if (!WowBDeathCheckpoint.ObserveSafetyExit(PollAfterDelay, () => stopped, Wait) || polls != 4 || waits != 3)
+            throw new Exception("A delayed death veto should be observed before the safety abort");
+        polls = waits = 0;
+        if (WowBDeathCheckpoint.ObserveSafetyExit(() => { polls++; return false; }, () => stopped, Wait) || polls != 21 || waits != 20)
+            throw new Exception("Alive or unreadable state must time out without authorizing recovery");
+        polls = waits = 0; stopped = true;
+        if (WowBDeathCheckpoint.ObserveSafetyExit(() => { polls++; return true; }, () => stopped, Wait) || polls != 0)
+            throw new Exception("STOP before the safety pause must suppress polling and recovery");
+        stopped = false;
+        if (WowBDeathCheckpoint.ObserveSafetyExit(() => { stopped = true; return true; }, () => stopped, Wait))
+            throw new Exception("STOP during a death poll must win over its result");
+        stopped = false; polls = 0;
+        if (WowBDeathCheckpoint.ObserveSafetyExit(() => { polls++; return false; }, () => stopped,
+                ms => { stopped = true; return true; }) || polls != 1)
+            throw new Exception("STOP during a safety wait must end it immediately");
+        Console.WriteLine("Death checkpoint, safety-exit and recovery STOP policy fixtures passed (no live death or recovery test).");
     }
 }
 #endif

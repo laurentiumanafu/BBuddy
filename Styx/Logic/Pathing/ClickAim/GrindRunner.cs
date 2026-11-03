@@ -316,13 +316,19 @@ internal static class GrindRunner
     private static bool _recoveryReady;
     private static int _deathStopGeneration;
 
-    private static bool CheckDeathCheckpoint()
+    private static bool CheckDeathCheckpoint(bool trackerOnly = false)
     {
         // Standalone Gather uses this fight loop for defence and owns its tracker.
-        if (_deathCheckpoint == null && GatherRunner.Running && GatherRunner.StopIfDeadOrGhost()) return true;
+        if (_deathCheckpoint == null && GatherRunner.Running)
+        {
+            if (GatherRunner.StopIfDeadOrGhost()) return true;
+            // During the bounded safety pause, let Gather's own tracker retry
+            // instead of stopping the unrelated Grind runner on a fallback read.
+            if (trackerOnly) return false;
+        }
         bool observed = false;
         bool veto = _deathCheckpoint != null && _deathCheckpoint.Poll(out observed);
-        if (!veto && (observed || !PlayerDead())) return false;
+        if (!veto && (observed || trackerOnly || !PlayerDead())) return false;
         lock (StartStopGate)
         {
             if (_stop || ClickAimAbort.Requested) return true;
@@ -334,6 +340,22 @@ internal static class GrindRunner
         Logging.Write(_recoveryReady ? "[Grind] death checkpoint recorded; preparing experimental recovery" :
             "[Grind] death/ghost safety check stopped the bot; no usable recovery checkpoint");
         return true;
+    }
+
+    // These 70707 combat exits previously requested a global abort immediately.
+    // If death and a target/vitals change happened between scheduled polls,
+    // that abort prevented the owning runner from recording or recovering it.
+    // Never attack the replacement target; pause input and sample death first.
+    private static string StopFightForSafety(string reason)
+    {
+        ClickAimKeySteer.ReleaseHeld();
+        Logging.Write("[Grind] " + reason + "; pausing to check for a death/ghost transition before stopping");
+        bool veto = WowBDeathCheckpoint.ObserveSafetyExit(() => CheckDeathCheckpoint(trackerOnly: true),
+            () => ClickAimAbort.Requested || RouteRunner.StopRequested, ClickAimAbort.Wait);
+        if (veto) return "death/ghost safety check; fight halted for recovery if a checkpoint was captured";
+        _stop = true;
+        ClickAimAbort.Request();
+        return reason + "; no death/ghost transition confirmed during safety pause";
     }
 
     private static bool RecoverIfPending(ClickAimMover mover)
@@ -881,6 +903,7 @@ internal static class GrindRunner
                 }
 
                 if (combatReport.Length > 0) Logging.Write("[Grind] " + combatReport);
+                if (_stop || ClickAimAbort.Requested) break;
                 if (trialReader != null && ObjectManager.WowB != trialReader) break;
                 if (_combatHold || _poolApproachHandled) continue;
 
@@ -4343,15 +4366,17 @@ internal static class GrindRunner
 
             if (target.Guid != defenceTarget)
             {
-                if (reader?.IsExperimental70707 == true) { _stop = true; ClickAimAbort.Request(); }
-                return "target changed during the fight; stopping rather than attacking another unit";
+                string reason = "target changed during the fight; stopping rather than attacking another unit";
+                if (reader?.IsExperimental70707 == true)
+                    return StopFightForSafety(reason + " (expected " + defenceTarget + ", selected " + target.Guid + ")");
+                return reason;
             }
             if (target.HasPlayerVtable)
                 return "the target turned out to be a player - disengaged";
 
             int health = Health(target);
             if (reader?.IsExperimental70707 == true && health < 0)
-            { _stop = true; ClickAimAbort.Request(); return "70707 target health became unreadable; stopping"; }
+                return StopFightForSafety("70707 target health became unreadable; stopping");
             if (health >= 0 && lastHealth > 0 && health == 0)
             {
                 if (_focusedFightGuid == target.Guid) _focusedFightGuid = default;
@@ -4514,7 +4539,7 @@ internal static class GrindRunner
                 myMaxMana = mine.MaxPower;      // a candidate on this build: see HealPowerOk
             }
             else if (reader?.IsExperimental70707 == true)
-            { _stop = true; ClickAimAbort.Request(); return "70707 player vitals became unreadable; stopping"; }
+                return StopFightForSafety("70707 player vitals became unreadable; stopping");
 
             /* Every read feeds the peak. It used to be fed only while resting, so a fight that
              * began on a full bar had no denominator at all - and an unknown maximum is what
@@ -4541,7 +4566,10 @@ internal static class GrindRunner
              * dead character, which is what the 16:09 run did for its last four seconds
              * ("health 0% and Healing Touch did not lift it"). */
             if (myMaxHealth > 0 && myHealth == 0)
-                return "the character died at " + presses + " press(es) into the fight; stopping the grind";
+            {
+                string reason = "the character died at " + presses + " press(es) into the fight; stopping the grind";
+                return reader?.IsExperimental70707 == true ? StopFightForSafety(reason) : reason;
+            }
 
             if (!announced)
             {
@@ -4637,7 +4665,10 @@ internal static class GrindRunner
 
                 if (_stop || ClickAimAbort.Requested) return "stopped";
                 if (afterMaxHealth > 0 && afterHealth == 0)
-                    return "the character died during the heal; stopping the grind";
+                {
+                    const string reason = "the character died during the heal; stopping the grind";
+                    return reader?.IsExperimental70707 == true ? StopFightForSafety(reason) : reason;
+                }
                 if (afterHealth > myHealth)
                 {
                     string label = "heal " + heal.Name;
@@ -4701,7 +4732,11 @@ internal static class GrindRunner
                         finalBack.TryGetSelectedTarget(out WowBObservedUnit finalTarget) && finalTarget.Guid == wanted &&
                         (defenceOnly && !defenceFactionFilter || FactionPullStillAllowed(reader, expectedPull, finalTarget));
                     if (!recovered)
-                    { _stop = true; ClickAimAbort.Request(); return "could not recover the same target after healing; stopped rather than switching mobs"; }
+                    {
+                        const string reason = "could not recover the same target after healing; stopped rather than switching mobs";
+                        if (reader?.IsExperimental70707 == true) return StopFightForSafety(reason);
+                        _stop = true; ClickAimAbort.Request(); return reason;
+                    }
                 }
                 continue;
             }

@@ -30,6 +30,24 @@ internal sealed class WowBDeathCheckpoint
                                           bool abortRequested, bool routeStopped)
         => pending && hasCheckpoint && deathGeneration == currentGeneration && !abortRequested && !routeStopped;
 
+    // A combat safety exit can race the next scheduled death sample. While no
+    // gameplay input is being sent, allow 20 short waits (two seconds plus read
+    // time) for a checkpoint or ghost veto. A STOP wins, including one that
+    // arrives during a poll. An unreadable/alive result never authorizes recovery.
+    internal static bool ObserveSafetyExit(Func<bool> poll, Func<bool> cancelled, Func<int, bool> wait)
+    {
+        const int intervals = 20, intervalMs = 100;
+        for (int i = 0; i <= intervals; i++)
+        {
+            if (cancelled()) return false;
+            bool veto = poll();
+            if (cancelled()) return false;
+            if (veto) return true;
+            if (i == intervals || wait(intervalMs)) return false;
+        }
+        return false;
+    }
+
     internal static bool MayRecord(bool hasAlive, bool alreadySaved, WowBGuid aliveGuid, uint aliveMap,
                                    int ageMs, WowBGuid currentGuid, uint currentMap,
                                    uint health, uint maxHealth, double x, double y, double z)
