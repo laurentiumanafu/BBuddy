@@ -112,6 +112,7 @@ internal static class ClickAimUi
             return "a bot or route is already running";
 
         GatherSettings.Load();
+        WowBSkinning.Load();
         if (string.Equals(botName, GatherBotName, StringComparison.OrdinalIgnoreCase))
         {
             string gatherPath = LoadedProfile;

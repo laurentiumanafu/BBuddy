@@ -1,0 +1,10 @@
+# Experimental wowb skinning
+
+This is the ClickAim **Grind** path for builds 70291 and 70707. The legacy 3.3.5a bot has its own separate skinning behavior and settings.
+
+1. Train Skinning in-game, bring any required tool, and enable game auto-loot. The bot cannot read the character's profession, skill, tools, loot window or whether a skinning cast succeeded.
+2. Stop the bot. Select a **living beast** in WoW. Open **Gather settings** and press **Remember selected beast**, confirming only if it really is a beast. Repeat for each beast type you want to skin.
+3. Check **Skin confirmed beasts after looting (Grind)** and press **Save**. The remembered list is saved immediately; it is independent for the two supported wowb builds. **Clear confirmed beasts** clears both lists.
+4. Start Grind. After a loot interaction with a confirmed pixel, if the corpse remains visible in the validated snapshot, the bot may attempt one additional right-click. It rechecks the exact corpse, distance, map, combat, death, STOP, and pending vendor trip; probes a fresh corpse pixel and requires the selected and candidate mouseover GUIDs to match. It then waits still for up to six seconds, unless interrupted. It does not retry skinning a corpse repeatedly. The existing F1 self-target binding must work to clear a selected corpse before re-probing.
+
+**Limitations:** the unit creature-type and skill offsets are not verified on wowb. Remembering a beast stores an experimental entry candidate extracted from its GUID, not a proven client creature type; the bot treats other units with that candidate as the same beast type. It cannot independently guarantee that matching implies a beast, or that a beast is skinnable, that auto-loot finished, or that items were received. Never confirm an unknown type. A wrong or colliding candidate could cause an unwanted second interaction. Unknown entries are skipped. `[Skin]` logs describe requests and withholding, not confirmed skinning success. Candidate mouseover is also unverified on 70707 and can cause attempts to be withheld. Live validation is required.

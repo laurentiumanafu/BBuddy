@@ -16,6 +16,8 @@ namespace CopilotBuddy.UI
     {
         private readonly CheckBox _mining = new CheckBox { Content = "Mining", Margin = new Thickness(0, 8, 0, 4) };
         private readonly CheckBox _herbalism = new CheckBox { Content = "Herbalism", Margin = new Thickness(0, 8, 0, 4) };
+        private readonly CheckBox _skinning = new CheckBox { Content = "Skin confirmed beasts after looting (Grind)", Margin = new Thickness(0, 10, 0, 4) };
+        private readonly TextBlock _beastCount = new TextBlock { TextWrapping = TextWrapping.Wrap };
         private readonly CheckBox _roam = new CheckBox { Content = "Roam on the mesh when no profile is loaded", Margin = new Thickness(0, 10, 0, 4) };
         private readonly CheckBox _grind = new CheckBox { Content = "Gather nearby resources while grinding", Margin = new Thickness(0, 10, 0, 4) };
         private readonly TextBox _roamRadius = new TextBox { Width = 90, HorizontalAlignment = HorizontalAlignment.Left };
@@ -25,6 +27,7 @@ namespace CopilotBuddy.UI
         public GatherSettingsWindow()
         {
             GatherSettings.Load();
+            if (!ClickAimUi.Running && !ClickAimUi.Paused) WowBSkinning.Load();
             Title = "Gather settings";
             Width = 460; Height = 550; ResizeMode = ResizeMode.NoResize;
             WindowStartupLocation = WindowStartupLocation.CenterOwner;
@@ -33,6 +36,7 @@ namespace CopilotBuddy.UI
             _roamRadius.Text = GatherSettings.RoamRadiusYd.ToString(CultureInfo.InvariantCulture);
             _mining.IsChecked = GatherSettings.Mining;
             _herbalism.IsChecked = GatherSettings.Herbalism;
+            _skinning.IsChecked = GatherSettings.Skinning;
             _miningSkill.Text = GatherSettings.MiningSkill.ToString(CultureInfo.InvariantCulture);
             _herbSkill.Text = GatherSettings.HerbalismSkill.ToString(CultureInfo.InvariantCulture);
             var panel = new StackPanel { Margin = new Thickness(16) };
@@ -43,6 +47,16 @@ namespace CopilotBuddy.UI
             panel.Children.Add(_herbalism);
             panel.Children.Add(new TextBlock { Text = "Herbalism skill" });
             panel.Children.Add(_herbSkill);
+            panel.Children.Add(_skinning);
+            panel.Children.Add(new TextBlock { Text = "Skill and beast type are not readable on wowb. Stop the bot, select a living beast, then remember it. Only confirmed entry candidates are tried; this applies to other spawns of that entry. Ensure skinning is trained and you have the required skill/tool.", TextWrapping = TextWrapping.Wrap });
+            var remember = new Button { Content = "Remember selected beast", Margin = new Thickness(0, 4, 0, 4), HorizontalAlignment = HorizontalAlignment.Left };
+            remember.Click += RememberBeastClick;
+            panel.Children.Add(remember);
+            var clearBeasts = new Button { Content = "Clear confirmed beasts", Margin = new Thickness(0, 0, 0, 4), HorizontalAlignment = HorizontalAlignment.Left };
+            clearBeasts.Click += ClearBeastsClick;
+            panel.Children.Add(clearBeasts);
+            panel.Children.Add(_beastCount);
+            UpdateBeastCount();
             panel.Children.Add(_roam);
             panel.Children.Add(new TextBlock { Text = "Roaming destination radius from start (100–3000 yd)" });
             panel.Children.Add(_roamRadius);
@@ -58,6 +72,29 @@ namespace CopilotBuddy.UI
                 VerticalScrollBarVisibility = System.Windows.Controls.ScrollBarVisibility.Auto,
                 Content = panel
             };
+        }
+
+        private void UpdateBeastCount()
+        {
+            _beastCount.Text = "Confirmed entry candidates: " + WowBSkinning.Count(false) + " for 70291, "
+                + WowBSkinning.Count(true) + " for 70707. The entry field is experimental.";
+        }
+
+        private void RememberBeastClick(object sender, RoutedEventArgs e)
+        {
+            if (MessageBox.Show(this, "Is your selected living NPC a beast? Its entry candidate will be treated as a beast for all matching spawns. Do not confirm humanoids or unknown types.",
+                "Confirm beast", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+            bool saved = WowBSkinning.RememberSelected(out string message);
+            MessageBox.Show(this, message, "Skinning", MessageBoxButton.OK, saved ? MessageBoxImage.Information : MessageBoxImage.Warning);
+            UpdateBeastCount();
+        }
+
+        private void ClearBeastsClick(object sender, RoutedEventArgs e)
+        {
+            if (MessageBox.Show(this, "Clear confirmed beast entries for both wowb builds?", "Skinning",
+                MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+            if (!WowBSkinning.Clear()) MessageBox.Show(this, "Stop the bot first or check that the settings file is writable.", "Skinning", MessageBoxButton.OK, MessageBoxImage.Warning);
+            UpdateBeastCount();
         }
 
         private void SaveClick(object sender, RoutedEventArgs e)
@@ -78,6 +115,7 @@ namespace CopilotBuddy.UI
             GatherSettings.RoamRadiusYd = roamRadius;
             GatherSettings.Mining = _mining.IsChecked == true;
             GatherSettings.Herbalism = _herbalism.IsChecked == true;
+            GatherSettings.Skinning = _skinning.IsChecked == true;
             GatherSettings.MiningSkill = mining;
             GatherSettings.HerbalismSkill = herbs;
             if (!GatherSettings.Save()) { MessageBox.Show(this, "Could not save gather settings."); return; }

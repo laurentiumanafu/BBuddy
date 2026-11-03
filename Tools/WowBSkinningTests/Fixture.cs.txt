@@ -1,0 +1,149 @@
+using System;
+using System.IO;
+using System.Collections.Generic;
+using Styx.WoWInternals;
+using Styx.Logic.Pathing;
+using Styx.Helpers;
+namespace Styx.Helpers { internal static class Logging { internal static void Write(string text) {} } }
+namespace GreenMagic { internal class Memory { internal IntPtr WindowHandle = (IntPtr)1; internal IDisposable TemporaryCacheState(bool _) => new Scope(); private sealed class Scope : IDisposable { public void Dispose() {} } } }
+namespace Styx.WoWInternals
+{
+    internal struct WowBGuid : IEquatable<WowBGuid>
+    {
+        internal ulong High, Low;
+        internal bool IsEmpty => High == 0 && Low == 0;
+        internal WowBGuid(uint entry) { High = (ulong)entry << 6; Low = 1; }
+        public bool Equals(WowBGuid other) => High == other.High && Low == other.Low;
+        public override bool Equals(object? o) => o is WowBGuid g && Equals(g);
+        public override int GetHashCode() => HashCode.Combine(High, Low);
+        public static bool operator ==(WowBGuid a, WowBGuid b) => a.Equals(b);
+        public static bool operator !=(WowBGuid a, WowBGuid b) => !a.Equals(b);
+    }
+    internal struct Position { internal double X,Y,Z; }
+    internal struct WowBObservedUnit
+    {
+        internal WowBGuid Guid; internal ulong RecordAddress, UnitAddress;
+        internal bool IsLocalPlayer, HasPlayerVtable; internal Position Location;
+    }
+    internal class WowBWorldSnapshot
+    {
+        internal bool TryGetLocalPlayer(out WowBObservedUnit p) { p=TestState.Player; return TestState.PlayerPresent; }
+        internal bool TryGetUnit(WowBGuid guid, out WowBObservedUnit u) { u=TestState.Corpse; return TestState.CorpsePresent && u.Guid==guid; }
+    }
+    internal class WowBReader
+    {
+        internal bool IsExperimental70707 = true;
+        internal bool TryReadMapId(out uint map) { map=TestState.Map; return TestState.MapReadable; }
+        internal WowBGuid ReadTargetGuid() => TestState.Target;
+        internal bool TryReadMouseoverGuidCandidate(out WowBGuid guid) { guid=TestState.Hover; return TestState.HoverReadable; }
+        internal struct WowBUnitFields { internal uint Health; }
+        internal bool TryGetUnitFields(ulong address, out WowBUnitFields fields) { fields=new WowBUnitFields { Health=TestState.Health }; return TestState.FieldsReadable; }
+    }
+    internal static class ObjectManager { internal static WowBReader? WowB; internal static GreenMagic.Memory? Wow; }
+}
+namespace Styx.Logic.Pathing
+{
+    internal static class TestState
+    {
+        internal static WowBObservedUnit Player, Corpse, Original;
+        internal static WowBGuid Target, Hover;
+        internal static bool PlayerPresent, CorpsePresent, MapReadable, FieldsReadable, HoverReadable, Combat, CombatReadable, Faction, CaptureOk, Death, ConfirmPixel, StopDuringProbe, SelectOnProbe;
+        internal static uint Map, Health; internal static int Clicks, Waits, Dismissals; internal static Action? OnWait;
+        internal static void Reset()
+        {
+            Player=new WowBObservedUnit { Guid=new WowBGuid(999), RecordAddress=1, UnitAddress=2, IsLocalPlayer=true };
+            Corpse=new WowBObservedUnit { Guid=new WowBGuid(123), RecordAddress=3, UnitAddress=4, Location=new Position { X=3 } }; Original=Corpse;
+            Target=Player.Guid; Hover=Corpse.Guid; PlayerPresent=CorpsePresent=MapReadable=FieldsReadable=HoverReadable=CombatReadable=Faction=CaptureOk=ConfirmPixel=SelectOnProbe=true;
+            Combat=Death=StopDuringProbe=false; Map=1; Health=0; Clicks=Waits=Dismissals=0; OnWait=null;
+            ObjectManager.Wow=new GreenMagic.Memory(); ObjectManager.WowB=new WowBReader();
+            ClickAimAbort.Requested=false; RouteRunner.StopRequested=false; GatherSettings.Skinning=true; GrindRunner.Reset();
+        }
+    }
+    internal static class ClickAimCalibration { internal static string DefaultPath = Path.Combine(Path.GetTempPath(), "bbuddy-skinning-tests-" + Guid.NewGuid(), "config"); }
+    internal static class ClickAimUi { internal static bool Running, Paused; }
+    internal static class WowBKnownMerchants
+    {
+        internal static bool CaptureSelected(out WowBGuid guid, out uint map, out string message)
+        { guid=TestState.Corpse.Guid; map=1; message=""; return true; }
+    }
+    internal static class ClickAimAbort
+    {
+        internal static bool Requested;
+        internal static bool Wait(int ms) { TestState.Waits++; TestState.OnWait?.Invoke(); return Requested; }
+    }
+    internal static class RouteRunner { internal static bool StopRequested; }
+    internal static class WowBGrindFactions { internal static bool AllowsPull(WowBReader r, WowBObservedUnit u, out bool unknown) { unknown=false; return TestState.Faction; } }
+    internal static class ClickAimInput
+    {
+        internal static bool ClientSize(IntPtr h, out int w, out int height) { w=800; height=600; return true; }
+        internal static bool ConfirmedRightClick(IntPtr h, int x, int y, int w, int height, Func<bool> confirm, out string reason)
+        { reason="cancelled"; if (ClickAimAbort.Requested || !confirm() || ClickAimAbort.Requested) return false; TestState.Clicks++; reason="posted"; return true; }
+    }
+    internal static class GrindRunner
+    {
+        private static bool _stop, _vendorDue, vendorDue;
+        private static int _clicks;
+        private const double LootReachYd = 4;
+        internal static void Reset() { _stop=false; _vendorDue=false; vendorDue=false; _clicks=0; }
+        internal static void Vendor() { _vendorDue=true; }
+        private static bool VendorDue() => vendorDue;
+        private static bool CheckDeathCheckpoint() => TestState.Death;
+        private static bool TryReadGatherCombat(out bool fighting) { fighting=TestState.Combat; return TestState.CombatReadable; }
+        private static bool Capture(out WowBWorldSnapshot? snap) { snap=TestState.CaptureOk ? new WowBWorldSnapshot() : null; return snap != null; }
+        private static void DismissRejectedSelection(IntPtr hwnd, WowBReader? reader, WowBGuid player, WowBGuid rejected) { TestState.Dismissals++; TestState.Target=player; }
+        private static bool FindUnitPixel(IntPtr hwnd, WowBObservedUnit unit, double px, double py, out int x, out int y, out string how, Func<bool>? cancel = null)
+        {
+            x=0; y=0; how="fixture";
+            if (TestState.StopDuringProbe) ClickAimAbort.Requested=true;
+            if (!TestState.ConfirmPixel || (cancel != null && cancel())) return false;
+            if (TestState.SelectOnProbe) TestState.Target=unit.Guid;
+            return true;
+        }
+        internal static void Run(uint map=1) => TrySkinLootedBeast((IntPtr)1, ObjectManager.WowB!, TestState.Original, map);
+        // METHODS
+    }
+    public static class Program
+    {
+        static void Check(bool condition, string text) { if (!condition) throw new Exception(text); }
+        static void NoClick(string text) { GrindRunner.Run(); Check(TestState.Clicks == 0, text); }
+        public static void Main()
+        {
+            TestState.Reset();
+            Check(GatherSettings.Save(), "save opt-in"); GatherSettings.Skinning=false; GatherSettings.Load();
+            Check(GatherSettings.Skinning, "persist opt-in");
+            File.Delete(Path.Combine(Path.GetDirectoryName(ClickAimCalibration.DefaultPath)!, "clickaim-gather.txt"));
+            GatherSettings.Load(); Check(!GatherSettings.Skinning, "missing settings fail closed");
+            WowBSkinning.Load(); Check(!WowBSkinning.IsConfirmed(true, TestState.Corpse.Guid), "unknown beast");
+            Check(WowBSkinning.RememberSelected(out _), "remember selected");
+            Check(WowBSkinning.IsConfirmed(true, TestState.Corpse.Guid) && !WowBSkinning.IsConfirmed(false, TestState.Corpse.Guid), "build isolation");
+            WowBSkinning.Load(); Check(WowBSkinning.IsConfirmed(true, TestState.Corpse.Guid), "persisted");
+            TestState.Reset(); GrindRunner.Run(); Check(TestState.Clicks==1 && TestState.Waits==30, "one click and cast wait");
+            TestState.Reset(); GatherSettings.Skinning=false; NoClick("disabled");
+            TestState.Reset(); TestState.Corpse.Guid=new WowBGuid(124); TestState.Original=TestState.Corpse; NoClick("unconfirmed type");
+            TestState.Reset(); TestState.Combat=true; NoClick("combat");
+            TestState.Reset(); TestState.CombatReadable=false; NoClick("unknown combat");
+            TestState.Reset(); TestState.Death=true; NoClick("death");
+            TestState.Reset(); ClickAimAbort.Requested=true; NoClick("stop");
+            TestState.Reset(); RouteRunner.StopRequested=true; NoClick("route stop");
+            TestState.Reset(); TestState.Map=2; NoClick("map changed");
+            TestState.Reset(); TestState.MapReadable=false; NoClick("map unreadable");
+            TestState.Reset(); GrindRunner.Vendor(); NoClick("vendor priority");
+            TestState.Reset(); TestState.CorpsePresent=false; NoClick("corpse gone");
+            TestState.Reset(); TestState.Corpse.UnitAddress=5; NoClick("identity changed");
+            TestState.Reset(); TestState.Health=1; NoClick("alive");
+            TestState.Reset(); TestState.FieldsReadable=false; NoClick("unreadable corpse");
+            TestState.Reset(); TestState.Corpse.Location.X=6; NoClick("out of reach");
+            TestState.Reset(); TestState.Faction=false; NoClick("faction gate");
+            TestState.Reset(); TestState.ConfirmPixel=false; NoClick("no pixel");
+            TestState.Reset(); TestState.SelectOnProbe=false; NoClick("selection not verified");
+            TestState.Reset(); TestState.Hover=new WowBGuid(124); NoClick("wrong hover");
+            TestState.Reset(); TestState.HoverReadable=false; NoClick("hover unreadable");
+            TestState.Reset(); TestState.StopDuringProbe=true; NoClick("stop during probe");
+            TestState.Reset(); TestState.OnWait=()=>ClickAimAbort.Requested=true; GrindRunner.Run(); Check(TestState.Clicks==1 && TestState.Waits==1 && TestState.Dismissals==0, "stop during cast");
+            TestState.Reset(); TestState.OnWait=()=>TestState.Combat=true; GrindRunner.Run(); Check(TestState.Clicks==1 && TestState.Waits==1 && TestState.Dismissals==0, "combat during cast");
+            TestState.Reset(); TestState.Target=TestState.Corpse.Guid; GrindRunner.Run(); Check(TestState.Clicks==1 && TestState.Dismissals==2, "verified reselect and cleanup");
+            Check(WowBSkinning.Clear() && !WowBSkinning.IsConfirmed(true, TestState.Corpse.Guid), "clear");
+            Console.WriteLine("32 synthetic skinning checks passed (stubbed client/input; no real game)");
+        }
+    }
+}

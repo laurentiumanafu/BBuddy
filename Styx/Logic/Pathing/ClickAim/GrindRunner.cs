@@ -2648,12 +2648,10 @@ internal static class GrindRunner
     /// memory write, no reading of the loot itself. The user has auto-loot on, so there is
     /// nothing here that reads a loot window, and nothing that presses a key to take an item.
     ///
-    /// The only thing that can be observed from outside is whether the body left the pool.
-    /// A body that leaves was looted. A body that stays might still have been looted (bones
-    /// linger), so a second attempt is made with an ESC between them to close a window that
-    /// stayed open, and then the body is left alone for the session - one visit per corpse,
-    /// never a loop. If auto-loot were off, the windows would stay open and every corpse would
-    /// report that it is still there, which is the symptom the log would show.
+    /// A corpse disappearing does not prove loot was collected. One loot click is sent per
+    /// visited corpse. With skinning explicitly enabled, a user-confirmed beast entry may
+    /// get one separate skinning click after the loot wait and fresh safety/identity checks.
+    /// Loot window state, skinnability and actual item collection are not verified.
     ///
     /// Nothing happens while something is attacking: a fight outranks loot, and the corpse
     /// is not going anywhere.
@@ -2706,7 +2704,7 @@ internal static class GrindRunner
             WowBObservedUnit corpse = corpses[i].Value;
             _looted.Add(corpse.Guid);          // one visit per body, whatever happens
 
-            int result = TryLootOne(hwnd, corpse);
+            int result = TryLootOne(hwnd, corpse, out uint lootMap, out bool lootPixelConfirmed);
             if (result == LootUnderAttack)
             {
                 /* Something started fighting while the body was being reached. Nothing is
@@ -2725,31 +2723,37 @@ internal static class GrindRunner
             clicked++;
             _loots++;
             _lootsSinceTrip++;
+            if (result == 0 && _running && GatherSettings.Skinning)
+            {
+                if (!lootPixelConfirmed)
+                    Logging.Write("[Skin] not attempted: loot pixel was not confirmed");
+                else if (WowBSkinning.IsConfirmed(reader.IsExperimental70707, corpse.Guid))
+                    TrySkinLootedBeast(hwnd, reader, corpse, lootMap);
+                else
+                    Logging.Write("[Skin] not attempted: unconfirmed beast entry candidate "
+                        + WowBSkinning.EntryCandidate(corpse.Guid).ToString(CultureInfo.InvariantCulture));
+            }
 
-            /* Something just went into the bags: this is the moment a free-slot count moves by
-             * one, which is the whole point of the hunt. */
-            BagSlotHunt.Sample("looted a body");
+            // Observe possible bag changes; the interaction does not prove any item was collected.
+            BagSlotHunt.Sample("loot interaction");
             if (result > 0)
             {
                 gone++;
                 Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                    "[Grind] looted the body of {0} ({1:F1} yd away) - the corpse is gone, so the client "
-                    + "took it", corpse.Guid, corpses[i].Key));
+                    "[Grind] sent a loot interaction for {0} ({1:F1} yd away); the corpse was not observed afterward (loot not verified)",
+                    corpse.Guid, corpses[i].Key));
             }
             else
             {
-                /* Bones stay in the pool, so a body that is still there is not proof of failure -
-                 * but the click itself WAS confirmed by the client selecting the body, which is
-                 * the part that used to be taken on faith. */
                 Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                    "[Grind] looted the body of {0} ({1:F1} yd away); the bones are still in the pool, "
-                    + "which is normal", corpse.Guid, corpses[i].Key));
+                    "[Grind] sent a loot interaction for {0} ({1:F1} yd away); the corpse was still observed (loot not verified)",
+                    corpse.Guid, corpses[i].Key));
             }
         }
 
         if (clicked == 0 && unreached == 0) return "";
         return string.Format(CultureInfo.InvariantCulture,
-            "looting: {0} body(s) taken{1}{2}", clicked,
+            "looting: {0} interaction(s) sent{1}{2}", clicked,
             gone == 0 ? "" : ", " + gone + " gone from the pool",
             unreached == 0 ? "" : ", " + unreached + " the mouse could not reach");
     }
@@ -3126,8 +3130,12 @@ internal static class GrindRunner
     /// fighting. Walks only within <see cref="LootYd"/>, because a loot trip is not worth a
     /// fight with something else.
     /// </summary>
-    private static int TryLootOne(IntPtr hwnd, WowBObservedUnit corpse)
+    private static int TryLootOne(IntPtr hwnd, WowBObservedUnit corpse, out uint lootMap, out bool lootPixelConfirmed)
     {
+        lootMap = uint.MaxValue;
+        lootPixelConfirmed = false;
+        WowBReader? lootReader = ObjectManager.WowB;
+        if (lootReader != null && lootReader.TryReadMapId(out uint currentMap)) lootMap = currentMap;
         /* Get within reach first, and mean it. A right-click on a body further away is a walk
          * order, not a loot - the 18:44 run spent a whole loot window on that. */
         int walkStart = Environment.TickCount;
@@ -3161,13 +3169,24 @@ internal static class GrindRunner
 
         ClickAimKeySteer.Face(corpse.Location.X, corpse.Location.Y, hwnd, 30.0, 4);
 
+        // A killing blow commonly leaves this corpse selected. For an opted-in
+        // beast, clear it safely before the loot probe so that both the first
+        // interaction and the later skinning click can use a confirmed pixel.
+        GreenMagic.Memory? lootMemory = ObjectManager.Wow;
+        if (_running && GatherSettings.Skinning && lootReader != null && lootMemory != null &&
+            WowBSkinning.IsConfirmed(lootReader.IsExperimental70707, corpse.Guid) &&
+            lootReader.ReadTargetGuid() == corpse.Guid &&
+            Capture(out WowBWorldSnapshot? preLoot) && preLoot != null && preLoot.TryGetLocalPlayer(out WowBObservedUnit lootPlayer) &&
+            SkinCorpseCurrent(lootReader, lootMemory, lootMap, corpse, lootPlayer.Guid, out _, out _))
+            DismissRejectedSelection(hwnd, lootReader, lootPlayer.Guid, corpse.Guid);
+
         /* One probe per session: five windows of the corpse's own object, read before and after
          * a click the client CONFIRMED selected the body. */
         bool probe = !_lootProbed && !_clickBiasKnown;
         uint[][]? before = probe ? CaptureWords(corpse) : null;
 
         string how;
-        if (!TryClickUnit(hwnd, corpse, lx, ly, true, out how))
+        if (!TryClickUnit(hwnd, corpse, lx, ly, true, out how, out lootPixelConfirmed))
         {
             Logging.Write(string.Format(CultureInfo.InvariantCulture,
                 "[Loot] could not reach the body of {0} with the mouse: {1}", corpse.Guid, how));
@@ -3201,8 +3220,8 @@ internal static class GrindRunner
         }
 
         Logging.Write(string.Format(CultureInfo.InvariantCulture,
-            "[Loot] the right-click on {0} landed ({1}); {2}", corpse.Guid, how,
-            result > 0 ? "the body is gone, so the client took it" : "the body is still in the pool as bones"));
+            "[Loot] requested right-click on {0} ({1}); {2}; loot is not verified", corpse.Guid, how,
+            result > 0 ? "body not observed afterward" : "body still observed"));
 
         // Loot can leave the corpse selected. Do not click a stale screen pixel:
         // if it is still selected and combat is clear, F1 targets self and is verified.
@@ -3213,6 +3232,74 @@ internal static class GrindRunner
             DismissRejectedSelection(hwnd, afterLootReader, afterLootPlayer.Guid, corpse.Guid);
 
         return result;
+    }
+
+    // Skinning is separate from the single loot click: only a user-confirmed beast
+    // entry candidate is eligible, and neither the loot nor the skin is observable.
+    private static bool SkinQuiet(WowBReader reader, GreenMagic.Memory memory, uint map)
+    {
+        if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested || _vendorDue ||
+            !GatherSettings.Skinning || map == uint.MaxValue || ObjectManager.Wow != memory || ObjectManager.WowB != reader)
+            return false;
+        if (CheckDeathCheckpoint() || !reader.TryReadMapId(out uint now) || now != map ||
+            !TryReadGatherCombat(out bool fighting) || fighting || VendorDue()) return false;
+        return !_stop && !ClickAimAbort.Requested && !RouteRunner.StopRequested && !_vendorDue &&
+            ObjectManager.Wow == memory && ObjectManager.WowB == reader;
+    }
+
+    private static bool SkinCorpseCurrent(WowBReader reader, GreenMagic.Memory memory, uint map,
+                                          WowBObservedUnit original, WowBGuid playerGuid,
+                                          out WowBObservedUnit current, out WowBObservedUnit player)
+    {
+        current = default; player = default;
+        if (!SkinQuiet(reader, memory, map) || !WowBSkinning.IsConfirmed(reader.IsExperimental70707, original.Guid) ||
+            !Capture(out WowBWorldSnapshot? snapshot) || snapshot == null ||
+            !snapshot.TryGetLocalPlayer(out player) || player.Guid != playerGuid ||
+            !snapshot.TryGetUnit(original.Guid, out current) || current.IsLocalPlayer || current.HasPlayerVtable ||
+            current.RecordAddress != original.RecordAddress || current.UnitAddress != original.UnitAddress ||
+            !reader.TryGetUnitFields(current.UnitAddress, out WowBReader.WowBUnitFields fields) || fields.Health != 0 ||
+            (reader.IsExperimental70707 && !WowBGrindFactions.AllowsPull(reader, current, out _))) return false;
+        double dx = current.Location.X - player.Location.X, dy = current.Location.Y - player.Location.Y;
+        double dz = current.Location.Z - player.Location.Z;
+        return Math.Sqrt(dx * dx + dy * dy + dz * dz) <= LootReachYd + 1.0 && SkinQuiet(reader, memory, map);
+    }
+
+    private static void TrySkinLootedBeast(IntPtr hwnd, WowBReader reader, WowBObservedUnit original, uint map)
+    {
+        GreenMagic.Memory? memory = ObjectManager.Wow;
+        if (memory == null) return;
+        using var uncached = memory.TemporaryCacheState(false);
+        if (!SkinQuiet(reader, memory, map) ||
+            !Capture(out WowBWorldSnapshot? snap) || snap == null || !snap.TryGetLocalPlayer(out WowBObservedUnit player)) return;
+        WowBGuid playerGuid = player.Guid;
+        if (!SkinCorpseCurrent(reader, memory, map, original, playerGuid, out WowBObservedUnit corpse, out player)) return;
+
+        // First loot normally dismissed the corpse. If not, clear it with verified
+        // F1; never use the unverified projected-point fallback for skinning.
+        if (reader.ReadTargetGuid() == corpse.Guid)
+            DismissRejectedSelection(hwnd, reader, playerGuid, corpse.Guid);
+        if (!SkinCorpseCurrent(reader, memory, map, original, playerGuid, out corpse, out player) ||
+            reader.ReadTargetGuid() == corpse.Guid || memory.WindowHandle != hwnd ||
+            !ClickAimInput.ClientSize(hwnd, out int width, out int height)) return;
+        if (!FindUnitPixel(hwnd, corpse, player.Location.X, player.Location.Y, out int x, out int y, out string how,
+            () => !SkinCorpseCurrent(reader, memory, map, original, playerGuid, out _, out _)))
+        { Logging.Write("[Skin] no confirmed corpse pixel: " + how); return; }
+        int pixelX = width / 2 + x, pixelY = height / 2 + y;
+        bool sent = ClickAimInput.ConfirmedRightClick(hwnd, pixelX, pixelY, width, height, () =>
+            memory.WindowHandle == hwnd && SkinCorpseCurrent(reader, memory, map, original, playerGuid, out _, out _) &&
+            reader.ReadTargetGuid() == original.Guid && reader.TryReadMouseoverGuidCandidate(out WowBGuid hover) && hover == original.Guid &&
+            !_stop && !ClickAimAbort.Requested, out string reason);
+        if (!sent) { Logging.Write("[Skin] right-click withheld: " + reason); return; }
+        _clicks++;
+        Logging.Write("[Skin] requested one right-click on confirmed beast " + original.Guid
+            + "; loot state, skinning cast and items are not verified");
+
+        // No turns or movement while a possible cast/auto-loot runs. Yield promptly
+        // to combat, map changes, death, vendor requests and user STOP.
+        for (int waited = 0; waited < 6000; waited += 200)
+            if (ClickAimAbort.Wait(200) || !SkinQuiet(reader, memory, map)) return;
+        if (SkinQuiet(reader, memory, map) && reader.ReadTargetGuid() == original.Guid)
+            DismissRejectedSelection(hwnd, reader, playerGuid, original.Guid);
     }
 
     /// <summary>The click found no point on the body at all.</summary>
@@ -3837,8 +3924,13 @@ internal static class GrindRunner
 
     private static bool TryClickUnit(IntPtr hwnd, WowBObservedUnit unit, double px, double py,
                                      bool mustSelect, out string how)
+        => TryClickUnit(hwnd, unit, px, py, mustSelect, out how, out _);
+
+    private static bool TryClickUnit(IntPtr hwnd, WowBObservedUnit unit, double px, double py,
+                                     bool mustSelect, out string how, out bool pixelConfirmed)
     {
         how = "";
+        pixelConfirmed = false;
 
         if (!mustSelect)
         {
@@ -3884,6 +3976,7 @@ internal static class GrindRunner
                 !TryReadGatherCombat(out bool postProbeFighting) || postProbeFighting))
             { how += "; click withheld because selection or combat state changed"; return false; }
             ClickAimInput.Click(hwnd, fx, fy);
+            pixelConfirmed = true;
             return true;
         }
 
@@ -3891,12 +3984,13 @@ internal static class GrindRunner
          * target guid cannot change and every probe looks like a miss. Right-click the
          * projected point anyway - it is a best effort and the caller is told so. */
         Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
-        if (reader == null || reader.ReadTargetGuid() != unit.Guid) return false;
+        if (_stop || ClickAimAbort.Requested || reader == null || reader.ReadTargetGuid() != unit.Guid) return false;
         if (_running && GrindFactionSettings.Rules.Enabled)
         { how += "; unverified right-click withheld while the faction attack filter is active"; return false; }
 
         int bx, by;
-        if (!TryProject(hwnd, px, py, unit.Location.X, unit.Location.Y, unit.Location.Z, out bx, out by))
+        if (!TryProject(hwnd, px, py, unit.Location.X, unit.Location.Y, unit.Location.Z, out bx, out by) ||
+            _stop || ClickAimAbort.Requested)
             return false;
         ClickAimInput.Click(hwnd, bx + (_clickBiasKnown ? _clickBiasX : 0),
                             by + (_clickBiasKnown ? _clickBiasY : 0));
