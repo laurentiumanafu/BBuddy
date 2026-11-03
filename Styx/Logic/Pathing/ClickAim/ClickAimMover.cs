@@ -347,6 +347,23 @@ public sealed class ClickAimMover : IPlayerMover
     /// <summary>True when movement is by facing + forward key rather than by clicking.</summary>
     public bool KeyMode { get { return _keyMode; } }
 
+    // Recovery must never use the normal first-route calibration: it walks before
+    // planning and cannot poll the ghost guard. Use the same turn-only calibration
+    // as a Grind chase, then restore this mover's original mode after recovery.
+    internal bool TryEnableRecoveryKeySteering(IntPtr hwnd, Func<bool> safe, out string report)
+    {
+        report = "";
+        if (!safe()) { report = "recovery state changed"; return false; }
+        if (_keyMode) return true;
+        if (!ClickAimKeySteer.EnsureChaseTurnKeys(hwnd, safe, out report)) return false;
+        if (!safe()) { report = "recovery state changed after turn calibration"; return false; }
+        _keyMode = true;
+        return true;
+    }
+
+    internal void EndRecoveryKeySteering() { _keyMode = false; }
+    internal bool RequireFacingForKeyMode { get; set; }
+
     // Gather uses only key steering. Its stops must not click the centre or tap W:
     // either input can start/interfere with an interaction at the character's feet.
     internal bool QuietKeyStop { get; set; }
@@ -365,7 +382,7 @@ public sealed class ClickAimMover : IPlayerMover
                  * at the waypoint instead of overshooting it. */
                 IntPtr hwnd = Handle();
                 double rem;
-                if (!ClickAimKeySteer.Steer(location.X, location.Y, hwnd, true, out rem))
+                if (!ClickAimKeySteer.Steer(location.X, location.Y, hwnd, true, out rem, RequireFacingForKeyMode))
                 {
                     Blocked = true;
                     return;

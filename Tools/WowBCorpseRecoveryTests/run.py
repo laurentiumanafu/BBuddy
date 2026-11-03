@@ -11,6 +11,10 @@ root = Path(__file__).resolve().parents[2]
 source = (root / 'Styx/Logic/Pathing/ClickAim/WowBCorpseRecovery.cs').read_text(encoding='utf-8-sig')
 methods = source[source.index('    // Mesh-only movement'):source.index('    private static bool TryDialogClick(')]
 fixture = (Path(__file__).parent / 'Fixture.cs.txt').read_text(encoding='utf-8')
+mover = (root / 'Styx/Logic/Pathing/ClickAim/ClickAimMover.cs').read_text(encoding='utf-8-sig')
+mover_methods = mover[mover.index('    internal bool TryEnableRecoveryKeySteering('):mover.index('    // Gather uses only key steering.') ]
+assert fixture.count('// __MOVER_METHODS__') == 1
+fixture = fixture.replace('// __MOVER_METHODS__', mover_methods)
 assert fixture.count('// __SEARCH_METHODS__') == 1
 fixture = fixture.replace('// __SEARCH_METHODS__', methods)
 constants = source[source.index('    private const int PromptWaitMs'):source.index('    private static bool Allowed(')]
@@ -29,6 +33,22 @@ assert 'TryDialogClick(memory, reader, hwnd, checkpoint, running, false, !fallba
 assert 'aliveReads >= 2 && WowBGrindFactions.Experimental70707BarSafe(reader)' in recover
 assert 'new bool[WowBCorpseSpotPolicy.DirectionCount]' in recover and 'out fallback' in recover
 assert 'TryDialogClick(memory, reader, hwnd, checkpoint, running, true, true' in recover
+assert recover.index('!RouteRunner.MeshReady()') < recover.index('TryDialogClick(memory, reader, hwnd, checkpoint, running, true, true')
+assert recover.index('state == State.Ghost') < recover.index('TryEnableRecoveryKeySteering(hwnd, SafeGhost') < recover.index('WalkGhostTo(memory, reader, hwnd, checkpoint')
+assert 'RequireFacingForKeyMode = true' in recover and 'mover.EndRecoveryKeySteering()' in recover
+assert 'out rem, RequireFacingForKeyMode' in mover
+assert 'EnsureChaseTurnKeys(hwnd, safe, out report)' in mover_methods
+assert 'TryEnableKeySteering(' not in mover_methods  # no walking calibration
+# The owning Grind loop must hand a death checkpoint to recovery without
+# overriding an explicit STOP, then return to the loop after confirmed revival.
+grind = (root / 'Styx/Logic/Pathing/ClickAim/GrindRunner.cs').read_text(encoding='utf-8-sig')
+owner = grind[grind.index('    private static bool RecoverIfPending('):grind.index('    private static int _presses;')]
+assert 'MayBeginRecovery' in owner and '_deathStopGeneration, _stopGeneration' in owner
+assert 'WowBCorpseRecovery.TryRecover(candidate, mover' in owner and 'Buffs.Reset()' in owner
+loop = grind[grind.index('            bool recovered;'):grind.index('        catch (Exception ex)', grind.index('            bool recovered;'))]
+assert 'if (CheckDeathCheckpoint()) break;' in loop
+assert '_recoveryReady && !ClickAimAbort.Requested && RecoverIfPending(mover)' in loop
+assert 'while (recovered && !_stop && !ClickAimAbort.Requested' in loop
 policy = (root / 'Styx/Logic/Pathing/ClickAim/WowBCorpseSpotPolicy.cs').read_text(encoding='utf-8-sig')
 project = '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><Nullable>enable</Nullable></PropertyGroup></Project>'
 with tempfile.TemporaryDirectory(prefix='wowb-corpse-recovery-') as directory:

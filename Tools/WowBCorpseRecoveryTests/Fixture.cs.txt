@@ -13,7 +13,29 @@ namespace Styx.Logic.Pathing
         public readonly float X, Y, Z;
         public WoWPoint(float x, float y, float z) { X = x; Y = y; Z = z; }
     }
-    sealed class ClickAimMover { public bool KeyMode = true, QuietKeyStop; public void MoveStop() { } }
+    sealed class ClickAimMover
+    {
+        private bool _keyMode = true;
+        public bool KeyMode { get => _keyMode; set => _keyMode = value; }
+        public bool QuietKeyStop;
+        public void MoveStop() { }
+        // __MOVER_METHODS__
+    }
+    static class ClickAimKeySteer
+    {
+        public static bool CalibrationOk = true, StopDuringCalibration, LoseGhostDuringCalibration;
+        public static int Calls;
+        public static Action? OnLoseGhost;
+        public static bool EnsureChaseTurnKeys(IntPtr h, Func<bool> safe, out string report)
+        {
+            Calls++; report = "synthetic turn calibration";
+            if (!safe()) return false;
+            if (StopDuringCalibration) ClickAimAbort.Requested = true;
+            if (LoseGhostDuringCalibration) OnLoseGhost?.Invoke();
+            return CalibrationOk && safe();
+        }
+        public static void ReleaseHeld() { }
+    }
     static class ClickAimMath { public static double Len(double x, double y) => Math.Sqrt(x*x + y*y); }
     static class WowBGrindFactions { public static bool Experimental70707BarSafe(WowBReader r) => true; }
     sealed class RoutePoint { public float X, Y, Z; public string Kind = ""; }
@@ -25,8 +47,8 @@ namespace Styx.Logic.Pathing
     static class Logging { public static void Write(string line) { } }
     static class RouteRunner
     {
-        public static bool NoPath;
-        public static bool MeshReady() => true;
+        public static bool NoPath, MeshUnavailable, StopRequested;
+        public static bool MeshReady() => !MeshUnavailable;
         public static WoWPoint[]? TryCombatMeshPath(double x, double y, RoutePoint target)
             => NoPath ? null : new[] { new WoWPoint((float)x, (float)y, 0), new WoWPoint(target.X, target.Y, target.Z) };
     }
@@ -41,7 +63,7 @@ namespace Styx.Logic.Pathing
         private static WoWPoint position;
         private static List<WoWPoint> npcs = new();
         private static readonly List<WoWPoint> walks = new();
-        private static bool Allowed(Memory m, WowBReader r, IntPtr h, Func<bool> active) => running && active() && !ClickAimAbort.Requested;
+        private static bool Allowed(Memory m, WowBReader r, IntPtr h, Func<bool> active) => running && active() && !ClickAimAbort.Requested && !RouteRunner.StopRequested;
         private static State ReadState(Memory m, WowBReader r, IntPtr h, WowBDeathCheckpoint.Candidate c, Func<bool> active, out WoWPoint p)
         { p = position; return !Allowed(m, r, h, active) ? State.Unknown : ghost ? State.Ghost : alive ? State.Alive : State.Dead; }
         private static bool TryNpcSnapshot(Memory m, WowBReader r, IntPtr h, WowBDeathCheckpoint.Candidate c, Func<bool> active, out WoWPoint p, out List<WoWPoint> units)
@@ -62,7 +84,7 @@ namespace Styx.Logic.Pathing
         { snapped = candidate; return !invalidGround && WowBCorpseSpotPolicy.InRange(candidate, corpse, WowBCorpseSpotPolicy.MaxClickRadius); }
         private static bool WalkGhostTo(Memory m, WowBReader r, IntPtr h, WowBDeathCheckpoint.Candidate c, Func<bool> active, ClickAimMover mover, RoutePoint goal, int started, bool stopNear)
         {
-            if (stopNear) return Allowed(m, r, h, active) && ghost;
+            if (stopNear) return mover.KeyMode && mover.RequireFacingForKeyMode && !RouteRunner.NoPath && Allowed(m, r, h, active) && ghost;
             walks.Add(new WoWPoint(goal.X, goal.Y, goal.Z));
             if (stopOnWalk) { ClickAimAbort.Requested = true; return false; }
             if (!Allowed(m, r, h, active) || !ghost) return false;
@@ -87,7 +109,9 @@ namespace Styx.Logic.Pathing
         {
             running = ghost = capture = true; alive = stopOnWalk = promptAlways = invalidGround = moveAtPrompt = moveAtClick = false;
             releaseClicks = resurrectClicks = promptCalls = visibleAtPrompt = 0; lastRequiredClearance = true;
-            promptRange = -1; ClickAimAbort.Requested = RouteRunner.NoPath = false;
+            promptRange = -1; ClickAimAbort.Requested = RouteRunner.NoPath = RouteRunner.MeshUnavailable = RouteRunner.StopRequested = false;
+            ClickAimKeySteer.CalibrationOk = true; ClickAimKeySteer.StopDuringCalibration = ClickAimKeySteer.LoseGhostDuringCalibration = false;
+            ClickAimKeySteer.Calls = 0; ClickAimKeySteer.OnLoseGhost = () => ghost = false;
             position = new WoWPoint(0, 25, 0); npcs = new List<WoWPoint>(); walks.Clear();
         }
         private static void Surround()
@@ -140,7 +164,32 @@ namespace Styx.Logic.Pathing
             Reset(); promptAlways = true; ghost = false; moveAtClick = true; ObjectManager.Wow = m; ObjectManager.WowB = r;
             Check(TryRecover(checkpoint, mover, active) && resurrectClicks == 1 && !lastRequiredClearance && alive && walks.Count == 4,
                   "NPC approaching before preferred click triggers scouting and fallback, not a stop");
-            Console.WriteLine("Corpse search and fallback fixtures passed (synthetic routes and prompts only).");
+            Reset(); ghost = false; RouteRunner.MeshUnavailable = true; mover.KeyMode = false;
+            Check(!TryRecover(checkpoint, mover, active) && releaseClicks == 0 && ClickAimKeySteer.Calls == 0,
+                  "missing mesh prevents release and calibration");
+            Reset(); ghost = false; promptAlways = true; mover.KeyMode = false;
+            Check(TryRecover(checkpoint, mover, active) && releaseClicks == 1 && resurrectClicks == 1 &&
+                  ClickAimKeySteer.Calls == 1 && !mover.KeyMode && !mover.RequireFacingForKeyMode,
+                  "uncalibrated mover turns after ghost, routes, resurrects and restores mode");
+            Reset(); ghost = false; promptAlways = true; mover.KeyMode = false; ClickAimKeySteer.CalibrationOk = false;
+            Check(!TryRecover(checkpoint, mover, active) && releaseClicks == 1 && resurrectClicks == 0 && walks.Count == 0 && !mover.KeyMode,
+                  "failed turn calibration stops without ghost walking or resurrection");
+            Reset(); ghost = false; promptAlways = true; mover.KeyMode = false; ClickAimKeySteer.StopDuringCalibration = true;
+            Check(!TryRecover(checkpoint, mover, active) && releaseClicks == 1 && resurrectClicks == 0 && walks.Count == 0 && !mover.KeyMode,
+                  "STOP during calibration stops recovery");
+            Reset(); ghost = false; promptAlways = true; mover.KeyMode = false; ClickAimKeySteer.LoseGhostDuringCalibration = true;
+            Check(!TryRecover(checkpoint, mover, active) && releaseClicks == 1 && resurrectClicks == 0 && walks.Count == 0 && !mover.KeyMode,
+                  "lost ghost during calibration prevents movement");
+            Reset(); ghost = false; promptAlways = true; mover.KeyMode = true; mover.RequireFacingForKeyMode = false;
+            Check(TryRecover(checkpoint, mover, active) && ClickAimKeySteer.Calls == 0 && mover.KeyMode && !mover.RequireFacingForKeyMode,
+                  "previously calibrated mode is retained after recovery");
+            Reset(); ghost = false; promptAlways = true; mover.KeyMode = false; RouteRunner.NoPath = true;
+            Check(!TryRecover(checkpoint, mover, active) && releaseClicks == 1 && resurrectClicks == 0 && !mover.KeyMode && !mover.RequireFacingForKeyMode,
+                  "missing route stops and restores temporary steering");
+            Reset(); ghost = false; mover.KeyMode = false; RouteRunner.StopRequested = true;
+            Check(!TryRecover(checkpoint, mover, active) && releaseClicks == 0 && ClickAimKeySteer.Calls == 0,
+                  "route STOP before release is respected");
+            Console.WriteLine("Corpse recovery and steering fixtures passed (synthetic routes and prompts only).");
         }
     }
 }

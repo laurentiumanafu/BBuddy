@@ -363,13 +363,16 @@ internal static class WowBCorpseRecovery
         WowBReader? reader = ObjectManager.WowB;
         IntPtr hwnd = memory?.WindowHandle ?? IntPtr.Zero;
         if (memory == null || reader == null || hwnd == IntPtr.Zero || !Allowed(memory, reader, hwnd, running)) return false;
-        // First-use steering calibration walks before path planning and does not
-        // poll the ghost identity guard. Do not release without this prerequisite.
-        if (!RouteRunner.MeshReady() || !mover.KeyMode)
+        // Mesh is mandatory before releasing. A Grind fight can use key-steered
+        // mesh chasing without ever calibrating its route mover; after release we
+        // may safely calibrate turns in place, never the normal blind probe walk.
+        if (!RouteRunner.MeshReady())
         {
-            Logging.Write("[Corpse] mesh or previously calibrated route steering unavailable; stopping before release rather than stranding the ghost");
+            Logging.Write("[Corpse] mesh unavailable; stopping before release rather than stranding the ghost");
             return false;
         }
+        if (!mover.KeyMode)
+            Logging.Write("[Corpse] route mover has no walking calibration; turn-only ghost steering will be checked after release");
         Logging.Write("[Corpse] EXPERIMENTAL 70707 recovery: foreground capture or experimental background window capture; STOP remains active. No Lua.");
         bool initialQuiet = mover.QuietKeyStop;
         try { mover.QuietKeyStop = true; mover.MoveStop(); }
@@ -402,44 +405,67 @@ internal static class WowBCorpseRecovery
         double distance = ClickAimMath.Len(ghostPos.X - checkpoint.Position.X, ghostPos.Y - checkpoint.Position.Y);
         if (!double.IsFinite(distance) || distance > MaxGhostDistance)
         { Logging.Write("[Corpse] checkpoint too far away or invalid; refusing route"); return false; }
-        Logging.Write("[Corpse] ghost candidate confirmed; following the mesh toward the checkpoint, stopping short to scout");
-        var goal = new RoutePoint { X = checkpoint.Position.X, Y = checkpoint.Position.Y, Z = checkpoint.Position.Z, Kind = "Corpse" };
-        int routeStarted = Environment.TickCount;
-        if (!WalkGhostTo(memory, reader, hwnd, checkpoint, running, mover, goal, routeStarted, true) ||
-            ReadState(memory, reader, hwnd, checkpoint, running, out ghostPos) != State.Ghost ||
-            !WowBCorpseSpotPolicy.InRange(ghostPos, checkpoint.Position, WowBCorpseSpotPolicy.MaxClickRadius))
-        { Logging.Write("[Corpse] mesh route or proximity was not confirmed; stopping"); return false; }
-        var tried = new bool[WowBCorpseSpotPolicy.DirectionCount];
-        if (ClickAimAbort.Wait(800) || !FindSafeSpot(memory, reader, hwnd, checkpoint, running, mover, routeStarted, tried, out bool fallback)) return false;
-        started = Environment.TickCount; lastProblem = unchecked(started - 6000);
-        bool sentResurrect = false;
-        while (unchecked(Environment.TickCount - started) < PromptWaitMs && Allowed(memory, reader, hwnd, running))
+        bool temporaryKeyMode = !mover.KeyMode;
+        bool oldRequireFacing = mover.RequireFacingForKeyMode;
+        try
         {
-            if (!TryNpcSnapshot(memory, reader, hwnd, checkpoint, running, out ghostPos, out var nearby) ||
-                !WowBCorpseSpotPolicy.InRange(ghostPos, checkpoint.Position, WowBCorpseSpotPolicy.MaxClickRadius)) break;
-            if (!fallback && !WowBCorpseSpotPolicy.ClearEnough(ghostPos, nearby, WowBCorpseSpotPolicy.MinNpcClearance))
+            if (temporaryKeyMode)
             {
-                Logging.Write("[Corpse] an observed NPC approached; trying remaining scout locations");
-                if (!FindSafeSpot(memory, reader, hwnd, checkpoint, running, mover, routeStarted, tried, out fallback)) break;
-                continue;
+                bool SafeGhost() => ReadState(memory, reader, hwnd, checkpoint, running, out _) == State.Ghost;
+                if (!mover.TryEnableRecoveryKeySteering(hwnd, SafeGhost, out string steeringReport))
+                {
+                    Logging.Write("[Corpse] turn-only ghost steering unavailable; stopping without movement: " + steeringReport);
+                    return false;
+                }
+                Logging.Write("[Corpse] using turn-only calibrated steering for the ghost; the normal probe walk was skipped");
             }
-            if (TryDialogClick(memory, reader, hwnd, checkpoint, running, false, !fallback, out string problem)) { sentResurrect = true; break; }
-            if (unchecked(Environment.TickCount - lastProblem) >= 5000)
-            { Logging.Write("[Corpse] resurrection not clicked: " + problem); lastProblem = Environment.TickCount; }
-            if (ClickAimAbort.Wait(500)) return false;
+            mover.RequireFacingForKeyMode = true;
+            if (ReadState(memory, reader, hwnd, checkpoint, running, out _) != State.Ghost) return false;
+            Logging.Write("[Corpse] ghost candidate confirmed; following the mesh toward the checkpoint, stopping short to scout");
+            var goal = new RoutePoint { X = checkpoint.Position.X, Y = checkpoint.Position.Y, Z = checkpoint.Position.Z, Kind = "Corpse" };
+            int routeStarted = Environment.TickCount;
+            if (!WalkGhostTo(memory, reader, hwnd, checkpoint, running, mover, goal, routeStarted, true) ||
+                ReadState(memory, reader, hwnd, checkpoint, running, out ghostPos) != State.Ghost ||
+                !WowBCorpseSpotPolicy.InRange(ghostPos, checkpoint.Position, WowBCorpseSpotPolicy.MaxClickRadius))
+            { Logging.Write("[Corpse] mesh route or proximity was not confirmed; stopping"); return false; }
+            var tried = new bool[WowBCorpseSpotPolicy.DirectionCount];
+            if (ClickAimAbort.Wait(800) || !FindSafeSpot(memory, reader, hwnd, checkpoint, running, mover, routeStarted, tried, out bool fallback)) return false;
+            started = Environment.TickCount; lastProblem = unchecked(started - 6000);
+            bool sentResurrect = false;
+            while (unchecked(Environment.TickCount - started) < PromptWaitMs && Allowed(memory, reader, hwnd, running))
+            {
+                if (!TryNpcSnapshot(memory, reader, hwnd, checkpoint, running, out ghostPos, out var nearby) ||
+                    !WowBCorpseSpotPolicy.InRange(ghostPos, checkpoint.Position, WowBCorpseSpotPolicy.MaxClickRadius)) break;
+                if (!fallback && !WowBCorpseSpotPolicy.ClearEnough(ghostPos, nearby, WowBCorpseSpotPolicy.MinNpcClearance))
+                {
+                    Logging.Write("[Corpse] an observed NPC approached; trying remaining scout locations");
+                    if (!FindSafeSpot(memory, reader, hwnd, checkpoint, running, mover, routeStarted, tried, out fallback)) break;
+                    continue;
+                }
+                if (TryDialogClick(memory, reader, hwnd, checkpoint, running, false, !fallback, out string problem)) { sentResurrect = true; break; }
+                if (unchecked(Environment.TickCount - lastProblem) >= 5000)
+                { Logging.Write("[Corpse] resurrection not clicked: " + problem); lastProblem = Environment.TickCount; }
+                if (ClickAimAbort.Wait(500)) return false;
+            }
+            if (!sentResurrect) { Logging.Write("[Corpse] resurrection dialog not confirmed; stopping"); return false; }
+            started = Environment.TickCount;
+            int aliveReads = 0;
+            while (unchecked(Environment.TickCount - started) < TransitionWaitMs && Allowed(memory, reader, hwnd, running))
+            {
+                if (ReadState(memory, reader, hwnd, checkpoint, running, out _) == State.Alive) aliveReads++;
+                else aliveReads = 0;
+                if (aliveReads >= 2 && WowBGrindFactions.Experimental70707BarSafe(reader))
+                { Logging.Write("[Corpse] alive candidate and action bar confirmed; resuming the bot"); return true; }
+                if (ClickAimAbort.Wait(500)) return false;
+            }
+            Logging.Write("[Corpse] resurrection or action-bar transition not confirmed; stopping without retrying");
+            return false;
         }
-        if (!sentResurrect) { Logging.Write("[Corpse] resurrection dialog not confirmed; stopping"); return false; }
-        started = Environment.TickCount;
-        int aliveReads = 0;
-        while (unchecked(Environment.TickCount - started) < TransitionWaitMs && Allowed(memory, reader, hwnd, running))
+        finally
         {
-            if (ReadState(memory, reader, hwnd, checkpoint, running, out _) == State.Alive) aliveReads++;
-            else aliveReads = 0;
-            if (aliveReads >= 2 && WowBGrindFactions.Experimental70707BarSafe(reader))
-            { Logging.Write("[Corpse] alive candidate and action bar confirmed; resuming the bot"); return true; }
-            if (ClickAimAbort.Wait(500)) return false;
+            ClickAimKeySteer.ReleaseHeld();
+            mover.RequireFacingForKeyMode = oldRequireFacing;
+            if (temporaryKeyMode) mover.EndRecoveryKeySteering();
         }
-        Logging.Write("[Corpse] resurrection or action-bar transition not confirmed; stopping without retrying");
-        return false;
     }
 }
