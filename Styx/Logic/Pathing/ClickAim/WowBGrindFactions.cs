@@ -93,7 +93,9 @@ internal static class WowBGrindFactions
             if (!reader.TryReadMapId(out _) || !reader.TryGetPlayerObject(out _) ||
                 !reader.TryGetUnitFields(player.UnitAddress, out WowBReader.WowBUnitFields self) || self.Health == 0 ||
                 ObjectManager.Wow != memory || ObjectManager.WowB != reader)
-            { reason = "70707 candidate map, player or mana unavailable"; return false; }
+            { reason = "70707 candidate map, player or supported power type unavailable"; return false; }
+            if (self.PlayerPowerTypeCandidate == 1)
+                Logging.Write("[70707] player power type candidate 1 (rage): value unavailable; mana recovery is skipped and resource-dependent abilities are withheld, but auto-attack is available");
             if (!TryReadGhostFlagCandidate(memory, reader, player, out bool ghostFlag))
             { reason = "70707 ghost flag candidate unavailable or changed; refusing to start"; return false; }
             if (ghostFlag)

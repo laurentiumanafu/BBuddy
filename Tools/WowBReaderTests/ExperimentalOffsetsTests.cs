@@ -264,8 +264,34 @@ internal static class ExperimentalOffsetsTests
         memory.U64(module + Wow70707Offsets.StoredActionArrayCandidate + 8, 403);
         memory.U64(module + Wow70707Offsets.StoredActionArrayCandidate + 16, 331);
         memory.U64(module + Wow70707Offsets.StoredActionArrayCandidate + 11 * 8, 12345);
-        memory.U32(0x24000000 + 0x1E20, 0x100);
+        memory.U32(0x24000000 + 0x1E20, 0x200);
         Require(!WowBGrindFactions.PrepareForGrind(out _) && !experimental.TryReadMapId(out _), "unsupported power type rejects and revokes session");
+        memory.U32(0x24000000 + 0x1E20, 0x100);
+        Require(WowBGrindFactions.PrepareForGrind(out string rageError), "type 1 candidate starts with unknown rage: " + rageError);
+        Require(experimental.TryGetUnitFields(0x24000000, out var rageFields) && rageFields.Health == 148 &&
+                rageFields.PlayerPowerTypeCandidate == 1 && rageFields.Power == 0 && rageFields.MaxPower == 0 &&
+                rageFields.ToString().Contains("value unavailable"), "rage remains unmeasured; mana arrays are not reused");
+        memory.Remove(0x24000000 + Wow70707Offsets.PowerArrayCandidateOffset);
+        memory.Remove(0x24000000 + Wow70707Offsets.MaxPowerArrayCandidateOffset);
+        Require(experimental.TryGetUnitFields(0x24000000, out rageFields) && rageFields.PlayerPowerTypeCandidate == 1,
+                "rage candidate does not depend on the unverified power arrays");
+        memory.U32(0x24000000 + Wow70707Offsets.PowerArrayCandidateOffset, 10);
+        memory.U32(0x24000000 + Wow70707Offsets.MaxPowerArrayCandidateOffset, 20);
+        memory.U64(0x24000000 + Wow70707Offsets.MaxHealthCandidateOffset, 0);
+        Require(!experimental.TryGetUnitFields(0x24000000, out _), "rage candidate still requires valid health");
+        memory.U64(0x24000000 + Wow70707Offsets.MaxHealthCandidateOffset, 148);
+        memory.Remove(0x24000000 + 0x1E21);
+        Require(!experimental.TryGetUnitFields(0x24000000, out _), "unreadable candidate power type is rejected");
+        memory.U32(0x24000000 + 0x1E20, 0x100);
+        WowBGrindFactions.EndExperimental70707();
+        int powerTypeReads = 0;
+        memory.OnRead = (address, count) =>
+        {
+            if (address == 0x24000000 + 0x1E21 && count == 1 && ++powerTypeReads == 2)
+                memory.U32(0x24000000 + 0x1E20, 0);
+        };
+        Require(!WowBGrindFactions.PrepareForGrind(out _) && !experimental.HasExperimentalGrindSession, "changing power type refuses startup");
+        memory.OnRead = null;
         memory.U32(0x24000000 + 0x1E20, 0);
         memory.Remove(module + 0x2890305);
         memory.Remove(module + 0xA538FD);

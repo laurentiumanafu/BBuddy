@@ -1385,9 +1385,8 @@ internal static class GrindRunner
             }
         }
 
-        // Defence always takes precedence above. On 70707 the player reader only
-        // permits the observed mana-type-0 layout, so it is safe to use this
-        // threshold even if an empty drink still has an action-bar icon.
+        // Defence always takes precedence above. Mana users wait at the configured
+        // threshold; a stable 70707 rage-type candidate must not wait for mana.
         if (trialReader != null)
         {
             if (!WaitForManaBeforePull(hwnd, trialReader)) { _combatHold = true; return false; }
@@ -2391,25 +2390,30 @@ internal static class GrindRunner
         return percent > 100 ? 100 : percent;
     }
 
-    /// <summary>
-    /// Mana as a percentage, or -1 when it cannot be read.
-    ///
-    /// The max-power word is a CANDIDATE on this build and it lies: every log line prints
-    /// "pow=139/100" for a character whose mana bar is full at 139. A percentage over that 100
-    /// would read 139% and the drink rule would never fire, so the denominator is the larger of
-    /// the field and the highest value seen this session.
-    /// </summary>
+    private static bool TryReadLocalFields(WowBReader reader, out WowBReader.WowBUnitFields fields)
+    {
+        fields = default;
+        return ObjectManager.WowB == reader && Capture(out WowBWorldSnapshot? snap) && snap != null &&
+            snap.TryGetLocalPlayer(out WowBObservedUnit me) && reader.TryGetUnitFields(me.UnitAddress, out fields) &&
+            ObjectManager.WowB == reader;
+    }
+
+    // 70707 resource-dependent inputs must not reuse a mana sample after the
+    // player's power type changed. Auto-attack does not require this gate.
+    private static bool ResourceInputStillAllowed(WowBReader? reader)
+    {
+        if (reader == null) return false;
+        if (!reader.IsExperimental70707) return true;
+        return TryReadLocalFields(reader, out WowBReader.WowBUnitFields fields) && fields.PlayerPowerTypeCandidate == 0;
+    }
+
+    /// <summary>Candidate mana percentage, or -1 when unavailable or not mana.</summary>
     private static int ManaPercent()
     {
         Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
-        if (reader == null) return -1;
-
-        WowBWorldSnapshot? snap;
-        WowBObservedUnit me;
-        if (!Capture(out snap) || snap == null || !snap.TryGetLocalPlayer(out me)) return -1;
-
-        Styx.WoWInternals.WowBReader.WowBUnitFields f;
-        if (!reader.TryGetUnitFields(me.UnitAddress, out f)) return -1;
+        if (reader == null || !TryReadLocalFields(reader, out WowBReader.WowBUnitFields f)) return -1;
+        // Type 1 is not mana, and zero here means unavailable rather than empty.
+        if (reader.IsExperimental70707 && f.PlayerPowerTypeCandidate == 1) return -1;
 
         if (f.Power > _manaPeak) _manaPeak = f.Power;
         uint max = f.MaxPower;
@@ -2423,17 +2427,22 @@ internal static class GrindRunner
     // Between voluntary pulls, the drink percentage is also the minimum mana
     // to resume. We cannot know whether a hotbar item still exists in the bags,
     // so this applies regardless of whether a drink icon was present or pressed.
-    // Currently limited to 70707: its player field reader requires mana type 0;
-    // the 70291 power type is not yet reliably identified (rage must not wait).
+    // Limited to 70707: type 0 uses the candidate mana read; candidate type 1
+    // explicitly bypasses mana waiting. The 70291 power type is not identified.
     private static bool ManaRecoveryNeeded(int threshold, int mana)
         => threshold > 0 && (mana < 0 || mana < threshold);
 
     private static bool WaitForManaBeforePull(IntPtr hwnd, WowBReader reader)
     {
+        if (_stop || ClickAimAbort.Requested || _vendorDue || ObjectManager.WowB != reader || !reader.ExperimentalGrindActive) return false;
         int threshold = ClickAimSettings.DrinkBelowPercent;
         if (threshold <= 0) return true;
+        if (!TryReadLocalFields(reader, out WowBReader.WowBUnitFields player)) return false;
+        if (_stop || ClickAimAbort.Requested || _vendorDue || !reader.ExperimentalGrindActive) return false;
+        if (reader.IsExperimental70707 && player.PlayerPowerTypeCandidate == 1) return true;
         int mana = ManaPercent();
-        if (!ManaRecoveryNeeded(threshold, mana)) return true;
+        if (!ManaRecoveryNeeded(threshold, mana))
+            return !_stop && !ClickAimAbort.Requested && !_vendorDue && ObjectManager.WowB == reader && reader.ExperimentalGrindActive;
         if (_stop || ClickAimAbort.Requested || _vendorDue) return false;
         ClickAimKeySteer.ReleaseHeld();
         if (!StopForRest(hwnd)) return false;
@@ -2444,6 +2453,9 @@ internal static class GrindRunner
         {
             if (!WowBGrindFactions.Experimental70707BarSafe(reader)) return false;
             if (!TryReadGatherCombat(out bool fighting) || fighting) return false;
+            if (!TryReadLocalFields(reader, out player)) return false;
+            if (_stop || ClickAimAbort.Requested || _vendorDue || !reader.ExperimentalGrindActive) return false;
+            if (reader.IsExperimental70707 && player.PlayerPowerTypeCandidate == 1) return true;
             mana = ManaPercent();
             if (!ManaRecoveryNeeded(threshold, mana))
             {
@@ -2575,7 +2587,8 @@ internal static class GrindRunner
                 "pressed food key for {0} (slot {1} '{2}') at {3}% health", food.Name, food.Slot,
                 ClickAimCombat.KeyLabel(food.KeyVk), health));
         }
-        if (wantDrink && !_stop && !ClickAimAbort.Requested && !InRealCombat())
+        if (wantDrink && !_stop && !ClickAimAbort.Requested && !InRealCombat() &&
+            (!reader.IsExperimental70707 || ResourceInputStillAllowed(reader)))
         {
             ClickAimInput.TapKey(hwnd, drink!.KeyVk, 40);
             _presses++;
@@ -4810,6 +4823,7 @@ internal static class GrindRunner
 
             /* My own vitals, from the same block the mob's health comes from. */
             uint myHealth = 0, myMaxHealth = 0, myMana = 0, myMaxMana = 0;
+            bool unmeasuredRage = false;
             Styx.WoWInternals.WowBReader.WowBUnitFields mine;
             if (reader != null && reader.TryGetUnitFields(me.UnitAddress, out mine))
             {
@@ -4817,6 +4831,7 @@ internal static class GrindRunner
                 myMaxHealth = mine.MaxHealth;
                 myMana = mine.Power;
                 myMaxMana = mine.MaxPower;      // a candidate on this build: see HealPowerOk
+                unmeasuredRage = reader.IsExperimental70707 && mine.PlayerPowerTypeCandidate == 1;
             }
             else if (reader?.IsExperimental70707 == true)
                 return StopFightForSafety("70707 player vitals became unreadable; stopping");
@@ -5087,7 +5102,7 @@ internal static class GrindRunner
              * left alone until ClickAimSettings.DotRefreshSeconds has passed. The client's
              * debuff list is not readable on this build, so the timer is our own cast - being
              * a second late costs nothing, being early costs mana. */
-            if (dot != null && ClickAimSettings.UseDamageOverTime
+            if (dot != null && ClickAimSettings.UseDamageOverTime && !unmeasuredRage
                 && (!melee || (dot.IsMelee && rotation.Class != ClickAimRotationClass.Generic))
                 && (dot.IsMelee || myMana >= PowerForCast(dot, 10)) && d <= dotRange
                 && (rotation.Class != ClickAimRotationClass.Hunter || d >= 8.0)
@@ -5104,6 +5119,7 @@ internal static class GrindRunner
                 if (!FightAttackInputAllowed(reader, fightMemory, defenceTarget, expectedPull, !defenceOnly || defenceFactionFilter))
                 { return YieldForTargetChange(reader, fightMemory, defenceTarget); }
                 if (!dot.IsDot || !ClickAimSettings.UseDamageOverTime) return "DoT role or setting changed; attack withheld";
+                if (!ResourceInputStillAllowed(reader)) continue;
                 ClickAimInput.TapKey(hwnd, dot.KeyVk, 40);
                 if (rotation.Class == ClickAimRotationClass.Shaman)
                     ClickAimClassRotation.Defer(_rotationCooldowns, ClickAimClassRotation.DotCooldownGroup(dot), 8000, Environment.TickCount);
@@ -5222,16 +5238,17 @@ internal static class GrindRunner
                     continue;
                 }
 
+                if (!FightAttackInputAllowed(reader, fightMemory, defenceTarget, expectedPull, !defenceOnly || defenceFactionFilter))
+                { return YieldForTargetChange(reader, fightMemory, defenceTarget); }
+                if (supplemental ? !castDamage!.IsDamage : (damageWasDot ? !castDamage!.IsDot || !ClickAimSettings.UseDamageOverTime : !castDamage!.IsDamage))
+                    return "damage role or DoT setting changed; attack withheld";
+                if (!ResourceInputStillAllowed(reader)) continue;
                 lastCastMs = Environment.TickCount;
                 meleeSwinging = false;          // a cast stops auto-attack; it must be restarted
                 uint manaBefore = myMana;
                 int mobBeforeHealth = lastHealth;
                 _pendingCastId = castDamage!.Id;
                 _pendingCastMana = manaBefore;
-                if (!FightAttackInputAllowed(reader, fightMemory, defenceTarget, expectedPull, !defenceOnly || defenceFactionFilter))
-                { return YieldForTargetChange(reader, fightMemory, defenceTarget); }
-                if (supplemental ? !castDamage!.IsDamage : (damageWasDot ? !castDamage!.IsDot || !ClickAimSettings.UseDamageOverTime : !castDamage!.IsDamage))
-                    return "damage role or DoT setting changed; attack withheld";
                 ClickAimInput.TapKey(hwnd, castDamage!.KeyVk, 40);
                 ClickAimClassRotation.Defer(_rotationCooldowns,
                     supplemental ? rotation.SupplementalGroup : rotation.DamageGroup,
@@ -5325,7 +5342,9 @@ internal static class GrindRunner
             if (!meleeOnce)
             {
                 meleeOnce = true;
-                string whyCasting = castFailures > 0
+                string whyCasting = unmeasuredRage
+                    ? "withheld: rage is unmeasured"
+                    : castFailures > 0
                     ? "switched off: the casts landed nothing"
                     : damage == null
                         ? "no damage spell on the bar"
@@ -5344,8 +5363,8 @@ internal static class GrindRunner
                     + "power {3}, {4} failed cast(s)); a swing that is running stays running",
                     whyCasting,
                     damage == null ? "none on the bar" : damage.Name,
-                    meleeHit == null ? "" : " and " + meleeHit.Name + " to press at arm's length",
-                    myMana, castFailures));
+                    meleeHit == null ? "" : " and " + meleeHit.Name + (unmeasuredRage ? " withheld" : " to press at arm's length"),
+                    unmeasuredRage ? "unavailable" : myMana.ToString(CultureInfo.InvariantCulture), castFailures));
             }
 
             /* Stop the walk a yard and a bit early. A character that walks until it is inside
@@ -5486,18 +5505,17 @@ internal static class GrindRunner
                 Logging.Write("[Grind] faction filter: unverified melee right-click withheld; put Attack on an action bar to start auto-attack safely");
             }
 
-            /* The melee half of the bar: Claw, Heroic Strike, Sinister Strike, Rend. These are
-             * 5 yd abilities, so this is the only branch that can use them - the cast loop would
-             * have stood at 28 yd pressing a key the client refuses. Rage and energy are not
-             * readable apart from mana here, so the press goes out, and a refusal costs the
-             * client's own error line rather than a global cooldown spent twice. */
-            if (meleeHit != null && (!swinging || sinceDamageMs >= MeleePressMs)
+            /* The melee half of the bar is only used at arm's length. On 70707,
+             * candidate rage has no validated amount; withhold resource-dependent
+             * abilities rather than repeatedly pressing them at unknown rage. */
+            if (meleeHit != null && !unmeasuredRage && (!swinging || sinceDamageMs >= MeleePressMs)
                 && ClickAimClassRotation.Ready(_rotationCooldowns, rotation.MeleeGroup, Environment.TickCount)
                 && (rotation.MeleeIntervalMs == 0 || myMana >= PowerForCast(meleeHit, 10)))
             {
                 if (!FightAttackInputAllowed(reader, fightMemory, defenceTarget, expectedPull, !defenceOnly || defenceFactionFilter))
                 { return YieldForTargetChange(reader, fightMemory, defenceTarget); }
                 if (!meleeHit.IsDamage) return "melee ability role changed; attack withheld";
+                if (!ResourceInputStillAllowed(reader)) continue;
                 ClickAimInput.TapKey(hwnd, meleeHit.KeyVk, 40);
                 ClickAimClassRotation.Defer(_rotationCooldowns, rotation.MeleeGroup, rotation.MeleeIntervalMs, Environment.TickCount);
                 if (rotation.MeleeIntervalMs > 0) { _pendingCastId = meleeHit.Id; _pendingCastMana = myMana; }

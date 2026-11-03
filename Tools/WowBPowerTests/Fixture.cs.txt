@@ -1,0 +1,72 @@
+using System;
+using Styx.WoWInternals;
+using Styx.Logic.Pathing;
+namespace Styx.WoWInternals {
+    internal struct WowBObservedUnit { internal ulong UnitAddress; }
+    internal sealed class WowBWorldSnapshot {
+        internal bool TryGetLocalPlayer(out WowBObservedUnit unit) { unit = new WowBObservedUnit { UnitAddress = 5 }; return Test.PlayerReadable; }
+    }
+    internal sealed class WowBReader {
+        internal bool IsExperimental70707 = true, ExperimentalGrindActive = true;
+        internal struct WowBUnitFields { internal uint Power, MaxPower; internal byte? PlayerPowerTypeCandidate; }
+        internal bool TryGetUnitFields(ulong address, out WowBUnitFields f) { f = Test.Fields; return Test.Readable; }
+    }
+    internal static class ObjectManager { internal static WowBReader? WowB; }
+}
+namespace Styx.Logic.Pathing {
+    internal static class Test {
+        internal static WowBReader.WowBUnitFields Fields;
+        internal static bool Readable, PlayerReadable, Combat, CombatReadable, StopCalled;
+        internal static int Waits; internal static Action? OnWait;
+        internal static void Reset(byte? type, uint power, uint max) {
+            Fields = new WowBReader.WowBUnitFields { PlayerPowerTypeCandidate = type, Power = power, MaxPower = max };
+            Readable = PlayerReadable = CombatReadable = true; Combat = StopCalled = false; Waits = 0; OnWait = null;
+            ObjectManager.WowB = new WowBReader(); ClickAimAbort.Requested = false; ClickAimSettings.DrinkBelowPercent = 35;
+            GrindRunner.Reset();
+        }
+    }
+    internal static class Logging { internal static void Write(string s) {} }
+    internal static class ClickAimSettings { internal static int DrinkBelowPercent; }
+    internal static class ClickAimKeySteer { internal static void ReleaseHeld() {} }
+    internal static class ClickAimAbort { internal static bool Requested; internal static bool Wait(int n) { Test.Waits++; Test.OnWait?.Invoke(); return Requested; } }
+    internal static class WowBGrindFactions { internal static bool Experimental70707BarSafe(WowBReader r) => true; }
+    internal static class GrindRunner {
+        private static uint _manaPeak; private static bool _stop, _vendorDue;
+        internal static void Reset() { _manaPeak = 0; _stop = _vendorDue = false; }
+        private static bool Capture(out WowBWorldSnapshot? snap) { snap = new WowBWorldSnapshot(); return true; }
+        private static bool StopForRest(IntPtr hwnd) { Test.StopCalled = true; return true; }
+        private static bool TryReadGatherCombat(out bool fighting) { fighting = Test.Combat; return Test.CombatReadable; }
+        internal static int Pct() => ManaPercent();
+        internal static bool Wait() => WaitForManaBeforePull((IntPtr)1, ObjectManager.WowB!);
+        internal static bool ResourceSafe() => ResourceInputStillAllowed(ObjectManager.WowB);
+        // __METHODS__
+    }
+    public static class Program {
+        private static int checks;
+        private static void Check(bool condition, string label) { checks++; if (!condition) throw new Exception(label); }
+        public static void Main() {
+            Test.Reset(1, 0, 0); Check(GrindRunner.Pct() == -1, "unknown rage is not mana");
+            Check(GrindRunner.Wait() && !Test.StopCalled && Test.Waits == 0, "rage skips drink and pre-pull mana wait");
+            Check(!GrindRunner.ResourceSafe(), "unknown rage cannot authorize resource abilities");
+            Test.Fields.Power = 800; Test.Fields.MaxPower = 1000; Check(GrindRunner.Pct() == -1, "rage cannot pollute mana peak");
+            Test.Fields.PlayerPowerTypeCandidate = 0; Test.Fields.Power = 30; Test.Fields.MaxPower = 100;
+            Check(GrindRunner.Pct() == 30, "mana peak remains unaffected by rage");
+            Test.Reset(1, 0, 0); ClickAimAbort.Requested = true; Check(!GrindRunner.Wait(), "STOP blocks even the rage bypass");
+            Test.Reset(0, 100, 100); Check(GrindRunner.Pct() == 100 && GrindRunner.Wait() && GrindRunner.ResourceSafe(), "full mana pulls normally");
+            Test.Reset(0, 0, 100); Test.OnWait = () => Test.Fields.Power = 40;
+            Check(GrindRunner.Wait() && Test.StopCalled && Test.Waits == 1, "empty mana waits until recovered");
+            Test.Reset(0, 0, 100); Test.OnWait = () => Test.Combat = true;
+            Check(!GrindRunner.Wait() && Test.Waits == 1, "combat interrupts mana wait");
+            Test.Reset(0, 0, 100); Test.OnWait = () => ClickAimAbort.Requested = true;
+            Check(!GrindRunner.Wait() && Test.Waits == 1, "STOP interrupts mana wait");
+            Test.Reset(0, 0, 100); Test.OnWait = () => { Test.Fields.PlayerPowerTypeCandidate = 1; Test.Fields.MaxPower = 0; };
+            Check(GrindRunner.Wait() && Test.Waits == 1, "changed rage type exits mana wait");
+            Test.Reset(1, 0, 0); Test.Readable = false; Check(!GrindRunner.Wait() && !GrindRunner.ResourceSafe(), "unreadable type does not bypass safety");
+            Test.Reset(0, 0, 100); Test.OnWait = () => Test.Readable = false;
+            Check(!GrindRunner.Wait() && Test.Waits == 1, "unreadable type interrupts an ongoing mana wait");
+            Test.Reset(null, 50, 100); ObjectManager.WowB!.IsExperimental70707 = false;
+            Check(GrindRunner.Pct() == 50 && GrindRunner.ResourceSafe(), "70291 power behavior unchanged");
+            Console.WriteLine($"{checks} power-policy checks passed (synthetic snapshots/input only)");
+        }
+    }
+}

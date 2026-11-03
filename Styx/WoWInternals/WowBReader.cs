@@ -925,9 +925,12 @@ namespace Styx.WoWInternals
             public readonly uint Power;
             public readonly uint MaxPower;
             public readonly ulong DataPtr;
+            // Only populated for the local 70707 player. Type 1 is a rage
+            // candidate; its value and maximum are not established.
+            public readonly byte? PlayerPowerTypeCandidate;
 
             public WowBUnitFields(uint health, uint maxHealth, uint level, uint unitFlags,
-                                  uint power, uint maxPower, ulong dataPtr)
+                                  uint power, uint maxPower, ulong dataPtr, byte? playerPowerTypeCandidate = null)
             {
                 Health = health;
                 MaxHealth = maxHealth;
@@ -936,11 +939,13 @@ namespace Styx.WoWInternals
                 Power = power;
                 MaxPower = maxPower;
                 DataPtr = dataPtr;
+                PlayerPowerTypeCandidate = playerPowerTypeCandidate;
             }
 
             public override string ToString()
             {
-                return $"hp={Health}/{MaxHealth} lvl={Level} uflags=0x{UnitFlags:X} pow={Power}/{MaxPower}";
+                string powerText = PlayerPowerTypeCandidate == 1 ? "rage candidate: value unavailable" : $"pow={Power}/{MaxPower}";
+                return $"hp={Health}/{MaxHealth} lvl={Level} uflags=0x{UnitFlags:X} {powerText}";
             }
         }
 
@@ -992,8 +997,9 @@ namespace Styx.WoWInternals
             return true;
         }
 
-        // Experimental 70707 live path: only the observed mana-type-0 player
-        // layout is supported. Reject uncertain data rather than supplying zeros.
+        // Experimental 70707: candidate type 0 has a mana value; type 1 was
+        // observed on a Warrior, but its rage value/maximum are not established.
+        // Represent unavailable rage explicitly instead of interpreting an array slot.
         private bool TryGetExperimentalGrindFields(ulong unitPtr, out WowBUnitFields fields)
         {
             fields = default;
@@ -1015,13 +1021,18 @@ namespace Styx.WoWInternals
             uint level = BitConverter.ToUInt32(levelBytes, 0), flags = BitConverter.ToUInt32(flagsBytes, 0);
             if (max == 0 || max > uint.MaxValue || hp > max || level == 0 || level > 100) return false;
             uint power = 0, maxPower = 0;
+            byte? playerPowerType = null;
             if (player)
             {
                 byte[]? type = _memory.ReadBytes64(unitPtr + 0x1E21, 1);
-                if (type == null || type.Length != 1 || type[0] != 0 || guid != ReadLocalGuid() ||
-                    !TryReadUInt32(unitPtr + Wow70707Offsets.PowerArrayCandidateOffset, out power) ||
-                    !TryReadUInt32(unitPtr + Wow70707Offsets.MaxPowerArrayCandidateOffset, out maxPower) ||
-                    maxPower == 0 || power > maxPower) return false;
+                if (type == null || type.Length != 1 || (type[0] != 0 && type[0] != 1) || guid != ReadLocalGuid()) return false;
+                playerPowerType = type[0];
+                if (playerPowerType == 0 &&
+                    (!TryReadUInt32(unitPtr + Wow70707Offsets.PowerArrayCandidateOffset, out power) ||
+                     !TryReadUInt32(unitPtr + Wow70707Offsets.MaxPowerArrayCandidateOffset, out maxPower) ||
+                     maxPower == 0 || power > maxPower)) return false;
+                byte[]? typeAfter = _memory.ReadBytes64(unitPtr + 0x1E21, 1);
+                if (typeAfter == null || typeAfter.Length != 1 || typeAfter[0] != type[0] || guid != ReadLocalGuid()) return false;
             }
             byte[]? pointerAfter = _memory.ReadBytes64(record + WowBOffsets.RecordDataBlockPtrOffset, 8);
             byte[]? recordGuid = _memory.ReadBytes64(record + WowBOffsets.RecordGuidLoOffset, 16);
@@ -1029,7 +1040,7 @@ namespace Styx.WoWInternals
             if (pointerAfter == null || pointerAfter.Length != 8 || BitConverter.ToUInt64(pointerAfter, 0) != unitPtr ||
                 recordGuid == null || recordGuid.Length != 16 || new WowBGuid(BitConverter.ToUInt64(recordGuid, 0), BitConverter.ToUInt64(recordGuid, 8)) != guid ||
                 headerAfter == null || headerAfter.Length != 0x20 || Convert.ToHexString(headerAfter) != Convert.ToHexString(header) || !ExperimentalGrindActive) return false;
-            fields = new WowBUnitFields((uint)hp, (uint)max, level, flags, power, maxPower, unitPtr);
+            fields = new WowBUnitFields((uint)hp, (uint)max, level, flags, power, maxPower, unitPtr, playerPowerType);
             return true;
         }
 
