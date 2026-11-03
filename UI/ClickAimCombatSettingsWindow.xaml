@@ -1,0 +1,332 @@
+<mah:MetroWindow x:Class="CopilotBuddy.UI.ClickAimCombatSettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:mah="http://metro.mahapps.com/winfx/xaml/controls"
+        x:Name="Window"
+        Title="Combat settings"
+        Width="620" Height="660"
+        MinWidth="560" MinHeight="600"
+        TitleCharacterCasing="Normal"
+        Background="{DynamicResource WindowBackgroundBrush}"
+        GlowBrush="{DynamicResource MahApps.Brushes.Accent}">
+    <Grid Margin="8">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        <TabControl Grid.Row="0" Margin="0,0,0,8">
+        <!-- ===================================================== numbers ============ -->
+        <TabItem Header="Eating and drinking">
+            <Grid Margin="12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="80"/>
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>  <!-- 0 intro       -->
+                    <RowDefinition Height="Auto"/>  <!-- 1 heal        -->
+                    <RowDefinition Height="Auto"/>  <!-- 2 heal power  -->
+                    <RowDefinition Height="Auto"/>  <!-- 3 eat         -->
+                    <RowDefinition Height="Auto"/>  <!-- 4 drink       -->
+                    <RowDefinition Height="Auto"/>  <!-- 5 dot         -->
+                    <RowDefinition Height="Auto"/>  <!-- 6 dot secs    -->
+                    <RowDefinition Height="Auto"/>  <!-- 7 buffs       -->
+                    <RowDefinition Height="Auto"/>  <!-- 8 food slot   -->
+                    <RowDefinition Height="Auto"/>  <!-- 9 drink slot  -->
+                    <RowDefinition Height="Auto"/>  <!-- 10 rest ms    -->
+                    <RowDefinition Height="Auto"/>  <!-- 11 file       -->
+                    <RowDefinition Height="*"/>     <!-- 12 spacer     -->
+                </Grid.RowDefinitions>
+
+                <TextBlock Grid.Row="0" Grid.ColumnSpan="2" TextWrapping="Wrap" Margin="0,0,0,12"
+                           Text="The grind loop reads these numbers at the start of every run. A percentage of 0 turns that rule off."/>
+
+                <TextBlock Grid.Row="1" Grid.Column="0" VerticalAlignment="Center" Margin="0,0,8,8"
+                           Text="Heal myself at or below (percent health)"/>
+                <TextBox x:Name="txtHeal" Grid.Row="1" Grid.Column="1" Margin="0,0,0,8"/>
+
+                <TextBlock Grid.Row="2" Grid.Column="0" VerticalAlignment="Center" Margin="0,0,8,8"
+                           Text="...but only while power is at least (percent)"/>
+                <TextBox x:Name="txtHealMana" Grid.Row="2" Grid.Column="1" Margin="0,0,0,8"
+                         ToolTip="Below this power percentage, heals are withheld. The client spell cost is not readable: the percentage and any observed power drop are only estimates and cannot guarantee the heal is affordable."/>
+
+                <TextBlock Grid.Row="3" Grid.Column="0" VerticalAlignment="Center" Margin="0,0,8,8"
+                           Text="Eat at or below (percent health)"/>
+                <TextBox x:Name="txtEat" Grid.Row="3" Grid.Column="1" Margin="0,0,0,8"/>
+
+                <TextBlock Grid.Row="4" Grid.Column="0" VerticalAlignment="Center" Margin="0,0,8,8"
+                           Text="Drink at or below (percent mana)"/>
+                <TextBox x:Name="txtDrink" Grid.Row="4" Grid.Column="1" Margin="0,0,0,8"
+                         ToolTip="On 70707, voluntary pulls wait until mana recovers to this value, even when the drink key has no item. Combat and Stop take priority. 0 disables this rule."/>
+
+                <CheckBox x:Name="chkDot" Grid.Row="5" Grid.ColumnSpan="2" Margin="0,8,0,4"
+                          Content="Use damage-over-time spells (Moonfire, Corruption, Serpent Sting ...)"/>
+
+                <TextBlock Grid.Row="6" Grid.Column="0" VerticalAlignment="Center" Margin="0,0,8,8"
+                           Text="Refresh a damage-over-time spell after (seconds)"/>
+                <TextBox x:Name="txtDotSeconds" Grid.Row="6" Grid.Column="1" Margin="0,0,0,8"/>
+
+                <CheckBox x:Name="chkBuffs" Grid.Row="7" Grid.ColumnSpan="2" Margin="0,4,0,12"
+                          Content="Apply self-buffs on start, periodically, and after resurrection"
+                          ToolTip="Grind and GatherBuddy attempt hotbar buffs outside combat. On 70707, selected Mage and Shaman buffs use experimental aura timing; other or uncertain cases use a 30-minute attempt timer. Cast success is not verified."/>
+
+                <TextBlock Grid.Row="8" Grid.Column="0" VerticalAlignment="Center" Margin="0,0,8,8"
+                           Text="Food slot (0 = find it on the bar)"/>
+                <TextBox x:Name="txtFoodSlot" Grid.Row="8" Grid.Column="1" Margin="0,0,0,8"/>
+
+                <TextBlock Grid.Row="9" Grid.Column="0" VerticalAlignment="Center" Margin="0,0,8,8"
+                           Text="Drink slot (0 = find it on the bar)"/>
+                <TextBox x:Name="txtDrinkSlot" Grid.Row="9" Grid.Column="1" Margin="0,0,0,8"/>
+
+                <TextBlock Grid.Row="10" Grid.Column="0" VerticalAlignment="Center" Margin="0,0,8,8"
+                           Text="Food/drink wait limit (milliseconds)"/>
+                <TextBox x:Name="txtRestMs" Grid.Row="10" Grid.Column="1" Margin="0,0,0,8"/>
+
+                <TextBlock x:Name="lblFile" Grid.Row="11" Grid.ColumnSpan="2" TextWrapping="Wrap"
+                           Margin="0,8,0,0" FontSize="11" Opacity="0.7"/>
+
+                <TextBlock Grid.Row="12" Grid.ColumnSpan="2" TextWrapping="Wrap" Margin="0,12,0,0"
+                           VerticalAlignment="Top" FontSize="11" Opacity="0.7"
+                           Text="The character eats and drinks between fights, out of combat. On 70707 it also waits for the mana threshold before a new pull if drinking fails or no drink is available; that wait is not limited by the food/drink timer."/>
+            </Grid>
+        </TabItem>
+
+        <!-- ===================================================== spells ============= -->
+        <TabItem Header="Spells">
+            <Grid Margin="12">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <StackPanel Grid.Row="0" Margin="0,0,0,8">
+                    <TextBlock TextWrapping="Wrap" Margin="0,0,0,6"
+                               Text="Stage 1: choose a low-level hotbar priority. Auto uses recognizable class spells; ambiguous bars use Generic. The rotation does not read spec, cooldowns, forms, runes, combo points or pets. Selected 70707 buffs use experimental aura candidates."/>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="Rotation class:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <ComboBox x:Name="cmbRotation" Width="145"/>
+                    </StackPanel>
+                    <TextBlock TextWrapping="Wrap" FontSize="11" Opacity="0.7" Margin="0,5,0,0"
+                               Text="Generic retains the older first-spell behavior, including its limitations. Class profiles omit rune abilities, feral forms, finishers and pet actions unless manually overridden. On 70707 only verified mana-type characters pass the existing combat gate."/>
+                    <CheckBox x:Name="chkBuffsInCombat" Margin="0,8,0,0"
+                              Content="Re-cast supported buffs when they run out during combat"
+                              ToolTip="Requires Apply self-buffs. Experimental 70707 Lightning Shield and Frost Armor, observed ranks only. Uses mana estimates; exact cost and cast success are not verified. Other buffs remain out-of-combat only."/>
+                </StackPanel>
+
+                <ListView x:Name="lstSpells" Grid.Row="1" Margin="0,0,0,8"
+                          SelectionMode="Single" SelectionChanged="lstSpells_SelectionChanged">
+                    <ListView.View>
+                        <GridView>
+                            <GridViewColumn Header="Slot" Width="45" DisplayMemberBinding="{Binding Slot}"/>
+                            <GridViewColumn Header="Key" Width="45" DisplayMemberBinding="{Binding Key}"/>
+                            <GridViewColumn Header="Spell" Width="230" DisplayMemberBinding="{Binding Spell}"/>
+                            <GridViewColumn Header="Role" Width="100" DisplayMemberBinding="{Binding Role}"/>
+                            <GridViewColumn Header="Range" Width="80" DisplayMemberBinding="{Binding Range}"/>
+                            <GridViewColumn Header="Set by" Width="70" DisplayMemberBinding="{Binding Source}"/>
+                        </GridView>
+                    </ListView.View>
+                </ListView>
+
+                <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,0,0,6">
+                    <TextBlock Text="Role:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                    <ComboBox x:Name="cmbRole" Width="130" SelectedIndex="0">
+                        <ComboBoxItem Content="(built-in)"/>
+                        <ComboBoxItem Content="Damage"/>
+                        <ComboBoxItem Content="Dot"/>
+                        <ComboBoxItem Content="Heal"/>
+                        <ComboBoxItem Content="Buff"/>
+                        <ComboBoxItem Content="Attack"/>
+                        <ComboBoxItem Content="Utility"/>
+                        <ComboBoxItem Content="Ignore"/>
+                    </ComboBox>
+                    <Button Content="Apply to selected" Width="120" Height="24" Margin="8,0,0,0"
+                            Click="btnApplyRole_Click"/>
+                    <Button Content="Refresh" Width="80" Height="24" Margin="8,0,0,0"
+                            Click="btnRefreshSpells_Click"/>
+                </StackPanel>
+
+                <TextBlock x:Name="lblSpells" Grid.Row="3" TextWrapping="Wrap" FontSize="11"
+                           Opacity="0.7" Margin="0,0,0,4"/>
+
+                <TextBlock Grid.Row="4" TextWrapping="Wrap" FontSize="11" Opacity="0.7"
+                           Text="&quot;(built-in)&quot; removes your setting and goes back to the name table. &quot;Ignore&quot; means the bot never presses that spell."/>
+            </Grid>
+        </TabItem>
+        <!-- ================================================ combat research ========= -->
+        <TabItem Header="Combat research">
+            <StackPanel Margin="12">
+                <TextBlock FontWeight="Bold" Text="70707 spell-state research (read-only)" Margin="0,0,0,8"/>
+                <TextBlock TextWrapping="Wrap" Margin="0,0,0,8"
+                           Text="Stop the bot. Select a target before recording if you need target data, then start the trace. Wait for the Recording message, return to the game, wait about five seconds and manually cast one spell once. Keep the same character and target selected."/>
+                <TextBlock TextWrapping="Wrap" Margin="0,0,0,10"
+                           Text="The trace samples raw player data and, when available, the selected NPC. It does not press keys, use Lua, or identify cooldowns or auras. The data may contain GUIDs, process addresses and other sensitive information."/>
+                <TextBlock Text="Experiment label (e.g. Mage Fireball or Shaman Lightning Bolt):" Margin="0,0,0,4"/>
+                <TextBox x:Name="txtCombatResearchLabel" MaxLength="80" Margin="0,0,0,10"/>
+                <StackPanel Orientation="Horizontal">
+                    <Button x:Name="btnCombatResearch" Content="Record 25 seconds" Height="28" Padding="12,0" Click="btnCombatResearch_Click"/>
+                    <Button x:Name="btnCancelCombatResearch" Content="Stop recording" Height="28" Margin="8,0,0,0" Padding="12,0" IsEnabled="False" Click="btnCancelCombatResearch_Click"/>
+                </StackPanel>
+                <TextBlock x:Name="lblCombatResearch" TextWrapping="Wrap" Margin="0,10,0,0" FontSize="11"/>
+                <TextBlock TextWrapping="Wrap" Margin="0,14,0,0" FontSize="11" Opacity="0.7"
+                           Text="Files are saved under Logs/CombatResearch. Select a durable target to avoid losing the end of the trace when it dies. Identifying spell state may require additional traces or other memory regions."/>
+            </StackPanel>
+        </TabItem>
+        <!-- ===================================================== selling ============ -->
+        <TabItem Header="Selling">
+            <Grid Margin="12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="80"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>  <!-- 0 intro          -->
+                    <RowDefinition Height="Auto"/>  <!-- 1 auto sell      -->
+                    <RowDefinition Height="Auto"/>  <!-- 2 after kills    -->
+                    <RowDefinition Height="Auto"/>  <!-- 3 merchant wait  -->
+                    <RowDefinition Height="Auto"/>  <!-- 4 vendor search  -->
+                    <RowDefinition Height="Auto"/>  <!-- 5 note           -->
+                    <RowDefinition Height="*"/>     <!-- 6 the two lists  -->
+                    <RowDefinition Height="Auto"/>  <!-- 7 plan summary   -->
+                </Grid.RowDefinitions>
+
+                <TextBlock Grid.Row="0" Grid.ColumnSpan="3" TextWrapping="Wrap" Margin="0,0,0,10"
+                           Text="After the configured number of corpse loot interactions (not verified bag contents), Grind walks to the recorded town hotspot. Select a saved plan, stand in town and record its hotspot; then select each known merchant and remember it. The nearest recorded merchant is approached by mesh before the existing click plan is replayed."/>
+
+                <CheckBox x:Name="chkAutoSell" Grid.Row="1" Grid.ColumnSpan="3" Margin="0,0,0,8"
+                          Content="Walk to the vendor and sell when the bags are due"/>
+
+                <TextBlock Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2" VerticalAlignment="Center" Margin="0,0,8,8"
+                           Text="...after this many corpse loot interactions"/>
+                <TextBox x:Name="txtSellAfter" Grid.Row="2" Grid.Column="2" HorizontalAlignment="Left"
+                         Width="80" Margin="0,0,0,8"/>
+
+                <TextBlock Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="2" VerticalAlignment="Center" Margin="0,0,8,8"
+                           Text="Wait for the merchant window (milliseconds)"/>
+                <TextBox x:Name="txtVendorWait" Grid.Row="3" Grid.Column="2" HorizontalAlignment="Left"
+                         Width="80" Margin="0,0,0,8"/>
+
+                <TextBlock Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="2" VerticalAlignment="Center" Margin="0,0,8,8"
+                           Text="Look for the vendor NPC within (yards)"/>
+                <TextBox x:Name="txtVendorSearch" Grid.Row="4" Grid.Column="2" HorizontalAlignment="Left"
+                         Width="80" Margin="0,0,0,8"/>
+
+                <Button x:Name="btnTargetInfo" Grid.Row="4" Grid.Column="2" Content="Target Info" Height="24" Padding="10,0" HorizontalAlignment="Left" Margin="100,0,0,8"
+                        Click="btnTargetInfo_Click" ToolTip="Stop the bot, select an NPC and log a read-only 70291 snapshot for vendor investigation."/>
+
+                <StackPanel Grid.Row="5" Grid.ColumnSpan="3">
+                    <Button x:Name="btnInventoryProbe" Content="Bag research snapshot" Height="24" Padding="10,0" HorizontalAlignment="Left" Click="btnInventoryProbe_Click"
+                            ToolTip="Stopped bot only. Read-only candidate bytes, not a bag-full or item detector; logged data can be sensitive."/>
+                    <TextBlock x:Name="lblVendorNote" TextWrapping="Wrap" Margin="0,2,0,8" FontSize="11" Opacity="0.9"/>
+                </StackPanel>
+
+                <!-- the two lists: vendor points on the left, the plan of the selected one on the right -->
+                <Grid Grid.Row="6" Grid.ColumnSpan="3">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="12"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Vendor points" Margin="0,0,0,4" FontWeight="SemiBold"/>
+                    <ListView x:Name="lstVendors" Grid.Row="1" Grid.Column="0" Margin="0,0,0,6"
+                              SelectionMode="Single" SelectionChanged="lstVendors_SelectionChanged">
+                        <ListView.View>
+                            <GridView>
+                                <GridViewColumn Header="Where" Width="120" DisplayMemberBinding="{Binding Place}"/>
+                                <GridViewColumn Header="Steps" Width="55" DisplayMemberBinding="{Binding Steps}"/>
+                            </GridView>
+                        </ListView.View>
+                    </ListView>
+
+                    <WrapPanel Grid.Row="2" Grid.Column="0" Margin="0,0,0,4">
+                        <Button Content="Add vendor here" Height="24" Padding="8,0" Click="btnVendorAdd_Click"
+                                ToolTip="Stand at the vendor in town and press this: that spot becomes the place the bot walks to when the bags are due."/>
+                        <Button Content="Delete vendor" Height="24" Padding="8,0" Margin="8,0,0,0"
+                                Click="btnVendorDelete_Click"
+                                ToolTip="Removes the selected point and every step recorded under it."/>
+                        <Button Content="Record town hotspot" Height="24" Padding="8,0" Margin="0,4,4,0" Click="btnRecordTown_Click"/>
+                        <Button Content="Remember selected merchant" Height="24" Padding="8,0" Margin="0,4,0,0" Click="btnRememberMerchant_Click"/>
+                    </WrapPanel>
+
+                    <TextBlock Grid.Row="0" Grid.Column="2" Text="The sell plan (in order)" Margin="0,0,0,4" FontWeight="SemiBold"/>
+                    <ListView x:Name="lstSteps" Grid.Row="1" Grid.Column="2" Margin="0,0,0,6"
+                              SelectionMode="Single">
+                        <ListView.View>
+                            <GridView>
+                                <GridViewColumn Header="#" Width="30" DisplayMemberBinding="{Binding Number}"/>
+                                <GridViewColumn Header="Step" Width="200" DisplayMemberBinding="{Binding Text}"/>
+                            </GridView>
+                        </ListView.View>
+                    </ListView>
+
+                    <StackPanel Grid.Row="2" Grid.Column="2" Orientation="Horizontal" Margin="0,0,0,4">
+                        <Button Content="Delete step" Height="24" Padding="8,0" Click="btnVendorDeleteStep_Click"/>
+                        <Button Content="Up" Height="24" Padding="8,0" Margin="8,0,0,0" Click="btnVendorStepUp_Click"/>
+                        <Button Content="Down" Height="24" Padding="8,0" Margin="8,0,0,0" Click="btnVendorStepDown_Click"/>
+                        <Button Content="Clear steps" Height="24" Padding="8,0" Margin="8,0,0,0"
+                                Click="btnVendorClearSteps_Click"/>
+                    </StackPanel>
+
+                    <WrapPanel Grid.Row="3" Grid.Column="2" Margin="0,2,0,0">
+                        <Button Content="Left click (3 s)" Height="24" Padding="8,0" Click="btnVendorRecordLeft_Click"
+                                ToolTip="Press it, then put the cursor on the thing to click inside three seconds. The merchant window's own options (e.g. Browse goods) are left clicks."/>
+                        <Button Content="Right click (3 s)" Height="24" Padding="8,0" Margin="8,0,0,0"
+                                Click="btnVendorRecordRight_Click"
+                                ToolTip="Press it, then put the cursor on an item in the bags inside three seconds: while the merchant window is open, a right-click on an item sells it."/>
+                        <Button Content="Bags key (B)" Height="24" Padding="8,0" Margin="8,0,0,0"
+                                Click="btnVendorBagsKey_Click"
+                                ToolTip="Records a press of B, which opens the backpack. It toggles: record it a second time at the end of the plan to close the bags."/>
+                        <Button Content="Sell now" Height="24" Padding="8,0" Margin="8,0,0,0"
+                                Click="btnVendorSellNow_Click"
+                                ToolTip="A running grind loop goes to the vendor before doing anything else, as soon as nothing is attacking."/>
+                    </WrapPanel>
+                </Grid>
+
+                <TextBlock x:Name="lblVendorPlan" Grid.Row="7" Grid.ColumnSpan="3" TextWrapping="Wrap"
+                           Margin="0,6,0,0" FontSize="11" Opacity="0.75" VerticalAlignment="Top"/>
+            </Grid>
+        </TabItem>
+
+        <TabItem Header="Factions">
+            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                <StackPanel Margin="12">
+                    <TextBlock TextWrapping="Wrap" Text="Stop the bot and scan nearby NPC faction-template IDs without selecting them. On 70707 keys and gameplay are experimental; Grind requires Allow or Blacklist mode. IDs are not names or proof of hostility or merchant status."/>
+                    <Button x:Name="btnFactionScan" Content="Scan nearby NPC factions (100 horizontal yd)" Height="30" Margin="0,10,0,0" Click="btnFactionScan_Click"/>
+                    <TextBox x:Name="txtFactionReport" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" Height="145" Margin="0,8,0,8"/>
+                    <TextBlock Text="Filter mode (only one applies)" FontWeight="SemiBold" Margin="0,2,0,4"/>
+                    <WrapPanel>
+                        <RadioButton x:Name="rbFactionOff" GroupName="FactionMode" Content="Off" Margin="0,0,16,0"/>
+                        <RadioButton x:Name="rbFactionAllow" GroupName="FactionMode" Content="Allow list only" Margin="0,0,16,0"/>
+                        <RadioButton x:Name="rbFactionBlacklist" GroupName="FactionMode" Content="Blacklist"/>
+                    </WrapPanel>
+                    <TextBlock Text="Allowed attack IDs (decimal; commas or spaces)" Margin="0,10,0,3"/>
+                    <TextBox x:Name="txtFactionAllowed"/>
+                    <TextBlock Text="Blacklist faction IDs (decimal; commas or spaces)" Margin="0,10,0,3"/>
+                    <TextBox x:Name="txtFactionBlacklist"/>
+                    <TextBlock TextWrapping="Wrap" Margin="0,10,0,0" Text="Blacklist allows every other readable faction key, including potentially friendly NPCs. Neither mode proves attackability. Unknown keys are blocked. Both lists are saved but only the selected mode applies. The selected list must not be empty. Blocked attackers cannot be identified and may not be fought; GatherBuddy defence is unchanged. Save below, then restart Grind. Put Attack on the action bar; some unsafe clicks are withheld."/>
+                </StackPanel>
+            </ScrollViewer>
+        </TabItem>
+
+        </TabControl>
+
+        <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button Content="Defaults" Width="90" Height="26" Margin="0,0,8,0"
+                    Click="btnDefaults_Click"/>
+            <Button Content="Save" Width="90" Height="26" Margin="0,0,8,0"
+                    IsDefault="True" Click="btnSave_Click"/>
+            <Button Content="Cancel" Width="90" Height="26"
+                    IsCancel="True" Click="btnCancel_Click"/>
+        </StackPanel>
+    </Grid>
+</mah:MetroWindow>

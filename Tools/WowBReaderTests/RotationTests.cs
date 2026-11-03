@@ -1,0 +1,117 @@
+#if WOWB_READER_TESTS
+using System;
+using System.Collections.Generic;
+using Styx.Logic.Pathing;
+
+internal static class RotationTests
+{
+    private static ClickAimAction A(int id, int slot = 1) => new() {
+        Id = id, Slot = slot, KeyVk = ClickAimCombat.KeyForSlot(slot), Kind = ClickAimActionKind.Spell,
+        Name = ClickAimCombat.NameOf(id)
+    };
+    private static List<ClickAimAction> Bar(params int[] ids)
+    {
+        var bar = new List<ClickAimAction>();
+        for (int i = 0; i < ids.Length; i++) bar.Add(A(ids[i], i + 1));
+        return bar;
+    }
+    private static void Check(bool condition, string name)
+    { if (!condition) throw new Exception("Rotation: " + name); }
+
+    internal static void Run()
+    {
+        ClickAimCombat.ClearRoleOverrides();
+        try
+        {
+            var shaman = Bar(8042, 403, 331, 8050); // shock before bolt on the bar
+            var plan = ClickAimClassRotation.Build(ClickAimRotationClass.Auto, shaman);
+            Check(plan.Class == ClickAimRotationClass.Shaman && plan.Damage?.Id == 403 &&
+                  plan.Supplemental?.Id == 8042 && plan.Heal?.Id == 331 && plan.Dot?.Id == 8050,
+                  "shaman priorities ignore bar order");
+            Check(plan.SupplementalIntervalMs >= 6000 && plan.SupplementalGroup == "Shocks" &&
+                  ClickAimClassRotation.DotCooldownGroup(plan.Dot!) == "Shocks", "shared shock estimate");
+            var cooldowns = new Dictionary<string, int>();
+            Check(ClickAimClassRotation.SelectSupplemental(plan, false, true, 15, 50, 20, 1000, cooldowns)?.Id == 8042, "optional shock in range with sufficient power");
+            Check(ClickAimClassRotation.SelectSupplemental(plan, false, false, 15, 50, 20, 1000, cooldowns) == null, "pull uses filler first");
+            Check(ClickAimClassRotation.SelectSupplemental(plan, false, true, 21, 50, 20, 1000, cooldowns) == null, "optional range");
+            Check(ClickAimClassRotation.SelectSupplemental(plan, false, true, 15, 19, 20, 1000, cooldowns) == null, "optional resource gate");
+            Check(ClickAimClassRotation.SelectSupplemental(plan, true, true, 15, 50, 20, 1000, cooldowns) == null, "melee latch");
+            ClickAimClassRotation.Defer(cooldowns, "Shocks", 8000, 1000);
+            Check(ClickAimClassRotation.SelectSupplemental(plan, false, true, 15, 50, 20, 2000, cooldowns) == null &&
+                  ClickAimClassRotation.SelectSupplemental(plan, false, true, 15, 50, 20, 9000, cooldowns)?.Id == 8042, "cooldown fallback and expiry");
+            ClickAimCombat.SetRoleOverride(8042, ClickAimSpellRole.Ignore);
+            Check(ClickAimClassRotation.SelectSupplemental(plan, false, true, 15, 50, 20, 9000, cooldowns) == null, "live override veto");
+            Check(ClickAimClassRotation.Build(ClickAimRotationClass.Auto, shaman).Supplemental == null, "ignore supplemental");
+            ClickAimCombat.SetRoleOverride(403, ClickAimSpellRole.Ignore);
+            Check(ClickAimClassRotation.Build(ClickAimRotationClass.Auto, shaman).Damage == null, "ignore damage");
+            ClickAimCombat.ClearRoleOverrides();
+            var shockOnly = ClickAimClassRotation.Build(ClickAimRotationClass.Shaman, Bar(8042));
+            Check(shockOnly.Damage?.Id == 8042 && shockOnly.Supplemental == null && shockOnly.DamageIntervalMs >= 6000,
+                "short-range only fallback is timed");
+            Check(ClickAimClassRotation.Resolve(ClickAimRotationClass.Auto, Bar(403, 133)) == ClickAimRotationClass.Generic, "ambiguous class -> generic");
+            Check(ClickAimClassRotation.Resolve(ClickAimRotationClass.Auto, Bar(6603)) == ClickAimRotationClass.Generic, "no signature -> generic");
+            Check(ClickAimClassRotation.Build(ClickAimRotationClass.Generic, Bar(8042, 403)).Damage?.Id == 8042, "generic preserves bar order");
+            var dotOnly = ClickAimClassRotation.Build(ClickAimRotationClass.Warlock, Bar(172));
+            Check(ClickAimClassRotation.ShouldApproachDotOnly(dotOnly.Damage, dotOnly.Dot, false, true, true, true, 50, 10, 35), "DoT-only approaches to cast range");
+            Check(!ClickAimClassRotation.ShouldApproachDotOnly(dotOnly.Damage, dotOnly.Dot, false, false, true, true, 50, 10, 35) &&
+                  !ClickAimClassRotation.ShouldApproachDotOnly(dotOnly.Damage, dotOnly.Dot, false, true, false, true, 50, 10, 35) &&
+                  !ClickAimClassRotation.ShouldApproachDotOnly(dotOnly.Damage, dotOnly.Dot, false, true, true, true, 5, 10, 35), "DoT-only respects setting, timer and power");
+            var druid = ClickAimClassRotation.Build(ClickAimRotationClass.Auto, Bar(8921, 5176, 5185));
+            Check(druid.Class == ClickAimRotationClass.Druid && druid.Damage?.Id == 5176 && druid.Dot?.Id == 8921 && druid.Heal?.Id == 5185, "druid");
+            Check(ClickAimClassRotation.Build(ClickAimRotationClass.Auto, Bar(1752, 2098)).Melee?.Id == 1752, "rogue builder, no finisher");
+            Check(ClickAimClassRotation.Build(ClickAimRotationClass.Rogue, Bar(2098)).Melee == null, "no unguarded combo finisher");
+            var warrior = ClickAimClassRotation.Build(ClickAimRotationClass.Auto, Bar(772, 78));
+            Check(warrior.Class == ClickAimRotationClass.Warrior && warrior.Dot?.Id == 772 && warrior.Melee?.Id == 78, "warrior");
+            var hunter = ClickAimClassRotation.Build(ClickAimRotationClass.Auto, Bar(1978, 3044, 2973));
+            Check(hunter.Class == ClickAimRotationClass.Hunter && hunter.Dot?.Id == 1978 && hunter.Damage?.Id == 3044 && hunter.DamageIntervalMs >= 6000 && hunter.MeleeIntervalMs > 0, "hunter");
+            var mage = ClickAimClassRotation.Build(ClickAimRotationClass.Auto, Bar(2136, 133));
+            Check(mage.Class == ClickAimRotationClass.Mage && mage.Damage?.Id == 133 && mage.Supplemental?.Id == 2136, "mage");
+            var priest = ClickAimClassRotation.Build(ClickAimRotationClass.Auto, Bar(8092, 585, 2050, 589));
+            Check(priest.Class == ClickAimRotationClass.Priest && priest.Damage?.Id == 585 && priest.Supplemental?.Id == 8092 && priest.Heal?.Id == 2050 && priest.Dot?.Id == 589, "priest");
+            var warlock = ClickAimClassRotation.Build(ClickAimRotationClass.Auto, Bar(172, 686));
+            Check(warlock.Class == ClickAimRotationClass.Warlock && warlock.Damage?.Id == 686 && warlock.Dot?.Id == 172, "warlock");
+            var paladin = ClickAimClassRotation.Build(ClickAimRotationClass.Auto, Bar(635, 35395));
+            Check(paladin.Class == ClickAimRotationClass.Paladin && paladin.Heal?.Id == 635 && paladin.Melee?.Id == 35395 && paladin.MeleeIntervalMs > 0, "paladin");
+            var dk = ClickAimClassRotation.Build(ClickAimRotationClass.DeathKnight, Bar(6603));
+            Check(dk.Class == ClickAimRotationClass.DeathKnight && dk.Damage == null && dk.Melee == null, "runes withheld");
+            var unknown = Bar(999999);
+            ClickAimCombat.SetRoleOverride(999999, ClickAimSpellRole.Damage);
+            Check(ClickAimClassRotation.Build(ClickAimRotationClass.Shaman, unknown).Damage?.Id == 999999, "explicit custom override");
+            ClickAimCombat.SetRoleOverride(6603, ClickAimSpellRole.Ignore);
+            Check(ClickAimCombat.AutoAttack(Bar(6603)) == null, "ignore Attack override");
+            ClickAimCombat.ClearRoleOverrides();
+            unknown[0].KeyVk = 0;
+            Check(ClickAimClassRotation.Build(ClickAimRotationClass.Shaman, unknown).Damage == null, "no unbound slot");
+            var times = new Dictionary<string, int>();
+            ClickAimClassRotation.Defer(times, "Shocks", 8000, int.MaxValue - 100);
+            Check(!ClickAimClassRotation.Ready(times, "Shocks", int.MaxValue - 99) &&
+                  !ClickAimClassRotation.Ready(times, "Shocks", unchecked(int.MinValue + 200)) &&
+                  ClickAimClassRotation.Ready(times, "Shocks", unchecked(int.MinValue + 8000)), "timer wrap and cross-fight state");
+            ClickAimSettings.ResetDefaults();
+            Check(ClickAimSettings.RotationClass == ClickAimRotationClass.Auto, "default");
+            ClickAimSettings.Apply("RotationClass", "shaman");
+            Check(ClickAimSettings.RotationClass == ClickAimRotationClass.Shaman, "setting parse");
+            ClickAimSettings.Apply("RotationClass", "999");
+            Check(ClickAimSettings.RotationClass == ClickAimRotationClass.Shaman, "invalid setting ignored");
+            string originalPath = Styx.Helpers.Logging.ApplicationPath;
+            string temporaryPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "bbuddy-rotation-" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                Styx.Helpers.Logging.ApplicationPath = temporaryPath;
+                Check(ClickAimSettings.Save(), "save setting");
+                ClickAimSettings.ResetDefaults();
+                ClickAimSettings.Load();
+                Check(ClickAimSettings.RotationClass == ClickAimRotationClass.Shaman, "persisted setting round-trip");
+            }
+            finally
+            {
+                Styx.Helpers.Logging.ApplicationPath = originalPath;
+                if (System.IO.Directory.Exists(temporaryPath)) System.IO.Directory.Delete(temporaryPath, true);
+            }
+            ClickAimSettings.ResetDefaults();
+        }
+        finally { ClickAimCombat.ClearRoleOverrides(); }
+        Console.WriteLine("Rotation fixtures passed (synthetic only).");
+    }
+}
+#endif

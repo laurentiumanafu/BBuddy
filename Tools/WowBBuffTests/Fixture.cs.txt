@@ -1,0 +1,341 @@
+using System;
+using System.Collections.Generic;
+using Styx.WoWInternals;
+using GreenMagic;
+namespace GreenMagic
+{
+    sealed class Memory
+    {
+        public IntPtr WindowHandle = new IntPtr(7);
+        public byte[]? AuraBytes;
+        public bool ChangeSecondRead, StopDuringRead;
+        private int _readCount;
+        public byte[]? ReadBytes64(ulong address, int length)
+        {
+            if (AuraBytes == null || address != 0x20000 + 0x5F0 || length != AuraBytes.Length) return null;
+            var result = (byte[])AuraBytes.Clone();
+            if (StopDuringRead) Styx.Logic.Pathing.ClickAimAbort.Requested = true;
+            if (ChangeSecondRead && ++_readCount % 2 == 0) result[0xF08 - 0x5F0] ^= 1;
+            return result;
+        }
+        public IDisposable TemporaryCacheState(bool value) => new Scope();
+        private sealed class Scope : IDisposable { public void Dispose() { } }
+    }
+}
+namespace Styx.Helpers { static class Logging { public static void Write(string line) { } } }
+namespace Styx.WoWInternals
+{
+    readonly struct WowBGuid : IEquatable<WowBGuid>
+    {
+        private readonly int value;
+        public WowBGuid(int value) { this.value = value; }
+        public bool IsEmpty => value == 0;
+        public bool Equals(WowBGuid other) => value == other.value;
+        public override bool Equals(object? other) => other is WowBGuid guid && Equals(guid);
+        public override int GetHashCode() => value;
+        public static bool operator ==(WowBGuid a, WowBGuid b) => a.Equals(b);
+        public static bool operator !=(WowBGuid a, WowBGuid b) => !a.Equals(b);
+    }
+    struct WowBObservedUnit { public WowBGuid Guid; public ulong UnitAddress, RecordAddress; }
+    sealed class WowBWorldSnapshot
+    {
+        public WowBObservedUnit Player;
+        public bool TryGetLocalPlayer(out WowBObservedUnit player) { player = Player; return !player.Guid.IsEmpty; }
+    }
+    sealed class WowBReader
+    {
+        public struct WowBUnitFields { public uint Health, MaxHealth, Power; }
+        public bool IsExperimental70707 = true, Readable = true;
+        public uint Map = 0, Health = 100, MaxHealth = 100, Power = 100;
+        public WowBGuid Selected;
+        public WowBObservedUnit Player = new WowBObservedUnit { Guid = new WowBGuid(1), UnitAddress = 0x20000, RecordAddress = 0x30000 };
+        public bool TryReadMapId(out uint map) { map = Map; return Readable; }
+        public bool TryCaptureWorldSnapshot(out WowBWorldSnapshot? snapshot) { snapshot = Readable ? new WowBWorldSnapshot { Player = Player } : null; return Readable; }
+        public bool TryGetUnitFields(ulong address, out WowBUnitFields fields) { fields = new WowBUnitFields { Health = Health, MaxHealth = MaxHealth, Power = Power }; return Readable && address == Player.UnitAddress; }
+        public WowBGuid ReadTargetGuid() => Selected;
+    }
+    static class ObjectManager { public static Memory? Wow; public static WowBReader? WowB; }
+}
+namespace Styx.Logic.Pathing
+{
+    enum ClickAimRotationClass { Auto, Generic, Druid }
+    enum ClickAimSpellRole { Unknown, Buff, Ignore, Damage }
+    sealed class ClickAimAction
+    {
+        public int Id, KeyVk, Slot; public ulong Raw; public string Name = "";
+        public bool IsBuff => ClickAimCombat.RoleOf(Id) == ClickAimSpellRole.Buff;
+    }
+    static class ClickAimSettings { public static bool UseBuffs = true, UseBuffsInCombat; public static ClickAimRotationClass RotationClass = ClickAimRotationClass.Auto; }
+    static class ClickAimClassRotation { public static ClickAimRotationClass Resolve(ClickAimRotationClass type, List<ClickAimAction> bar) => type; }
+    static class ClickAimCombat
+    {
+        public const int CastSettleMs = 1800;
+        public static List<ClickAimAction> Bar = new();
+        public static Dictionary<int, ClickAimSpellRole> Overrides = new();
+        public static List<ClickAimAction> ReadBar(WowBReader reader) => new List<ClickAimAction>(Bar);
+        public static string NameOf(int id) => id switch { 1 => "Arcane Intellect", 2 => "Frost Armor", 3 => "Thorns", 4 => "Cat Form", 20550 => "Endurance", _ => "spell" };
+        public static ClickAimSpellRole RoleOverrideOf(int id) => Overrides.TryGetValue(id, out var role) ? role : ClickAimSpellRole.Unknown;
+        public static ClickAimSpellRole RoleOf(int id) => Overrides.TryGetValue(id, out var role) ? role : ClickAimSpellRole.Buff;
+    }
+    static class WowBGrindFactions
+    {
+        public static bool BarSafe = true, Ghost, GhostReadable = true;
+        public static bool Experimental70707BarSafe(WowBReader reader) => BarSafe;
+        public static bool TryReadGhostFlagCandidate(Memory m, WowBReader r, WowBObservedUnit p, out bool ghost) { ghost = Ghost; return GhostReadable; }
+    }
+    static class RouteRunner { public static bool StopRequested; }
+    static class GrindRunner { public static bool Combat, CombatReadable = true; public static bool TryReadGatherCombat(out bool fighting) { fighting = Combat; return CombatReadable; } }
+    static class ClickAimAbort { public static bool Requested; public static bool Wait(int ms) => Requested; }
+    static class ClickAimInput
+    {
+        public static bool F1Works = true, StopOnF1, StopAfterFirst, DisableAfterFirst, CombatAfterFirst, ChangeSecondAfterFirst, ChangeTargetAfterFirst, ChangeMapAfterFirst;
+        public static List<int> Keys = new();
+        public static void TapKey(IntPtr hwnd, int key, int ms)
+        {
+            Keys.Add(key);
+            var reader = ObjectManager.WowB!;
+            if (key == 0x70) { if (F1Works) reader.Selected = reader.Player.Guid; if (StopOnF1) ClickAimAbort.Requested = true; }
+            else if (key == 0x31)
+            {
+                if (CombatAfterFirst) GrindRunner.Combat = true;
+                if (StopAfterFirst) ClickAimAbort.Requested = true;
+                if (DisableAfterFirst) ClickAimSettings.UseBuffs = false;
+                if (ChangeSecondAfterFirst) ClickAimCombat.Bar[1] = Harness.Action(999, 2);
+                if (ChangeTargetAfterFirst) reader.Selected = new WowBGuid(9);
+                if (ChangeMapAfterFirst) reader.Map = 1;
+            }
+        }
+    }
+    static class Harness
+    {
+        public static ClickAimAction Action(int id, int slot) => new ClickAimAction { Id = id, Slot = slot, KeyVk = 0x30 + slot, Raw = (ulong)id, Name = ClickAimCombat.NameOf(id) };
+        private static void Check(bool value, string label) { if (!value) throw new Exception(label); }
+        private static void Write32(byte[] data, int absoluteOffset, uint value) => BitConverter.GetBytes(value).CopyTo(data, absoluteOffset - 0x5F0);
+        private static void Write64(byte[] data, int absoluteOffset, ulong value) => BitConverter.GetBytes(value).CopyTo(data, absoluteOffset - 0x5F0);
+        private static byte[] Candidate(uint clock = 1000000)
+        {
+            byte[] data = new byte[0x1624];
+            Write64(data, 0x5F0, 0x20608); Write64(data, 0x5F8, 12); Write64(data, 0x600, 0x8000000000000010UL);
+            Write32(data, 0x1C10, clock); Write32(data, 0x1A60, 9);
+            uint[] otherIds = { 0x5075, 0x5076, 0x72FE, 0x12B2DB, 0x12B300, 0x12B302, 0x12B306 };
+            for (int i = 0; i < otherIds.Length; i++) Write32(data, 0x6F0 + i * 0x128, otherIds[i]);
+            Write32(data, 0xF08, 168); Write32(data, 0xF14, 1800000); Write32(data, 0xF18, unchecked(clock + 1200000));
+            Write32(data, 0x1030, 1459); Write32(data, 0x103C, 3600000); Write32(data, 0x1040, unchecked(clock + 2400000));
+            return data;
+        }
+        private static byte[] ShamanCandidate()
+        {
+            byte[] data = new byte[0x1624];
+            Write64(data, 0x5F0, 0x20608); Write64(data, 0x5F8, 11); Write64(data, 0x600, 0x8000000000000010UL);
+            Write32(data, 0x1C10, 0x00FFF51B); Write32(data, 0x1A60, 10);
+            uint[] ids = { 0x1338C7, 0x1338C9, 324, 10400, 0, 0x12B300, 0x12B312, 0x12B307, 0x12B305, 0x12B31C, 0x12B319 };
+            for (int i = 0; i < ids.Length; i++) Write32(data, 0x6F0 + i * 0x128, ids[i]);
+            Write32(data, 0x94C, 600000); Write32(data, 0x950, 0x01091C62);
+            return data;
+        }
+        private static void Reset()
+        {
+            ObjectManager.Wow = new Memory(); ObjectManager.WowB = new WowBReader { Selected = new WowBGuid(8) };
+            ClickAimCombat.Bar = new List<ClickAimAction> { Action(1, 1), Action(2, 2), Action(3, 3) };
+            ClickAimCombat.Overrides.Clear(); ClickAimInput.Keys.Clear();
+            ClickAimSettings.UseBuffs = true; ClickAimSettings.UseBuffsInCombat = false; ClickAimSettings.RotationClass = ClickAimRotationClass.Auto;
+            GrindRunner.Combat = ClickAimAbort.Requested = RouteRunner.StopRequested = false;
+            GrindRunner.CombatReadable = WowBGrindFactions.BarSafe = WowBGrindFactions.GhostReadable = ClickAimInput.F1Works = true;
+            WowBGrindFactions.Ghost = ClickAimInput.StopOnF1 = ClickAimInput.StopAfterFirst = ClickAimInput.DisableAfterFirst = ClickAimInput.CombatAfterFirst = ClickAimInput.ChangeSecondAfterFirst = ClickAimInput.ChangeTargetAfterFirst = ClickAimInput.ChangeMapAfterFirst = false;
+        }
+        public static void Main()
+        {
+            long now = 0; int stoppedMovement = 0;
+            Func<bool> stopped = () => false;
+            Action stopMovement = () => stoppedMovement++;
+            var controller = new ClickAimBuffController(() => now);
+            Reset();
+            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && stoppedMovement == 1 &&
+                  ClickAimInput.Keys.Count == 4 && ClickAimInput.Keys[0] == 0x70 && ClickAimInput.Keys[1] == 0x31 &&
+                  ClickAimInput.Keys[2] == 0x32 && ClickAimInput.Keys[3] == 0x33, "fresh session selects self and attempts all three buffs");
+            ClickAimInput.Keys.Clear(); now = ClickAimBuffSchedule.RefreshMs - 5000;
+            Check(!controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 0, "no early refresh");
+            now = ClickAimBuffSchedule.RefreshMs;
+            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 3, "30-minute refresh, existing self-target preserved");
+            ClickAimInput.Keys.Clear(); now++;
+            controller.Reset();
+            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 3, "confirmed resurrection resets timer immediately");
+            Reset(); controller.Reset(); now = 0; GrindRunner.Combat = true;
+            Check(!controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 0, "combat blocks targeting and buffs");
+            GrindRunner.Combat = false; now = 5000;
+            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 4, "deferred start resumes out of combat");
+            Reset(); controller.Reset(); now = 0;
+            Check(!controller.TryApply(new IntPtr(7), stopped, () => throw new Exception("stop failed")) && ClickAimInput.Keys.Count == 0,
+                  "movement-stop failure blocks buff input");
+            Reset(); controller.Reset(); now = 0; ClickAimInput.F1Works = false;
+            Check(!controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 1 && ClickAimInput.Keys[0] == 0x70, "unconfirmed F1 blocks every buff");
+            ClickAimInput.Keys.Clear(); now = 5000;
+            Check(!controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 0, "failed F1 uses a longer retry backoff");
+            now = 30000; Check(!controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 1, "failed F1 can retry later");
+            Reset(); controller.Reset(); now = 0;
+            ObjectManager.Wow!.AuraBytes = Candidate(); ObjectManager.Wow.StopDuringRead = true;
+            ClickAimCombat.Bar = new List<ClickAimAction> { Action(168, 1), Action(1459, 2) };
+            int beforeStop = stoppedMovement;
+            Check(!controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 0 && stoppedMovement == beforeStop,
+                  "STOP during candidate read blocks movement and buff keys");
+            Reset(); controller.Reset(); now = 0;
+            ObjectManager.Wow!.AuraBytes = Candidate();
+            ClickAimCombat.Bar = new List<ClickAimAction> { Action(168, 1), Action(1459, 2) };
+            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 3, "fresh run attempts buffs even if candidate active");
+            ClickAimInput.Keys.Clear(); now = ClickAimBuffSchedule.RefreshMs;
+            Check(!controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 0, "active candidate suppresses thirty-minute fallback");
+            Write32(ObjectManager.Wow.AuraBytes!, 0xF18, 1000000 + 25000); now += 5000;
+            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 1 && ClickAimInput.Keys[0] == 0x31, "near-expiry candidate refreshes only Frost Armor");
+            ClickAimInput.Keys.Clear(); Write32(ObjectManager.Wow.AuraBytes!, 0xF08, 0); Write32(ObjectManager.Wow.AuraBytes!, 0x1A60, 8); now += 5000;
+            Check(!controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 0, "candidate absence respects thirty-second retry limit");
+            now += 25000;
+            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 1 && ClickAimInput.Keys[0] == 0x31, "missing candidate retries after backoff");
+            controller.Reset(); now = 0; ClickAimInput.Keys.Clear();
+            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement), "fresh timer for malformed layout test");
+            ClickAimInput.Keys.Clear(); Write64(ObjectManager.Wow.AuraBytes!, 0x5F0, 0x99999); now = 5000;
+            Check(!controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 0, "unexpected array pointer falls back, not absent");
+            now += ClickAimBuffSchedule.RefreshMs;
+            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 2, "unreadable candidates use the old thirty-minute fallback");
+            Reset(); controller.Reset(); now = 0;
+            ObjectManager.Wow!.AuraBytes = Candidate();
+            var snapshot = WowBInlineAuraCandidate.Capture(ObjectManager.Wow, ObjectManager.WowB!.Player);
+            Check(snapshot != null && snapshot.Remaining(168) == 1200000 && snapshot.Remaining(1459) == 2400000 && snapshot.Remaining(999) == null, "candidate decodes two observed spells only");
+            Write32(ObjectManager.Wow.AuraBytes!, 0x1A60, 10);
+            Check(WowBInlineAuraCandidate.Capture(ObjectManager.Wow, ObjectManager.WowB.Player) == null, "mismatched occupancy is unknown");
+            ObjectManager.Wow.AuraBytes = Candidate(0xFFFFFF00);
+            snapshot = WowBInlineAuraCandidate.Capture(ObjectManager.Wow, ObjectManager.WowB.Player);
+            Check(snapshot != null && snapshot.Remaining(168) == 1200000, "candidate clock wraparound");
+            ObjectManager.Wow.ChangeSecondRead = true;
+            Check(WowBInlineAuraCandidate.Capture(ObjectManager.Wow, ObjectManager.WowB.Player) == null, "unstable candidate snapshot is unknown");
+            ObjectManager.Wow.ChangeSecondRead = false; ObjectManager.Wow.AuraBytes = Candidate();
+            Write32(ObjectManager.Wow.AuraBytes!, 0xF14, 0);
+            snapshot = WowBInlineAuraCandidate.Capture(ObjectManager.Wow, ObjectManager.WowB.Player);
+            Check(snapshot != null && snapshot.Remaining(168) == null, "indefinite or corrupt duration is unknown");
+            ObjectManager.Wow.AuraBytes = Candidate(); Write32(ObjectManager.Wow.AuraBytes!, 0x1030, 168);
+            Check(WowBInlineAuraCandidate.Capture(ObjectManager.Wow, ObjectManager.WowB.Player) == null, "duplicate IDs are unknown");
+            ObjectManager.Wow.AuraBytes = Candidate(0);
+            Check(WowBInlineAuraCandidate.Capture(ObjectManager.Wow, ObjectManager.WowB.Player) == null, "zero clock is unknown");
+            Reset(); controller.Reset(); now = 0;
+            ObjectManager.Wow!.AuraBytes = ShamanCandidate();
+            snapshot = WowBInlineAuraCandidate.Capture(ObjectManager.Wow, ObjectManager.WowB!.Player);
+            Check(snapshot != null && snapshot.Remaining(324) == 599879 && snapshot.Remaining(8017) == null,
+                  "observed eleven-slot Shaman layout decodes Lightning Shield but not Rockbiter");
+            ClickAimCombat.Bar = new List<ClickAimAction> { Action(324, 1), Action(324, 2), Action(8017, 3) };
+            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 3,
+                  "Shaman fresh start deduplicates shield and attempts Rockbiter fallback");
+            ClickAimInput.Keys.Clear(); now = 30000;
+            Check(!controller.TryApply(new IntPtr(7), stopped, stopMovement), "active Lightning Shield is not refreshed early");
+            Write32(ObjectManager.Wow.AuraBytes!, 0x940, 0); Write32(ObjectManager.Wow.AuraBytes!, 0x94C, 0);
+            Write32(ObjectManager.Wow.AuraBytes!, 0x950, 0); Write32(ObjectManager.Wow.AuraBytes!, 0x1A60, 9); now += 5000;
+            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 1 && ClickAimInput.Keys[0] == 0x31,
+                  "removed Lightning Shield is retried, not Rockbiter or duplicate slot");
+            Write32(ObjectManager.Wow.AuraBytes!, 0x940, 324); Write32(ObjectManager.Wow.AuraBytes!, 0x94C, 600000);
+            Write32(ObjectManager.Wow.AuraBytes!, 0x950, 0x01091C62); Write32(ObjectManager.Wow.AuraBytes!, 0x1A60, 10);
+            ClickAimInput.Keys.Clear(); now = ClickAimBuffSchedule.RefreshMs;
+            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 1 && ClickAimInput.Keys[0] == 0x33,
+                  "Rockbiter retains thirty-minute fallback, independent of active Shield");
+            Write64(ObjectManager.Wow.AuraBytes!, 0x5F8, 10);
+            Check(WowBInlineAuraCandidate.Capture(ObjectManager.Wow, ObjectManager.WowB.Player) == null, "unobserved container length is unknown");
+            Write64(ObjectManager.Wow.AuraBytes!, 0x5F8, 11); Write32(ObjectManager.Wow.AuraBytes!, 0x1A60, 11);
+            Check(WowBInlineAuraCandidate.Capture(ObjectManager.Wow, ObjectManager.WowB.Player) == null, "out-of-bounds active count is unknown");
+            Reset(); controller.Reset(); now = 0;
+            ObjectManager.Wow!.AuraBytes = Candidate(); ObjectManager.WowB!.IsExperimental70707 = false;
+            ClickAimCombat.Bar = new List<ClickAimAction> { Action(168, 1), Action(1459, 2) };
+            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement), "70291 initial attempts");
+            ClickAimInput.Keys.Clear(); now = ClickAimBuffSchedule.RefreshMs;
+            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 2,
+                  "70291 ignores 70707 aura candidates and uses timer");
+            // Combat path is opt-in, 70707-only, self-only and never retargets.
+            Reset(); controller.Reset(); now = 0; GrindRunner.Combat = true;
+            ObjectManager.Wow!.AuraBytes = ShamanCandidate();
+            Write32(ObjectManager.Wow.AuraBytes!, 0x940, 0); Write32(ObjectManager.Wow.AuraBytes!, 0x94C, 0);
+            Write32(ObjectManager.Wow.AuraBytes!, 0x950, 0); Write32(ObjectManager.Wow.AuraBytes!, 0x1A60, 9);
+            ClickAimCombat.Bar = new List<ClickAimAction> { Action(324, 1), Action(8017, 3) };
+            WowBObservedUnit combatPlayer = ObjectManager.WowB!.Player;
+            Func<bool> targetSafe = () => ObjectManager.WowB!.Selected == new WowBGuid(8);
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe) && ClickAimInput.Keys.Count == 0, "combat checkbox off withholds buff");
+            ClickAimSettings.UseBuffsInCombat = true; ObjectManager.WowB.Power = 59;
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "insufficient estimated mana withholds shield");
+            ObjectManager.WowB.Power = 60;
+            Check(controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe) && ClickAimInput.Keys.Count == 1 && ClickAimInput.Keys[0] == 0x31 && ObjectManager.WowB.Selected == new WowBGuid(8),
+                  "missing shield casts with estimated mana and leaves enemy selected");
+            ClickAimInput.Keys.Clear(); now = 9999;
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "combat retry has ten-second backoff");
+            now = 10000; Write32(ObjectManager.Wow.AuraBytes!, 0x940, 324); Write32(ObjectManager.Wow.AuraBytes!, 0x94C, 600000);
+            Write32(ObjectManager.Wow.AuraBytes!, 0x950, 0x01091C62); Write32(ObjectManager.Wow.AuraBytes!, 0x1A60, 10);
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "active shield is not recast");
+            Write32(ObjectManager.Wow.AuraBytes!, 0x940, 0); Write32(ObjectManager.Wow.AuraBytes!, 0x1A60, 9);
+            Write64(ObjectManager.Wow.AuraBytes!, 0x5F8, 10);
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "unknown aura layout does not trigger a combat cast");
+            Write64(ObjectManager.Wow.AuraBytes!, 0x5F8, 11); ObjectManager.WowB.Selected = new WowBGuid(9);
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "changed enemy selection blocks combat buff");
+            ObjectManager.WowB.Selected = new WowBGuid(8); WowBGrindFactions.Ghost = true;
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "ghost blocks combat buff");
+            WowBGrindFactions.Ghost = false; GrindRunner.Combat = false;
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "out-of-combat state blocks combat path");
+            GrindRunner.Combat = true; ObjectManager.WowB.IsExperimental70707 = false;
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "70291 does not use 70707 combat aura layout");
+            ObjectManager.WowB.IsExperimental70707 = true; ClickAimCombat.Overrides[324] = ClickAimSpellRole.Ignore;
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "ignored spell never casts");
+            ClickAimCombat.Overrides.Clear(); ClickAimSettings.UseBuffs = false;
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "master buff setting blocks combat buff");
+            ClickAimSettings.UseBuffs = true; int guardCalls = 0;
+            Func<bool> drainingMana = () => { if (++guardCalls == 2) ObjectManager.WowB.Power = 59; return true; };
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, drainingMana), "mana is rechecked before input");
+            ObjectManager.WowB.Power = 100; ObjectManager.Wow.StopDuringRead = true;
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe) && ClickAimInput.Keys.Count == 0,
+                  "STOP during combat aura read blocks input");
+            Reset(); controller.Reset(); now = 0; GrindRunner.Combat = true; ClickAimSettings.UseBuffsInCombat = true;
+            ObjectManager.Wow!.AuraBytes = Candidate();
+            Write32(ObjectManager.Wow.AuraBytes!, 0xF08, 0); // Armor removed, Shield active in a different candidate slot
+            Write32(ObjectManager.Wow.AuraBytes!, 0x1158, 324); Write32(ObjectManager.Wow.AuraBytes!, 0x1164, 600000);
+            Write32(ObjectManager.Wow.AuraBytes!, 0x1168, 1000000 + 500000);
+            ClickAimCombat.Bar = new List<ClickAimAction> { Action(324, 1), Action(168, 2) };
+            combatPlayer = ObjectManager.WowB!.Player; ObjectManager.WowB.Power = 79;
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "Armor below its own mana estimate is withheld");
+            ObjectManager.WowB.Power = 80;
+            Check(controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe) && ClickAimInput.Keys.Count == 1 && ClickAimInput.Keys[0] == 0x32,
+                  "missing Armor casts while an earlier Shield is active, without retargeting");
+            Reset(); controller.Reset(); now = 0; ClickAimInput.StopOnF1 = true;
+            Check(!controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 1, "STOP after self-target blocks buff key");
+            Reset(); controller.Reset(); now = 0; ClickAimInput.CombatAfterFirst = true;
+            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 2, "combat after first buff blocks remaining buffs");
+            GrindRunner.Combat = false; ClickAimInput.CombatAfterFirst = false; ClickAimInput.Keys.Clear(); now = 5000;
+            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 2 && ClickAimInput.Keys[0] == 0x32, "unattempted buffs remain due");
+            Reset(); controller.Reset(); now = 0; ClickAimInput.StopAfterFirst = true;
+            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 2, "STOP after first buff blocks remaining keys");
+            Reset(); controller.Reset(); now = 0; ClickAimInput.DisableAfterFirst = true;
+            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 2, "disabling buffs after first key blocks the remainder");
+            Reset(); controller.Reset(); now = 0; ClickAimInput.ChangeTargetAfterFirst = true;
+            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 2, "changed self target blocks next buff");
+            Reset(); controller.Reset(); now = 0; ClickAimInput.ChangeMapAfterFirst = true;
+            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 2, "map change blocks next buff");
+            Reset(); controller.Reset(); now = 0; ClickAimInput.ChangeSecondAfterFirst = true;
+            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 2, "changed slot blocks stale key");
+            Reset(); controller.Reset(); now = 0; WowBGrindFactions.Ghost = true;
+            Check(!controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 0, "ghost blocks buffs");
+            Reset(); controller.Reset(); now = 0; ObjectManager.WowB!.Power = 0;
+            Check(!controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 0, "zero 70707 mana defers buff attempts");
+            ObjectManager.WowB.Power = 100; now = 5000;
+            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 4, "buffs remain due when mana recovers");
+            Reset(); controller.Reset(); now = 0; ObjectManager.WowB!.IsExperimental70707 = false; ObjectManager.WowB.Power = 0;
+            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement), "unknown 70291 power type is not treated as mana");
+            Reset(); controller.Reset(); now = 0; WowBGrindFactions.GhostReadable = false;
+            Check(!controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 0, "unreadable ghost flag blocks 70707 buffs");
+            Reset(); controller.Reset(); now = 0; ObjectManager.WowB!.IsExperimental70707 = false; WowBGrindFactions.GhostReadable = false;
+            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 4, "70291 does not require the 70707 ghost flag");
+            Reset(); controller.Reset(); now = 0; WowBGrindFactions.BarSafe = false;
+            Check(!controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 0, "unconfirmed action bar blocks buffs");
+            Reset(); controller.Reset(); now = 0; ClickAimSettings.UseBuffs = false;
+            Check(!controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 0, "disabled setting blocks buffs");
+            ClickAimSettings.UseBuffs = true;
+            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement), "enabled during session attempts due buffs");
+            Reset(); controller.Reset(); now = 0; ClickAimSettings.RotationClass = ClickAimRotationClass.Druid;
+            ClickAimCombat.Bar = new List<ClickAimAction> { Action(4, 1), Action(20550, 2) };
+            Check(!controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 0, "implicit druid forms and passive racial excluded");
+            controller.Reset(); now = 0; ClickAimSettings.RotationClass = ClickAimRotationClass.Generic;
+            Check(!controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 0, "forms excluded even if class is Generic");
+            Console.WriteLine("Buff scheduling and safety fixtures passed (synthetic only; no real cast or aura validation).");
+        }
+    }
+}

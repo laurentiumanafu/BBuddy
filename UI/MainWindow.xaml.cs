@@ -43,6 +43,13 @@ namespace CopilotBuddy.UI
         private const int MaxLogLines = 1000;
         private bool _isRunning;
         private DispatcherTimer? _infoTimer;
+        private ClickAimToolsWindow? _clickAimToolsWindow;
+
+        /// <summary>
+        /// True while the Start button is running the ClickAim grind loop instead of the
+        /// behaviour tree - the case on wowb.exe, where the tree refuses to start.
+        /// </summary>
+        private bool _grindStarted;
 
         /// <summary>
         /// Mutex that claims ownership of the attached WoW process.
@@ -110,7 +117,14 @@ namespace CopilotBuddy.UI
             {
                 Interval = TimeSpan.FromSeconds(1)
             };
-            _infoTimer.Tick += (s, e) => UpdateInfoPanel();
+            /* The panel reads ObjectManager.Me, which on wowb.exe is a 32-bit wrapper over a
+             * client that does not have one. A throw here would kill the window from a timer
+             * tick, so the tick swallows it and the panel simply shows the counters. */
+            _infoTimer.Tick += (s, e) =>
+            {
+                try { UpdateInfoPanel(); }
+                catch (Exception ex) { Logging.WriteDebug("info panel: " + ex.Message); }
+            };
             
             // Subscribe to StatusText changes — updates StatusBar like HB 4.3.4
             TreeRoot.OnStatusTextChanged += (sender, e) =>
@@ -179,6 +193,77 @@ namespace CopilotBuddy.UI
                     if (ObjectManager.IsInitialized)
                     {
                         Logging.Write("Attached to WoW with ID {0}", _selectedWoWProc!.Value);
+
+                        if (ObjectManager.Wow?.Is64BitTarget == true)
+                        {
+                            // Until the x64 object model and dependencies are
+                            // ported, plugin/bot constructors and legacy SQLite
+                            // cannot be treated as safe or available. Leave
+                            // normal x86 startup unchanged.
+                            /* The behaviour tree and the combat routines still cannot start on
+                             * this client, but the window is now the way in: Load Profile ->
+                             * Grind -> Start runs the ClickAim grind loop. Say that instead of
+                             * saying everything is disabled, which stopped being true. */
+                            Logging.Write("[Attach] WowB mode: the behaviour tree is not used here. "
+                                          + "Load Profile, pick \"Grind\", press Start - that runs the "
+                                          + "ClickAim loop on the loaded profile.");
+
+                            // Movement does not need the object model - it needs the
+                            // player's X/Y, which the WowB reader already provides. Arm
+                            // the click-aim pilot so it can be exercised from this mode.
+                            try
+                            {
+                                Styx.Logic.Pathing.ClickAimDiagnostics.EnableAfterAttach();
+                            }
+                            catch (Exception ex)
+                            {
+                                Logging.Write("[ClickAim] pilot not armed: " + ex.Message);
+                            }
+
+                            Dispatcher.Invoke(() =>
+                            {
+                                SetStatus("Attached (read-only)");
+                                // The legacy Developer Tools uses 32-bit
+                                // wrappers. Expose the separate read-only
+                                // x64 snapshot viewer instead.
+                                btnDevTools.Content = "World snapshot";
+                                btnDevTools.ToolTip = "View a read-only WowB snapshot";
+                                btnDevTools.Visibility = Visibility.Visible;
+                                btnDevTools.IsEnabled = true;
+                                btnClickAimTools.IsEnabled = true;
+
+                                /* Enable the three controls that do something on this client.
+                                 * Everything else stays as ToggleButtons(false) left it, because
+                                 * it still needs the object model this client does not expose. */
+                                try
+                                {
+                                    /* Deliberately NOT BotManager.Instance.Bots: touching it
+                                     * instantiates every BotBase in the assembly, and some of
+                                     * them own a SQLite database and a 32-bit object model -
+                                     * on the UI thread, on a client where none of them can
+                                     * run. Grind is the one bot with a 64-bit implementation,
+                                     * and it is the only entry the list needs. */
+                                    cmbBotSelector.Items.Clear();
+                                    cmbBotSelector.Items.Add(Styx.Logic.Pathing.ClickAimUi.GrindBotName);
+                                    cmbBotSelector.Items.Add(Styx.Logic.Pathing.ClickAimUi.GatherBotName);
+                                    cmbBotSelector.SelectedIndex = 0;
+                                    cmbBotSelector.IsEnabled = true;
+                                }
+                                catch (Exception ex)
+                                {
+                                    Logging.Write("[Attach] bot list: " + ex.Message);
+                                }
+
+                                btnLoadProfile.IsEnabled = true;
+                                btnStart.IsEnabled = true;
+                                EnhancedMode.IsEnabled = true;
+
+                                // The grind loop can end on its own; the info timer is what puts
+                                // the buttons back when it does.
+                                _infoTimer?.Start();
+                            });
+                            return;
+                        }
 
                         // HB 6.2.3 smethod_3: Start minimize guard thread + event handlers
                         TreeRoot.Initialize();
@@ -312,16 +397,19 @@ namespace CopilotBuddy.UI
         /// 
         /// Logic:
         ///   1. Check /pid= command line arg for explicit process selection
-        ///   2. Find all Wow.exe processes matching build 12340
-        ///   3. Filter: logged in + not claimed by another CopilotBuddy (via mutex)
+        ///   2. Find recognized client processes and the existing name-based exceptions
+        ///   3. Filter: logged in where checkable + not claimed by another CopilotBuddy (via mutex)
         ///   4. If 0 available: show error
         ///   5. If 1 available: auto-attach
-        ///   6. If 2+: show ProcessSelectorWindow
+        ///   6. If 2+: show ProcessSelectorWindow, defaulting to the newest registered build
         ///   7. Attach to selected process
         /// </summary>
         private bool FindAndAttachToWoW()
         {
-            Logging.Write("Searching for WoW process...");
+            Logging.Write("Searching for WoW process... default registered client build: {0}", ClientAttachPolicy.DefaultBuild);
+            Logging.Write("[Attach] Executable: {0} ({1})",
+                Environment.ProcessPath ?? AppDomain.CurrentDomain.BaseDirectory,
+                Environment.Is64BitProcess ? "x64" : "x86");
 
             // Step 1: Check for /pid= command line argument
             string? pidArg = Environment.GetCommandLineArgs()
@@ -335,8 +423,9 @@ namespace CopilotBuddy.UI
             {
                 // Find ALL Wow processes (covers the standard client, the WoW.exe spelling,
                 // and the Luacct.exe variant used by some private-server clients)
-                string[] wowProcessNames = { "Wow", "WoW", "Luacct", "WowB" };
-                var wowProcesses = wowProcessNames.SelectMany(n => Process.GetProcessesByName(n)).ToArray();
+                string[] wowProcessNames = ClientAttachPolicy.ProcessNames();
+                var wowProcesses = wowProcessNames.SelectMany(n => Process.GetProcessesByName(n))
+                    .DistinctBy(p => p.Id).ToArray();
                 wowProcessesFound = wowProcesses.Length;
 
                 foreach (var proc in wowProcesses)
@@ -357,20 +446,16 @@ namespace CopilotBuddy.UI
                             continue;
                         }
 
-                        // build == 0 means no version resource (custom/private server client).
-                        // WowB.exe reports FileVersion 1.60.1.x (FilePrivatePart = 1) — its
-                        // real build number (70291) is NOT in that field, so accept WowB by
-                        // process name: only the Classic Beta client is named WowB.
-                        if (ObjectManager.IsSupportedBuild(build) || build == 0
-                            || proc.ProcessName.Equals("WowB", StringComparison.OrdinalIgnoreCase))
+                        // Keep existing unversioned/WowB discovery rules and discover 70707 automatically.
+                        if (ClientAttachPolicy.IsCandidate(build, proc.ProcessName))
                         {
                             candidates.Add(proc);
                             Logging.WriteDebug("Candidate: {0} (PID {1}), build {2}", proc.ProcessName, proc.Id, build);
                         }
                         else
                         {
-                            Logging.Write(Colors.Orange, "{0} (PID {1}) skipped: unsupported build {2} (expected {3} or {4}).",
-                                proc.ProcessName, proc.Id, build, ObjectManager.SupportedBuild, ObjectManager.SupportedBuildWowB);
+                            Logging.Write(Colors.Orange, "{0} (PID {1}) skipped: unsupported build {2} (expected {3}, {4}, or experimental {5}).",
+                                proc.ProcessName, proc.Id, build, ObjectManager.SupportedBuild, ObjectManager.SupportedBuildWowB, ClientAttachPolicy.ExperimentalBuild);
                         }
                     }
                     catch { /* Access denied or process exited */ }
@@ -394,11 +479,12 @@ namespace CopilotBuddy.UI
                                 if (!Environment.Is64BitProcess)
                                     Logging.Write(Colors.Orange, "CopilotBuddy is running as x86 — use the x64 build to attach to a 64-bit client.");
                             }
-                            else if (ObjectManager.IsSupportedBuild(build) || build == 0
-                                || proc.ProcessName.Equals("WowB", StringComparison.OrdinalIgnoreCase))
+                            else if (ClientAttachPolicy.IsCandidate(build, proc.ProcessName))
                                 candidates.Add(proc);
                             else
-                                Logging.Write(Colors.Orange, "PID {0} skipped: unsupported build {1} (expected {2} or {3}).", pid, build, ObjectManager.SupportedBuild, ObjectManager.SupportedBuildWowB);
+                            {
+                                Logging.Write(Colors.Orange, "PID {0} skipped: unsupported build {1} (expected {2}, {3}, or experimental {4}).", pid, build, ObjectManager.SupportedBuild, ObjectManager.SupportedBuildWowB, ClientAttachPolicy.ExperimentalBuild);
+                            }
                         }
                     }
                     catch
@@ -425,6 +511,11 @@ namespace CopilotBuddy.UI
                 try
                 {
                         using var tempMemory = new Memory(proc.Id);
+                        if (ObjectManager.GetBuildNumber(proc) == ClientAttachPolicy.ExperimentalBuild && !tempMemory.Is64BitTarget)
+                        {
+                            Logging.Write(Colors.Orange, "PID {0}: experimental build 70707 requires a 64-bit client.", proc.Id);
+                            continue;
+                        }
 
                         // Check if player is logged in
                         bool isLoggedIn;
@@ -691,6 +782,22 @@ namespace CopilotBuddy.UI
 
         private void UpdateInfoPanel()
         {
+            /* The grind loop can end on its own - a ring it cannot reach, an empty area, the
+             * user's "stop" request. The window must go back to Start when it does, or the
+             * next click does nothing and looks broken. */
+            if (_grindStarted && !Styx.Logic.Pathing.ClickAimUi.Running)
+            {
+                _grindStarted = false;
+                _isRunning = false;
+                btnStart.Visibility = Visibility.Visible;
+                btnStopGroup.Visibility = Visibility.Hidden;
+                btnLoadProfile.IsEnabled = true;
+                cmbBotSelector.IsEnabled = true;
+                // Settings needs the object model; on wowb it stays as the attach left it.
+                btnSettings.IsEnabled = !Styx.Logic.Pathing.ClickAimUi.IsWowB;
+                SetStatus("Grind finished");
+            }
+
             // HB 4.3.4 pattern: always display current values; no IsMeasuring gate.
             // Values start at 0 and accumulate once the bot starts.
             var sb = new System.Text.StringBuilder();
@@ -703,7 +810,8 @@ namespace CopilotBuddy.UI
             sb.AppendLine($"BGs Won: {GameStats.BGsWon} Lost: {GameStats.BGsLost} Total: {GameStats.BGsCompleted} ({GameStats.BGsPerHour:F0}/hr)");
 
             // TTL only meaningful below max level (80 in WotLK 3.3.5a)
-            var me = ObjectManager.Me;
+            Styx.WoWInternals.WoWObjects.LocalPlayer? me = null;
+            try { me = ObjectManager.Me; } catch { me = null; }
             if (me != null && me.Level < 80 && GameStats.TimeToLevel > TimeSpan.Zero)
             {
                 var ttl = GameStats.TimeToLevel;
@@ -776,7 +884,19 @@ namespace CopilotBuddy.UI
                     Logging.Write("Auto-load profile from /loadprofile: {0}", autoLoadProfile);
                     try
                     {
-                        ProfileManager.LoadNew(autoLoadProfile);
+                        /* Same split as the button: on wowb the legacy profile object is not
+                         * built, because the loop that uses the file does not need it. */
+                        if (Styx.Logic.Pathing.ClickAimUi.IsWowB)
+                        {
+                            string loaded = Styx.Logic.Pathing.ClickAimUi.Load(autoLoadProfile);
+                            Logging.Write("{0}", loaded);
+                            if (cmbBotSelector.Items.Contains(Styx.Logic.Pathing.ClickAimUi.GrindBotName))
+                                cmbBotSelector.SelectedItem = Styx.Logic.Pathing.ClickAimUi.GrindBotName;
+                        }
+                        else
+                        {
+                            ProfileManager.LoadNew(autoLoadProfile);
+                        }
                         Logging.Write("Profile loaded: {0}", System.IO.Path.GetFileName(autoLoadProfile));
                     }
                     catch (Exception ex)
@@ -835,6 +955,35 @@ namespace CopilotBuddy.UI
         private void StartBot()
         {
             if (_isRunning) return;
+
+            /* wowb.exe: the behaviour tree cannot run, so Start means "run the grind loop on
+             * the profile this window loaded". The bot name comes from the list, not from
+             * BotManager.Current, because a bot that failed to instantiate still has a name
+             * the user can pick - and Grind only needs its name. Doing this before the UI is
+             * disabled means a refusal leaves the window usable instead of half-stopped. */
+            if (Styx.Logic.Pathing.ClickAimUi.IsWowB)
+            {
+                string? chosen = cmbBotSelector.SelectedItem?.ToString();
+                string report = Styx.Logic.Pathing.ClickAimUi.Start(chosen);
+                if (!Styx.Logic.Pathing.ClickAimUi.Running)
+                {
+                    Logging.Write(Colors.Red, "{0}", report);
+                    SetStatus("Not started");
+                    return;
+                }
+
+                Logging.Write("{0}", report);
+                _grindStarted = true;
+                _isRunning = true;
+                btnStart.Visibility = Visibility.Hidden;
+                btnStopGroup.Visibility = Visibility.Visible;
+                btnLoadProfile.IsEnabled = false;
+                cmbBotSelector.IsEnabled = false;
+                btnSettings.IsEnabled = false;
+                SetStatus(string.Equals(chosen, Styx.Logic.Pathing.ClickAimUi.GatherBotName, StringComparison.OrdinalIgnoreCase)
+                    ? "Gathering (experimental)..." : "Grinding...");
+                return;
+            }
 
             if (BotManager.Current == null)
             {
@@ -907,6 +1056,13 @@ namespace CopilotBuddy.UI
             SetStatus("Stopping...");
 
             Logging.Write("Stopping the bot!");
+            if (_grindStarted)
+            {
+                _grindStarted = false;
+                Logging.Write("{0}", Styx.Logic.Pathing.ClickAimUi.Stop());
+                SetStatus("Stopped");
+                return;
+            }
             TreeRoot.Stop();
         }
 
@@ -948,6 +1104,28 @@ namespace CopilotBuddy.UI
         private void btnPause_Click(object sender, RoutedEventArgs e)
         {
             var item = (System.Windows.Controls.MenuItem)sender;
+
+            /* The grind loop has no tree to pause: Pause stops it and Resume starts the same
+             * profile again, which is what the user means by pausing a grind. */
+            if (_grindStarted || Styx.Logic.Pathing.ClickAimUi.Paused)
+            {
+                if (Styx.Logic.Pathing.ClickAimUi.Paused)
+                {
+                    string resumed = Styx.Logic.Pathing.ClickAimUi.Resume(cmbBotSelector.SelectedItem?.ToString());
+                    item.Header = Styx.Logic.Pathing.ClickAimUi.Paused ? "Resume" : "Pause";
+                    Logging.Write("{0}", resumed);
+                    SetStatus(Styx.Logic.Pathing.ClickAimUi.Running ? "Grinding..." : resumed);
+                }
+                else
+                {
+                    string paused = Styx.Logic.Pathing.ClickAimUi.Pause(cmbBotSelector.SelectedItem?.ToString());
+                    item.Header = "Resume";
+                    Logging.Write("{0}", paused);
+                    SetStatus("Paused");
+                }
+                return;
+            }
+
             if (TreeRoot.IsPaused)
             {
                 item.Header = "Pause";
@@ -1004,6 +1182,15 @@ namespace CopilotBuddy.UI
             if (cmbBotSelector.SelectedItem == null) return;
 
             string? botName = cmbBotSelector.SelectedItem.ToString();
+            /* wowb.exe: only the NAME matters (Start passes it to ClickAimUi) and the bot's
+             * configuration form is built on the object model, so nothing else happens here -
+             * a config button that throws on click is worse than no config button. */
+            if (Styx.Logic.Pathing.ClickAimUi.IsWowB)
+            {
+                Logging.Write("[Attach] bot selected: {0}", botName ?? "(none)");
+                return;
+            }
+
             if (botName != null && BotManager.Instance.Bots.TryGetValue(botName, out BotBase? bot) && bot != null)
             {
                 BotManager.Instance.SetCurrent(bot);
@@ -1031,6 +1218,17 @@ namespace CopilotBuddy.UI
             {
                 try
                 {
+                    /* wowb.exe cannot build the legacy profile object, and the grind loop does
+                     * not need it: it reads the XML itself. So Load means "remember this path
+                     * and tell me what is in it". */
+                    if (Styx.Logic.Pathing.ClickAimUi.IsWowB)
+                    {
+                        string report = Styx.Logic.Pathing.ClickAimUi.Load(openFileDialog.FileName);
+                        Logging.Write("{0}", report);
+                        SetStatus(report);
+                        return;
+                    }
+
                     ProfileManager.LoadNew(openFileDialog.FileName);
                     Logging.Write($"Profile loaded: {Path.GetFileName(openFileDialog.FileName)}");
                 }
@@ -1112,8 +1310,234 @@ namespace CopilotBuddy.UI
             pluginsWindow.ShowDialog();
         }
 
+        /// <summary>
+        /// x64 diagnostic only: walk 40 yd ahead of the character using the
+        /// synthesised click mover. Nothing else in the bot is running when this
+        /// button exists, so it is the lowest-friction way to test movement.
+        /// </summary>
+        private void btnAimWalk_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                Styx.Logic.Pathing.ClickAimDiagnostics.WalkRelative(40.0);
+            }
+            catch (Exception ex)
+            {
+                Logging.Write("[ClickAim] walk failed: " + ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// x64 diagnostic only: remember the current position as a hotspot. Press it
+        /// where you want a waypoint; the list is Settings\clickaim-hotspots.xml, which
+        /// is an ordinary profile and can be walked or replaced with a real one.
+        /// </summary>
+        private void btnAimHotspot_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                if (Styx.Logic.Pathing.ClickAimDiagnostics.CaptureHotspot())
+                    SetStatus(Styx.Logic.Pathing.HotspotFile.Describe());
+            }
+            catch (Exception ex)
+            {
+                Logging.Write("[Route] capturing a hotspot failed: " + ex.Message);
+            }
+        }
+
+        private void btnAimHotspots_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                Styx.Logic.Pathing.ClickAimDiagnostics.WalkHotspots();
+            }
+            catch (Exception ex)
+            {
+                Logging.Write("[Route] walking the hotspots failed: " + ex.Message);
+            }
+        }
+
+        private void btnAimPlanHotspots_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                Styx.Logic.Pathing.ClickAimDiagnostics.PlanHotspots();
+            }
+            catch (Exception ex)
+            {
+                Logging.Write("[Route] planning the hotspots failed: " + ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// The grind loop's combat numbers, in a window instead of in a text file. The file is
+        /// still the source of truth: the window loads it, Save writes it, and the next Start
+        /// reads it - so a hand edit and the window can never disagree.
+        /// </summary>
+        private void btnAimCombatSettings_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                var window = new ClickAimCombatSettingsWindow { Owner = this };
+                bool? shown = window.ShowDialog();
+                if (shown == true && window.Saved)
+                    SetStatus("Combat settings saved");
+            }
+            catch (Exception ex)
+            {
+                Logging.Write("[Grind] combat settings window failed: " + ex.Message);
+                System.Windows.MessageBox.Show(this, "The combat settings window could not open: " + ex.Message,
+                                "Combat settings", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+        }
+
+        private void btnClickAimTools_Click(object sender, RoutedEventArgs e)
+        {
+            if (_clickAimToolsWindow != null) { _clickAimToolsWindow.Activate(); return; }
+            var window = new ClickAimToolsWindow(new (string Label, string Tip, Action Action)[]
+            {
+                ("Gather settings", "Configure professions, profile-free roaming and gathering while grinding", () => btnGatherSettings_Click(this, new RoutedEventArgs())),
+                ("Clear loaded profile", "Clear the WowB profile so profile-free roaming can start", () => {
+                    if (!Styx.Logic.Pathing.ClickAimUi.IsWowB) { SetStatus("Profile clearing here applies only to wowb.exe"); return; }
+                    string report = Styx.Logic.Pathing.ClickAimUi.ClearProfile();
+                    Logging.Write("{0}", report); SetStatus(report);
+                }),
+                ("Gather hover test", "Test hover tracking without clicking", () => btnGatherHoverTest_Click(this, new RoutedEventArgs())),
+                ("Gather background test", "Observe node hover while moving the mouse in another application; no clicks", () => btnGatherBackgroundHoverTest_Click(this, new RoutedEventArgs())),
+                ("Corpse dialog test", "Read-only visual check for English death and resurrection prompts; no clicks", () => {
+                    if (Styx.Logic.Pathing.WowBCorpseDialogProbe.Start())
+                        SetStatus("Focus the game within 10 seconds; see the log for the dialog test result");
+                    else SetStatus("Stop the bot first, or wait for the current dialog test");
+                }),
+                ("Combat probe", "Compare idle and combat memory samples", () => btnCombatProbe_Click(this, new RoutedEventArgs())),
+                ("NPC reaction samples", "Capture user-labelled NPC memory without attacking", () => {
+                    var probe = new WowBReactionProbeWindow { Owner = this }; probe.Show();
+                }),
+                ("NPC cursor probe", "Observe the cursor over a selected NPC without clicking", () => {
+                    var probe = new WowBCursorProbeWindow { Owner = this }; probe.Show();
+                }),
+                ("Gather probe", "Inspect a hovered herb or ore", () => btnGatherProbe_Click(this, new RoutedEventArgs())),
+                ("Add hotspot", "Remember your current position as a hotspot", () => btnAimHotspot_Click(this, new RoutedEventArgs())),
+                ("Walk hotspots", "Walk the captured hotspots", () => btnAimHotspots_Click(this, new RoutedEventArgs())),
+                ("Plan hotspots", "Plan routes without walking", () => btnAimPlanHotspots_Click(this, new RoutedEventArgs())),
+                ("Clear hotspots", "Empty the captured hotspot list", () => btnAimClearHotspots_Click(this, new RoutedEventArgs())),
+                ("Offsets", "Print the client offsets", () => btnAimOffsets_Click(this, new RoutedEventArgs())),
+                ("ClickAim 40 yd", "Walk 40 yards ahead", () => btnAimWalk_Click(this, new RoutedEventArgs()))
+            }) { Owner = this };
+            _clickAimToolsWindow = window;
+            window.Closed += (closedSender, closedArgs) => _clickAimToolsWindow = null;
+            window.Show();
+        }
+
+        private void btnGatherSettings_Click(object sender, RoutedEventArgs e)
+        {
+            if (Styx.Logic.Pathing.ClickAimUi.Running) { SetStatus("Stop the bot before changing gather settings"); return; }
+            try
+            {
+                var window = new GatherSettingsWindow { Owner = this };
+                if (window.ShowDialog() == true) SetStatus("Gather settings saved");
+            }
+            catch (Exception ex)
+            {
+                Logging.Write("[Gather] settings window failed: " + ex.Message);
+                System.Windows.MessageBox.Show(this, "Gather settings could not open: " + ex.Message);
+            }
+        }
+
+        private void btnGatherHoverTest_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                if (Styx.Logic.Pathing.GatherHoverTest.Start())
+                    SetStatus("Hover a nearby node and keep the mouse still...");
+                else
+                    SetStatus("Stop the bot first, or wait for the current hover test");
+            }
+            catch (Exception ex)
+            {
+                Logging.Write("[Gather hover test] could not start: " + ex.Message);
+            }
+        }
+
+        private void btnGatherBackgroundHoverTest_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                if (Styx.Logic.Pathing.GatherHoverTest.StartBackground())
+                    SetStatus("Hover a resource in the game; follow the background test instructions in the log");
+                else
+                    SetStatus("Stop the bot first, or wait for the current hover test");
+            }
+            catch (Exception ex)
+            {
+                Logging.Write("[Gather background test] could not start: " + ex.Message);
+            }
+        }
+
+        private void btnCombatProbe_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                if (Styx.Logic.Pathing.CombatProbe.Start())
+                    SetStatus("Reading combat sample...");
+                else
+                    SetStatus("Combat probe already running");
+            }
+            catch (Exception ex)
+            {
+                Logging.Write("[Combat probe] could not start: " + ex.Message);
+            }
+        }
+
+        private void btnGatherProbe_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                if (Styx.Logic.Pathing.GatherProbe.Start())
+                    SetStatus("Hover a node in the game for 8 seconds...");
+                else
+                    SetStatus("Gather probe already running");
+            }
+            catch (Exception ex)
+            {
+                Logging.Write("[Gather probe] could not start: " + ex.Message);
+            }
+        }
+
+        private void btnAimOffsets_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                Styx.Logic.Pathing.ClickAimDiagnostics.Offsets();
+                SetStatus("Reading offsets...");
+            }
+            catch (Exception ex)
+            {
+                Logging.Write("[Offsets] reading the offsets failed: " + ex.Message);
+            }
+        }
+
+        private void btnAimClearHotspots_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                if (Styx.Logic.Pathing.ClickAimDiagnostics.ClearHotspots())
+                    SetStatus("Hotspot list cleared");
+            }
+            catch (Exception ex)
+            {
+                Logging.Write("[Route] clearing the hotspots failed: " + ex.Message);
+            }
+        }
+
         private void btnDevTools_Click(object sender, RoutedEventArgs e)
         {
+            if (ObjectManager.Wow?.Is64BitTarget == true)
+            {
+                var snapshotWindow = new WowBSnapshotWindow { Owner = this };
+                snapshotWindow.Show();
+                return;
+            }
             var devTools = new DeveloperToolsWindow();
             devTools.Owner = this;
             devTools.Show();
@@ -1138,7 +1562,9 @@ namespace CopilotBuddy.UI
             btnBotConfig.Visibility = Visibility.Hidden;
             btnClassConfig.Visibility = Visibility.Hidden;
             btnPlugins.Visibility = Visibility.Hidden;
-            btnDevTools.Visibility = Visibility.Hidden;
+            // on wowb this button is the read-only world snapshot view, not Developer Tools
+            if (!Styx.Logic.Pathing.ClickAimUi.IsWowB)
+                btnDevTools.Visibility = Visibility.Hidden;
             
             // Save setting
             UISettings.Instance.EnhancedMode = false;

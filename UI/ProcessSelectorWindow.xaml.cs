@@ -88,7 +88,7 @@ namespace CopilotBuddy.UI
             _processes.Clear();
             cbProcesses.Items.Clear();
 
-            Process[] wowProcesses = new[] { "Wow", "WoW", "WowB" }
+            Process[] wowProcesses = ClientAttachPolicy.ProcessNames()
                 .SelectMany(n => Process.GetProcessesByName(n))
                 .DistinctBy(p => p.Id)
                 .ToArray();
@@ -101,21 +101,34 @@ namespace CopilotBuddy.UI
                     if (wowProcesses[i].HasExited)
                         continue;
 
-                    // Verify build matches 3.3.5a (12340)
-                    int build = wowProcesses[i].MainModule?.FileVersionInfo.FilePrivatePart ?? 0;
-                    // build == 0 means no version resource (custom/private server client)
-                    if (!ObjectManager.IsSupportedBuild(build) && build != 0)
+                    // Match auto-attach, including experimental build 70707.
+                    Process process = wowProcesses[i];
+                    int build = ObjectManager.GetBuildNumber(process);
+                    if (!ClientAttachPolicy.IsCandidate(build, process.ProcessName))
                         continue;
 
-                    using var memory = new Memory(wowProcesses[i].Id);
-
-                    // Check if player is logged in (InGame offset)
-                    bool isLoggedIn = memory.Read<byte>(GlobalOffsets.InGame) != 0;
-                    if (!isLoggedIn)
+                    using var memory = new Memory(process.Id);
+                    if (!memory.IsProcessOpen || (build == ClientAttachPolicy.ExperimentalBuild && !memory.Is64BitTarget))
                         continue;
 
-                    // Read character name
-                    string characterName = memory.ReadString(GlobalOffsets.PlayerName);
+                    string? characterName;
+                    if (memory.Is64BitTarget)
+                    {
+                        // The 70707 name is a candidate read, not login validation.
+                        // Keep the existing 70291 selector behavior unchanged.
+                        characterName = build == ClientAttachPolicy.ExperimentalBuild
+                            ? memory.ReadString64(memory.GetAbsolute64(Wow70707Offsets.PlayerNamePrimary), 32)
+                            : build == ObjectManager.SupportedBuildWowB &&
+                              process.ProcessName.Equals("WowB", StringComparison.OrdinalIgnoreCase)
+                                ? memory.ReadString64(memory.GetAbsolute64(WowBOffsets.PlayerNamePrimary), 48)
+                                : null;
+                    }
+                    else
+                    {
+                        if (memory.Read<byte>(GlobalOffsets.InGame) == 0)
+                            continue;
+                        characterName = memory.ReadString(GlobalOffsets.PlayerName);
+                    }
                     if (string.IsNullOrEmpty(characterName))
                         characterName = "Unknown";
 
@@ -129,9 +142,8 @@ namespace CopilotBuddy.UI
                     }
 
                     // Available! Add to list (keep mutex held so another instance can't grab it)
-                    var entry = new ProcessEntry(characterName, wowProcesses[i].Id, mutex);
+                    var entry = new ProcessEntry(characterName, wowProcesses[i].Id, build, mutex);
                     _processes.Add(entry);
-                    cbProcesses.Items.Add(entry);
                 }
                 catch
                 {
@@ -139,6 +151,13 @@ namespace CopilotBuddy.UI
                 }
             }
 
+            // The highest registered build is the default, not an arbitrary
+            // newer/unknown WowB executable accepted by the legacy name rule.
+            // Keep the selector for multiple processes, including multiple
+            // characters on the preferred build.
+            foreach (var entry in _processes.OrderByDescending(p => ClientAttachPolicy.SelectionPriority(p.Build))
+                                            .ThenBy(p => p.ProcessId))
+                cbProcesses.Items.Add(entry);
             if (cbProcesses.Items.Count > 0)
                 cbProcesses.SelectedIndex = 0;
         }
@@ -155,22 +174,28 @@ namespace CopilotBuddy.UI
         {
             private readonly string _characterName;
 
-            public ProcessEntry(string characterName, int processId, Mutex mutex)
+            public ProcessEntry(string characterName, int processId, int build, Mutex mutex)
             {
                 _characterName = characterName;
                 ProcessId = processId;
+                Build = build;
                 Mutex = mutex;
             }
 
             /// <summary>The WoW process ID.</summary>
             public readonly int ProcessId;
 
+            /// <summary>Observed executable build; 0 means unversioned.</summary>
+            public readonly int Build;
+
             /// <summary>The mutex claiming ownership of this process.</summary>
             public readonly Mutex Mutex;
 
             public override string ToString()
             {
-                return $"PID: {ProcessId} logged in on: {_characterName}";
+                string buildText = Build > 0 ? Build.ToString() : "unknown";
+                string preferred = Build == ClientAttachPolicy.DefaultBuild ? " (default)" : "";
+                return $"PID: {ProcessId}, build {buildText}{preferred}: {_characterName}";
             }
         }
 

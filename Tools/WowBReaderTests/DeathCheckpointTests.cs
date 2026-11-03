@@ -1,0 +1,126 @@
+#if WOWB_READER_TESTS
+using System;
+using System.IO;
+using System.Linq;
+using GreenMagic;
+using Styx.Offsets;
+using Styx.Logic.Pathing;
+using Styx.WoWInternals;
+
+internal static class DeathCheckpointTests
+{
+    internal static void RunActive70707(Memory memory, ulong unit, WowBGuid player)
+    {
+        string oldPath = Styx.Helpers.Logging.ApplicationPath;
+        string folder = Path.Combine(Path.GetTempPath(), "bbuddy-death-fixture-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Styx.Helpers.Logging.ApplicationPath = folder;
+            string directory = Path.Combine(folder, "Logs", "CorpseRecovery");
+            ulong ghostAddress = unit + Wow70707Offsets.GhostFlagsCandidateOffset;
+            var ghostTracker = new WowBDeathCheckpoint();
+            memory.U64(unit + Wow70707Offsets.HealthCandidateOffset, 1);
+            memory.Bytes(ghostAddress, new byte[] { Wow70707Offsets.GhostFlagCandidate });
+            if (!ghostTracker.Poll(out bool ghostObserved) || !ghostObserved || Directory.Exists(directory))
+                throw new Exception("Ghost candidate must stop without saving a corpse at the graveyard");
+            memory.Remove(ghostAddress);
+            if (!ghostTracker.Poll(out ghostObserved) || !ghostObserved || Directory.Exists(directory))
+                throw new Exception("Unreadable ghost candidate must stop without saving a checkpoint");
+            memory.Bytes(ghostAddress, new byte[] { 0 });
+            var transitionTracker = new WowBDeathCheckpoint();
+            memory.U64(unit + Wow70707Offsets.HealthCandidateOffset, 148);
+            if (transitionTracker.Poll(out _)) throw new Exception("Living observation unexpectedly vetoed");
+            memory.U64(unit + Wow70707Offsets.HealthCandidateOffset, 0);
+            int ghostReads = 0;
+            memory.OnRead = (address, count) =>
+            {
+                if (address == ghostAddress && count == 1 && ++ghostReads == 3)
+                    memory.Bytes(ghostAddress, new byte[] { Wow70707Offsets.GhostFlagCandidate });
+            };
+            if (!transitionTracker.Poll(out _) || Directory.Exists(directory))
+                throw new Exception("Ghost transition must not save a graveyard position");
+            memory.OnRead = null;
+            memory.Bytes(ghostAddress, new byte[] { 0 });
+            var deadAtStart = new WowBDeathCheckpoint();
+            memory.U64(unit + Wow70707Offsets.HealthCandidateOffset, 0);
+            if (!deadAtStart.Poll(out _) || Directory.Exists(directory)) throw new Exception("Starting dead must not save a checkpoint");
+            var changedMap = new WowBDeathCheckpoint();
+            memory.U64(unit + Wow70707Offsets.HealthCandidateOffset, 148);
+            if (changedMap.Poll(out bool wasObserved) || !wasObserved) throw new Exception("Living observation marked dead or unreadable");
+            memory.U32(0x30000000 + Wow70707Offsets.MapIdCandidateOffset, 8);
+            memory.U64(unit + Wow70707Offsets.HealthCandidateOffset, 0);
+            if (!changedMap.Poll(out wasObserved) || !wasObserved || Directory.Exists(directory))
+                throw new Exception("Changed map must not save a checkpoint");
+            memory.U32(0x30000000 + Wow70707Offsets.MapIdCandidateOffset, 7);
+            var tracker = new WowBDeathCheckpoint();
+            memory.U64(unit + Wow70707Offsets.HealthCandidateOffset, 148);
+            if (tracker.Poll(out _)) throw new Exception("Living observation marked dead");
+            int samples = 0;
+            if (!WowBDeathCheckpoint.ObserveSafetyExit(
+                    () => { if (++samples == 3) memory.U64(unit + Wow70707Offsets.HealthCandidateOffset, 0); return tracker.Poll(out _); },
+                    () => false, ms => false) || samples != 3)
+                throw new Exception("A death after a combat safety exit must reach the real checkpoint tracker");
+            var recorded = tracker.Recorded;
+            if (!recorded.HasValue || recorded.Value.Player != player || recorded.Value.Map != 7 ||
+                recorded.Value.Position.X != 100 || recorded.Value.Position.Y != 200 || recorded.Value.Position.Z != 300 ||
+                deadAtStart.Recorded.HasValue || changedMap.Recorded.HasValue || ghostTracker.Recorded.HasValue || transitionTracker.Recorded.HasValue)
+                throw new Exception("In-memory recovery candidate was missing or created without a valid death observation");
+            string path = Directory.GetFiles(directory).Single();
+            string data = File.ReadAllText(path);
+            if (!data.Contains("player=" + player) || !data.Contains("map=7") || !data.Contains("x=100") || !data.Contains("y=200") || !data.Contains("z=300"))
+                throw new Exception("Checkpoint contents incorrect");
+            if (!tracker.Poll(out _) || Directory.GetFiles(directory).Length != 1) throw new Exception("Duplicate checkpoint");
+            memory.U64(unit + Wow70707Offsets.HealthCandidateOffset, 148);
+            Console.WriteLine("70707 synthetic checkpoint capture passed (not a live death test).");
+        }
+        finally
+        {
+            memory.OnRead = null;
+            memory.Bytes(unit + Wow70707Offsets.GhostFlagsCandidateOffset, new byte[] { 0 });
+            memory.U64(unit + Wow70707Offsets.HealthCandidateOffset, 148);
+            Styx.Helpers.Logging.ApplicationPath = oldPath;
+            if (Directory.Exists(folder)) Directory.Delete(folder, true);
+        }
+    }
+
+    internal static void Run()
+    {
+        var a = new WowBGuid(1, 2);
+        var b = new WowBGuid(1, 3);
+        bool Check(bool alive = true, bool saved = false, WowBGuid? id = null, uint map = 7,
+                   int age = 100, uint hp = 0, uint max = 100, double x = 1, double y = 2, double z = 3)
+            => WowBDeathCheckpoint.MayRecord(alive, saved, a, 7, age, id ?? a, map, hp, max, x, y, z);
+        if (!Check() || Check(alive: false) || Check(saved: true) || Check(id: b) || Check(id: default(WowBGuid)) ||
+            Check(map: 8) || Check(age: -1) || Check(age: 30001) || !Check(age: 30000) || Check(hp: 1) ||
+            Check(max: 0) || Check(x: double.NaN) || Check(y: double.PositiveInfinity) || Check(z: 100000))
+            throw new Exception("Death checkpoint policy fixture failed");
+        if (!WowBDeathCheckpoint.MayBeginRecovery(true, true, 12, 12, false, false) ||
+            WowBDeathCheckpoint.MayBeginRecovery(false, true, 12, 12, false, false) ||
+            WowBDeathCheckpoint.MayBeginRecovery(true, false, 12, 12, false, false) ||
+            WowBDeathCheckpoint.MayBeginRecovery(true, true, 12, 13, false, false) ||
+            WowBDeathCheckpoint.MayBeginRecovery(true, true, 12, 12, true, false) ||
+            WowBDeathCheckpoint.MayBeginRecovery(true, true, 12, 12, false, true))
+            throw new Exception("Recovery must not clear a newer STOP or proceed without its checkpoint");
+        int polls = 0, waits = 0;
+        bool stopped = false;
+        bool Wait(int milliseconds) { if (milliseconds != 100) throw new Exception("Unexpected sampling interval"); waits++; return stopped; }
+        bool PollAfterDelay() { polls++; return polls == 4; }
+        if (!WowBDeathCheckpoint.ObserveSafetyExit(PollAfterDelay, () => stopped, Wait) || polls != 4 || waits != 3)
+            throw new Exception("A delayed death veto should be observed before the safety abort");
+        polls = waits = 0;
+        if (WowBDeathCheckpoint.ObserveSafetyExit(() => { polls++; return false; }, () => stopped, Wait) || polls != 21 || waits != 20)
+            throw new Exception("Alive or unreadable state must time out without authorizing recovery");
+        polls = waits = 0; stopped = true;
+        if (WowBDeathCheckpoint.ObserveSafetyExit(() => { polls++; return true; }, () => stopped, Wait) || polls != 0)
+            throw new Exception("STOP before the safety pause must suppress polling and recovery");
+        stopped = false;
+        if (WowBDeathCheckpoint.ObserveSafetyExit(() => { stopped = true; return true; }, () => stopped, Wait))
+            throw new Exception("STOP during a death poll must win over its result");
+        stopped = false; polls = 0;
+        if (WowBDeathCheckpoint.ObserveSafetyExit(() => { polls++; return false; }, () => stopped,
+                ms => { stopped = true; return true; }) || polls != 1)
+            throw new Exception("STOP during a safety wait must end it immediately");
+        Console.WriteLine("Death checkpoint, safety-exit and recovery STOP policy fixtures passed (no live death or recovery test).");
+    }
+}
+#endif

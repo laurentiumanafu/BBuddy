@@ -1,0 +1,543 @@
+diff --git a/Navigation/MoveMap.cpp b/Navigation/MoveMap.cpp
+index 9b68d88..717ce99 100644
+--- a/Navigation/MoveMap.cpp
++++ b/Navigation/MoveMap.cpp
+@@ -183,6 +183,70 @@ namespace MMAP
+ 		}
+ 	}
+ 
++	/* Two naming schemes are in the wild, and they do not overlap:
++	 *
++	 *   MaNGOS / cmangos / AzerothCore     mmaps\\\\001.mmap    mmaps\\\\0013232.mmtile
++	 *   TrinityCore (and anything newer)   mmaps\\\\0001.mmap   mmaps\\\\0001_32_32.mmtile
++	 *
++	 * Both are read: the mmap set on disk is whatever that install's extractor wrote. */
++
++	// "<mapid><xx><yy>" or "<mapid>_<xx>_<yy>", .mmtile suffix included.
++	bool parseTileFileName(const string& name, unsigned int mapId, int* x, int* y)
++	{
++		const string suffix = ".mmtile";
++		if (name.size() <= suffix.size() ||
++			name.compare(name.size() - suffix.size(), suffix.size(), suffix) != 0)
++			return false;
++
++		const string stem = name.substr(0, name.size() - suffix.size());
++
++		/* The map id and the tile digits are both numbers, so where the map id ends
++		 * has to come from the shape of the name: a "_" separator, or else the four
++		 * trailing digits of a 7- or 8-character run (3-digit or 4-digit map id). */
++		string mapPart, rest;
++		const size_t underscore = stem.find('_');
++		if (underscore != string::npos)
++		{
++			mapPart = stem.substr(0, underscore);
++			rest = stem.substr(underscore);
++		}
++		else
++		{
++			if (stem.size() != 7 && stem.size() != 8)
++				return false;
++			mapPart = stem.substr(0, stem.size() - 4);
++			rest = stem.substr(stem.size() - 4);
++		}
++		if (mapPart.empty())
++			return false;
++		for (size_t i = 0; i < mapPart.size(); i++)
++		{
++			if (mapPart[i] < '0' || mapPart[i] > '9')
++				return false;
++		}
++		if ((unsigned int)atoi(mapPart.c_str()) != mapId)
++			return false;
++		if (rest.size() == 4 &&
++			rest[0] >= '0' && rest[0] <= '9' && rest[1] >= '0' && rest[1] <= '9' &&
++			rest[2] >= '0' && rest[2] <= '9' && rest[3] >= '0' && rest[3] <= '9')
++		{
++			*x = (rest[0] - '0') * 10 + (rest[1] - '0');
++			*y = (rest[2] - '0') * 10 + (rest[3] - '0');
++			return true;
++		}
++
++		if (rest.size() == 6 && rest[0] == '_' && rest[3] == '_' &&
++			rest[1] >= '0' && rest[1] <= '9' && rest[2] >= '0' && rest[2] <= '9' &&
++			rest[4] >= '0' && rest[4] <= '9' && rest[5] >= '0' && rest[5] <= '9')
++		{
++			*x = (rest[1] - '0') * 10 + (rest[2] - '0');
++			*y = (rest[4] - '0') * 10 + (rest[5] - '0');
++			return true;
++		}
++
++		return false;
++	}
++
+ 	bool MMapManager::loadMapData(unsigned int mapId)
+ 	{
+ 		if (loadedMMaps.find(mapId) != loadedMMaps.end())
+@@ -192,7 +256,16 @@ namespace MMAP
+ 		getMapName(mapId, fileName);
+ 		FILE* file = fopen(fileName.c_str(), "rb");
+ 		if (!file)
+-			return false;
++		{
++			// TrinityCore and anything newer: mmaps\\0001.mmap
++			string directory = "";
++			getMmapsDirectory(directory);
++			char modern[64];
++			snprintf(modern, sizeof(modern), "%04u.mmap", mapId);
++			file = fopen((directory + modern).c_str(), "rb");
++			if (!file)
++				return false;
++		}
+ 		dtNavMeshParams params;
+ 		size_t file_read = fread(&params, sizeof(dtNavMeshParams), 1, file);
+ 		fclose(file);
+@@ -232,7 +305,7 @@ namespace MMAP
+ 		string directory = "";
+ 		getMmapsDirectory(directory);
+ 
+-		string pattern = directory + mapIdStr + "*.mmtile";
++		string pattern = directory + "*.mmtile";
+ 
+ 		WIN32_FIND_DATAA findData;
+ 		HANDLE find = FindFirstFileA(pattern.c_str(), &findData);
+@@ -250,21 +323,10 @@ namespace MMAP
+ 			if (name.length() < prefixLength + 4)
+ 				continue;
+ 
+-			bool digits = true;
+-			for (size_t i = prefixLength; i < prefixLength + 4; i++)
+-			{
+-				if (name[i] < '0' || name[i] > '9')
+-				{
+-					digits = false;
+-					break;
+-				}
+-			}
+-			if (!digits)
++			int x = 0, y = 0;
++			if (!parseTileFileName(name, mapId, &x, &y))
+ 				continue;
+ 
+-			int x = (name[prefixLength] - '0') * 10 + (name[prefixLength + 1] - '0');
+-			int y = (name[prefixLength + 2] - '0') * 10 + (name[prefixLength + 3] - '0');
+-
+ 			mmap->mmapExistingTiles.insert(packTileID(x, y));
+ 		}
+ 		while (FindNextFileA(find, &findData));
+@@ -322,7 +384,7 @@ namespace MMAP
+ 
+ 	unsigned int MMapManager::packTileID(int x, int y)
+ 	{
+-		return unsigned int(x << 16 | y);
++		return (unsigned int)(x << 16 | y);   // MSVC-only functional cast; portable form
+ 	}
+ 
+ 	bool MMapManager::loadMap(unsigned int mapId, int x, int y)
+@@ -344,7 +406,16 @@ namespace MMAP
+ 
+ 		FILE* file = fopen(fileName.c_str(), "rb");
+ 		if (!file)
+-			return false;
++		{
++			// TrinityCore and anything newer: mmaps\\0001_32_32.mmtile
++			string directory = "";
++			getMmapsDirectory(directory);
++			char modern[64];
++			snprintf(modern, sizeof(modern), "%04u_%02d_%02d.mmtile", mapId, x, y);
++			file = fopen((directory + modern).c_str(), "rb");
++			if (!file)
++				return false;
++		}
+ 
+ 		// Peek at the first 12 bytes to determine format version
+ 		unsigned int headerPeek[3]; // magic, dtVersion, mmapVersion
+@@ -362,128 +433,180 @@ namespace MMAP
+ 		}
+ 
+ 		unsigned int mmapVersion = headerPeek[2];
++
++		/* A tile file is one of two things:
++		 *
++		 *   this build's container   magic, dtVersion, 6, tileCount, flags,
++		 *                            then tileCount x (u32 size + blob)
++		 *   a single Detour tile     magic, dtVersion, mmapVersion, size[, usesLiquids],
++		 *                            then one blob
++		 *
++		 * The second kind is what the MaNGOS / TrinityCore / AzerothCore extractors have
++		 * always written, and the version number in it (4 through 8 in the wild) is not
++		 * this build's business: Detour does not care how a tile file is arranged, only
++		 * that the tile was built against the params in <map>.mmap. So both are tried and
++		 * the version field decides nothing.
++		 */
+ 		std::vector<dtTileRef> tileRefs;
++		bool anyLoaded = false;
+ 
+-		if (mmapVersion == MMAP_MULTI_TILE_VERSION)
++		/* Both containers are tried, in either direction, without consulting the
++		 * version field: 6 is ours, 5 is what the 4x4 builds that came before it wrote,
++		 * and a single-tile file has no business being gated on a number either. The
++		 * parsers are strict (count, sizes, file length) and addTile is the final judge,
++		 * so a wrong guess costs one rejected blob, not a half-loaded tile. */
++		(void)mmapVersion;
++		anyLoaded = loadMultiTile(file, mmap, mapId, tileRefs);
++
++		if (!anyLoaded)
+ 		{
+-			// ===== Version 5: Multi-tile format (16 sub-tiles per ADT) =====
+-			// Read remaining header fields (tileCount + flags)
+-			unsigned int tileCount, flags;
+-			if (fread(&tileCount, sizeof(unsigned int), 1, file) != 1 ||
+-				fread(&flags, sizeof(unsigned int), 1, file) != 1)
+-			{
+-				fclose(file);
+-				return false;
+-			}
++			tileRefs.clear();
++			anyLoaded = loadSingleTile(file, mmap, mapId, tileRefs);
++		}
+ 
+-			// Sanity check
+-			if (tileCount == 0 || tileCount > 64)
+-			{
+-				fclose(file);
+-				return false;
+-			}
++		fclose(file);
+ 
+-			bool anyLoaded = false;
+-			for (unsigned int i = 0; i < tileCount; i++)
+-			{
+-				unsigned int blobSize = 0;
+-				if (fread(&blobSize, sizeof(unsigned int), 1, file) != 1)
+-				{
+-					fclose(file);
+-					return anyLoaded;
+-				}
+-
+-				if (blobSize == 0)
+-				{
+-					// Empty sub-tile slot — skip
+-					tileRefs.push_back(0);
+-					continue;
+-				}
+-
+-				unsigned char* data = (unsigned char*)dtAlloc(blobSize, DT_ALLOC_PERM);
+-				if (!data)
+-				{
+-					fclose(file);
+-					return anyLoaded;
+-				}
+-
+-				if (fread(data, blobSize, 1, file) != 1)
+-				{
+-					dtFree(data);
+-					fclose(file);
+-					return anyLoaded;
+-				}
+-
+-				dtMeshHeader* header = (dtMeshHeader*)data;
+-				OffMeshManager::Instance().RegisterTileNavParams(mapId, header);
+-
+-				dtTileRef tileRef = 0;
+-				dtStatus dtResult = mmap->navMesh->addTile(data, blobSize, DT_TILE_FREE_DATA, 0, &tileRef);
+-				if (dtStatusFailed(dtResult))
+-				{
+-					dtFree(data);
+-					tileRefs.push_back(0);
+-					continue;
+-				}
+-
+-				tileRefs.push_back(tileRef);
+-				anyLoaded = true;
+-			}
++		if (!anyLoaded)
++			return false;
+ 
+-			fclose(file);
++		mmap->mmapLoadedTiles.insert(std::pair<unsigned int, std::vector<dtTileRef>>(packedGridPos, tileRefs));
+ 
+-			if (!anyLoaded)
+-				return false;
+-		}
+-		else if (mmapVersion == MMAP_VERSION)
++		// HB 4.3.4: Load tile-specific offmesh connections
++		OffMeshManager::Instance().LoadTileOffMeshConnections(mapId, x, y);
++
++		// HB 6.2.3 pattern: notify managed layer that a tile was loaded
++		raiseTileLoaded(mapId, x, y);
++
++		return true;
++	}
++
++	/* This build's container: magic, dtVersion, 6, tileCount, flags, then
++	 * tileCount x (u32 size + blob). An empty slot has size 0. */
++	bool MMapManager::loadMultiTile(FILE* file, MMapData* mmap, unsigned int mapId, std::vector<dtTileRef>& tileRefs)
++	{
++		unsigned int tileCount = 0, flags = 0;
++		if (fread(&tileCount, sizeof(unsigned int), 1, file) != 1 ||
++			fread(&flags, sizeof(unsigned int), 1, file) != 1)
++			return false;
++
++		if (tileCount == 0 || tileCount > 64)
++			return false;
++
++		// How much is left in the file: a size field that claims more than this is a
++		// file in some other layout, not a blob to allocate for.
++		const long here = ftell(file);
++		if (here < 0 || fseek(file, 0, SEEK_END) != 0)
++			return false;
++		long remaining = ftell(file) - here;
++		if (remaining < 0 || fseek(file, here, SEEK_SET) != 0)
++			return false;
++
++		bool anyLoaded = false;
++		for (unsigned int i = 0; i < tileCount; i++)
+ 		{
+-			// ===== Version 4: Legacy single-blob format =====
+-			// Rewind and read the full MmapTileHeader
+-			fseek(file, 0, SEEK_SET);
+-			MmapTileHeader fileHeader;
+-			if (fread(&fileHeader, sizeof(MmapTileHeader), 1, file) != 1)
++			unsigned int blobSize = 0;
++			if (fread(&blobSize, sizeof(unsigned int), 1, file) != 1)
++				return anyLoaded;
++
++			if (blobSize == 0)
+ 			{
+-				fclose(file);
+-				return false;
++				tileRefs.push_back(0);
++				continue;
+ 			}
+ 
+-			unsigned char* data = (unsigned char*)dtAlloc(fileHeader.size, DT_ALLOC_PERM);
+-			if (fread(data, fileHeader.size, 1, file) != 1)
++			if (blobSize > 64u * 1024u * 1024u || (long)blobSize > remaining)
++				return anyLoaded;
++
++			remaining -= (long)blobSize;
++
++			unsigned char* data = (unsigned char*)dtAlloc(blobSize, DT_ALLOC_PERM);
++			if (!data)
++				return anyLoaded;
++
++			if (fread(data, blobSize, 1, file) != 1)
+ 			{
+ 				dtFree(data);
+-				fclose(file);
+-				return false;
++				return anyLoaded;
+ 			}
+-			fclose(file);
+ 
+ 			dtMeshHeader* header = (dtMeshHeader*)data;
+ 			OffMeshManager::Instance().RegisterTileNavParams(mapId, header);
+ 
+ 			dtTileRef tileRef = 0;
+-			dtStatus dtResult = mmap->navMesh->addTile(data, fileHeader.size, DT_TILE_FREE_DATA, 0, &tileRef);
+-			if (dtStatusFailed(dtResult))
++			if (dtStatusFailed(mmap->navMesh->addTile(data, blobSize, DT_TILE_FREE_DATA, 0, &tileRef)))
+ 			{
+ 				dtFree(data);
+-				return false;
++				tileRefs.push_back(0);
++				continue;
+ 			}
+ 
+ 			tileRefs.push_back(tileRef);
++			anyLoaded = true;
+ 		}
+-		else
+-		{
+-			// Unknown version
+-			fclose(file);
++		return anyLoaded;
++	}
++
++	/* One Detour tile per file, as every MaNGOS-family extractor writes it. The
++	 * header is 16 bytes, or 20 when the writer kept the usesLiquids byte, and the
++	 * tile data begins with DT_NAVMESH_MAGIC in both cases - which is what is looked
++	 * for, instead of trusting a struct size. addTile then rejects anything built
++	 * against a different Detour version, so a mismatch fails cleanly here rather
++	 * than half-loading. */
++	bool MMapManager::loadSingleTile(FILE* file, MMapData* mmap, unsigned int mapId, std::vector<dtTileRef>& tileRefs)
++	{
++		unsigned int head[4] = { 0, 0, 0, 0 };
++		if (fseek(file, 0, SEEK_SET) != 0)
++			return false;
++		if (fread(head, sizeof(unsigned int), 4, file) != 4)
++			return false;
++		if (head[0] != MMAP_MAGIC)
++			return false;
++
++		unsigned int blobSize = head[3];
++		if (blobSize == 0 || blobSize > 64u * 1024u * 1024u)
+ 			return false;
++
++		long dataStart = -1;
++		for (long candidate = 16; candidate <= 20; candidate += 4)
++		{
++			if (fseek(file, candidate, SEEK_SET) != 0)
++				break;
++			unsigned int magic = 0;
++			if (fread(&magic, sizeof(unsigned int), 1, file) != 1)
++				break;
++			if (magic == (unsigned int)DT_NAVMESH_MAGIC)
++			{
++				dataStart = candidate;
++				break;
++			}
+ 		}
++		if (dataStart < 0)
++			return false;
+ 
+-		mmap->mmapLoadedTiles.insert(std::pair<unsigned int, std::vector<dtTileRef>>(packedGridPos, tileRefs));
++		if (fseek(file, dataStart, SEEK_SET) != 0)
++			return false;
+ 
+-		// HB 4.3.4: Load tile-specific offmesh connections
+-		OffMeshManager::Instance().LoadTileOffMeshConnections(mapId, x, y);
++		unsigned char* data = (unsigned char*)dtAlloc(blobSize, DT_ALLOC_PERM);
++		if (!data)
++			return false;
+ 
+-		// HB 6.2.3 pattern: notify managed layer that a tile was loaded
+-		raiseTileLoaded(mapId, x, y);
++		if (fread(data, blobSize, 1, file) != 1)
++		{
++			dtFree(data);
++			return false;
++		}
++
++		dtMeshHeader* header = (dtMeshHeader*)data;
++		OffMeshManager::Instance().RegisterTileNavParams(mapId, header);
++
++		dtTileRef tileRef = 0;
++		if (dtStatusFailed(mmap->navMesh->addTile(data, blobSize, DT_TILE_FREE_DATA, 0, &tileRef)))
++		{
++			dtFree(data);
++			return false;
++		}
+ 
++		tileRefs.push_back(tileRef);
+ 		return true;
+ 	}
+ 
+diff --git a/Navigation/MoveMap.h b/Navigation/MoveMap.h
+index 678642e..071fbc9 100644
+--- a/Navigation/MoveMap.h
++++ b/Navigation/MoveMap.h
+@@ -130,6 +130,8 @@ namespace MMAP
+ 		dtLoadTileFunc _queryTileLoader = nullptr;
+ 		int _tileLoadBatchDepth = 0;
+ 		std::vector<DeferredTileLoad> _deferredTileLoads;
++		bool loadMultiTile(FILE* file, MMapData* mmap, unsigned int mapId, std::vector<dtTileRef>& tileRefs);
++		bool loadSingleTile(FILE* file, MMapData* mmap, unsigned int mapId, std::vector<dtTileRef>& tileRefs);
+ 		bool loadMapData(unsigned int mapId);
+ 		void buildTileManifest(unsigned int mapId, MMapData* mmap);
+ 		bool tileFileExists(MMapData* mmap, unsigned int packedGridPos) const;
+diff --git a/Navigation/Navigation.cpp b/Navigation/Navigation.cpp
+index 416f094..3970b29 100644
+--- a/Navigation/Navigation.cpp
++++ b/Navigation/Navigation.cpp
+@@ -1576,6 +1576,9 @@ bool Navigation::DetourTileLoader(int x, int y, void* userArg)
+     return nav->LoadTileForDetour(ctx->mapId, x, y);
+ }
+ 
++/* Called by Detour (dtNavMeshQuery::loadNeighbourTiles) when a search reaches the
++ * edge of a tile that is not loaded. Detour passes its own tile coordinates, which
++ * are in the space of the <map>.mmap params - not grid coordinates. */
+ bool Navigation::LoadTileForDetour(unsigned int mapId, int detourX, int detourY)
+ {
+     MMAP::MMapManager* manager = MMAP::MMapFactory::createOrGetMMapManager();
+@@ -1596,31 +1599,34 @@ bool Navigation::LoadTileForDetour(unsigned int mapId, int detourX, int detourY)
+     int tileX, tileY;
+     WorldToTile(worldX, worldY, &tileX, &tileY);
+ 
+-    if (tileX < 0 || tileX >= 64 || tileY < 0 || tileY >= 64)
+-        return false;
+-
+-    TileKey key = { mapId, tileX, tileY };
+-
+-    if (manager->isTileLoaded(mapId, tileX, tileY))
++    /* Ask for the file the detour tile *should* be in, then the eight around it.
++     *
++     * One detour tile is not always in the file its coordinates name: the naming
++     * schemes in the wild disagree about which axis the grid index carries, the
++     * stock 3.3.5a extractors write one 533 yd tile per file while our own builder
++     * writes sixteen 133 yd ones, and an off-by-one at a tile edge is easy to make
++     * and invisible. Loading the 3x3 neighbourhood costs nothing when the files are
++     * absent (fopen fails, loadMap returns false) and removes the whole class. */
++    bool loaded = false;
++    for (int dy = -1; dy <= 1; dy++)
+     {
+-        auto accessed = _tileAccessTime.find(key);
+-        if (accessed != _tileAccessTime.end())
++        for (int dx = -1; dx <= 1; dx++)
+         {
+-            accessed->second = std::chrono::duration_cast<std::chrono::milliseconds>(
+-                std::chrono::high_resolution_clock::now().time_since_epoch()
+-            ).count();
++            const int gx = tileX + dx;
++            const int gy = tileY + dy;
++            if (gx < 0 || gx >= 64 || gy < 0 || gy >= 64)
++                continue;
++            if (manager->loadMap(mapId, gx, gy))
++                loaded = true;
+         }
+-        return false;
+     }
+ 
+-    if (!manager->loadMap(mapId, tileX, tileY))
+-        return false;
+-
++    TileKey key = { mapId, tileX, tileY };
+     _tileAccessTime[key] = std::chrono::duration_cast<std::chrono::milliseconds>(
+         std::chrono::high_resolution_clock::now().time_since_epoch()
+     ).count();
+ 
+-    return true;
++    return loaded;
+ }
+ 
+ // HB 6.2.3 pattern: time-based tile GC (GarbageCollectTime = 1 minute).
+diff --git a/Navigation/PathFinder.cpp b/Navigation/PathFinder.cpp
+index 0e2dd31..92afc5b 100644
+--- a/Navigation/PathFinder.cpp
++++ b/Navigation/PathFinder.cpp
+@@ -322,7 +322,7 @@ void PathFinder::BuildPolyPath(const Vector3& startPos, const Vector3& endPos)
+ 
+ 		// take ~80% of the original length
+ 		// TODO : play with the values here
+-		unsigned int prefixPolyLength = unsigned int(m_polyLength * 0.8f + 0.5f);
++		unsigned int prefixPolyLength = (unsigned int)(m_polyLength * 0.8f + 0.5f);
+ 		memmove(m_pathPolyRefs, m_pathPolyRefs + pathStartIndex, prefixPolyLength * sizeof(dtPolyRef));
+ 
+ 		dtPolyRef suffixStartPoly = m_pathPolyRefs[prefixPolyLength - 1];
+diff --git a/Navigation/PathFinder.h b/Navigation/PathFinder.h
+index d50f79b..3a352e0 100644
+--- a/Navigation/PathFinder.h
++++ b/Navigation/PathFinder.h
+@@ -86,7 +86,7 @@ public:
+ 
+ 	// option setters - use optional
+ 	void setUseStrightPath(bool useStraightPath) { m_useStraightPath = useStraightPath; };
+-	void setPathLengthLimit(float distance) { m_pointPathLimit = std::min<unsigned int>(unsigned int(distance / SMOOTH_PATH_STEP_SIZE), MAX_POINT_PATH_LENGTH); };
++	void setPathLengthLimit(float distance) { m_pointPathLimit = std::min<unsigned int>((unsigned int)(distance / SMOOTH_PATH_STEP_SIZE), (unsigned int)MAX_POINT_PATH_LENGTH); };
+ 
+ 	// result getters
+ 	Vector3 getStartPosition()      const { return m_startPosition; }
+diff --git a/Navigation/g3dlite/Include/G3D/platform.h b/Navigation/g3dlite/Include/G3D/platform.h
+index 1964331..2f766af 100644
+--- a/Navigation/g3dlite/Include/G3D/platform.h
++++ b/Navigation/g3dlite/Include/G3D/platform.h
+@@ -49,7 +49,8 @@
+ #define __fastcall
+ #endif
+ 
+-#ifdef _MSC_VER 
++#if defined(_MSC_VER) || defined(_WIN32)
++    // MinGW / clang-cl also target Windows; g3dlite only knew MSVC here.
+     #define G3D_WIN32
+ #elif  defined(__FreeBSD__) || defined(__OpenBSD__)
+     #define G3D_FREEBSD

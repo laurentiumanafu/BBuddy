@@ -42,11 +42,12 @@
             </Viewbox>
         </Button>
 
-        <!-- Settings Button -->
+        <!-- Settings Button (greyed out for WowB clients - everything it holds lives in the
+             client's own windows now) -->
         <Button x:Name="btnSettings"
                 Height="25"
                 HorizontalAlignment="Right"
-                Margin="0,62,8,0"
+                Margin="0,89,8,0"
                 VerticalAlignment="Top"
                 Width="120"
                 Click="btnSettings_Click">
@@ -55,10 +56,16 @@
             </Viewbox>
         </Button>
 
+        <!-- WowB controls moved into a separate, scrollable panel. -->
+        <Button x:Name="btnClickAimTools" Height="25" Width="120" IsEnabled="False"
+                HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,115,8,0"
+                ToolTip="Gather settings, hotspot tools and diagnostic probes"
+                Click="btnClickAimTools_Click" Content="Gather &amp; tools"/>
+
         <!-- Enhanced Mode Checkbox -->
         <CheckBox x:Name="EnhancedMode"
                   HorizontalAlignment="Right"
-                  Margin="0,115,8,0"
+                  Margin="0,143,8,0"
                   VerticalAlignment="Top"
                   Width="120"
                   ToolTip="Makes all buttons visible in the main window"
@@ -69,7 +76,7 @@
         <!-- Bot Config Button (hidden by default) -->
         <Button x:Name="btnBotConfig"
                 Visibility="Hidden"
-                Margin="0,135,8,0"
+                Margin="0,163,8,0"
                 VerticalAlignment="Top"
                 Height="25"
                 HorizontalAlignment="Right"
@@ -83,7 +90,7 @@
         <!-- Class Config Button (hidden by default) -->
         <Button x:Name="btnClassConfig"
                 Visibility="Hidden"
-                Margin="0,161,8,0"
+                Margin="0,189,8,0"
                 VerticalAlignment="Top"
                 Height="25"
                 HorizontalAlignment="Right"
@@ -97,7 +104,7 @@
         <!-- Plugins Button (hidden by default) -->
         <Button x:Name="btnPlugins"
                 Visibility="Hidden"
-                Margin="0,187,8,0"
+                Margin="0,215,8,0"
                 VerticalAlignment="Top"
                 Height="25"
                 HorizontalAlignment="Right"
@@ -112,7 +119,7 @@
         <Button x:Name="btnDevTools"
                 Height="25"
                 Visibility="Hidden"
-                Margin="0,213,8,0"
+                Margin="0,241,8,0"
                 VerticalAlignment="Top"
                 HorizontalAlignment="Right"
                 Width="120"
@@ -121,6 +128,26 @@
                 <TextBlock Text="{loc:Resx DeveloperTools}"/>
             </Viewbox>
         </Button>
+
+
+        <!-- Combat settings: heal / eat / drink percentages, the DoT switch and the vendor
+             plan. Right under Load Profile, in the main column, because it is the button a
+             WowB user presses; the Settings button it sits above is greyed out for those
+             clients. Always visible, because these numbers describe the character and can be
+             set before the client is attached. -->
+        <Button x:Name="btnAimCombatSettings"
+                Height="25"
+                Margin="0,62,8,0"
+                VerticalAlignment="Top"
+                HorizontalAlignment="Right"
+                Width="120"
+                ToolTip="When to heal, eat and drink, and whether damage-over-time spells and self-buffs are used (Settings\clickaim-grind.txt)"
+                Click="btnAimCombatSettings_Click">
+            <Viewbox Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center">
+                <TextBlock Text="Combat settings"/>
+            </Viewbox>
+        </Button>
+
 
         <!-- Start Button -->
         <Button x:Name="btnStart"

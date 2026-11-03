@@ -1,10 +1,19 @@
 <Solution>
+  <!--
+    Debug/Release are BuildType entries, platforms are Platform entries.
+    Without an explicit <BuildType> the solution only knows "Debug", so
+    "-c Release" fails with MSB4126 ("The specified solution configuration
+    "Release|x64" is invalid") before any project is even loaded.
+  -->
   <Configurations>
+    <BuildType Name="Debug" />
+    <BuildType Name="Release" />
     <Platform Name="Any CPU" />
     <Platform Name="x86" />
     <Platform Name="x64" />
   </Configurations>
   <Project Path="CopilotBuddy.csproj">
+    <Platform Solution="*|Any CPU" Project="x64" />
     <Platform Solution="*|x86" Project="x86" />
     <Platform Solution="*|x64" Project="x64" />
   </Project>

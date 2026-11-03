@@ -505,6 +505,15 @@ namespace Styx.Logic.BehaviorTree
 				if (Current == null)
 					return;
 
+				// The x64 reader is diagnostic only: legacy bot actions and object
+				// wrappers still use 32-bit addresses and 3.3.5a offsets.
+				if (ObjectManager.Wow?.Is64BitTarget == true)
+				{
+					Logging.Write(System.Windows.Media.Colors.Red,
+						"WowB x64 is read-only; starting a bot is not supported yet.");
+					return;
+				}
+
 				// HB 6.2.3 pattern: if a previous thread is still stopping, wait for it to exit.
 				// IMPORTANT: do NOT wait while holding the lock if the caller is the worker thread
 				// itself (e.g. ChangeBotAction via Dispatcher.Invoke) — that would deadlock.

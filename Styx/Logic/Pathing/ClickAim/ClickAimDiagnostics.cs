@@ -1,0 +1,1764 @@
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
+using System.Threading;
+using Styx.Helpers;
+using Styx.WoWInternals;
+
+namespace Styx.Logic.Pathing;
+
+/// <summary>
+/// Lets the movement be driven on the 64-bit client, where the bot loop is still
+/// disabled. Nothing here is part of the normal gameplay path; it exists so that
+/// the ported mover can be exercised on the real client without waiting for the
+/// whole object model.
+///
+/// Two triggers, both optional and both off unless asked for:
+///
+///   1. command line:  CopilotBuddy.exe --clickaim-walk 1977.5,232.0[,2.0]
+///   2. a text file:   Settings\clickaim-walk.txt  containing x,y[,tolerance]
+///
+/// The file is deleted once it has been accepted, so the same coordinates can be
+/// requested again. A request is only started when the player position is
+/// readable, and it is refused while another walk is running.
+/// </summary>
+public static class ClickAimDiagnostics
+{
+    private const int PilotTimeoutMs = 240000;   // a 100 yd click walk needs ~20 s
+    private const int PlayerWaitMs = 30000;
+
+    private static int _enabled;
+    private static readonly object Gate = new object();
+    private static readonly Queue<double[]> Pending = new Queue<double[]>();
+    private static bool _walking;
+
+    // A profile route is one job, not a queue of points: it owns its own ordering.
+    private static List<RoutePoint>? _pendingRoute;
+    private static int _pendingRouteLegs;
+
+    public static string RequestPath
+    {
+        get
+        {
+            string dir;
+            try { dir = Path.GetDirectoryName(ClickAimCalibration.DefaultPath) ?? "."; }
+            catch { dir = "."; }
+            return Path.Combine(dir, "clickaim-walk.txt");
+        }
+    }
+
+    /// <summary>
+    /// Puts a line in the request file. Everything that can ask the pilot to move goes
+    /// through this file, so a button, a .cmd script and a hand-typed line all take the
+    /// same path - and a bug in that path shows up in every one of them.
+    /// </summary>
+    public static bool WriteRequest(string text)
+    {
+        try
+        {
+            string path = RequestPath;
+            string dir = Path.GetDirectoryName(path) ?? ".";
+            if (dir.Length > 0) Directory.CreateDirectory(dir);
+            File.WriteAllText(path, text + Environment.NewLine);
+            Logging.Write("[ClickAim] request: \"" + text + "\" -> " + path);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Logging.Write("[ClickAim] could not write the request file: " + ex.Message);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Remembers where the character is standing as a hotspot.
+    ///
+    /// This is the button that makes a profile without a text editor: stand somewhere
+    /// interesting, press it, and the point goes into
+    /// <c>Settings\clickaim-hotspots.xml</c> - which is an ordinary profile with
+    /// <c>&lt;Hotspot&gt;</c> elements, so the same file can be walked, replaced with a
+    /// real HonorBuddy profile, or hand-edited.
+    /// </summary>
+    public static bool CaptureHotspot()
+    {
+        double x, y;
+        if (!ClickAimPositions.TryRead(out x, out y))
+        {
+            Logging.Write("[Route] no player position, so there is no hotspot to capture");
+            return false;
+        }
+
+        double z = ClickAimPositions.Z();
+        if (double.IsNaN(z)) z = 0.0;
+
+        string error;
+        int count = HotspotFile.Add(x, y, z, out error);
+        if (count < 0)
+        {
+            Logging.Write("[Route] could not add the hotspot: " + error);
+            return false;
+        }
+
+        Logging.Write(string.Format(CultureInfo.InvariantCulture,
+            "[Route] hotspot {0} = ({1:F1}, {2:F1}, {3:F1}) - {4}",
+            count, x, y, z, HotspotFile.Describe()));
+        return true;
+    }
+
+    /// <summary>Walks the captured hotspot list, in the order it was captured.</summary>
+    public static bool WalkHotspots()
+    {
+        string path = HotspotFile.DefaultPath;
+        if (HotspotFile.Count(path) == 0)
+        {
+            Logging.Write("[Route] there are no hotspots yet: stand where you want one and press "
+                          + "\"Add hotspot\", or write \"profile:<path>\" into the request file to "
+                          + "walk an existing profile");
+            return false;
+        }
+
+        Logging.Write("[Route] hotspot list: " + HotspotFile.Describe(path));
+        // wholeFile: the list is ours and short, so every point in it is meant, not just
+        // the cluster nearest the player - a capture made across two areas would
+        // otherwise silently drop half of what the user just recorded.
+        return StartProfile(path, 0, 0, false, true);
+    }
+
+    /// <summary>True while a profile or hotspot walk is still running.</summary>
+    public static bool RouteRunning
+    {
+        get { lock (Gate) { return _walking || _pendingRoute != null; } }
+    }
+
+    /// <summary>Asks a running walk to end after the waypoint it is on.</summary>
+    public static void RequestStop()
+    {
+        lock (Gate)
+        {
+            _pendingRoute = null;          // a request that has not started must not start
+            RouteRunner.StopRequested = true;
+        }
+    }
+
+    /// <summary>Forgets the captured hotspots (the file stays, empty).</summary>
+    public static bool ClearHotspots()
+    {
+        string error;
+        if (!HotspotFile.Clear(out error))
+        {
+            Logging.Write("[Route] could not clear the hotspots: " + error);
+            return false;
+        }
+        Logging.Write("[Route] hotspot list cleared - " + HotspotFile.DefaultPath);
+        return true;
+    }
+
+    /// <summary>
+    /// Plans a mesh route to every hotspot and prints it, WITHOUT moving anything.
+    ///
+    /// This is the "test points against the mesh" half of the hotspot list: it answers,
+    /// per point, whether Detour can get there from where the player is standing, how
+    /// long the path is and how far it detours. Nothing is dispatched, so a bad point
+    /// costs a log line instead of a walk.
+    /// </summary>
+    public static void PlanHotspots()
+    {
+        var points = HotspotFile.Read(HotspotFile.DefaultPath);
+        if (points.Count == 0)
+        {
+            Logging.Write("[Route] there are no hotspots to plan");
+            return;
+        }
+
+        var thread = new Thread(() =>
+        {
+            Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                "[Route] planning {0} hotspot(s) from where the player stands; nothing will move",
+                points.Count));
+
+            for (int i = 0; i < points.Count; i++)
+            {
+                RoutePoint point = points[i];
+                Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                    "[Route] hotspot {0}/{1}", i + 1, points.Count));
+                try
+                {
+                    RouteReport(string.Format(CultureInfo.InvariantCulture, "{0},{1},{2}",
+                        point.X, point.Y, point.Z));
+                }
+                catch (Exception ex)
+                {
+                    Logging.Write("[Route] hotspot " + (i + 1) + " threw: " + ex.Message);
+                }
+            }
+
+            Logging.Write("[Route] hotspot planning done");
+        });
+        thread.IsBackground = true;
+        thread.Name = "ClickAimPlanHotspots";
+        thread.Start();
+    }
+
+
+    /// <summary>
+    /// What the memory side can say about units and the action bar, printed once.
+    ///
+    /// This exists because the Lua bridge is retired: taking the client's own Lua thread
+    /// over crashed wowb twice on 2026-10-30 (FrameScript_IsLuaThread at
+    /// FrameScriptEvents.cpp:208, then "Lua stack is unbalanced" at GameUI.cpp:8250 and a
+    /// 0xC0000028 unwind fault). Everything the grind loop needs - which unit is a mob, how
+    /// far it is, whether it is hurt, what is on the action bar - has to come from memory
+    /// this bot already reads or from the client's own input handling.
+    ///
+    /// Nothing here is interpreted on faith. The action bar is printed with both plausible
+    /// packings, health/max are printed next to the level word, and a raw word window is
+    /// dumped for the player and the nearest other unit so the fields that are still
+    /// unverified can be found by eye instead of by another build cycle.
+    /// </summary>
+    public static void Offsets()
+    {
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                OffsetsCore();
+            }
+            catch (Exception ex)
+            {
+                Logging.Write("[Offsets] threw: " + ex.Message);
+            }
+        });
+        thread.IsBackground = true;
+        thread.Name = "ClickAimOffsets";
+        thread.Start();
+    }
+
+    private static void OffsetsCore()
+    {
+        Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
+        if (reader == null)
+        {
+            Logging.Write("[Offsets] no WowB reader - attach to the client first");
+            return;
+        }
+
+        Logging.Write("[Offsets] reading the client's memory; nothing is written and no Lua is used");
+
+        /* ---- the player ---- */
+        WowBWorldSnapshot? snap;
+        if (!reader.TryCaptureWorldSnapshot(out snap) || snap == null)
+        {
+            Logging.Write("[Offsets] the world snapshot did not validate this time - try again in a second");
+            return;
+        }
+
+        WowBObservedUnit me;
+        if (!snap.TryGetLocalPlayer(out me))
+        {
+            Logging.Write("[Offsets] no local player in the snapshot");
+            return;
+        }
+
+        if (reader.TryGetUnitFields(me.UnitAddress, out Styx.WoWInternals.WowBReader.WowBUnitFields fields))
+            Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                "[Offsets] player {0} unit=0x{1:X} {2}", me.Guid, me.UnitAddress, fields));
+        else
+            Logging.Write("[Offsets] the player's unit fields did not read at 0x" + me.UnitAddress.ToString("X"));
+
+        /* The unit OBJECT, not the data block: the 15:57 run dumped data+0x1E00 and printed
+         * the tail of the unit object instead of the block, which is why the mob windows came
+         * back empty. Both bases are printed so the next log leaves no doubt which is which. */
+        Logging.Write("[Offsets] player unit object +0x1E00: " +
+            reader.DumpWords(me.UnitAddress + 0x1E00, 24));
+        Logging.Write("[Offsets] player data block +0x1E00: " +
+            reader.DumpWords(DataBlock(reader, me.UnitAddress), 24));
+
+        /* ---- the action bar ---- */
+        List<Styx.WoWInternals.WowBReader.WowBActionSlot> bar = reader.ReadActionBar();
+        Logging.Write(string.Format(CultureInfo.InvariantCulture,
+            "[Offsets] stored action array 0x{0:X}: {1} filled slot(s) of {2}",
+            Styx.Offsets.WowBOffsets.StoredActionArray, bar.Count,
+            Styx.WoWInternals.WowBReader.ActionSlotCount));
+        for (int i = 0; i < bar.Count; i++) Logging.Write("[Offsets]   " + bar[i]);
+
+        /* The decoded bar is what the grind loop actually presses: slot -> key -> spell. If
+         * a key here is wrong, the rotation presses the wrong button, so it is printed as
+         * the rotation sees it rather than as raw words. */
+        List<ClickAimAction> decoded = ClickAimCombat.ReadBar(reader);
+        Logging.Write("[Offsets] the rotation reads " + ClickAimCombat.Describe(decoded));
+        Logging.Write("[Offsets] " + ClickAimCombat.SelfTest());
+
+        /* ---- what is around, nearest first ---- */
+        var units = new List<WowBObservedUnit>();
+        for (int i = 0; i < snap.Units.Count; i++)
+        {
+            WowBObservedUnit unit = snap.Units[i];
+            if (unit.IsLocalPlayer) continue;
+            units.Add(unit);
+        }
+
+        Logging.Write(string.Format(CultureInfo.InvariantCulture,
+            "[Offsets] {0} other unit(s) in the pool; the nearest 8 follow", units.Count));
+
+        /* Insertion sort by distance: the list is tiny and this keeps the order stable. */
+        double px = me.Location.X, py = me.Location.Y;
+        var order = new List<KeyValuePair<double, int>>();
+        for (int i = 0; i < units.Count; i++)
+        {
+            double d = ClickAimMath.Len(units[i].Location.X - px, units[i].Location.Y - py);
+            int at = order.Count;
+            for (int j = 0; j < order.Count; j++)
+            {
+                if (d < order[j].Key) { at = j; break; }
+            }
+            order.Insert(at, new KeyValuePair<double, int>(d, i));
+        }
+
+        int shown = 0;
+        for (int i = 0; i < order.Count && shown < 8; i++, shown++)
+        {
+            WowBObservedUnit unit = units[order[i].Value];
+            string line = string.Format(CultureInfo.InvariantCulture,
+                "[Offsets]   {0:F1} yd {1} unit=0x{2:X}{3}", order[i].Key, unit.Guid, unit.UnitAddress,
+                unit.HasPlayerVtable ? " (player vtable)" : "");
+            if (reader.TryGetUnitFields(unit.UnitAddress, out Styx.WoWInternals.WowBReader.WowBUnitFields mf))
+                line += "  " + mf;
+            else
+                line += "  <fields unreadable>";
+            Logging.Write(line);
+        }
+
+        /* The nearest non-player unit's raw words: this is the window a level or reaction
+         * field would have to appear in, printed next to the player's for comparison. */
+        for (int i = 0; i < order.Count; i++)
+        {
+            WowBObservedUnit unit = units[order[i].Value];
+            if (unit.HasPlayerVtable) continue;
+            if (!reader.TryGetUnitFields(unit.UnitAddress, out Styx.WoWInternals.WowBReader.WowBUnitFields nf)) continue;
+
+            Logging.Write("[Offsets] nearest mob unit object +0x1E00: " +
+                reader.DumpWords(unit.UnitAddress + 0x1E00, 24));
+            Logging.Write("[Offsets] nearest mob unit object +0x1B80: " +
+                reader.DumpWords(unit.UnitAddress + 0x1B80, 24));
+            Logging.Write("[Offsets] nearest mob data block +0x1E00: " +
+                reader.DumpWords(DataBlock(reader, unit.UnitAddress), 24));
+            Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                "[Offsets] nearest mob at {0:F1} yd: {1}", order[i].Key, nf));
+            break;
+        }
+
+        Logging.Write("[Offsets] done. Paste this block and the offset table can be finished without another run.");
+    }
+
+    /// <summary>
+    /// The unit's data block - the pointer the stat fields are relative to. It is readable
+    /// straight out of the unit object at <c>RecordDataBlockPtrOffset</c>, so this uses the
+    /// reader's own field access rather than a second pointer walk, and returns 0 (which
+    /// <see cref="Styx.WoWInternals.WowBReader.DumpWords"/> rejects) when it cannot be read.
+    /// </summary>
+    private static ulong DataBlock(Styx.WoWInternals.WowBReader reader, ulong unitAddress)
+    {
+        Styx.WoWInternals.WowBReader.WowBUnitFields fields;
+        return reader.TryGetUnitFields(unitAddress, out fields) ? fields.DataPtr : 0UL;
+    }
+
+    /// <summary>
+    /// Called once after a successful attach. Logs the self-test so the 26 checks
+    /// are visible in the log even when no bot is started, then arms the triggers.
+    /// </summary>
+    public static void EnableAfterAttach()
+    {
+        if (Interlocked.Exchange(ref _enabled, 1) != 0) return;
+
+        string report;
+        try { report = ClickAimMath.SelfTest(); }
+        catch (Exception ex) { report = "[ClickAim] self-test threw: " + ex.Message; }
+        Logging.Write(report);
+
+        try { Logging.Write(WowBReader.MapIdSelfTest()); }
+        catch (Exception ex) { Logging.Write("[Mesh] map self-test threw: " + ex.Message); }
+
+        try { Logging.Write(RouteRunner.SelfTest()); }
+        catch (Exception ex) { Logging.Write("[Route] mesh self-test threw: " + ex.Message); }
+
+        try { Logging.Write(NavGridStore.SelfTest()); }
+        catch (Exception ex) { Logging.Write("[NavGrid] self-test threw: " + ex.Message); }
+
+        // Checks the destination finder against synthetic records, so a failure here
+        // is a code problem and not a client problem.
+        try { Logging.Write(ClickAimKeySteer.SelfTest()); }
+        catch (Exception ex) { Logging.Write("[Keys] self-test threw: " + ex.Message); }
+
+        try { Logging.Write(ClickAimDestHunt.SelfTest()); }
+        catch (Exception ex) { Logging.Write("[Dest] self-test threw: " + ex.Message); }
+
+        // Profile bands are read from XML and the area is chosen by level: both are pure
+        // enough to check here, and both fail silently when they are wrong.
+        try { Logging.Write(GatherNodeScanner.SelfTest()); }
+        catch (Exception ex) { Logging.Write("[Gather] node scanner self-test threw: " + ex.Message); }
+
+        try { Logging.Write(MeshRoam.SelfTest()); }
+        catch (Exception ex) { Logging.Write("[Roam] self-test threw: " + ex.Message); }
+
+        try { Logging.Write(GatherRunner.HotspotSelfTest()); }
+        catch (Exception ex) { Logging.Write("[Gather] hotspot self-test threw: " + ex.Message); }
+
+        try { Logging.Write(GatherInteraction.SelfTest()); }
+        catch (Exception ex) { Logging.Write("[Gather] hover self-test threw: " + ex.Message); }
+
+        try { Logging.Write(GatherProbe.SelfTest()); }
+        catch (Exception ex) { Logging.Write("[Gather probe] self-test threw: " + ex.Message); }
+
+        try { Logging.Write(GrindRunner.SelfTest()); }
+        catch (Exception ex) { Logging.Write("[Grind] self-test threw: " + ex.Message); }
+
+        // The spell table and the slot->key map: pressing the wrong key looks exactly like
+        // "the keyboard does not work", so this is checked at startup.
+        try { Logging.Write(ClickAimCombat.SelfTest()); }
+        catch (Exception ex) { Logging.Write("[Combat] self-test threw: " + ex.Message); }
+
+        // The user's own numbers: eat/drink/heal percentages and the DoT switch. A settings
+        // file that silently ignores a line is worse than no settings at all.
+        try { Logging.Write(ClickAimSettings.SelfTest()); }
+        catch (Exception ex) { Logging.Write("[Grind] settings self-test threw: " + ex.Message); }
+
+        // The bot loop is disabled on x64, but the navmesh engine only needs
+        // Navigation.dll (now built for x64) and the mmaps directory.
+        bool mesh = false;
+        try { mesh = Navigator.EnsureLoadedForDiagnostics(); }
+        catch (Exception ex) { Logging.Write("[NavMesh] " + ex.Message); }
+
+        // The DLL resolves mmaps relative to its own file, and it sits next to the
+        // exe, so this is the only path that matters - there is no override API.
+        string mmapsDir = System.IO.Path.Combine(AppContext.BaseDirectory, "mmaps");
+        int mmtiles = 0;
+        int thisMap = 0;
+        int paramsFiles = 0;
+        string paramsForMap = "none";
+        try
+        {
+            if (System.IO.Directory.Exists(mmapsDir))
+            {
+                string[] names = System.IO.Directory.GetFiles(mmapsDir);
+
+                // Both naming schemes the loader understands. Counting per map
+                // matters: a folder-wide number says nothing about whether the map
+                // the player is standing on has tiles at all.
+                uint mapId = (uint)NavGridStore.MapId;
+                string classic = mapId.ToString("000", CultureInfo.InvariantCulture);
+                string trinity = mapId.ToString("0000", CultureInfo.InvariantCulture) + "_";
+                foreach (string path in names)
+                {
+                    string name = System.IO.Path.GetFileName(path);
+                    if (name.EndsWith(".mmtile", StringComparison.OrdinalIgnoreCase))
+                    {
+                        mmtiles++;
+                        if ((name.Length == 14 && name.StartsWith(classic, StringComparison.Ordinal))
+                            || name.StartsWith(trinity, StringComparison.Ordinal))
+                            thisMap++;
+                    }
+                    else if (name.EndsWith(".mmap", StringComparison.OrdinalIgnoreCase))
+                    {
+                        paramsFiles++;
+                        if (name == classic + ".mmap" || name == trinity.TrimEnd('_') + ".mmap")
+                            paramsForMap = name;
+                    }
+                }
+            }
+        }
+        catch (Exception ex) { Logging.Write("[NavMesh] cannot list " + mmapsDir + ": " + ex.Message); }
+
+        uint currentMap = (uint)NavGridStore.MapId;
+        Logging.Write("[NavMesh] Navigation.dll loaded: " + (mesh ? "yes" : "no")
+                      + " - mmaps read from " + mmapsDir);
+        Logging.Write("[NavMesh] " + mmtiles + " tile files in the folder (" + paramsFiles
+                      + " params files), " + thisMap + " for map " + currentMap
+                      + "; params for this map: " + paramsForMap);
+        if (!mesh)
+        {
+            Logging.Write("[NavMesh] without it, routing falls back to the baked navgrid tiles "
+                          + "(Tools/NavGrid) and then to straight-line walking");
+        }
+        else if (thisMap == 0)
+        {
+            Logging.Write("[NavMesh] the library loaded, but no tile file in " + mmapsDir
+                          + " belongs to map " + currentMap + " - FindPath will return nothing "
+                          + "for this map. Run Tools\\UseExistingMmaps.cmd against your mmaps "
+                          + "set, or bake this map with make-mmaps.cmd");
+        }
+        else
+        {
+            Logging.Write("[MeshProbe] asking Detour for a path from where the player stands; "
+                          + "the answer follows in a few seconds");
+        }
+
+        Logging.Write("[ClickAim] pilot armed. Write \"x,y\" into " + RequestPath
+                      + " to walk there, or start CopilotBuddy with --clickaim-walk x,y");
+        Logging.Write("[ClickAim] position source: " + (ClickAimPositions.TryRead(out double px, out double py)
+            ? string.Format(CultureInfo.InvariantCulture, "{0} at ({1:F1}, {2:F1})", ClickAimPositions.Source, px, py)
+            : "not readable yet"));
+
+        ParseCommandLine();
+
+        var thread = new Thread(Worker);
+        thread.IsBackground = true;
+        thread.Name = "ClickAimPilot";
+        thread.Start();
+
+        if (mesh)
+        {
+            var probe = new Thread(MeshProbe);
+            probe.IsBackground = true;
+            probe.Name = "ClickAimMeshProbe";
+            probe.Start();
+        }
+    }
+
+    /// <summary>
+    /// Every map id that has a params file in the mmaps folder, in ascending order.
+    /// There are a few hundred at most, and it is the only list of "maps this set
+    /// actually covers" available without reading the client.
+    /// </summary>
+    private static List<uint> MapsWithParams(string mmapsDir)
+    {
+        var ids = new List<uint>();
+        try
+        {
+            if (!System.IO.Directory.Exists(mmapsDir)) return ids;
+            foreach (string path in System.IO.Directory.GetFiles(mmapsDir, "*.mmap"))
+            {
+                string stem = System.IO.Path.GetFileNameWithoutExtension(path);
+                uint id;
+                if (uint.TryParse(stem, NumberStyles.None, CultureInfo.InvariantCulture, out id))
+                    ids.Add(id);
+            }
+        }
+        catch { /* a listing failure is not fatal here */ }
+        ids.Sort();
+        return ids;
+    }
+
+    private static bool TileFileExists(string mmapsDir, uint mapId, int tileX, int tileY)
+    {
+        string classic = string.Format(CultureInfo.InvariantCulture, "{0:000}{1:00}{2:00}.mmtile",
+                                       mapId, tileX, tileY);
+        string trinity = string.Format(CultureInfo.InvariantCulture, "{0:0000}_{1:00}_{2:00}.mmtile",
+                                       mapId, tileX, tileY);
+        return System.IO.File.Exists(System.IO.Path.Combine(mmapsDir, classic))
+            || System.IO.File.Exists(System.IO.Path.Combine(mmapsDir, trinity));
+    }
+
+    /// <summary>
+    /// The map id to route on. Prefer the validated 70291 client map root;
+    /// X/Y tile coverage alone cannot distinguish overlapping continents. If the
+    /// client read fails on 70291, return uint.MaxValue (unknown); 32-bit
+    /// clients keep their legacy tile heuristic.
+    /// </summary>
+    private static uint? _reportedLiveMap;
+    private static bool _reportedMapUnavailable;
+
+    internal static uint ResolveMap(uint mapId, double x, double y)
+    {
+        try
+        {
+            WowBReader? reader = ObjectManager.WowB;
+            if (reader != null && reader.TryReadMapId(out uint liveMap) && ObjectManager.WowB == reader)
+            {
+                if (_reportedLiveMap != liveMap)
+                {
+                    _reportedLiveMap = liveMap;
+                    Logging.Write("[Mesh] client map root reports map " + liveMap + "; using that map, not coordinate guessing");
+                }
+                _reportedMapUnavailable = false;
+                return liveMap;
+            }
+            if (reader != null || ObjectManager.Wow?.Is64BitTarget == true)
+            {
+                if (!_reportedMapUnavailable)
+                    Logging.Write("[Mesh] client map id unreadable; refusing to guess a map from overlapping tiles");
+                _reportedMapUnavailable = true;
+                _reportedLiveMap = null;
+                return uint.MaxValue;
+            }
+            int tileX, tileY;
+            try
+            {
+                Tripper.Navigation.NativeMethods.WorldToTile((float)x, (float)y, out tileX, out tileY);
+            }
+            catch
+            {
+                tileX = (int)((32.0 * 533.33333 - x) / 533.33333);
+                tileY = (int)((32.0 * 533.33333 - y) / 533.33333);
+            }
+
+            string mmapsDir = System.IO.Path.Combine(AppContext.BaseDirectory, "mmaps");
+            if (TileFileExists(mmapsDir, mapId, tileX, tileY)) return mapId;
+
+            List<uint> covering = MapsCoveringTile(mmapsDir, tileX, tileY);
+            return covering.Count > 0 ? covering[0] : mapId;
+        }
+        catch
+        {
+            // Never turn an unreadable 64-bit client map into a guessed map.
+            return ObjectManager.WowB != null || ObjectManager.Wow?.Is64BitTarget == true ? uint.MaxValue : mapId;
+        }
+    }
+
+    /// <summary>
+    /// Which of the covered maps has a tile file for this position?
+    ///
+    /// <see cref="NavGridStore.MapId"/> defaults to 1 and nothing in the ported code
+    /// sets it from the client, so on a character standing in the Eastern Kingdoms
+    /// every query would fail with "no polygon" while the Kalimdor tiles sit right
+    /// there - the exact shape of failure that looks like a broken mesh. Comparing
+    /// the position against the files turns that into a sentence.
+    /// </summary>
+    private static List<uint> MapsCoveringTile(string mmapsDir, int tileX, int tileY)
+    {
+        var found = new List<uint>();
+        foreach (uint mapId in MapsWithParams(mmapsDir))
+        {
+            if (TileFileExists(mmapsDir, mapId, tileX, tileY))
+                found.Add(mapId);
+        }
+        return found;
+    }
+
+    /// <summary>
+    /// Answers one question the file count cannot: does this navmesh actually route?
+    ///
+    /// It asks the engine for a short path and a long one, both starting where the
+    /// player stands, and logs the status, the tile counts and the geometry it got
+    /// back. Everything printed here is a value that was read or returned - if the
+    /// probe cannot run, it says so instead of implying success.
+    ///
+    /// When the short path fails the likely cause is named: the tile file for this
+    /// position is missing, or the mesh under the player is not walkable. On a stock
+    /// mmap set that is nearly always a name/size mismatch, which the numbers below
+    /// make obvious.
+    /// </summary>
+    /// <summary>
+    /// Reports what the navmesh holds around a point: how many polygons the query
+    /// returns, which areas they are typed as, and whether the point itself is on
+    /// the mesh.
+    ///
+    /// This exists because "NO PATH (status Failed)" with the tile loaded is
+    /// ambiguous. A tile can be loaded and hold nothing under the character (a hole
+    /// in the geometry, a bridge the extrude step dropped), or hold polygons whose
+    /// area the query filter costs out. One query separates the cases, and the
+    /// difference decides whether the fix is a rebuild or a filter setting.
+    /// </summary>
+    private static void ProbePolys(Tripper.Navigation.Navigator nav, uint mapId, System.Numerics.Vector3 at)
+    {
+        try
+        {
+            float[] radii = { 5.0f, 25.0f };
+            foreach (float r in radii)
+            {
+                // Same swizzle trap as the snap: the DLL turns the XYZ it receives
+                // into {Y, Z, X}, so the vertical half-extent is the Z component here.
+                // (r, 30, r) searched 30 yd sideways and r yd tall, which is how the
+                // report read "within 5 yd" while looking 30 yd around.
+                var extents = new System.Numerics.Vector3(r, r, 30.0f);
+                Tripper.Navigation.PolygonReference[] polys;
+                try { polys = nav.QueryPolygons(mapId, at, extents, 256); }
+                catch (Exception ex)
+                {
+                    Logging.Write("[MeshProbe] polygon query failed: " + ex.Message);
+                    return;
+                }
+
+                if (polys == null || polys.Length == 0)
+                {
+                    Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                        "[MeshProbe] polygons within {0:F0} yd: none - the tile is loaded but there is "
+                        + "no mesh here at all ({1:F1},{2:F1},{3:F1})", r, at.X, at.Y, at.Z));
+                    continue;
+                }
+
+                var counts = new Dictionary<byte, int>();
+                foreach (Tripper.Navigation.PolygonReference poly in polys)
+                {
+                    byte area;
+                    try { if ((nav.GetPolyArea(mapId, poly, out area) & 0x80000000u) != 0) continue; }
+                    catch { continue; }
+
+                    int seen;
+                    counts.TryGetValue(area, out seen);
+                    counts[area] = seen + 1;
+                }
+
+                var parts = new List<string>();
+                foreach (KeyValuePair<byte, int> kv in counts)
+                {
+                    string name = kv.Key == (byte)Tripper.Navigation.AreaType.Blackspot ? "blackspot"
+                                : kv.Key == (byte)Tripper.Navigation.AreaType.Blocked ? "blocked"
+                                : kv.Key == (byte)Tripper.Navigation.AreaType.Water ? "water"
+                                : kv.Key == (byte)Tripper.Navigation.AreaType.Ground ? "ground"
+                                : "area " + kv.Key.ToString(CultureInfo.InvariantCulture);
+                    parts.Add(name + " x" + kv.Value.ToString(CultureInfo.InvariantCulture));
+                }
+                parts.Sort(StringComparer.Ordinal);
+
+                Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                    "[MeshProbe] polygons within {0:F0} yd: {1} ({2})", r, polys.Length, string.Join(", ", parts.ToArray())));
+            }
+
+            bool onMesh;
+            try { onMesh = nav.IsPointOnNavMesh(mapId, at, 3.0f); }
+            catch { onMesh = false; }
+
+            Tripper.Navigation.PolygonReference nearest;
+            System.Numerics.Vector3 snapped;
+            bool found;
+            try { found = nav.FindNearestPolyRef(mapId, at, out nearest, out snapped); }
+            catch { found = false; snapped = at; }
+
+            if (found)
+            {
+                double dx = snapped.X - at.X, dy = snapped.Y - at.Y, dz = snapped.Z - at.Z;
+                Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                    "[MeshProbe] point on mesh: {0}; nearest polygon is {1:F2} yd away at "
+                    + "({2:F1},{3:F1},{4:F1})", onMesh ? "yes" : "no (within 3 yd)",
+                    Math.Sqrt(dx * dx + dy * dy + dz * dz), snapped.X, snapped.Y, snapped.Z));
+            }
+            else
+            {
+                Logging.Write("[MeshProbe] point on mesh: no; no polygon within the search box - "
+                              + "check the selected map, tile data, and player position before diagnosing a mesh hole");
+            }
+        }
+        catch (Exception ex)
+        {
+            Logging.Write("[MeshProbe] polygon report failed: " + ex.Message);
+        }
+    }
+
+    // Research-only 70707 mesh query. This does not expose the candidate map
+    // or coordinates to the mover, issue input, or run FindPath (which changes
+    // the shared Navigator.CurrentMapId). Tile loads affect the navmesh cache.
+    private static void Experimental70707MeshProbe(WowBReader reader)
+    {
+        try
+        {
+            var memory = ObjectManager.Wow;
+            if (memory == null || ClickAimUi.Running || ClickAimUi.Paused || ObjectManager.WowB != reader ||
+                !reader.TryReadExperimentalMapCandidate(out uint map) ||
+                !reader.TryCaptureWorldSnapshot(out WowBWorldSnapshot? before) || before == null ||
+                !before.TryGetLocalPlayer(out WowBObservedUnit player) ||
+                !reader.TryReadExperimentalMapCandidate(out uint mapAfter) || map != mapAfter ||
+                !reader.TryCaptureWorldSnapshot(out WowBWorldSnapshot? after) || after == null ||
+                !after.TryGetLocalPlayer(out WowBObservedUnit current) ||
+                !reader.TryReadExperimentalMapCandidate(out uint mapFinal) || map != mapFinal ||
+                current.Guid != player.Guid || current.RecordAddress != player.RecordAddress || current.UnitAddress != player.UnitAddress ||
+                ObjectManager.Wow != memory || ObjectManager.WowB != reader || ClickAimUi.Running || ClickAimUi.Paused)
+            {
+                Logging.Write("[70707 mesh research] skipped: candidate map/player or bot state is unavailable or changed");
+                return;
+            }
+            double moved = player.Location.Distance(current.Location);
+            if (!double.IsFinite(moved) || moved > 2.0)
+            {
+                Logging.Write("[70707 mesh research] skipped: player position candidate changed during capture");
+                return;
+            }
+            string mmapsDir = Path.Combine(AppContext.BaseDirectory, "mmaps");
+            if (!MapsWithParams(mmapsDir).Contains(map))
+            {
+                Logging.Write("[70707 mesh research] skipped: no mesh parameters for candidate map " + map);
+                return;
+            }
+            var from = new System.Numerics.Vector3(current.Location.X, current.Location.Y, current.Location.Z);
+            Tripper.Navigation.Navigator nav = Navigator.TripperNavigator;
+            if (ClickAimUi.Running || ClickAimUi.Paused || ObjectManager.WowB != reader || ObjectManager.Wow != memory) return;
+            nav.EnsureTilesAroundPosition(map, from, 1);
+            bool found = nav.FindNearestPolyRef(map, from, 5f, 40f, out _, out System.Numerics.Vector3 nearest);
+            double correction = found ? System.Numerics.Vector3.Distance(from, nearest) : double.NaN;
+            Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                "[70707 mesh research] candidate map={0}, player=({1:F1},{2:F1},{3:F1}); nearest polygon found={4}, correction={5:F2} yd. Read-only query; map and transform unverified, no movement or path authorization.",
+                map, from.X, from.Y, from.Z, found, correction));
+            if (ClickAimUi.Running || ClickAimUi.Paused || ObjectManager.WowB != reader || ObjectManager.Wow != memory) return;
+            if (before.TargetGuid.IsEmpty || before.TargetGuid != after.TargetGuid ||
+                !before.TryGetSelectedTarget(out WowBObservedUnit targetBefore) ||
+                !after.TryGetSelectedTarget(out WowBObservedUnit targetAfter) ||
+                targetAfter.IsLocalPlayer || targetAfter.HasPlayerVtable ||
+                targetBefore.Guid != targetAfter.Guid || targetBefore.RecordAddress != targetAfter.RecordAddress ||
+                targetBefore.UnitAddress != targetAfter.UnitAddress) return;
+            double distance = current.Location.Distance(targetAfter.Location);
+            if (!double.IsFinite(distance) || distance > 100.0) return;
+            var to = new System.Numerics.Vector3(targetAfter.Location.X, targetAfter.Location.Y, targetAfter.Location.Z);
+            nav.EnsureTilesAroundPosition(map, to, 1);
+            bool targetFound = nav.FindNearestPolyRef(map, to, 5f, 40f, out _, out System.Numerics.Vector3 targetNearest);
+            double targetCorrection = targetFound ? System.Numerics.Vector3.Distance(to, targetNearest) : double.NaN;
+            Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                "[70707 mesh research] selected unit candidate distance={0:F1} yd; nearest polygon found={1}, correction={2:F2} yd. This is not a path, reaction, attackability, or reachability test.",
+                distance, targetFound, targetCorrection));
+        }
+        catch (Exception ex) { Logging.Write("[70707 mesh research] query failed: " + ex.Message); }
+    }
+
+    private static void MeshProbe()
+    {
+        try
+        {
+            // Let the client settle: attach happens before the world finishes loading.
+            Thread.Sleep(3000);
+            WowBReader? experimentalReader = ObjectManager.WowB;
+            if (experimentalReader?.IsExperimental70707 == true)
+            {
+                Experimental70707MeshProbe(experimentalReader);
+                return;
+            }
+
+            for (int attempt = 0; attempt < 5; attempt++)
+            {
+                double px, py;
+                if (ClickAimPositions.TryRead(out px, out py)) break;
+                Thread.Sleep(2000);
+            }
+
+            double x, y;
+            if (!ClickAimPositions.TryRead(out x, out y))
+            {
+                Logging.Write("[MeshProbe] skipped: player position is not readable");
+                return;
+            }
+
+            uint configuredMap = (uint)NavGridStore.MapId;
+            uint mapId = ResolveMap(configuredMap, x, y);
+            if (mapId == uint.MaxValue) { Logging.Write("[MeshProbe] skipped: client map ID unreadable"); return; }
+            bool liveMapKnown = ObjectManager.WowB != null;
+            Logging.Write(liveMapKnown ? "[MeshProbe] client map root reports map " + mapId
+                : "[MeshProbe] client map id unreadable; map " + mapId + " is a tile-based guess");
+            double z = ClickAimPositions.Z();
+            bool zKnown = !double.IsNaN(z);
+            if (!zKnown) z = 0.0;
+
+            var from = new System.Numerics.Vector3((float)x, (float)y, (float)z);
+
+            /* Which tile file does the engine expect for this position?
+             *
+             * Read it from the DLL itself rather than recomputing it here: the two
+             * conventions in this codebase are transposed (NavGridFinder.TileOf
+             * returns the .map-style pair, the loader names files the other way
+             * round), and a log that prints a name the loader would never look for
+             * sends the next person hunting a file that is not the problem.
+             * Navigation::WorldToTile is what getTileName/getTileFile use. */
+            int tileX, tileY;
+            try
+            {
+                Tripper.Navigation.NativeMethods.WorldToTile((float)x, (float)y, out tileX, out tileY);
+            }
+            catch
+            {
+                tileX = (int)((32.0 * 533.33333 - x) / 533.33333);
+                tileY = (int)((32.0 * 533.33333 - y) / 533.33333);
+            }
+
+            int gridX, gridY;
+            NavGridFinder.TileOf(x, y, out gridX, out gridY);
+
+            Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                "[MeshProbe] player {0:F1},{1:F1},{2:F1} map {3} -> loader tile ({4},{5}) = file "
+                + "{6}{7}{8}.mmtile; .map-style pair ({9},{10}){11}", x, y, z, mapId, tileX, tileY,
+                mapId.ToString("000"), tileX.ToString("00"), tileY.ToString("00"),
+                gridX, gridY, zKnown ? "" : " (z unreadable, probing at 0)"));
+
+            // Tile coverage is diagnostic only: several maps can overlap at X/Y.
+            string mmapsDir = System.IO.Path.Combine(AppContext.BaseDirectory, "mmaps");
+            List<uint> covering = MapsCoveringTile(mmapsDir, tileX, tileY);
+            bool currentCovered = covering.Contains(mapId);
+            Logging.Write("[MeshProbe] tile (" + tileX + "," + tileY + ") exists for map(s): "
+                          + (covering.Count == 0 ? "none" : string.Join(", ", covering.ConvertAll(v => v.ToString(CultureInfo.InvariantCulture)).ToArray())));
+            if (!liveMapKnown && !currentCovered && covering.Count > 0)
+            {
+                Logging.Write("[MeshProbe] the bot was using map " + mapId
+                              + ", which has no tile here; probing map " + covering[0]
+                              + " instead. NavGridStore.MapId is a constant, not a read from the "
+                              + "client - this is what that costs");
+                mapId = covering[0];
+            }
+
+            Tripper.Navigation.Navigator nav = Navigator.TripperNavigator;
+            nav.EnsureTilesAroundPosition(mapId, from, 2);
+
+            int loadedTiles = -1;
+            try { loadedTiles = nav.GetLoadedTilesCount(mapId); }
+            catch { /* older DLL without the export */ }
+
+            // Did the file for the player's own grid square load? If the ring around
+            // the position brought tiles in but this one is missing, the name the
+            // engine derives and the name on disk disagree - that is the single most
+            // expensive mistake in this area, so it gets its own line.
+            bool tileLoaded = false;
+            try { tileLoaded = nav.IsTileLoaded(mapId, tileX, tileY); }
+            catch { /* older DLL without the export */ }
+
+            Logging.Write("[MeshProbe] tiles loaded for map " + mapId + ": " + loadedTiles
+                          + "; tile (" + tileX + "," + tileY + ") loaded: " + tileLoaded);
+
+            // A loaded tile says the file is there. It does not say that anything
+            // walkable exists at this spot, and "NO PATH" cannot tell those apart -
+            // it is the same answer for an empty tile, a tile whose polygons the
+            // query filter refuses, and a floor twenty yards below the character.
+            // Ask Detour what is actually under the player.
+            ProbePolys(nav, mapId, from);
+
+            /* Put the probe on the same footing as a real route: snap the player's
+             * point onto the mesh first and say how far it moved. If this line
+             * reports a large correction, the NO PATH below was a Z problem, not a
+             * missing tile - which is exactly the ambiguity that cost a session. */
+            var snappedFrom = from;
+            bool onMesh = MeshQuery.SnapLogged(nav, mapId, from, "player", out snappedFrom);
+            if (onMesh) from = snappedFrom;
+
+            // Two lengths: 40 yd stays inside a few tiles, 120 yd crosses seams and
+            // exercises the on-demand loader while the search runs.
+            double[] legs = { 40.0, 120.0 };
+            double facing;
+            if (!ClickAimPositions.TryReadFacing(out facing)) facing = 0.0;
+            double dx = Math.Sin(facing), dy = Math.Cos(facing);
+
+            foreach (double leg in legs)
+            {
+                var to = new System.Numerics.Vector3(
+                    (float)(from.X + dx * leg), (float)(from.Y + dy * leg), from.Z);
+                nav.EnsureTilesAroundPosition(mapId, to, 1);
+
+                Tripper.Navigation.PathFindResult result;
+                try { result = nav.FindPath(mapId, from, to, true); }
+                catch (Exception ex)
+                {
+                    Logging.Write("[MeshProbe] " + leg + " yd threw: " + ex.Message);
+                    continue;
+                }
+
+                if (result == null || !result.Status.Succeeded
+                    || result.Points == null || result.Points.Length < 2)
+                {
+                    Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                        "[MeshProbe] {0:F0} yd: NO PATH (status {1}) - tile {2}{3}{4}.mmtile for map "
+                        + "{5}; check map identity, tile data, height and the polygon report before deciding "
+                        + "whether any mesh rebuild is needed",
+                        leg, result == null ? "null" : result.Status.ToString(),
+                        mapId.ToString("000"), tileX.ToString("00"), tileY.ToString("00"), mapId));
+                    continue;
+                }
+
+                double length = 0.0;
+                for (int i = 1; i < result.Points.Length; i++)
+                {
+                    double ex = result.Points[i].X - result.Points[i - 1].X;
+                    double ey = result.Points[i].Y - result.Points[i - 1].Y;
+                    double ez = result.Points[i].Z - result.Points[i - 1].Z;
+                    length += Math.Sqrt(ex * ex + ey * ey + ez * ez);
+                }
+                Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                    "[MeshProbe] {0:F0} yd: mesh path OK - {1} points, {2:F1} yd, {3:F1} ms, "
+                    + "ends at ({4:F1},{5:F1},{6:F1})",
+                    leg, result.Points.Length, length, result.Elapsed.TotalMilliseconds,
+                    result.Points[result.Points.Length - 1].X,
+                    result.Points[result.Points.Length - 1].Y,
+                    result.Points[result.Points.Length - 1].Z));
+            }
+
+            Logging.Write("[MeshProbe] done. A path here is Detour reading the mmaps; "
+                          + "walking still depends on the mover, not on this probe.");
+        }
+        catch (Exception ex)
+        {
+            Logging.Write("[MeshProbe] threw: " + ex.Message);
+        }
+    }
+
+    /// <summary>Queues a walk. Safe from any thread; returns false if one is already running.</summary>
+    public static bool WalkNow(double x, double y, double tolerance = 2.0)
+    {
+        lock (Gate)
+        {
+            if (_walking) return false;
+            Pending.Enqueue(new[] { x, y, tolerance });
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Walks <paramref name="yards"/> straight ahead of the character's own facing -
+    /// the no-coordinates test. Client convention: facing 0 = +Y, clockwise, so the
+    /// offset is (sin, cos).
+    /// </summary>
+    public static bool WalkRelative(double yards)
+    {
+        double x, y, facing;
+        if (!ClickAimPositions.TryRead(out x, out y))
+        {
+            Logging.Write("[ClickAim] cannot walk ahead: no player position yet");
+            return false;
+        }
+        if (!ClickAimPositions.TryReadFacing(out facing))
+        {
+            Logging.Write("[ClickAim] cannot walk ahead: facing is not readable");
+            return false;
+        }
+
+        double targetX = x + Math.Sin(facing) * yards;
+        double targetY = y + Math.Cos(facing) * yards;
+        Logging.Write(string.Format(CultureInfo.InvariantCulture,
+            "[ClickAim] {0:F0} yd ahead: ({1:F1}, {2:F1}) -> ({3:F1}, {4:F1}) at facing {5:F2} rad",
+            yards, x, y, targetX, targetY, facing));
+        if (WalkNow(targetX, targetY, 3.0)) return true;
+
+        Logging.Write("[ClickAim] a walk is already running; the request was ignored");
+        return false;
+    }
+
+    /// <summary>
+    /// Loads a profile and queues its waypoint chain. Returns false when the file has
+    /// no movement elements or a walk is already running.
+    /// </summary>
+    public static bool StartProfile(string path, int questId, int maxLegs, bool startNearest, bool wholeFile)
+    {
+        List<RoutePoint> route;
+        try
+        {
+            route = ProfileRoute.Load(path, questId);
+        }
+        catch (Exception ex)
+        {
+            Logging.Write("[Route] could not load " + path + ": " + ex.Message);
+            return false;
+        }
+
+        if (route.Count == 0)
+        {
+            Logging.Write("[Route] " + path + " has no Hotspot/RunTo waypoints"
+                          + (questId != 0 ? " for quest " + questId : ""));
+            return false;
+        }
+
+        Logging.Write("[Route] " + Path.GetFileName(path) + ": " + ProfileRoute.Describe(route));
+
+        double px, py;
+        bool havePosition = ClickAimPositions.TryRead(out px, out py);
+
+        // A profile's waypoints are separate grind areas plus continent-scale RunTo
+        // hops. Unless the whole file was asked for, walk the cluster we are
+        // standing in - the alternative is "walk 17,705 yd to Darkshore".
+        if (questId == 0 && !wholeFile && havePosition)
+        {
+            int clusterIndex, clusterCount;
+            List<RoutePoint> cluster = ProfileRoute.NearestCluster(route, px, py, out clusterIndex, out clusterCount);
+            if (clusterCount > 1 && cluster.Count > 0)
+            {
+                Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                    "[Route] the file has {0} separate walkable clusters; using #{1} - {2}. "
+                    + "Use --profile-all to walk the file as one chain",
+                    clusterCount, clusterIndex + 1, ProfileRoute.Describe(cluster)));
+                route = cluster;
+            }
+        }
+
+        if (havePosition)
+        {
+            int nearest = ProfileRoute.NearestIndex(route, px, py);
+            double distance = ClickAimMath.Len(route[nearest].X - px, route[nearest].Y - py);
+            Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                "[Route] nearest waypoint is {0}/{1} at {2:F0} yd; use --profile-nearest to start there",
+                nearest + 1, route.Count, distance));
+
+            if (startNearest && nearest > 0)
+            {
+                route = route.GetRange(nearest, route.Count - nearest);
+                Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                    "[Route] starting at waypoint {0}, {1} waypoints to walk", nearest + 1, route.Count));
+            }
+        }
+
+        lock (Gate)
+        {
+            if (_walking || _pendingRoute != null)
+            {
+                Logging.Write("[Route] a walk is already running; the profile request was ignored");
+                return false;
+            }
+            _pendingRoute = route;
+            _pendingRouteLegs = maxLegs;
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// Plans a route to a point and prints every waypoint, without touching the
+    /// keyboard or the mouse. The question it answers is "is the mesh right?", and
+    /// it answers it even while the mover is still being brought up: no clicks, no
+    /// camera, no character movement, just Detour reading the tiles.
+    /// </summary>
+    private static void StartRouteReport(string spec)
+    {
+        var thread = new Thread(() => RouteReport(spec));
+        thread.IsBackground = true;
+        thread.Name = "ClickAimRouteReport";
+        thread.Start();
+    }
+
+    private static void RouteReport(string spec)
+    {
+        try
+        {
+            double[] parts = ParseNumbers(spec);
+            if (parts.Length < 2)
+            {
+                Logging.Write("[Route] --clickaim-route wants x,y[,z]: got \"" + spec + "\"");
+                return;
+            }
+
+            double x, y;
+            if (!ClickAimPositions.TryRead(out x, out y))
+            {
+                Logging.Write("[Route] no player position - is the character in the world?");
+                return;
+            }
+
+            double z = ClickAimPositions.Z();
+            if (double.IsNaN(z)) z = 0.0;
+
+            var nav = Navigator.TripperNavigator;
+            if (!nav.IsLoaded)
+            {
+                Logging.Write("[Route] Navigation.dll is not loaded; nothing to plan with");
+                return;
+            }
+
+            uint mapId = ResolveMap((uint)NavGridStore.MapId, x, y);
+            if (mapId == uint.MaxValue) { Logging.Write("[Route] cannot plan without the client map ID"); return; }
+            var from = new System.Numerics.Vector3((float)x, (float)y, (float)z);
+            var to = new System.Numerics.Vector3((float)parts[0], (float)parts[1],
+                                                 (float)(parts.Length > 2 ? parts[2] : 0.0));
+
+            Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                "[Route] plan only, no walking: ({0:F1}, {1:F1}, {2:F1}) -> ({3:F1}, {4:F1}{5}) on map {6}",
+                from.X, from.Y, from.Z, to.X, to.Y,
+                parts.Length > 2 ? ", " + to.Z.ToString("F1", CultureInfo.InvariantCulture) : ", height unknown",
+                mapId));
+
+            nav.EnsureTilesAroundPosition(mapId, from, Navigator.LoadTilesAroundRadius);
+            nav.EnsureTilesAroundPosition(mapId, to, Navigator.LoadTilesAroundRadius);
+
+            var snappedFrom = from;
+            var snappedTo = to;
+            if (!MeshQuery.SnapLogged(nav, mapId, from, "player", out snappedFrom)) return;
+            if (!MeshQuery.SnapLogged(nav, mapId, to, "goal", out snappedTo)) return;
+
+            Tripper.Navigation.PathFindResult result = nav.FindPath(mapId, snappedFrom, snappedTo, true);
+            if (result == null || !result.Status.Succeeded || result.Points == null || result.Points.Length < 2)
+            {
+                Logging.Write("[Route] no path (status "
+                    + (result == null ? "null" : result.Status.ToString())
+                    + "); the probe's polygon report says whether the mesh is empty or the filter refuses it");
+                return;
+            }
+
+            double straight = ClickAimMath.Len(snappedTo.X - snappedFrom.X, snappedTo.Y - snappedFrom.Y);
+            double length = 0.0;
+            for (int i = 1; i < result.Points.Length; i++)
+                length += ClickAimMath.Len(result.Points[i].X - result.Points[i - 1].X,
+                                           result.Points[i].Y - result.Points[i - 1].Y);
+
+            Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                "[Route] {0} points, {1:F1} yd for a {2:F1} yd straight line ({3:F1} ms)",
+                result.Points.Length, length, straight,
+                result.Elapsed.TotalMilliseconds));
+
+            int shown = Math.Min(result.Points.Length, 60);
+            for (int i = 0; i < shown; i++)
+            {
+                Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                    "[Route]   {0,2}: ({1,9:F1}, {2,9:F1}, {3,7:F1})",
+                    i + 1, result.Points[i].X, result.Points[i].Y, result.Points[i].Z));
+            }
+            if (shown < result.Points.Length)
+                Logging.Write("[Route]   ... " + (result.Points.Length - shown) + " more");
+        }
+        catch (Exception ex)
+        {
+            Logging.Write("[Route] plan failed: " + ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// <c>--lua-probe</c>: what the client's Lua answers to on this build, and what is on
+    /// the action bar. One shot, read-mostly, no walking. Every line is a real call whose
+    /// result is printed, so a missing global shows up as its own error rather than being
+    /// assumed to work.
+    /// </summary>
+    private static void LuaProbe()
+    {
+        string report;
+        GameLua? lua = GameLua.TryOpen(180, out report);
+        if (lua == null)
+        {
+            Logging.Write("[Lua] " + report);
+            return;
+        }
+
+        try
+        {
+            Logging.Write("[Lua] " + report);
+            foreach (string line in lua.Probe()) Logging.Write("[Lua]   " + line);
+
+            List<GameLua.ActionSlot> bar = lua.ReadActionBar();
+            Logging.Write("[Lua] action bar: " + bar.Count + " slot(s) filled");
+            foreach (GameLua.ActionSlot slot in bar) Logging.Write("[Lua]   " + slot);
+            if (lua.Error != null) Logging.Write("[Lua] last error: " + lua.Error);
+            Logging.Write("[Lua] " + lua.Calls + " call(s) answered by the client's Lua");
+        }
+        catch (Exception ex)
+        {
+            Logging.Write("[Lua] probe threw: " + ex.Message);
+        }
+        finally
+        {
+            lua.Dispose();
+        }
+    }
+
+    /// <summary>Every number in a string, separators and spaces ignored.</summary>
+    private static double[] ParseNumbers(string text)
+    {
+        var values = new List<double>();
+        if (text == null) return values.ToArray();
+        int start = -1;
+        for (int i = 0; i <= text.Length; i++)
+        {
+            bool numeric = i < text.Length &&
+                (char.IsDigit(text[i]) || text[i] == '-' || text[i] == '+' || text[i] == '.');
+            if (numeric && start < 0) start = i;
+            if (!numeric && start >= 0)
+            {
+                double v;
+                if (double.TryParse(text.Substring(start, i - start), NumberStyles.Float,
+                        CultureInfo.InvariantCulture, out v))
+                    values.Add(v);
+                start = -1;
+            }
+        }
+        return values.ToArray();
+    }
+
+    private static void ParseCommandLine()
+    {
+        try
+        {
+            string[] args = Environment.GetCommandLineArgs();
+
+            // Pre-pass: --clickaim-profile depends on these, and argument order
+            // is the user's business, not ours.
+            int questId = 0;
+            int profileLegs = 0;
+            bool startNearest = false;
+            bool wholeProfile = false;
+            int grindMinutes = 0;              // 0 = until stopped
+            for (int i = 0; i < args.Length; i++)
+            {
+                string a = args[i] ?? "";
+                if (a.Equals("--profile-quest", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+                    int.TryParse(args[i + 1], out questId);
+                else if (a.Equals("--profile-legs", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+                    int.TryParse(args[i + 1], out profileLegs);
+                else if (a.Equals("--profile-nearest", StringComparison.OrdinalIgnoreCase))
+                    startNearest = true;
+                else if (a.Equals("--profile-all", StringComparison.OrdinalIgnoreCase))
+                    wholeProfile = true;
+                else if (a.Equals("--grind-minutes", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+                    int.TryParse(args[i + 1], out grindMinutes);
+                else if (a.Equals("--navtiles", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+                    NavGridStore.Root = args[i + 1];
+                else if (a.Equals("--navmap", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+                {
+                    int mapId;
+                    if (int.TryParse(args[i + 1], out mapId)) NavGridStore.MapId = mapId;
+                }
+            }
+
+            for (int i = 0; i < args.Length; i++)
+            {
+                string arg = args[i] ?? "";
+                string spec = null;
+                string profile = null;
+                if (arg.Equals("--clickaim-walk", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (i + 1 < args.Length) spec = args[i + 1];
+                }
+                else if (arg.StartsWith("--clickaim-walk=", StringComparison.OrdinalIgnoreCase))
+                {
+                    spec = arg.Substring("--clickaim-walk=".Length);
+                }
+                else if (arg.Equals("--keywalk", StringComparison.OrdinalIgnoreCase))
+                {
+                    // BloogBot's movement: write the heading, hold the forward key. No
+                    // camera and no pixels - see ClickAimKeySteer.
+                    string kspec = i + 1 < args.Length ? args[i + 1] : null;
+                    if (kspec != null && kspec.StartsWith("--", StringComparison.Ordinal)) kspec = null;
+                    var kw = new Thread(() => ClickAimKeySteer.Run(kspec));
+                    kw.IsBackground = true;
+                    kw.Name = "ClickAimKeySteer";
+                    kw.Start();
+                    continue;
+                }
+                else if (arg.StartsWith("--keywalk=", StringComparison.OrdinalIgnoreCase))
+                {
+                    string kspec = arg.Substring("--keywalk=".Length);
+                    var kw = new Thread(() => ClickAimKeySteer.Run(kspec));
+                    kw.IsBackground = true;
+                    kw.Name = "ClickAimKeySteer";
+                    kw.Start();
+                    continue;
+                }
+                else if (arg.Equals("--clickdest", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Hunt for the field the client walks toward: click once, snapshot
+                    // the record mid-walk, and find the triple that holds where it
+                    // stopped. See ClickAimDestHunt for why this replaces aiming.
+                    var hunt = new Thread(ClickAimDestHunt.Run);
+                    hunt.IsBackground = true;
+                    hunt.Name = "ClickAimDestHunt";
+                    hunt.Start();
+                    continue;
+                }
+                else if (arg.Equals("--grind", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Circle a grind profile's hotspots and fight what TAB finds. See
+                    // ClickAimGrind for what is measured and what is still guesswork.
+                    string gpath = i + 1 < args.Length ? args[i + 1] : null;
+                    if (gpath != null && gpath.StartsWith("--", StringComparison.Ordinal))
+                        gpath = null;
+                    if (gpath == null)
+                    {
+                        Logging.Write("[Grind] --grind wants a profile path: --grind \"C:\\p\\a.xml\"");
+                        continue;
+                    }
+                    GrindRunner.Start(gpath, grindMinutes);
+                    continue;
+                }
+                else if (arg.StartsWith("--grind=", StringComparison.OrdinalIgnoreCase))
+                {
+                    GrindRunner.Start(arg.Substring("--grind=".Length), grindMinutes);
+                    continue;
+                }
+                else if (arg.Equals("--lua-probe", StringComparison.OrdinalIgnoreCase))
+                {
+                    /* Ask the client's Lua what it answers to, without grinding and without
+                     * walking: attach, call the handful of globals a rotation needs, print the
+                     * action bar, release. On its own thread because attaching finds a gadget
+                     * and samples threads before the first call. */
+                    var lt = new Thread(LuaProbe);
+                    lt.IsBackground = true;
+                    lt.Name = "LuaProbe";
+                    lt.Start();
+                    continue;
+                }
+                else if (arg.Equals("--clickstop", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Does a key press cancel a click-walk on this build? The scan-code fix
+                    // in ClickAimInput is only worth anything if this answers yes.
+                    var st = new Thread(ClickAimStopTest.Run);
+                    st.IsBackground = true;
+                    st.Name = "ClickAimStopTest";
+                    st.Start();
+                    continue;
+                }
+                else if (arg.Equals("--sigscan", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Winkr's scanner + resig.py, ported: see WowBSigScan. Runs once, in the
+                    // attached client, and answers "does this function exist on THIS build".
+                    var scan = new Thread(Styx.WoWInternals.WowBSigScan.Run);
+                    scan.IsBackground = true;
+                    scan.Name = "WowBSigScan";
+                    scan.Start();
+                    continue;
+                }
+                else if (arg.Equals("--clickaim-calibrate", StringComparison.OrdinalIgnoreCase))
+                {
+                    var cal = new Thread(ClickAimSelfCalibration.Run);
+                    cal.IsBackground = true;
+                    cal.Name = "ClickAimSelfCalibration";
+                    cal.Start();
+                    continue;
+                }
+                else if (arg.Equals("--clickaim-route", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Plan and print, never walk. This is the mesh test: the mover
+                    // is not in the loop, so what comes back is Detour's opinion and
+                    // nothing else.
+                    if (i + 1 < args.Length) StartRouteReport(args[i + 1]);
+                    continue;
+                }
+                else if (arg.StartsWith("--clickaim-route=", StringComparison.OrdinalIgnoreCase))
+                {
+                    StartRouteReport(arg.Substring("--clickaim-route=".Length));
+                    continue;
+                }
+                else if (arg.Equals("--clickaim-profile", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (i + 1 < args.Length) profile = args[i + 1];
+                }
+                else if (arg.StartsWith("--clickaim-profile=", StringComparison.OrdinalIgnoreCase))
+                {
+                    profile = arg.Substring("--clickaim-profile=".Length);
+                }
+
+                if (profile != null)
+                {
+                    StartProfile(profile, questId, profileLegs, startNearest, wholeProfile);
+                    continue;
+                }
+
+                if (spec == null) continue;
+
+                TryQueueSpec(spec, "command line");
+            }
+
+            Logging.Write("[NavGrid] tiles: " + NavGridStore.Root + " (map " + NavGridStore.MapId + ")");
+        }
+        catch (Exception ex)
+        {
+            Logging.Write("[ClickAim] could not read the command line: " + ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Accepts two forms: "x,y[,tolerance]" for a world position, or a single number
+    /// for "that many yards straight ahead", which needs no map orientation.
+    /// </summary>
+    private static bool TryQueueSpec(string spec, string origin)
+    {
+        // A profile is a list of waypoints, not a point: "Settings\Ashenvale.xml"
+        // or "profile:<path>" in clickaim-walk.txt loads and walks it.
+        string trimmed = (spec ?? "").Trim();
+        if (trimmed.Length > 4 &&
+            (trimmed.EndsWith(".xml", StringComparison.OrdinalIgnoreCase) ||
+             trimmed.StartsWith("profile:", StringComparison.OrdinalIgnoreCase)))
+        {
+            string path = trimmed.StartsWith("profile:", StringComparison.OrdinalIgnoreCase)
+                ? trimmed.Substring("profile:".Length).Trim()
+                : trimmed;
+            if (path.Length >= 2 && path.StartsWith("\"", StringComparison.Ordinal) &&
+                path.EndsWith("\"", StringComparison.Ordinal))
+            {
+                path = path.Substring(1, path.Length - 2);
+            }
+            Logging.Write("[Route] " + origin + " request: profile " + path);
+            return StartProfile(path, 0, 0, false, false);
+        }
+
+        /* "grind:<path>" in clickaim-walk.txt grinds that profile, and a bare "stop"
+         * ends it - both go through the request file so the buttons, the .cmd scripts and
+         * a hand-typed line all behave the same. */
+        /* A bare "lua" in clickaim-walk.txt asks the client what its Lua answers to, on the
+         * bot that is already running - the same thing --lua-probe does at startup, without
+         * restarting anything. */
+        if (trimmed.Equals("lua", StringComparison.OrdinalIgnoreCase))
+        {
+            Logging.Write("[Lua] " + origin + " request: probe");
+            var probe = new Thread(LuaProbe);
+            probe.IsBackground = true;
+            probe.Name = "LuaProbe";
+            probe.Start();
+            return true;
+        }
+
+        if (trimmed.Equals("stop", StringComparison.OrdinalIgnoreCase))
+        {
+            Logging.Write("[ClickAim] " + origin + " request: stop");
+            GrindRunner.Stop();
+            return true;
+        }
+
+        if (trimmed.StartsWith("grind:", StringComparison.OrdinalIgnoreCase))
+        {
+            string gpath = trimmed.Substring("grind:".Length).Trim();
+            if (gpath.Length >= 2 && gpath.StartsWith("\"", StringComparison.Ordinal) &&
+                gpath.EndsWith("\"", StringComparison.Ordinal))
+            {
+                gpath = gpath.Substring(1, gpath.Length - 2);
+            }
+            Logging.Write("[Route] " + origin + " request: grind " + gpath);
+            return GrindRunner.Start(gpath, 0);
+        }
+
+        // "route:x,y[,z]" in clickaim-walk.txt plans and prints without walking,
+        // which is how the mesh gets checked while the mover is still being worked on.
+        // "calibrate" in the request file runs the four-probe measurement.
+        if (trimmed.Equals("calibrate", StringComparison.OrdinalIgnoreCase))
+        {
+            Logging.Write("[Calibrate] " + origin + " request: measuring the click model");
+            var cal = new Thread(ClickAimSelfCalibration.Run);
+            cal.IsBackground = true;
+            cal.Name = "ClickAimSelfCalibration";
+            cal.Start();
+            return true;
+        }
+
+        if (trimmed.StartsWith("route:", StringComparison.OrdinalIgnoreCase))
+        {
+            Logging.Write("[Route] " + origin + " request: plan only, no walking");
+            StartRouteReport(trimmed.Substring("route:".Length));
+            return true;
+        }
+
+        double yards;
+        if (TryParseRelative(spec, out yards))
+        {
+            Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                "[ClickAim] {0} request: {1:F0} yd ahead (a world point is the better test: "
+                + "write x,y into the request file)", origin, yards));
+            return WalkRelative(yards);
+        }
+
+        double x, y, tol;
+        if (!TryParseSpec(spec, out x, out y, out tol))
+        {
+            Logging.Write("[ClickAim] ignoring \"" + spec + "\" from the "
+                          + origin + ": expected x,y[,tolerance] or a distance in yards");
+            return false;
+        }
+
+        Logging.Write(string.Format(CultureInfo.InvariantCulture,
+            "[ClickAim] {0} request: point ({1:F1}, {2:F1}), tolerance {3:F1} yd", origin, x, y, tol));
+
+        // Say what the mesh thinks the target is before walking to it: the entered
+        // point has no height, and the height is what finds the right floor of a
+        // multi-level area. This line is the answer to "where am I actually going".
+        ReportPoint(x, y);
+
+        if (WalkNow(x, y, tol)) return true;
+
+        Logging.Write("[ClickAim] a walk is already running; the request was ignored");
+        return false;
+    }
+
+    /// <summary>
+    /// Resolves an entered point against the mesh and prints where it landed and at
+    /// what height. Purely informational - <see cref="RouteRunner"/> snaps again when
+    /// it plans - but it is the difference between "the walk failed" and "the point
+    /// you typed is 40 yd above the ground and the mesh found it anyway".
+    /// </summary>
+    private static void ReportPoint(double x, double y)
+    {
+        try
+        {
+            Tripper.Navigation.Navigator nav = Navigator.TripperNavigator;
+            if (nav == null || !nav.IsLoaded)
+            {
+                Logging.Write("[Point] Navigation.dll is not loaded, so the point cannot be placed on the mesh");
+                return;
+            }
+
+            double px, py;
+            double z = ClickAimPositions.Z();
+            if (!ClickAimPositions.TryRead(out px, out py)) z = 0.0;
+            if (double.IsNaN(z)) z = 0.0;
+
+            uint mapId = ResolveMap((uint)NavGridStore.MapId, px, py);
+            if (mapId == uint.MaxValue) { Logging.Write("[Point] client map ID unreadable; nothing will be walked"); return; }
+            var target = new System.Numerics.Vector3((float)x, (float)y, 0f);
+            nav.EnsureTilesAroundPosition(mapId, target, Navigator.LoadTilesAroundRadius);
+
+            var snapped = target;
+            if (!MeshQuery.SnapLogged(nav, mapId, target, "target", out snapped))
+            {
+                Logging.Write("[Point] the mesh has no ground at (" + x.ToString("F1", CultureInfo.InvariantCulture)
+                              + ", " + y.ToString("F1", CultureInfo.InvariantCulture)
+                              + "); nothing will be walked");
+                return;
+            }
+
+            double straight = ClickAimMath.Len(x - px, y - py);
+            double climb = snapped.Z - z;
+            Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                "[Point] target ({0:F1}, {1:F1}) -> mesh point ({2:F1}, {3:F1}, {4:F1}) on map {5}; "
+                + "{6:F1} yd from the player, {7:F1} yd higher",
+                x, y, snapped.X, snapped.Y, snapped.Z, mapId, straight, climb));
+        }
+        catch (Exception ex)
+        {
+            Logging.Write("[Point] could not place the target on the mesh: " + ex.Message);
+        }
+    }
+
+    private static bool TryParseRelative(string text, out double yards)
+    {
+        yards = 0.0;
+        if (string.IsNullOrWhiteSpace(text)) return false;
+        if (text.IndexOf(',') >= 0) return false;
+        if (!double.TryParse(text.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out yards)) return false;
+        if (yards < 5.0 || yards > 120.0) return false;
+        return true;
+    }
+
+    private static bool TryParseSpec(string text, out double x, out double y, out double tolerance)
+    {
+        x = 0;
+        y = 0;
+        tolerance = 2.0;
+        if (string.IsNullOrWhiteSpace(text)) return false;
+
+        string[] parts = text.Trim().Split(',');
+        if (parts.Length < 2 || parts.Length > 3) return false;
+
+        if (!double.TryParse(parts[0].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out x)) return false;
+        if (!double.TryParse(parts[1].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out y)) return false;
+        if (parts.Length == 3 &&
+            !double.TryParse(parts[2].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out tolerance))
+            return false;
+
+        if (Math.Abs(x) >= 100000.0 || Math.Abs(y) >= 100000.0) return false;
+        if (tolerance <= 0.0 || tolerance > 50.0) tolerance = 2.0;
+        return true;
+    }
+
+    private static void Worker()
+    {
+        string lastSeen = null;
+
+        while (true)
+        {
+            try
+            {
+                CheckRequestFile(ref lastSeen);
+
+                List<RoutePoint> route = null;
+                int routeLegs = 0;
+                double[] request = null;
+                lock (Gate)
+                {
+                    if (!_walking && _pendingRoute != null)
+                    {
+                        route = _pendingRoute;
+                        routeLegs = _pendingRouteLegs;
+                        _pendingRoute = null;
+                        _walking = true;
+                    }
+                    else if (!_walking && Pending.Count > 0)
+                    {
+                        request = Pending.Dequeue();
+                        _walking = true;
+                    }
+                }
+
+                if (route != null)
+                {
+                    try
+                    {
+                        RouteRunner.Run(route, routeLegs);
+                    }
+                    finally
+                    {
+                        lock (Gate) { _walking = false; }
+                    }
+                }
+                else if (request != null)
+                {
+                    try
+                    {
+                        RunWalk(request[0], request[1], request[2]);
+                    }
+                    finally
+                    {
+                        lock (Gate) { _walking = false; }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Logging.Write("[ClickAim] pilot error: " + ex.Message);
+                lock (Gate) { _walking = false; }
+            }
+
+            Thread.Sleep(500);
+        }
+    }
+
+    private static void CheckRequestFile(ref string lastSeen)
+    {
+        string path = RequestPath;
+        if (!File.Exists(path))
+        {
+            lastSeen = null;
+            return;
+        }
+
+        string text;
+        try { text = File.ReadAllText(path).Trim(); }
+        catch (IOException) { return; }          // the editor is still writing it
+        catch (UnauthorizedAccessException) { return; }
+
+        if (string.IsNullOrEmpty(text) || text == lastSeen) return;
+
+        lastSeen = text;
+        if (!TryQueueSpec(text, "file")) return;
+
+        try { File.Delete(path); }
+        catch { /* the next request can reuse the same text */ }
+    }
+
+    private static void RunWalk(double x, double y, double tolerance)
+    {
+        int waited = 0;
+        double startDistance = double.NaN;
+        while (waited < PlayerWaitMs)
+        {
+            double px, py;
+            if (ClickAimPositions.TryRead(out px, out py))
+            {
+                startDistance = ClickAimMath.Len(x - px, y - py);
+                Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                    "[ClickAim] from ({0:F1}, {1:F1}) [{2}] to ({3:F1}, {4:F1}) - {5:F1} yd",
+                    px, py, ClickAimPositions.Source, x, y, startDistance));
+                break;
+            }
+            Thread.Sleep(500);
+            waited += 500;
+        }
+
+        if (waited >= PlayerWaitMs)
+        {
+            Logging.Write("[ClickAim] no player position after " + (PlayerWaitMs / 1000)
+                          + " s; is the character in the world?");
+            return;
+        }
+
+        /* Route on the mmaps when they are there.
+         *
+         * A single click walks a straight line, and a straight line between two
+         * points in Ashenvale is usually a tree, a rock or a cliff. The mesh turns
+         * the same request into a polyline that goes around them - which is the
+         * entire reason the mmaps are loaded. Falls back to the straight click only
+         * when no mesh can be queried, and says which one it used.
+         */
+        bool mesh = false;
+        try { mesh = RouteRunner.MeshReady(); }
+        catch (Exception ex) { Logging.Write("[ClickAim] mesh probe failed: " + ex.Message); }
+
+        if (mesh)
+        {
+            double z = ClickAimPositions.Z();
+            if (double.IsNaN(z)) z = 0.0;
+
+            Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                "[ClickAim] routing {0:F1} yd on the mesh; a straight click is only the fallback",
+                startDistance));
+
+            var route = new List<RoutePoint>
+            {
+                new RoutePoint { X = x, Y = y, Z = z, Kind = "WalkTo", Label = "single point" }
+            };
+            RouteRunner.Run(route, 0);
+            return;
+        }
+
+        Logging.Write("[ClickAim] no mesh for this map - walking the straight line");
+        ClickAimPilot.WalkTo(x, y, tolerance, PilotTimeoutMs, true);
+    }
+}

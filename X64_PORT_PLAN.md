@@ -149,6 +149,43 @@ All additive — the classic x86/3.3.5a path is byte-for-byte untouched:
   enter **read-only WowB mode** (reader created, snapshot logged)
   instead of attempting the EndScene hook.
 
+- `GreenMagic/LuaBridge64.cs` + `Tools/LuaBridgeProbe` — the **execution vector that
+  works on this build**, entirely from outside the process: attach, verify (module canary,
+  `jmp qword ptr [rcx]` gadget, trampoline shape, `kernel32!Sleep`/`GetTickCount64`), start
+  **one** resident payload thread, then `Call(name, arg, results)` per command. The client's
+  Lua thread is found by two signals (per-thread CPU time + RIP sampling with
+  `SuspendThread`/`CONTEXT_CONTROL`) and frozen for the duration of each call, because the
+  2026-10-13 crash was a data race on the `lua_State`, not a broken vector. Proven live:
+  `GetTime`, `UnitName`, `UnitLevel`, `UnitHealth`, `UnitExists`, `UnitGUID`, `UnitClass` all
+  return correct in-game values (`hunt45`, 11/11; the 287-call `hunt46`-protocol run).
+  `--call NAME [--arg TEXT]` is the invocation primitive the action layer will use; it
+  refuses to call a handler whose page this client has not decrypted yet (cold pages hold
+  ciphertext) and says how to warm it. **`--on-lua-thread` runs each command ON the client's
+  own Lua thread** (suspend + saved CONTEXT + RIP/RSP redirect), which is the only way to call
+  anything that raises a FrameScript event: `MoveForwardStart` from an injected thread made the
+  client terminate itself with `ASSERT(FrameScript_IsLuaThread())` (2026-10-13, report read and
+  resolved). `--seq "A ; sleep=1200 ; B"` runs several guarded calls
+  in one session, in order - the shape of the action queue, and the way to test anything that
+  has to be undone. **Verified live (0.5.0): 798 of 798 calls ran with the client's Lua thread
+  frozen, zero faults, 1.14 ms frozen per call, the client alive at the end (the forced-tid
+  escape hatch `--lua-thread N` carried a 791-call run on its own), and the first WRITE went
+  through - `RunScript("print('bbuddy: the bridge can write')")` executed inside the client
+  and the chat frame showed it.** **0.8.0 makes the hijack path self-proving**: the first movement
+  attempt never reached the client at all - `SetThreadContext` was refused because the code asked
+  for `0x0040` (`THREAD_QUERY_INFORMATION`) instead of `THREAD_SET_CONTEXT` (**0x0010**), and the
+  last error was read after `ResumeThread` had overwritten it (hence the useless `failed: 0`).
+  Windows errors are now captured first, the raw `ntdll!NtSetContextThread` NTSTATUS is printed when
+  Win32 refuses, every candidate thread is proved with a real CONTEXT round-trip before a command
+  depends on it (`--check --on-lua-thread`), every write is verified by read-back and retried with
+  `CONTROL|INTEGER`, and a failed takeover is a `[takeover]` line (exit 8) - not a claim that the
+  client's Lua refused something. **The Lua-level gate is separately confirmed dead for `/run`**:
+  `/run MoveForwardStart()` in the chat box answers `*** FORCETAINT_STRONG*** has been blocked from
+  an action only available to the Blizzard UI`, i.e. `MoveForwardStart` is *forbidden* to script
+  code - so the route to movement is a C call on the client's own Lua thread, never an API call.
+  New `--dump va:len,...` copies live (decrypted) pages out read-only, which is the only way to see
+  the movement handlers: exactly those pages hold ciphertext in the offline image.
+  Details + cold-page rule: `LUA_BRIDGE_64.md`.
+
 ## 5. Known gaps / risks
 
 - The x64 platform **builds** (confirmed with .NET on Windows) but has
@@ -233,6 +270,20 @@ a WowB process with a clear log line rather than reading garbage.
 (Code for steps 1–2 has landed: `WowBReader` + the read-only attach mode;
 step 3's engine is scaffolded as `Executor64`/`DX11PresentHook64`. What
 remains at each step is filling in 70291 offsets and live validation.)
+
+**Status after hunt45/hunt46 (live, build 70291):** step 3's hard part is
+solved. Step 3's *call machinery* — getting a return address past the client's
+tail validator at `module+0x1D8E80` — works: a remote thread started at a warm
+`jmp qword ptr [rcx]` gadget, with `lua_pcall` entered through a two-hop
+trampoline (`hunt/hunt45.ps1`), returned real data 11/11 (`GetTime`,
+`UnitHealth`, `UnitLevel`, `UnitExists`, `UnitGUID`, `UnitName`, `UnitClass`,
+`GetMoney`, `IsLoggedIn`). `hunt/hunt46.ps1` then turns it into a *resident*
+bridge: one injected thread serving commands from a mailbox in its own page
+(`CMD`/`SEQ`/`ACK`, `kernel32!Sleep` idle, deadline failsafe), which is the
+interface `Executor64` should implement in-process. Result type words carry a
+value flag (`tt & 0xFF` is the type).
+Steps 1–2 (data pointers, camera/object enumeration) are still offsets work and
+can be served either by `WowBReader` or by the bridge.
 
 1. Fill the data pointers first (read-only milestone: log in-world
    state, player GUID, target GUID, zone text) — no injection needed,

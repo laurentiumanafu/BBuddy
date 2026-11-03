@@ -1,0 +1,146 @@
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using GreenMagic;
+using Styx.WoWInternals;
+
+namespace GreenMagic { sealed class Memory { public IntPtr WindowHandle = new IntPtr(1); } }
+namespace Styx.WoWInternals { sealed class WowBReader { } static class ObjectManager { public static Memory? Wow; public static WowBReader? WowB; } }
+namespace Styx.Logic.Pathing
+{
+    readonly struct WoWPoint
+    {
+        public readonly float X, Y, Z;
+        public WoWPoint(float x, float y, float z) { X = x; Y = y; Z = z; }
+    }
+    sealed class ClickAimMover { public bool KeyMode = true, QuietKeyStop; public void MoveStop() { } }
+    static class ClickAimMath { public static double Len(double x, double y) => Math.Sqrt(x*x + y*y); }
+    static class WowBGrindFactions { public static bool Experimental70707BarSafe(WowBReader r) => true; }
+    sealed class RoutePoint { public float X, Y, Z; public string Kind = ""; }
+    static class WowBDeathCheckpoint
+    {
+        internal sealed class Candidate { public uint Map; public WoWPoint Position; }
+    }
+    static class ClickAimAbort { public static bool Requested; public static bool Wait(int ms) => Requested; }
+    static class Logging { public static void Write(string line) { } }
+    static class RouteRunner
+    {
+        public static bool NoPath;
+        public static bool MeshReady() => true;
+        public static WoWPoint[]? TryCombatMeshPath(double x, double y, RoutePoint target)
+            => NoPath ? null : new[] { new WoWPoint((float)x, (float)y, 0), new WoWPoint(target.X, target.Y, target.Z) };
+    }
+    static class Harness
+    {
+        private enum State { Unknown, Alive, Dead, Ghost }
+        // __RECOVERY_CONSTANTS__
+        private static bool running, ghost, alive, capture, stopOnWalk, promptAlways, invalidGround, moveAtPrompt, moveAtClick;
+        private static int releaseClicks, resurrectClicks, promptCalls, visibleAtPrompt;
+        private static bool lastRequiredClearance;
+        private static double promptRange;
+        private static WoWPoint position;
+        private static List<WoWPoint> npcs = new();
+        private static readonly List<WoWPoint> walks = new();
+        private static bool Allowed(Memory m, WowBReader r, IntPtr h, Func<bool> active) => running && active() && !ClickAimAbort.Requested;
+        private static State ReadState(Memory m, WowBReader r, IntPtr h, WowBDeathCheckpoint.Candidate c, Func<bool> active, out WoWPoint p)
+        { p = position; return !Allowed(m, r, h, active) ? State.Unknown : ghost ? State.Ghost : alive ? State.Alive : State.Dead; }
+        private static bool TryNpcSnapshot(Memory m, WowBReader r, IntPtr h, WowBDeathCheckpoint.Candidate c, Func<bool> active, out WoWPoint p, out List<WoWPoint> units)
+        { p = position; units = npcs; return ReadState(m, r, h, c, active, out _) == State.Ghost; }
+        private static bool SpotSafe(Memory m, WowBReader r, IntPtr h, WowBDeathCheckpoint.Candidate c, Func<bool> active, bool clear)
+            => ReadState(m, r, h, c, active, out _) == State.Ghost && !invalidGround &&
+               WowBCorpseSpotPolicy.InRange(position, c.Position, WowBCorpseSpotPolicy.MaxClickRadius) &&
+               (!clear || WowBCorpseSpotPolicy.ClearEnough(position, npcs, WowBCorpseSpotPolicy.MinNpcClearance));
+        private static bool TryPromptAtSpot(Memory m, WowBReader r, IntPtr h, WowBDeathCheckpoint.Candidate c, Func<bool> active, bool clear, out bool visible)
+        {
+            promptCalls++;
+            if (clear && moveAtPrompt) { moveAtPrompt = false; Surround(); visible = false; return false; }
+            visible = promptAlways || (visibleAtPrompt > 0 && promptCalls >= visibleAtPrompt) ||
+                      WowBCorpseSpotPolicy.Distance(position, c.Position) <= promptRange;
+            return capture && SpotSafe(m, r, h, c, active, clear);
+        }
+        private static bool TrySnapSafeSpot(uint map, WoWPoint candidate, WoWPoint corpse, out WoWPoint snapped)
+        { snapped = candidate; return !invalidGround && WowBCorpseSpotPolicy.InRange(candidate, corpse, WowBCorpseSpotPolicy.MaxClickRadius); }
+        private static bool WalkGhostTo(Memory m, WowBReader r, IntPtr h, WowBDeathCheckpoint.Candidate c, Func<bool> active, ClickAimMover mover, RoutePoint goal, int started, bool stopNear)
+        {
+            if (stopNear) return Allowed(m, r, h, active) && ghost;
+            walks.Add(new WoWPoint(goal.X, goal.Y, goal.Z));
+            if (stopOnWalk) { ClickAimAbort.Requested = true; return false; }
+            if (!Allowed(m, r, h, active) || !ghost) return false;
+            position = walks[walks.Count - 1];
+            return true;
+        }
+        private static bool TryDialogClick(Memory m, WowBReader r, IntPtr h, WowBDeathCheckpoint.Candidate c, Func<bool> active, bool release, bool requireClearance, out string problem)
+        {
+            problem = "fixture";
+            if (!Allowed(m, r, h, active) || !capture) return false;
+            if (release) { if (ghost || alive) return false; releaseClicks++; ghost = true; return true; }
+            if (requireClearance && moveAtClick) { moveAtClick = false; Surround(); return false; }
+            if (!SpotSafe(m, r, h, c, active, requireClearance) ||
+                !(promptAlways || WowBCorpseSpotPolicy.Distance(position, c.Position) <= promptRange)) return false;
+            resurrectClicks++; lastRequiredClearance = requireClearance; ghost = false; alive = true; return true;
+        }
+        // __SEARCH_METHODS__
+        // __RECOVER_METHOD__
+
+        private static void Check(bool condition, string name) { if (!condition) throw new Exception(name); }
+        private static void Reset()
+        {
+            running = ghost = capture = true; alive = stopOnWalk = promptAlways = invalidGround = moveAtPrompt = moveAtClick = false;
+            releaseClicks = resurrectClicks = promptCalls = visibleAtPrompt = 0; lastRequiredClearance = true;
+            promptRange = -1; ClickAimAbort.Requested = RouteRunner.NoPath = false;
+            position = new WoWPoint(0, 25, 0); npcs = new List<WoWPoint>(); walks.Clear();
+        }
+        private static void Surround()
+        {
+            npcs.Clear();
+            for (int i = 0; i < 16; i++)
+                npcs.Add(new WoWPoint((float)(32 * Math.Cos(i * Math.PI / 8)), (float)(32 * Math.Sin(i * Math.PI / 8)), 0));
+        }
+        public static void Main()
+        {
+            var m = new Memory(); var r = new WowBReader(); var mover = new ClickAimMover();
+            var checkpoint = new WowBDeathCheckpoint.Candidate { Map = 0, Position = new WoWPoint(0, 0, 0) };
+            Func<bool> active = () => running;
+            Reset(); Surround(); promptAlways = true;
+            var tried = new bool[4];
+            Check(FindSafeSpot(m, r, IntPtr.Zero, checkpoint, active, mover, Environment.TickCount, tried, out bool fallback) && fallback,
+                "crowded four directions fall back rather than stop");
+            Check(Array.TrueForAll(tried, x => x) && walks.Count == 4, "four separate reachable scout locations visited");
+            for (int i = 0; i < walks.Count; i++) for (int j = 0; j < i; j++)
+                Check(WowBCorpseSpotPolicy.Distance(walks[i], walks[j]) > 3, "distinct scout positions");
+            Reset(); Surround(); promptRange = 10; tried = new bool[4];
+            Check(FindSafeSpot(m, r, IntPtr.Zero, checkpoint, active, mover, Environment.TickCount, tried, out fallback) && fallback &&
+                  Array.TrueForAll(tried, x => x) && walks.Count >= 5 && WowBCorpseSpotPolicy.Distance(position, checkpoint.Position) <= 10,
+                  "fallback moves closer when no prompt at scout positions");
+            Reset(); npcs.Add(position); promptAlways = true; tried = new bool[4];
+            Check(FindSafeSpot(m, r, IntPtr.Zero, checkpoint, active, mover, Environment.TickCount, tried, out fallback) && !fallback && walks.Count == 1,
+                  "a prompt with clearance uses preferred spot");
+            Reset(); Surround(); promptAlways = true; RouteRunner.NoPath = true; tried = new bool[4];
+            Check(FindSafeSpot(m, r, IntPtr.Zero, checkpoint, active, mover, Environment.TickCount, tried, out fallback) && fallback &&
+                  Array.TrueForAll(tried, x => x) && walks.Count == 0, "unreachable scouts still fall back at current prompt");
+            Reset(); Surround(); promptAlways = true; capture = false; tried = new bool[4];
+            Check(!FindSafeSpot(m, r, IntPtr.Zero, checkpoint, active, mover, Environment.TickCount, tried, out fallback), "unreadable prompt cannot authorize fallback");
+            Reset(); Surround(); promptAlways = true; stopOnWalk = true; tried = new bool[4];
+            Check(!FindSafeSpot(m, r, IntPtr.Zero, checkpoint, active, mover, Environment.TickCount, tried, out fallback) && walks.Count == 1, "STOP interrupts search before fallback");
+            Reset(); Surround(); promptAlways = true; ghost = false; tried = new bool[4];
+            Check(!FindSafeSpot(m, r, IntPtr.Zero, checkpoint, active, mover, Environment.TickCount, tried, out fallback) && walks.Count == 0, "unconfirmed ghost cannot walk or resurrect");
+            Reset(); Surround(); promptAlways = true; tried = new[] { true, true, true, true };
+            Check(FindSafeSpot(m, r, IntPtr.Zero, checkpoint, active, mover, Environment.TickCount, tried, out fallback) && fallback && walks.Count == 0,
+                  "rescout shares four-attempt budget");
+            Reset(); Surround(); visibleAtPrompt = 11; tried = new bool[4];
+            Check(FindSafeSpot(m, r, IntPtr.Zero, checkpoint, active, mover, Environment.TickCount, tried, out fallback) && fallback && promptCalls >= 11,
+                  "fallback waits for a delayed prompt after moving inward");
+            Reset(); promptAlways = true; moveAtPrompt = true; tried = new bool[4];
+            Check(FindSafeSpot(m, r, IntPtr.Zero, checkpoint, active, mover, Environment.TickCount, tried, out fallback) && fallback &&
+                  Array.TrueForAll(tried, x => x), "NPC moving close during capture starts four-direction search");
+            Reset(); Surround(); promptAlways = true; ghost = false; ObjectManager.Wow = m; ObjectManager.WowB = r;
+            Check(TryRecover(checkpoint, mover, active) && releaseClicks == 1 && resurrectClicks == 1 &&
+                  !lastRequiredClearance && alive && walks.Count == 4,
+                  "crowded recovery visits four locations, resurrects in fallback and resumes after confirmed alive");
+            Reset(); promptAlways = true; ghost = false; moveAtClick = true; ObjectManager.Wow = m; ObjectManager.WowB = r;
+            Check(TryRecover(checkpoint, mover, active) && resurrectClicks == 1 && !lastRequiredClearance && alive && walks.Count == 4,
+                  "NPC approaching before preferred click triggers scouting and fallback, not a stop");
+            Console.WriteLine("Corpse search and fallback fixtures passed (synthetic routes and prompts only).");
+        }
+    }
+}

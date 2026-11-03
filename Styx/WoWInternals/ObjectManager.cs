@@ -16,9 +16,9 @@ namespace Styx.WoWInternals
     public static class ObjectManager
     {
         #region Constants - WoW 3.3.5a Build 12340
-        internal const int SupportedBuild = 12340;
-        internal const int SupportedBuildWowB = 70291;
-        internal static bool IsSupportedBuild(int build) => build == SupportedBuild || build == SupportedBuildWowB;
+        internal const int SupportedBuild = ClientAttachPolicy.SupportedLegacyBuild;
+        internal const int SupportedBuildWowB = ClientAttachPolicy.SupportedModernBuild;
+        internal static bool IsSupportedBuild(int build) => ClientAttachPolicy.IsRegisteredBuild(build);
 
         /// <summary>
         /// Extracts the client build number from the process version resource.
@@ -149,6 +149,13 @@ namespace Styx.WoWInternals
         /// (WowB.exe). Only set when attached to a 64-bit client.
         /// </summary>
         public static WowBReader? WowB { get; private set; }
+
+        /// <summary>
+        /// Latest best-effort 70291 read-only observation; null when capture
+        /// fails. Separate from legacy ObjectList, whose uint addresses and
+        /// 64-bit GUID keys cannot represent modern objects safely.
+        /// </summary>
+        public static WowBWorldSnapshot? WowBWorld { get; private set; }
         public static bool IsInitialized => Wow != null;
 
         // cached collections (underlying data refreshed every ObjectManager.Update())
@@ -274,16 +281,26 @@ namespace Styx.WoWInternals
             if (memory == null)
                 throw new ArgumentNullException(nameof(memory));
             
-            Wow = memory;
-            
-            // Trouver le processus WoW
-            WoWProcess = Process.GetProcesses()
+            // Check the experimental build before publishing any attached state.
+            Process? targetProcess = Process.GetProcesses()
                 .FirstOrDefault(p => p.Id == memory.ProcessId);
-            
+            int initialBuild = targetProcess == null ? -1 : GetBuildNumber(targetProcess);
+            if (initialBuild == ClientAttachPolicy.ExperimentalBuild)
+            {
+                if (!memory.Is64BitTarget)
+                    throw new InvalidOperationException("Experimental build 70707 requires a 64-bit client.");
+                Logging.Write("[Attach] EXPERIMENTAL 70707: using candidate globals with unvalidated 70291 layouts. Memory reads and bot actions can be incorrect; this is not validated support.");
+            }
+
+            Wow = memory;
+            WowB = null;
+            WowBWorld = null;
+            WoWProcess = targetProcess;
+
             if (WoWProcess != null)
             {
                 WoWProcess.EnableRaisingEvents = true;
-                
+
                 // Check the build
                 try
                 {
@@ -292,12 +309,15 @@ namespace Styx.WoWInternals
                     // WowB.exe reports FileVersion 1.60.1.70291 as raw parts 160.1.7029.1;
                     // GetBuildNumber recombines those into 70291.
                     bool isWowBByName = WoWProcess.ProcessName.Equals("WowB", StringComparison.OrdinalIgnoreCase);
+                    bool experimental = build == ClientAttachPolicy.ExperimentalBuild;
                     if (!IsSupportedBuild(build) && !isWowBByName)
                     {
-                        Logging.Write($"[ObjectManager] Build {build} not supported (expected: {SupportedBuild} or {SupportedBuildWowB})");
-                        throw new Exception($"WoW build {build} not supported. Required build: {SupportedBuild} or {SupportedBuildWowB}");
+                        Logging.Write($"[ObjectManager] Build {build} not registered (default: {ClientAttachPolicy.DefaultBuild})");
+                        throw new Exception($"WoW build {build} not registered. Default build: {ClientAttachPolicy.DefaultBuild}");
                     }
-                    Logging.WriteDebug($"[ObjectManager] WoW build {build} detected - OK{(isWowBByName ? " (WowB client, accepted by process name)" : "")}");
+                    Logging.WriteDebug(experimental
+                        ? "[ObjectManager] Build 70707 automatically accepted; its reader offsets remain experimental."
+                        : $"[ObjectManager] WoW build {build} detected - OK{(isWowBByName ? " (WowB client, accepted by process name)" : "")}");
                 }
                 catch (Exception ex) when (ex is not InvalidOperationException)
                 {
@@ -326,9 +346,71 @@ namespace Styx.WoWInternals
                 // DX11PresentHook64 once the graphics offsets land
                 // (X64_PORT_PLAN.md §6). The reader validates the 64-bit
                 // read path and logs a full state snapshot on attach.
-                WowB = new WowBReader(memory);
+                WowB = new WowBReader(memory, initialBuild == ClientAttachPolicy.ExperimentalBuild);
+                if (initialBuild == ClientAttachPolicy.ExperimentalBuild)
+                {
+                    try { Logging.Write(WowB.DescribeExperimental70707()); }
+                    catch (Exception ex) { Logging.Write($"[70707 candidates] Diagnostic read failed: {ex.Message}"); }
+                }
+                Update();
                 Logging.Write("[ObjectManager] Attached to a 64-bit client (WowB) — read-only mode.");
-                Logging.Write($"[ObjectManager] WowB snapshot: {WowB.DescribeSnapshot()}");
+                WowBWorldSnapshot? world = WowBWorld;
+                int initialSnapshotSlots = WowB.LastPoolSlotsScanned;
+                if (initialBuild == ClientAttachPolicy.ExperimentalBuild)
+                {
+                    // Research-only rescans. Nothing here authorizes gameplay.
+                    try
+                    {
+                        Logging.Write("[70707 player record] " + WowB.DiagnoseExperimentalPlayer());
+                        WowBGuid selectedGuid = WowB.ReadTargetGuid();
+                        Logging.Write("[70707 selected record] " + WowB.DiagnoseTarget(selectedGuid));
+                        try { Logging.Write("[70707 action research] " + WowB.DescribeExperimentalActionBar()); }
+                        catch (Exception ex) { Logging.Write("[70707 action research] unavailable: " + ex.Message); }
+                    }
+                    catch (Exception ex) { Logging.Write("[70707 record diagnostics] unavailable: " + ex.Message); }
+                }
+                Logging.Write(world == null
+                    ? initialBuild == ClientAttachPolicy.ExperimentalBuild
+                        ? $"[ObjectManager] 70707 pool snapshot unavailable (capture failed or changed); {initialSnapshotSlots} slots scanned with the unverified 70291 layout."
+                        : "[ObjectManager] WowB pool snapshot unavailable (capture failed or changed during scan)."
+                    : initialBuild == ClientAttachPolicy.ExperimentalBuild
+                        ? $"[ObjectManager] 70707 diagnostic snapshot: {world.Units.Count} structurally matched candidate units, {world.PoolSlotsScanned} slots scanned, local={world.LocalGuid}, target={world.TargetGuid}; gameplay layouts unverified."
+                        : $"[ObjectManager] WowB pool snapshot: {world.Units.Count} validated units, {world.PoolSlotsScanned} slots scanned, local={world.LocalGuid}, target={world.TargetGuid}.");
+                if (world != null && !world.TargetGuid.IsEmpty)
+                {
+                    if (world.TryGetSelectedTarget(out WowBObservedUnit selected))
+                    {
+                        string distance = "unknown";
+                        if (world.TryGetLocalPlayer(out WowBObservedUnit player))
+                            distance = player.Location.Distance(selected.Location).ToString("F1", System.Globalization.CultureInfo.InvariantCulture);
+                        string label = initialBuild == ClientAttachPolicy.ExperimentalBuild ? "Selected target candidate (transform unverified)" : "Selected target found in snapshot";
+                        Logging.Write($"[ObjectManager] {label}: guid={selected.Guid}, pos=({selected.Location.X:F1}, {selected.Location.Y:F1}, {selected.Location.Z:F1}), distance={distance} yd, playerVtable={selected.HasPlayerVtable}.");
+                    }
+                    else
+                    {
+                        Logging.Write("[ObjectManager] Selected target is not in the validated unit snapshot (type or layout may be unsupported).");
+                        // A second read-only scan can help distinguish an
+                        // absent record from a rejected layout. Do not let
+                        // optional diagnostics prevent the actual attach.
+                        try
+                        {
+                            Logging.Write($"[ObjectManager] Target diagnostic (separate rescan): {WowB.DiagnoseTarget(world.TargetGuid)}");
+                        }
+                        catch (Exception ex)
+                        {
+                            Logging.Write($"[ObjectManager] Target diagnostic unavailable: {ex.Message}");
+                        }
+                    }
+                }
+                try
+                {
+                    Logging.Write($"[ObjectManager] WowB snapshot: {WowB.DescribeSnapshot()}");
+                }
+                catch (Exception ex) when (initialBuild == ClientAttachPolicy.ExperimentalBuild)
+                {
+                    // These optional 70291 diagnostic reads are not a 70707 attach prerequisite.
+                    Logging.Write($"[ObjectManager] Experimental 70707 snapshot unavailable: {ex.Message}");
+                }
                 Logging.WriteDebug("[ObjectManager] Initialized successfully (WowB read-only)");
                 return;
             }
@@ -433,6 +515,24 @@ namespace Styx.WoWInternals
             
             lock (_updateLock)
             {
+                if (Wow.Is64BitTarget)
+                {
+                    // Never enter the 3.3.5a linked-list/uint pointer path.
+                    // Publish only successful captures; do not retain stale
+                    // objects when the player disappears or a read fails.
+                    WowBWorld = null;
+                    try
+                    {
+                        if (WowB != null && WowB.TryCaptureWorldSnapshot(out WowBWorldSnapshot? snapshot))
+                            WowBWorld = snapshot;
+                    }
+                    catch (Exception ex)
+                    {
+                        Logging.WriteDebug($"[ObjectManager] WowB snapshot unavailable: {ex.Message}");
+                    }
+                    return;
+                }
+
                 try
                 {
                     // Mark all objects as potentially invalid.  HB originally ran on a single

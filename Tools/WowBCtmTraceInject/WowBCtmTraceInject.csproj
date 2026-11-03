@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows7.0</TargetFramework>
+    <PlatformTarget>x64</PlatformTarget>
+    <Platforms>x64</Platforms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>WowBCtmTraceInject</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <None Remove="native/WowBCtmInject.exe;native/WowBCtmProbe.dll" />
+    <Content Include="native/WowBCtmInject.exe;native/WowBCtmProbe.dll" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

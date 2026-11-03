@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <DefineConstants>$(DefineConstants);WOWB_READER_TESTS</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../Styx/Offsets/WowBOffsets.cs" Link="WowBOffsets.cs" />
+    <Compile Include="../../Styx/Offsets/Wow70707Offsets.cs" Link="Wow70707Offsets.cs" />
+    <Compile Include="../../Styx/Logic/Pathing/ClickAim/GrindFactionSettings.cs" Link="GrindFactionSettings.cs" />
+    <Compile Include="../../Styx/Logic/Pathing/ClickAim/GatherBackgroundFocus.cs" Link="GatherBackgroundFocus.cs" />
+    <Compile Include="../../Styx/Logic/Pathing/ClickAim/GatherSettings.cs" Link="GatherSettings.cs" />
+    <Compile Include="../../Styx/Logic/Pathing/ClickAim/ClickAimCombat.cs" Link="ClickAimCombat.cs" />
+    <Compile Include="../../Styx/Logic/Pathing/ClickAim/ClickAimHealPolicy.cs" Link="ClickAimHealPolicy.cs" />
+    <Compile Include="../../Styx/Logic/Pathing/ClickAim/ClickAimBuffSchedule.cs" Link="ClickAimBuffSchedule.cs" />
+    <Compile Include="../../Styx/Logic/Pathing/ClickAim/ClickAimClassRotation.cs" Link="ClickAimClassRotation.cs" />
+    <Compile Include="../../Styx/Logic/Pathing/ClickAim/WowBCombatResearch.cs" Link="WowBCombatResearch.cs" />
+    <Compile Include="../../Styx/Logic/Pathing/ClickAim/WowBDeathCheckpoint.cs" Link="WowBDeathCheckpoint.cs" />
+    <Compile Include="../../Styx/Logic/Pathing/ClickAim/WowBDefenceHandoff.cs" Link="WowBDefenceHandoff.cs" />
+    <Compile Include="../../Styx/Logic/Pathing/ClickAim/WowBCorpseDialogPattern.cs" Link="WowBCorpseDialogPattern.cs" />
+    <Compile Include="../../Styx/Logic/Pathing/ClickAim/WowBCorpseSpotPolicy.cs" Link="WowBCorpseSpotPolicy.cs" />
+    <Compile Include="../../Styx/Logic/Pathing/ClickAim/ClickAimSettings.cs" Link="ClickAimSettings.cs" />
+    <Compile Include="../../Styx/Logic/Pathing/ClickAim/VendorFile.cs" Link="VendorFile.cs" />
+    <Compile Include="../../Styx/Logic/Pathing/ClickAim/WowBInventoryProbe.cs" Link="WowBInventoryProbe.cs" />
+    <Compile Include="../../Styx/Logic/Pathing/ClickAim/WowBKnownMerchants.cs" Link="WowBKnownMerchants.cs" />
+    <Compile Include="../../Styx/Logic/Pathing/ClickAim/WowBTargetInfo.cs" Link="WowBTargetInfo.cs" />
+    <Compile Include="../../Styx/Logic/Pathing/ClickAim/WowBGrindFactions.cs" Link="WowBGrindFactions.cs" />
+    <Compile Include="../../Styx/Logic/Pathing/ClickAim/WowBReactionProbe.cs" Link="WowBReactionProbe.cs" />
+    <Compile Include="../../Styx/Logic/Pathing/ClickAim/WowBCursorProbe.cs" Link="WowBCursorProbe.cs" />
+    <Compile Include="../../Styx/WoWInternals/ClientAttachPolicy.cs" Link="ClientAttachPolicy.cs" />
+    <Compile Include="../../Styx/WoWInternals/WowBGuid.cs" Link="WowBGuid.cs" />
+    <Compile Include="../../Styx/WoWInternals/WowBReader.cs" Link="WowBReader.cs" />
+    <Compile Include="../../Styx/WoWInternals/WowBFactionDbSnapshotLayout.cs" Link="WowBFactionDbSnapshotLayout.cs" />
+    <Compile Include="../../Styx/WoWInternals/WowBFactionTemplateDiagnostic.cs" Link="WowBFactionTemplateDiagnostic.cs" />
+    <Compile Include="../../Styx/WoWInternals/WowBWorldSnapshot.cs" Link="WowBWorldSnapshot.cs" />
+  </ItemGroup>
+</Project>
