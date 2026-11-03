@@ -6,20 +6,32 @@ using Styx.WoWInternals;
 
 namespace Styx.Logic.Pathing;
 
-// Hotbar attempts only: this client cannot yet read aura presence, duration,
-// cast success, or authoritative spell cost. Never runs during combat/gathering.
+// Hotbar attempts; optional 70707 aura candidates are experimental and cannot
+// prove casts or costs. Never runs during combat/gathering.
 internal sealed class ClickAimBuffController
 {
     private const long ScanIntervalMs = 5000;
     private readonly ClickAimBuffSchedule _schedule = new ClickAimBuffSchedule();
     private readonly Func<long> _clock;
+    private readonly Dictionary<int, string> _reportedAuraState = new Dictionary<int, string>();
     private long _nextScan;
 
     internal ClickAimBuffController() : this(() => Environment.TickCount64) { }
     internal ClickAimBuffController(Func<long> clock) { _clock = clock; }
 
     // New run or confirmed resurrection: the next quiet opportunity starts fresh.
-    internal void Reset() { _schedule.Reset(); _nextScan = 0; }
+    internal void Reset() { _schedule.Reset(); _reportedAuraState.Clear(); _nextScan = 0; }
+
+    private void ReportAura(ClickAimAction action, int? remaining)
+    {
+        string state = !remaining.HasValue ? "unavailable; using 30-minute fallback" :
+            remaining.Value < 0 ? "missing in bounded candidate slots" :
+            remaining.Value <= ClickAimBuffSchedule.RefreshBeforeMs ? "near expiry" : "active";
+        if (_reportedAuraState.TryGetValue(action.Id, out string? old) && old == state) return;
+        _reportedAuraState[action.Id] = state;
+        string timing = remaining.HasValue && remaining.Value >= 0 ? "; approximately " + (remaining.Value / 1000) + " seconds remain" : "";
+        Logging.Write("[Buff] 70707 experimental aura candidate " + action.Name + ": " + state + timing + " (not verified)");
+    }
 
     private static bool Allowed(Memory memory, WowBReader reader, IntPtr hwnd, Func<bool> stopped)
         => !stopped() && !ClickAimAbort.Requested && !RouteRunner.StopRequested && ClickAimSettings.UseBuffs &&
@@ -94,9 +106,16 @@ internal sealed class ClickAimBuffController
         List<ClickAimAction> bar = ClickAimCombat.ReadBar(reader);
         var due = new List<ClickAimAction>();
         var seen = new HashSet<int>();
+        bool hasSupportedAura = reader.IsExperimental70707 && bar.Exists(action => Eligible(action) && WowBInlineAuraCandidate.Supported(action.Id));
+        WowBInlineAuraCandidate? aura = hasSupportedAura ? WowBInlineAuraCandidate.Capture(memory, player) : null;
         foreach (ClickAimAction action in bar)
-            if (Eligible(action) && seen.Add(action.Id) && _schedule.Due(action.Id, now)) due.Add(action);
-        if (due.Count == 0) return false;
+        {
+            if (!Eligible(action) || !seen.Add(action.Id)) continue;
+            int? remaining = aura?.Remaining(action.Id);
+            if (reader.IsExperimental70707 && WowBInlineAuraCandidate.Supported(action.Id)) ReportAura(action, remaining);
+            if (_schedule.Due(action.Id, now, remaining)) due.Add(action);
+        }
+        if (due.Count == 0 || !Allowed(memory, reader, hwnd, stopped)) return false;
 
         try { stopMovement(); }
         catch { Logging.Write("[Buff] could not stop movement; buff keys withheld"); return false; }
@@ -127,6 +146,13 @@ internal sealed class ClickAimBuffController
             {
                 if (!SameQuietPlayer(memory, reader, hwnd, stopped, player, map) || reader.ReadTargetGuid() != player.Guid ||
                     !SameSlot(action, ClickAimCombat.ReadBar(reader)) || !Allowed(memory, reader, hwnd, stopped)) break;
+                // Re-read after F1 and between keys. An unreadable candidate
+                // falls back to the original timer; it never means absent.
+                aura = reader.IsExperimental70707 && WowBInlineAuraCandidate.Supported(action.Id)
+                    ? WowBInlineAuraCandidate.Capture(memory, player) : null;
+                if (!_schedule.Due(action.Id, _clock(), aura?.Remaining(action.Id))) continue;
+                if (!SameQuietPlayer(memory, reader, hwnd, stopped, player, map) || reader.ReadTargetGuid() != player.Guid ||
+                    !SameSlot(action, ClickAimCombat.ReadBar(reader)) || !Allowed(memory, reader, hwnd, stopped)) break;
                 ClickAimInput.TapKey(hwnd, action.KeyVk, 40);
                 _schedule.RecordAttempt(action.Id, _clock());
                 onAttempt?.Invoke();
@@ -142,5 +168,79 @@ internal sealed class ClickAimBuffController
             }
         }
         return attempted;
+    }
+}
+
+// 70707 research candidate, bounded to the inline layout observed for one
+// Mage. No dynamic pointer dereference, Lua, calls into the client or writes.
+// Unknown layouts, unstable fields and unsupported IDs retain the old timer.
+internal sealed class WowBInlineAuraCandidate
+{
+    private const int Header = 0x5F0, DataSize = 0x1624; // ends after player+0x1C10
+    private const int DataPointer = 0x608, FirstId = 0x6F0, Stride = 0x128, Slots = 12;
+    private const int ActiveCount = 0x1A60, ClientClock = 0x1C10;
+    private readonly uint _clock;
+    private readonly uint[] _id, _duration, _expiry;
+
+    private WowBInlineAuraCandidate(uint clock, uint[] id, uint[] duration, uint[] expiry)
+    { _clock = clock; _id = id; _duration = duration; _expiry = expiry; }
+
+    private static uint Word(byte[] bytes, int offset) => BitConverter.ToUInt32(bytes, offset - Header);
+    private static ulong Qword(byte[] bytes, int offset) => BitConverter.ToUInt64(bytes, offset - Header);
+
+    // The only IDs corroborated in the traces. Other ranks/classes use the
+    // old scheduler rather than interpreting unverified aura/action ID pairs.
+    internal static bool Supported(int id) => id == 168 || id == 1459;
+
+    internal static WowBInlineAuraCandidate? Capture(Memory memory, WowBObservedUnit player)
+    {
+        try
+        {
+            if (player.Guid.IsEmpty || player.UnitAddress < 0x10000 ||
+                player.UnitAddress > 0x00007FFFFFFFFFFFUL - (ulong)(Header + DataSize)) return null;
+            using var uncached = memory.TemporaryCacheState(false);
+            byte[]? first = memory.ReadBytes64(player.UnitAddress + Header, DataSize);
+            byte[]? second = memory.ReadBytes64(player.UnitAddress + Header, DataSize);
+            if (first == null || second == null || first.Length != DataSize || second.Length != DataSize) return null;
+            // This representation, including the fixed inline pointer and 12
+            // entries, was observed in one session. External/grown arrays are
+            // not chased and must never be interpreted as an empty list.
+            ulong inline = player.UnitAddress + DataPointer;
+            if (Qword(first, 0x5F0) != inline || Qword(second, 0x5F0) != inline ||
+                Qword(first, 0x5F8) != Slots || Qword(second, 0x5F8) != Slots ||
+                Qword(first, 0x600) != 0x8000000000000010UL || Qword(second, 0x600) != 0x8000000000000010UL) return null;
+            uint clock1 = Word(first, ClientClock), clock2 = Word(second, ClientClock);
+            if (clock1 == 0 || clock2 == 0 || unchecked(clock2 - clock1) > 5000) return null;
+            uint[] id = new uint[Slots], duration = new uint[Slots], expiry = new uint[Slots];
+            var seen = new HashSet<uint>();
+            int occupied = 0;
+            for (int i = 0; i < Slots; i++)
+            {
+                int offset = FirstId + i * Stride;
+                id[i] = Word(second, offset); duration[i] = Word(second, offset + 12); expiry[i] = Word(second, offset + 16);
+                if (id[i] != Word(first, offset) || duration[i] != Word(first, offset + 12) || expiry[i] != Word(first, offset + 16)) return null;
+                if (id[i] != 0) { occupied++; if (!seen.Add(id[i])) return null; }
+            }
+            if (Word(first, ActiveCount) != (uint)occupied || Word(second, ActiveCount) != (uint)occupied) return null;
+            return new WowBInlineAuraCandidate(clock2, id, duration, expiry);
+        }
+        catch { return null; }
+    }
+
+    // Null means unknown; -1 means missing in this bounded candidate layout.
+    // The exact ID relation, clock and capacity remain experimental. A bad or
+    // indefinite timing word is unknown, not expired.
+    internal int? Remaining(int spellId)
+    {
+        if (!Supported(spellId)) return null;
+        for (int i = 0; i < Slots; i++)
+        {
+            if (_id[i] != (uint)spellId) continue;
+            if (_duration[i] == 0 || _duration[i] > 24U * 60 * 60 * 1000) return null;
+            int remaining = unchecked((int)(_expiry[i] - _clock));
+            if (remaining < -5000 || (long)remaining > (long)_duration[i] + 5000) return null;
+            return remaining;
+        }
+        return -1;
     }
 }

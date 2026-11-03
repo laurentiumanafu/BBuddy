@@ -51,7 +51,7 @@ internal static class ClickAimSettings
     /// </summary>
     public static bool UseDamageOverTime = true;
 
-    /// <summary>Attempt self-buffs out of combat at start, every 30 minutes, and after confirmed resurrection.</summary>
+    /// <summary>Attempt self-buffs out of combat on start, on the timer or experimental aura timing, and after confirmed resurrection.</summary>
     public static bool UseBuffs = true;
 
     /// <summary>Bar slot holding food; 0 means "work it out from the item id on the bar".</summary>
