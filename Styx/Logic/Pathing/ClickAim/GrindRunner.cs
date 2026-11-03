@@ -49,7 +49,9 @@ internal static class GrindRunner
     // With a manual faction filter, move close to a permitted candidate on mesh
     // rather than using indiscriminate pixel probes to search around it.
     private const double FactionApproachYd = 15.0;
-    private const int FactionTabRetryMs = 5000;
+    // A repeated TAB miss is inconclusive, but a five-second pause made the
+    // same friendly/occluded candidate interrupt roaming again immediately.
+    private const int FactionTabRetryMs = 30000;
 
     /// <summary>
     /// How far from the CHARACTER something may stand and still be fought. This is the user's
@@ -172,9 +174,6 @@ internal static class GrindRunner
     /// </summary>
     private const double PullYd = SearchYd;
 
-    /// <summary>How often the walk asks the client whether there is something to kill nearby.</summary>
-    private const int PullProbeMs = 1500;
-
     /// <summary>
     /// Do not sit down with a fight this close. A meal is cancelled by any damage and a character
     /// sitting next to a wolf is a character about to be eaten, so the rest waits for the next gap
@@ -230,7 +229,7 @@ internal static class GrindRunner
     /// <summary>How long to wait in melee when nothing was sent this pass.</summary>
     private const int MeleeWaitMs = 350;
 
-    /// <summary>How long to wait for the client to take the body before deciding it is bones.</summary>
+    /// <summary>How long to observe the body after posting a loot interaction.</summary>
     private const int LootSettleMs = 1500;
 
     /// <summary>
@@ -239,6 +238,8 @@ internal static class GrindRunner
     /// is exactly what the 18:44 run did for 17 s and then blamed on the projection.
     /// </summary>
     private const double LootReachYd = 4.0;
+    // Leave room for movement/position sampling error before posting a loot click.
+    private const double RecentLootApproachYd = 3.0;
 
     /// <summary>How long the walk to a corpse may take before the loot is given up.</summary>
     private const int LootWalkMs = 20000;
@@ -279,6 +280,9 @@ internal static class GrindRunner
     /// <summary>Corpses this run has already tried; a corpse that cannot be looted is not retried forever.</summary>
     private static readonly HashSet<WowBGuid> _looted = new HashSet<WowBGuid>();
     private static readonly WowBRecentLoot RecentLoot = new WowBRecentLoot();
+    // Retry only when no right-button down was posted, never on an unverified click.
+    private static readonly Dictionary<WowBGuid, int> _recentLootRetryAt = new Dictionary<WowBGuid, int>();
+    private static readonly HashSet<WowBGuid> _recentLootRetried = new HashSet<WowBGuid>();
     private static int _recentLootQuietAt;
 
     /// <summary>Corpse loot interactions sent this session; item collection is unverified.</summary>
@@ -375,6 +379,8 @@ internal static class GrindRunner
         if (!recovered) { _stop = true; return false; }
         _deathCheckpoint = new WowBDeathCheckpoint();
         RecentLoot.Clear();
+        _recentLootRetryAt.Clear();
+        _recentLootRetried.Clear();
         _focusedFightGuid = default; _defenceHandoffGuid = default; _focusedDamageObserved = false; _unverifiedGuid = default;
         _combatHold = false; _poolApproachHandled = false;
         Buffs.Reset(); // confirmed revival; reapply at the next quiet opportunity
@@ -411,12 +417,6 @@ internal static class GrindRunner
     /// interrupt found nothing it could actually fight.
     /// </summary>
     private static int _interruptQuietUntil;
-
-    /// <summary>When the walk last asked the client (TAB) whether anything nearby is attackable.</summary>
-    private static int _lastPullProbeMs;
-
-    /// <summary>When a refused pull was last explained, so the log is not one line per probe.</summary>
-    private static int _pullQuietAt;
 
     /// <summary>Last time the "TAB has a target out of range" note was printed.</summary>
     private static int _farQuietAt;
@@ -762,8 +762,6 @@ internal static class GrindRunner
         _gaveUpAt = 0;
         _gaveUpGuid = default(WowBGuid);
         _interruptQuietUntil = 0;
-        _lastPullProbeMs = 0;
-        _pullQuietAt = 0;
         _clearQuietAt = 0;
         _poolQuietAt = 0;
         _scanWasClear = false;
@@ -784,6 +782,8 @@ internal static class GrindRunner
         _focusedDamageObserved = false;
         _looted.Clear();
         RecentLoot.Clear();
+        _recentLootRetryAt.Clear();
+        _recentLootRetried.Clear();
         _recentLootQuietAt = unchecked(Environment.TickCount - 15000);
         _loots = 0;
         _lootProbed = false;
@@ -866,6 +866,7 @@ internal static class GrindRunner
                 {
                     string earlyLoot = LootNearby(hwnd, 3, recentOnly: true);
                     if (earlyLoot.Length > 0) { Logging.Write("[Grind] " + earlyLoot); continue; }
+                    if (RecentLootRetryPending()) { ClickAimAbort.Wait(200); continue; }
                 }
 
                 /* No recovery step: healing needs a cast, a cast needs the action bar, and
@@ -1376,6 +1377,12 @@ internal static class GrindRunner
                 _poolApproachHandled = true;
                 return false;
             }
+            if (RecentLootRetryPending())
+            {
+                _poolApproachHandled = true;
+                ClickAimAbort.Wait(200);
+                return false;
+            }
         }
 
         // Defence always takes precedence above. On 70707 the player reader only
@@ -1470,10 +1477,8 @@ internal static class GrindRunner
             NearestKillable(snap, px, py, SearchYd, out nearest, out nearestYd, out live, out unread);
         Styx.WoWInternals.WowBReader? selReader = ObjectManager.WowB;
 
-        /* The walk may already have selected the mob it stopped for (TryPullOnTheWay presses
-         * TAB once to ask the client who is attackable). Take that selection when it passes the
-         * same tests, instead of pressing TAB again and cycling PAST the very mob the walk
-         * stopped for. */
+        /* A mob may already be selected. Take it when it passes the same tests,
+         * instead of pressing TAB again and cycling past it. */
         if (TryCurrentSelection(snap, selReader, px, py, out target))
         {
             /* Still unproven if this is the unit the pool picked: see _unverifiedGuid. */
@@ -1508,6 +1513,23 @@ internal static class GrindRunner
             }
         }
 
+        // The unfiltered path must also approach before the first TAB. Previously
+        // its 40-yard mesh check ran only after three TAB presses.
+        if (!GrindFactionSettings.Rules.Enabled && ShouldApproachPoolCandidate(have, haveNearest, nearestYd))
+        {
+            _poolApproachHandled = true;
+            report = ApproachPoolCandidate(hwnd, nearest);
+            return false;
+        }
+        if (!have && !haveNearest)
+        {
+            // Unreadable units are not evidence that a TAB target is in range.
+            _combatHold = true;
+            report = "no readable nearby candidate for TAB; holding while unit fields are unreadable";
+            ClickAimAbort.Wait(300);
+            return false;
+        }
+
         if (!have && haveNearest && nearestYd > 2.0 &&
             (!GrindFactionSettings.Rules.Enabled || nearestYd <= FactionApproachYd))
             ClickAimKeySteer.Face(nearest.Location.X, nearest.Location.Y, hwnd, 25.0, 4);
@@ -1517,6 +1539,19 @@ internal static class GrindRunner
         {
             if (!TryReadGatherCombat(out bool tabCombat) || tabCombat)
             { _combatHold = true; ClickAimKeySteer.ReleaseHeld(); return false; }
+            // A mob can move while turning or between TAB attempts. Recheck the
+            // permitted, live pool before every press, not just before the turn.
+            double tabRadius = GrindFactionSettings.Rules.Enabled ? FactionApproachYd : PoolApproachYd;
+            if (!Capture(out WowBWorldSnapshot? tabSnapshot) || tabSnapshot == null ||
+                !tabSnapshot.TryGetLocalPlayer(out WowBObservedUnit tabPlayer) ||
+                !NearestKillable(tabSnapshot, tabPlayer.Location.X, tabPlayer.Location.Y, tabRadius,
+                    out nearest, out nearestYd, out _, out _))
+            {
+                _poolApproachHandled = true;
+                report = "no readable eligible candidate remains close enough for TAB; reconsidering the mesh approach";
+                ClickAimAbort.Wait(300);
+                return false;
+            }
             WowBGuid beforeTab = default(WowBGuid);
             try { if (selReader != null) beforeTab = selReader.ReadTargetGuid(); }
             catch { /* Unknown pre-TAB target cannot confirm a pool pick. */ }
@@ -2145,10 +2180,11 @@ internal static class GrindRunner
 
         /* Nothing is fighting us - but that is not the same as "nothing here worth killing",
          * and treating the two as one is why the character walked past mobs on every leg and
-         * only fought at the hotspots (the user's report). In unfiltered mode the client is
-         * asked with TAB and the level band and distance are checked here. TAB alone is not
-         * proof of hostility; filtered mode instead interrupts for allowed pool candidates. */
-        if (!GrindFactionSettings.Rules.Enabled && TryPullOnTheWay(hwnd, me)) return true;
+         * only fought at the hotspots (the user's report). Interrupt for a level-viable
+         * pool candidate; the main loop checks faction and distance before asking TAB.
+         * Neither pool eligibility nor TAB is proof of hostility. */
+        // Do not press TAB from a roaming leg before measuring the pool candidate.
+        // The main loop approaches on mesh and then asks TAB at close range.
 
         /* The pool has no facing blind spot. Stop for a level-viable observation
          * within the search radius; the main loop can approach distant candidates
@@ -2171,118 +2207,6 @@ internal static class GrindRunner
         }
 
         return false;
-    }
-
-    /// <summary>
-    /// While walking, looks for an attackable mob near the path and reports whether the walk
-    /// should stop for it.
-    ///
-    /// Why TAB and not the snapshot: the snapshot has positions, levels and flags but no
-    /// reaction word, so it cannot tell a wolf from a guard - the 17:22 run right-clicked a
-    /// friendly townsman on exactly that mistake. TAB is the client's own enemy filter, it costs
-    /// one key and one read, and if it selects nothing the walk simply continues.
-    ///
-    /// Throttled: one probe every <see cref="PullProbeMs"/>, so a leg is not a TAB machine gun,
-    /// and the probe is skipped while the interrupt quiet period is running (the caller sets it
-    /// after a pull that did not turn into a fight).
-    /// </summary>
-    private static bool TryPullOnTheWay(IntPtr hwnd, WowBObservedUnit me)
-    {
-        if (unchecked(Environment.TickCount - _lastPullProbeMs) < PullProbeMs) return false;
-        _lastPullProbeMs = Environment.TickCount;
-
-        /* What is already selected costs no key: if it is good enough, take it. TAB would move
-         * the selection to the NEXT enemy, which is how a probe can walk past the mob it was
-         * looking at. */
-        WowBWorldSnapshot? snap;
-        WowBObservedUnit current;
-        if (Capture(out snap) && snap != null && snap.TryGetSelectedTarget(out current))
-        {
-            string selectedWhy;
-            double selectedYd;
-            if (PullWorthTaking(current, me, out selectedWhy, out selectedYd))
-            {
-                Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                    "[Grind] {0} is {1:F1} yd off the path and selected as a potential pull - stopping the walk",
-                    current.Guid, selectedYd));
-                return true;
-            }
-        }
-
-        ClickAimInput.TapKey(hwnd, TabVk, 40);
-        Thread.Sleep(TabSettleMs);
-
-        WowBWorldSnapshot? after;
-        if (!Capture(out after) || after == null) return false;
-
-        /* The local player moved while the probe was in flight: read the distance from the
-         * fresh snapshot rather than from the one that started the probe. */
-        WowBObservedUnit now;
-        if (!after.TryGetLocalPlayer(out now)) return false;
-
-        WowBObservedUnit candidate;
-        if (!after.TryGetSelectedTarget(out candidate)) return false;
-
-        string why;
-        double d;
-        if (!PullWorthTaking(candidate, now, out why, out d))
-        {
-            /* Say why only when the client DID offer something - a probe that found nothing is
-             * the normal case on a quiet stretch and does not deserve a log line. */
-            if (why.Length > 0 && unchecked(Environment.TickCount - _pullQuietAt) > 15000)
-            {
-                _pullQuietAt = Environment.TickCount;
-                Logging.Write("[Grind] TAB offered a target while walking, not taking it: " + why);
-            }
-            return false;
-        }
-
-        Logging.Write(string.Format(CultureInfo.InvariantCulture,
-            "[Grind] {0} is {1:F1} yd off the path and selected as a potential pull - stopping the walk",
-            candidate.Guid, d));
-        return true;
-    }
-
-    /// <summary>
-    /// Whether a unit the client just offered is worth interrupting a walk for: alive, not a
-    /// player, not one that has already been given up on, inside the level band, and within
-    /// <see cref="PullYd"/>.
-    /// </summary>
-    private static bool PullWorthTaking(WowBObservedUnit candidate, WowBObservedUnit me,
-                                        out string why, out double yards)
-    {
-        why = "";
-        yards = double.MaxValue;
-
-        if (candidate.IsLocalPlayer) return false;
-        if (candidate.HasPlayerVtable) { why = "the client offered a PLAYER"; return false; }
-        if (Refused(candidate.Guid) || _notViable.Contains(candidate.Guid)) return false;
-        if (Unreachable(candidate.Guid)) return false;
-
-        Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
-        if (reader == null) return false;
-
-        Styx.WoWInternals.WowBReader.WowBUnitFields f;
-        if (!reader.TryGetUnitFields(candidate.UnitAddress, out f)) return false;
-        if (f.Health == 0 || (f.UnitFlags & NotAFightFlag) != 0) return false;
-        if (!WowBGrindFactions.AllowsPull(reader, candidate, out bool factionUnknown))
-        { why = factionUnknown ? "faction key unreadable or changed" : "faction key is blocked by the active filter"; return false; }
-        if (_tabRefusedUntil.TryGetValue(candidate.Guid, out int refusedUntil)
-            && unchecked(Environment.TickCount - refusedUntil) < 0) return false;
-
-        yards = ClickAimMath.Len(candidate.Location.X - me.Location.X,
-                                 candidate.Location.Y - me.Location.Y);
-        if (yards > PullYd) return false;
-
-        int myLevel = PlayerLevel();
-        if (!LevelViable(f.Level, myLevel))
-        {
-            why = string.Format(CultureInfo.InvariantCulture,
-                "it is level {0} and this character is level {1}", f.Level, myLevel);
-            return false;
-        }
-
-        return true;
     }
 
     /// <summary>
@@ -2722,6 +2646,14 @@ internal static class GrindRunner
         }
     }
 
+    private static bool RecentLootRetryPending()
+    {
+        int now = Environment.TickCount;
+        foreach (int retryAt in _recentLootRetryAt.Values)
+            if (unchecked(now - retryAt) < 0) return true;
+        return false;
+    }
+
     private static string LootNearby(IntPtr hwnd, int maxCorpses, bool recentOnly = false)
     {
         if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested || _vendorDue || maxCorpses <= 0) return "";
@@ -2751,6 +2683,8 @@ internal static class GrindRunner
             if (unit.HasPlayerVtable) continue;
             if (_looted.Contains(unit.Guid)) continue;
             if (recentOnly && !RecentLoot.Matches(unit, recentMap, Environment.TickCount)) continue;
+            if (recentOnly && _recentLootRetryAt.TryGetValue(unit.Guid, out int retryAt) &&
+                unchecked(Environment.TickCount - retryAt) < 0) continue;
             // 70707 corpse classifications are candidates; never probe a body
             // outside the same active faction filter used for combat.
             if (reader.IsExperimental70707 && !WowBGrindFactions.AllowsPull(reader, unit, out _)) continue;
@@ -2797,6 +2731,8 @@ internal static class GrindRunner
                     Logging.Write("[Loot] recent corpse approach withheld: " + reason);
                     _looted.Add(corpse.Guid);
                     RecentLoot.Forget(corpse.Guid);
+                    _recentLootRetryAt.Remove(corpse.Guid);
+                    _recentLootRetried.Remove(corpse.Guid);
                     unreached++;
                     continue;
                 }
@@ -2811,17 +2747,44 @@ internal static class GrindRunner
                 if (recentOnly && (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested || _vendorDue || VendorDue() ||
                     !TryReadGatherCombat(out bool interruptedCombat) || interruptedCombat))
                     _looted.Remove(corpse.Guid); // retry only after the interruption clears
-                else if (recentOnly) RecentLoot.Forget(corpse.Guid);
+                else if (recentOnly)
+                {
+                    RecentLoot.Forget(corpse.Guid);
+                    _recentLootRetryAt.Remove(corpse.Guid);
+                    _recentLootRetried.Remove(corpse.Guid);
+                }
                 Logging.Write(string.Format(CultureInfo.InvariantCulture,
                     "[Grind] deferred the body of {0} ({1:F1} yd away) - combat or another safety interruption",
                     corpse.Guid, corpses[i].Key));
                 break;
             }
-            if (recentOnly) RecentLoot.Forget(corpse.Guid);
             if (result == LootNoClick)
             {
+                if (recentOnly && _recentLootRetried.Count > 256)
+                {
+                    _recentLootRetried.Clear();
+                    _recentLootRetryAt.Clear();
+                }
+                if (recentOnly && _recentLootRetried.Add(corpse.Guid))
+                {
+                    _recentLootRetryAt[corpse.Guid] = unchecked(Environment.TickCount + 5000);
+                    _looted.Remove(corpse.Guid);
+                    Logging.Write("[Loot] no right-button down was sent; one guarded retry is eligible after 5 seconds");
+                }
+                else if (recentOnly)
+                {
+                    RecentLoot.Forget(corpse.Guid);
+                    _recentLootRetryAt.Remove(corpse.Guid);
+                    _recentLootRetried.Remove(corpse.Guid);
+                }
                 unreached++;
-                continue;                      // TryLootOne already said exactly what failed
+                continue;
+            }
+            if (recentOnly)
+            {
+                RecentLoot.Forget(corpse.Guid);
+                _recentLootRetryAt.Remove(corpse.Guid);
+                _recentLootRetried.Remove(corpse.Guid);
             }
 
             clicked++;
@@ -3249,6 +3212,14 @@ internal static class GrindRunner
             ObjectManager.WowB == reader && ObjectManager.Wow == memory;
     }
 
+    private static bool RecentLootInReach(WowBObservedUnit corpse, WowBObservedUnit player)
+    {
+        double dx = corpse.Location.X - player.Location.X, dy = corpse.Location.Y - player.Location.Y;
+        double dz = corpse.Location.Z - player.Location.Z;
+        double distance = Math.Sqrt(dx * dx + dy * dy + dz * dz);
+        return double.IsFinite(distance) && distance <= LootReachYd;
+    }
+
     private static bool ApproachRecentCorpse(IntPtr hwnd, WowBReader reader, uint map, WowBObservedUnit original, out string reason)
     {
         reason = "identity, zero health, map or combat state unavailable";
@@ -3261,8 +3232,13 @@ internal static class GrindRunner
             while (unchecked(Environment.TickCount - started) < LootWalkMs)
             {
                 if (CheckDeathCheckpoint() || !RecentCorpseCurrent(reader, memory, map, original,
-                        out WowBObservedUnit corpse, out _, out double distance)) return false;
-                if (distance <= LootReachYd) return true;
+                        out WowBObservedUnit corpse, out WowBObservedUnit player, out double distance)) return false;
+                if (distance <= RecentLootApproachYd)
+                {
+                    if (!RecentLootInReach(corpse, player))
+                    { reason = "corpse is too far vertically for a guarded loot click"; return false; }
+                    return true;
+                }
                 if (!ChaseStep(hwnd, watch, corpse, out reason, true)) return false;
             }
             reason = "mesh approach timed out";
@@ -3272,12 +3248,10 @@ internal static class GrindRunner
     }
 
     /// <summary>
-    /// Walks to one corpse and right-clicks it, and reports what happened: 1 when the body left
-    /// the pool, 0 when the client confirmed the click by selecting the body and the body is
-    /// still there (bones), <see cref="LootNoClick"/> when no point around the projected one
-    /// made the client select it, and <see cref="LootUnderAttack"/> when something started
-    /// fighting. Walks only within <see cref="LootYd"/>, because a loot trip is not worth a
-    /// fight with something else.
+    /// Attempts one corpse interaction: 1 when a body is no longer observed, 0 when it
+    /// remains in the pool, <see cref="LootNoClick"/> when no right-button down was sent,
+    /// or <see cref="LootUnderAttack"/> on a safety interruption. A selected pixel and
+    /// posted input do not prove loot was received. Recent 70707 corpses use a mesh approach.
     /// </summary>
     private static int TryLootOne(IntPtr hwnd, WowBObservedUnit corpse, out uint lootMap, out bool lootPixelConfirmed, bool recentOnly = false)
     {
@@ -3288,7 +3262,8 @@ internal static class GrindRunner
         GreenMagic.Memory? recentMemory = ObjectManager.Wow;
         uint recentMap = lootMap;
         Func<bool>? recentSafe = recentOnly && lootReader != null && recentMemory != null
-            ? () => RecentCorpseCurrent(lootReader, recentMemory, recentMap, corpse, out _, out _, out double verifiedDistance) && verifiedDistance <= LootReachYd + 1.0
+            ? () => RecentCorpseCurrent(lootReader, recentMemory, recentMap, corpse, out WowBObservedUnit currentCorpse, out WowBObservedUnit currentPlayer, out _) &&
+                    RecentLootInReach(currentCorpse, currentPlayer)
             : null;
         if (recentOnly && (recentSafe == null || !recentSafe())) return LootUnderAttack;
         /* Get within reach first, and mean it. A right-click on a body further away is a walk
@@ -3443,11 +3418,21 @@ internal static class GrindRunner
             () => !SkinCorpseCurrent(reader, memory, map, original, playerGuid, out _, out _)))
         { Logging.Write("[Skin] no confirmed corpse pixel: " + how); return; }
         int pixelX = width / 2 + x, pixelY = height / 2 + y;
+        if (pixelX <= 0 || pixelY <= 0 || pixelX >= width - 1 || pixelY >= height - 1 ||
+            !ClickAimInput.PostMouseMoveFraction(hwnd, pixelX / (double)(width - 1), pixelY / (double)(height - 1)))
+        { Logging.Write("[Skin] right-click withheld: could not position the client cursor"); return; }
+        if (ClickAimAbort.Wait(200) || _stop) return;
+        bool hoverRead = reader.TryReadMouseoverGuidCandidate(out WowBGuid skinHover);
         bool sent = ClickAimInput.ConfirmedRightClick(hwnd, pixelX, pixelY, width, height, () =>
             memory.WindowHandle == hwnd && SkinCorpseCurrent(reader, memory, map, original, playerGuid, out _, out _) &&
             reader.ReadTargetGuid() == original.Guid && reader.TryReadMouseoverGuidCandidate(out WowBGuid hover) && hover == original.Guid &&
             !_stop && !ClickAimAbort.Requested, out string reason);
-        if (!sent) { Logging.Write("[Skin] right-click withheld: " + reason); return; }
+        if (!sent)
+        {
+            Logging.Write("[Skin] right-click withheld: " + reason + "; candidate hover before final check " +
+                (!hoverRead ? "unreadable" : skinHover == original.Guid ? "matched" : "did not match") + " (unverified)");
+            return;
+        }
         _clicks++;
         Logging.Write("[Skin] requested one right-click on confirmed beast " + original.Guid
             + "; loot state, skinning cast and items are not verified");
@@ -3547,8 +3532,7 @@ internal static class GrindRunner
             "[Loot] {0} word(s) of the body's own object moved across the loot click{1}",
             changed,
             changed == 0
-                ? " - this build keeps its loot state somewhere these windows do not reach, so the "
-                  + "only signal left is the body leaving the pool"
+                ? " - no loot-state signal is established in these windows; disappearance also does not prove loot"
                 : ""));
     }
 
@@ -4125,6 +4109,9 @@ internal static class GrindRunner
             clickCurrent.RecordAddress == unit.RecordAddress && clickCurrent.UnitAddress == unit.UnitAddress)
             DismissRejectedSelection(hwnd, clickReader, clickPlayer.Guid, unit.Guid);
 
+        int probeWidth = 0, probeHeight = 0;
+        if (safeToClick != null && !ClickAimInput.ClientSize(hwnd, out probeWidth, out probeHeight))
+        { how = "client size unavailable before loot probe"; return false; }
         int fx, fy;
         if (FindUnitPixel(hwnd, unit, px, py, out fx, out fy, out how,
                 strictClick ? () => !TryReadGatherCombat(out bool probeFighting) || probeFighting ||
@@ -4138,10 +4125,22 @@ internal static class GrindRunner
             { how += "; click withheld because selection or combat state changed"; return false; }
             if (safeToClick != null)
             {
-                if (!ClickAimInput.ClientSize(hwnd, out int width, out int height) || clickReader == null ||
-                    !ClickAimInput.ConfirmedRightClick(hwnd, width / 2 + fx, height / 2 + fy, width, height,
-                        () => clickReader.ReadTargetGuid() == unit.Guid && safeToClick(), out _))
-                { how += "; final guarded right-click withheld"; return false; }
+                int x = probeWidth / 2 + fx, y = probeHeight / 2 + fy;
+                if (clickReader == null || !ClickAimInput.ClientSize(hwnd, out int width, out int height) ||
+                    width != probeWidth || height != probeHeight || x <= 0 || y <= 0 || x >= width - 1 || y >= height - 1 ||
+                    !ClickAimInput.PostMouseMoveFraction(hwnd, x / (double)(width - 1), y / (double)(height - 1)))
+                { how += "; click withheld: client size, pixel or mouse-move post failed"; return false; }
+                // Allow the client to process the move after the left-click probe;
+                // do not claim it was delivered to the corpse or collected loot.
+                if (ClickAimAbort.Wait(200) || _stop)
+                { how += "; click withheld during mouse-move settle"; return false; }
+                string hoverState = clickReader.TryReadMouseoverGuidCandidate(out WowBGuid hover)
+                    ? (hover == unit.Guid ? "candidate hover matched" : "candidate hover did not match")
+                    : "candidate hover unreadable";
+                if (!ClickAimInput.ConfirmedRightClick(hwnd, x, y, width, height,
+                        () => clickReader.ReadTargetGuid() == unit.Guid && safeToClick(), out string clickReason))
+                { how += "; final guarded right-click withheld: " + clickReason + "; " + hoverState; return false; }
+                how += "; " + clickReason + "; " + hoverState + " (hover unverified)";
             }
             else ClickAimInput.Click(hwnd, fx, fy);
             pixelConfirmed = true;
@@ -4725,7 +4724,7 @@ internal static class GrindRunner
                 if (inReachSince == 0 && d <= TabReachYd) inReachSince = Environment.TickCount;
             }
 
-            if (unverified && !verifyAsked && inReachSince != 0
+            if (unverified && !verifyAsked && inReachSince != 0 && d <= PoolApproachYd
                 && unchecked(Environment.TickCount - inReachSince) >= PoolVerifyMs
                 && unchecked(Environment.TickCount - lastHealthDropMs) >= PoolVerifyMs)
             {
@@ -5909,7 +5908,6 @@ internal static class GrindRunner
              * why mobs beside the path were walked past. It still sits inside the search. */
             check("pullInsideSearch", PullYd > InterruptYd && PullYd <= SearchYd
                                      && PullYd >= ClickAimCombat.CasterRangeYd);
-            check("pullProbeIsThrottled", PullProbeMs > 0 && PullProbeMs < 5000);
 
             /* Auto-attack is a toggle on this client: it is only pressed again after this much
              * silence, and the silence window has to be longer than a swing. */

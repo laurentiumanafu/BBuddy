@@ -20,6 +20,7 @@ namespace Styx.WoWInternals {
   internal bool IsExperimental70707=true, ExperimentalGrindActive=true;
   internal bool TryReadMapId(out uint m){m=Test.Map;return Test.MapReadable;}
   internal WowBGuid ReadTargetGuid()=>Test.Target;
+  internal bool TryReadMouseoverGuidCandidate(out WowBGuid hover){hover=Test.Target;return true;}
   internal struct WowBUnitFields { internal uint Health; }
   internal bool TryGetUnitFields(ulong address,out WowBUnitFields f){f=new WowBUnitFields{Health=address==Test.Corpse.UnitAddress ? Test.Health : 0};return Test.FieldsReadable;}
  }
@@ -30,7 +31,7 @@ namespace Styx.Logic.Pathing {
   internal static WowBObservedUnit Player,Corpse,Other;
   internal static WowBGuid Target;
   internal static uint Map,Health;
-  internal static bool Combat,CombatReadable,MapReadable,FieldsReadable,PlayerPresent,CorpsePresent,Snapshot,Death,PathOk,PixelOk,Faction,Vendor,InterruptDuringPath,ChangeDuringProbe,StopDuringProbe,ChangeBeforeClick;
+  internal static bool Combat,CombatReadable,MapReadable,FieldsReadable,PlayerPresent,CorpsePresent,Snapshot,Death,PathOk,PixelOk,Faction,Vendor,InterruptDuringPath,ChangeDuringProbe,StopDuringProbe,ChangeBeforeClick,MoveOk;
   internal static int Clicks,Skin,Paths,ClickX,ClickY,Waits;
   internal static Action? OnWait;
   internal static void Reset(){
@@ -39,7 +40,7 @@ namespace Styx.Logic.Pathing {
    Other=new WowBObservedUnit{Guid=new WowBGuid(2),RecordAddress=14,UnitAddress=15,Location=new Position{X=2}};
    Target=default; Map=1;Health=0;
    Combat=Death=Vendor=InterruptDuringPath=ChangeDuringProbe=StopDuringProbe=ChangeBeforeClick=false;
-   CombatReadable=MapReadable=FieldsReadable=PlayerPresent=CorpsePresent=Snapshot=PathOk=PixelOk=Faction=true;
+   CombatReadable=MapReadable=FieldsReadable=PlayerPresent=CorpsePresent=Snapshot=PathOk=PixelOk=Faction=MoveOk=true;
    Clicks=Skin=Paths=ClickX=ClickY=Waits=0; OnWait=null; ClickAimAbort.Requested=false;RouteRunner.StopRequested=false; GatherSettings.Skinning=false;
    ObjectManager.Wow=new GreenMagic.Memory(); ObjectManager.WowB=new WowBReader(); GrindRunner.Reset();
   }
@@ -54,6 +55,7 @@ namespace Styx.Logic.Pathing {
  }
  internal static class ClickAimInput {
   internal static bool ClientSize(IntPtr h,out int w,out int height){w=800;height=600;return true;}
+  internal static bool PostMouseMoveFraction(IntPtr h,double x,double y)=>Test.MoveOk;
   internal static void Click(IntPtr h,int x,int y){Test.Clicks++;}
   internal static bool ConfirmedRightClick(IntPtr h,int x,int y,int w,int height,Func<bool> confirm,out string reason){
    reason="fixture"; if(Test.ChangeBeforeClick) Test.Target=Test.Other.Guid; if(!confirm())return false;
@@ -68,11 +70,15 @@ namespace Styx.Logic.Pathing {
  internal static class GrindRunner {
   private static bool _stop,_vendorDue,_running=true,_lootProbed,_clickBiasKnown;
   private static int _clickBiasX,_clickBiasY,_clicks,_loots,_lootsSinceTrip,_recentLootQuietAt;
-  private const double LootYd=18,LootReachYd=4;
+  private const double LootYd=18,LootReachYd=4,RecentLootApproachYd=3;
   private const int LootWalkMs=20000,LootSettleMs=1500,LootNoClick=-2,LootUnderAttack=-1;
   private static readonly WowBRecentLoot RecentLoot=new();
   private static readonly HashSet<WowBGuid> _looted=new();
-  internal static void Reset(){_stop=_vendorDue=_lootProbed=_clickBiasKnown=false;_running=true;_clicks=_loots=_lootsSinceTrip=0;RecentLoot.Clear();_looted.Clear();GrindFactionSettings.Rules.Enabled=false;}
+  private static readonly Dictionary<WowBGuid,int> _recentLootRetryAt=new();
+  private static readonly HashSet<WowBGuid> _recentLootRetried=new();
+  internal static void AllowRetry(){_recentLootRetryAt[Test.Corpse.Guid]=unchecked(Environment.TickCount-1);}
+  internal static bool Pending()=>RecentLootRetryPending();
+  internal static void Reset(){_stop=_vendorDue=_lootProbed=_clickBiasKnown=false;_running=true;_clicks=_loots=_lootsSinceTrip=0;RecentLoot.Clear();_looted.Clear();_recentLootRetryAt.Clear();_recentLootRetried.Clear();GrindFactionSettings.Rules.Enabled=false;}
   internal static void Remember(WowBObservedUnit u,uint map=1,int? time=null)=>RecentLoot.Remember(u,map,time??Environment.TickCount);
   internal static bool Matches(WowBObservedUnit u,uint map,int time)=>RecentLoot.Matches(u,map,time);
   internal static bool Any(int time)=>RecentLoot.Any(time);
@@ -124,7 +130,12 @@ namespace Styx.Logic.Pathing {
    Ready();Test.Corpse.UnitAddress=777;NoClick("changed unit pointer");
    Ready();Test.Corpse.RecordAddress=777;NoClick("changed record pointer");
    Ready();Test.Faction=false;NoClick("blocked faction");
-   Ready();Test.PixelOk=false;NoClick("no confirmed pixel");
+   Ready();Test.PixelOk=false;NoClick("no confirmed pixel"); Check(GrindRunner.Pending(),"pending retry blocks a new pull"); Test.PixelOk=true;GrindRunner.Run();Check(Test.Clicks==0,"retry cooldown");GrindRunner.AllowRetry();GrindRunner.Run();Check(Test.Clicks==1,"retry when no click posted");
+   Ready();Test.PixelOk=false;GrindRunner.Run();GrindRunner.AllowRetry();GrindRunner.Run();Test.PixelOk=true;GrindRunner.Run();Check(Test.Clicks==0&&!GrindRunner.Pending(),"two failed probes end retries");
+   Ready();Test.OnWait=()=>ClickAimAbort.Requested=true;NoClick("stop during mouse settle");
+   Ready();Test.OnWait=()=>Test.Combat=true;NoClick("combat during mouse settle");
+   Ready();Test.MoveOk=false;NoClick("failed mouse move");Test.MoveOk=true;GrindRunner.AllowRetry();GrindRunner.Run();Check(Test.Clicks==1,"retry mouse move failure");
+   Ready();Test.Corpse.Location.Z=4;NoClick("out of 3d loot reach");
    Ready();Test.ChangeDuringProbe=true;NoClick("body became alive during probe");
    Ready();Test.StopDuringProbe=true;NoClick("stop during probe");
    Ready();Test.ChangeBeforeClick=true;NoClick("selection changed at final click");
