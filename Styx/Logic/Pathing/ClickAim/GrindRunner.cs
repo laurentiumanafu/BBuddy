@@ -372,7 +372,7 @@ internal static class GrindRunner
         bool recovered = WowBCorpseRecovery.TryRecover(candidate, mover, () => !_stop && !ClickAimAbort.Requested);
         if (!recovered) { _stop = true; return false; }
         _deathCheckpoint = new WowBDeathCheckpoint();
-        _focusedFightGuid = default; _focusedDamageObserved = false; _unverifiedGuid = default;
+        _focusedFightGuid = default; _defenceHandoffGuid = default; _focusedDamageObserved = false; _unverifiedGuid = default;
         _combatHold = false; _poolApproachHandled = false;
         return !_stop && !ClickAimAbort.Requested;
     }
@@ -541,6 +541,9 @@ internal static class GrindRunner
     private static WowBGuid _unverifiedGuid;
     // The bot's most recently engaged target, not a claim about attacker identity.
     private static WowBGuid _focusedFightGuid;
+    // A changed selection observed during a fight, pending fresh combat and
+    // eligibility checks. This is not evidence that the unit is an attacker.
+    private static WowBGuid _defenceHandoffGuid;
     private static bool _focusedDamageObserved;
     private static void MarkFocusedAttack(WowBGuid guid)
     {
@@ -766,6 +769,7 @@ internal static class GrindRunner
         _poolMisses.Clear();
         _lastPoolSelectMs = 0;
         _unverifiedGuid = default(WowBGuid);
+        _defenceHandoffGuid = default;
         _focusedFightGuid = default(WowBGuid);
         _focusedDamageObserved = false;
         _looted.Clear();
@@ -1312,6 +1316,8 @@ internal static class GrindRunner
             ClickAimAbort.Wait(300);
             return false;
         }
+
+        _defenceHandoffGuid = default; // no longer in combat; do not carry a prior selection forward
 
         /* A trip that was asked for is not a suggestion: nothing NEW is picked up while one is
          * waiting. (The loop asks VendorDue first, so this is the second line of defence - the
@@ -1927,6 +1933,27 @@ internal static class GrindRunner
             return !_stop && !ClickAimAbort.Requested && FactionAttackInputAllowed(reader, expected, enforceFaction);
         }
         catch { return false; }
+    }
+
+    // End the old rotation without stopping the bot. The newly selected GUID
+    // is only a hint; defence re-reads combat, unit, range and faction before
+    // starting a fresh fight. No spell intended for the old target is sent.
+    private static string YieldForTargetChange(WowBReader? reader, GreenMagic.Memory? memory, WowBGuid previous)
+    {
+        ClickAimKeySteer.ReleaseHeld();
+        if (reader?.IsExperimental70707 != true || memory == null || ObjectManager.Wow != memory || ObjectManager.WowB != reader)
+            return "selected target or faction changed; attack input withheld";
+        if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested) return "stopped";
+        if (CheckDeathCheckpoint(trackerOnly: true)) return "death/ghost safety check; fight halted for recovery if a checkpoint was captured";
+        if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested) return "stopped";
+        WowBGuid selected = reader.ReadTargetGuid();
+        if (WowBDefenceHandoff.MayQueue(previous, selected, _stop || ClickAimAbort.Requested || RouteRunner.StopRequested))
+        {
+            _defenceHandoffGuid = selected;
+            Logging.Write("[Grind] target changed from " + previous + " to " + selected + "; checking the new selection for defence");
+            return "target changed; checking the new selection for defence";
+        }
+        return "selected target or faction changed; attack input withheld; defence will recheck";
     }
 
     private static void LogFactionFight(WowBReader? reader, WowBObservedUnit unit, bool defence)
@@ -3535,6 +3562,7 @@ internal static class GrindRunner
         _unreachableUntil.Clear();
         _tabRefusedUntil.Clear();
         _unverifiedGuid = default(WowBGuid);
+        _defenceHandoffGuid = default;
         _focusedFightGuid = default(WowBGuid);
         _focusedDamageObserved = false;
         _gaveUpAt = 0;
@@ -3553,7 +3581,7 @@ internal static class GrindRunner
     internal static void ClearGatherFightAfterRecovery()
     {
         // Do not touch _stop here: STOP may have arrived during recovery.
-        _focusedFightGuid = default; _focusedDamageObserved = false; _unverifiedGuid = default;
+        _focusedFightGuid = default; _defenceHandoffGuid = default; _focusedDamageObserved = false; _unverifiedGuid = default;
         _combatHold = false; _poolApproachHandled = false;
     }
 
@@ -3592,12 +3620,66 @@ internal static class GrindRunner
     private static bool DefenceFieldsValid(uint health, uint flags, bool previouslyRefused)
         => health > 0 && (flags & NotAFightFlag) == 0 && !previouslyRefused;
 
+    private static bool TryTakeDefenceHandoff(WowBReader reader, bool grindMode,
+                                              out WowBObservedUnit player, out WowBObservedUnit selected)
+    {
+        player = default; selected = default;
+        WowBGuid queued = _defenceHandoffGuid;
+        _defenceHandoffGuid = default; // never carry a stale selection into a later fight
+        if (queued.IsEmpty || _stop || ClickAimAbort.Requested || RouteRunner.StopRequested || ObjectManager.WowB != reader ||
+            !TryReadGatherCombat(out bool fighting) || !fighting ||
+            !Capture(out WowBWorldSnapshot? snap) || snap == null ||
+            !snap.TryGetLocalPlayer(out player) || !snap.TryGetSelectedTarget(out selected)) return false;
+        bool fieldsValid = reader.TryGetUnitFields(selected.UnitAddress, out WowBReader.WowBUnitFields fields) &&
+            DefenceFieldsValid(fields.Health, fields.UnitFlags, grindMode && _notViable.Contains(selected.Guid));
+        bool factionAllowed = !grindMode || WowBGrindFactions.AllowsPull(reader, selected, out _);
+        double distance = ClickAimMath.Len(selected.Location.X - player.Location.X, selected.Location.Y - player.Location.Y);
+        return WowBDefenceHandoff.MayFight(queued, selected.Guid, _stop || ClickAimAbort.Requested || RouteRunner.StopRequested,
+                   fighting, selected.IsLocalPlayer, selected.HasPlayerVtable, fieldsValid, factionAllowed, distance, GatherDefenceRadius) &&
+               ObjectManager.WowB == reader && reader.ReadTargetGuid() == queued &&
+               TryReadGatherCombat(out fighting) && fighting && !_stop && !ClickAimAbort.Requested && !RouteRunner.StopRequested;
+    }
+
+    private static string FightDefenceWithHandoffs(IntPtr hwnd, WowBReader reader, bool grindMode,
+                                                    WowBObservedUnit player, WowBObservedUnit target)
+    {
+        string report = "";
+        // Bound one chain; any remaining handoff is processed by the next
+        // defence loop so a stream of changes cannot monopolize the worker.
+        for (int count = 0; count < 8 && !_stop && !ClickAimAbort.Requested; count++)
+        {
+            report = Fight(hwnd, player.Location.X, player.Location.Y, false, true, target.Guid, target, grindMode);
+            if (_defenceHandoffGuid.IsEmpty || _stop || ClickAimAbort.Requested || RouteRunner.StopRequested) return report;
+            if (CheckDeathCheckpoint(trackerOnly: true)) return "death/ghost safety check; fight halted for recovery if a checkpoint was captured";
+            if (count == 7) return report;
+            if (!TryTakeDefenceHandoff(reader, grindMode, out player, out target))
+            {
+                if (!_stop && !ClickAimAbort.Requested)
+                    Logging.Write("[Grind] changed target could not be validated for defence; rechecking nearby units");
+                return report;
+            }
+            Logging.Write("[Grind] continuing defence on changed selected NPC " + target.Guid + "; attacker identity remains unknown");
+            if (grindMode) LogFactionFight(reader, target, true);
+        }
+        return report;
+    }
+
     private static string DefendNearby(IntPtr hwnd, bool grindMode, out bool engaged)
     {
         engaged = false;
-        if (_stop || ClickAimAbort.Requested || !TryReadGatherCombat(out bool fighting) || !fighting) return "";
+        if (_stop || ClickAimAbort.Requested || !TryReadGatherCombat(out bool fighting) || !fighting)
+        { _defenceHandoffGuid = default; return ""; }
         WowBReader? reader = ObjectManager.WowB;
-        if (reader == null || !Capture(out WowBWorldSnapshot? snap) || snap == null
+        if (reader == null) return "cannot read nearby units";
+        if (!_defenceHandoffGuid.IsEmpty && TryTakeDefenceHandoff(reader, grindMode, out WowBObservedUnit handoffPlayer, out WowBObservedUnit handoffTarget))
+        {
+            Logging.Write("[Grind] continuing defence on changed selected NPC " + handoffTarget.Guid + "; attacker identity remains unknown");
+            if (grindMode) LogFactionFight(reader, handoffTarget, true);
+            engaged = true;
+            try { return FightDefenceWithHandoffs(hwnd, reader, grindMode, handoffPlayer, handoffTarget); }
+            finally { ClickAimKeySteer.ReleaseHeld(); }
+        }
+        if (!Capture(out WowBWorldSnapshot? snap) || snap == null
             || !snap.TryGetLocalPlayer(out WowBObservedUnit player)) return "cannot read nearby units";
         var nearby = new List<WowBObservedUnit>();
         int inRange = 0, unreadable = 0, dead = 0, flagged = 0, refused = 0, factionBlocked = 0;
@@ -3636,7 +3718,7 @@ internal static class GrindRunner
             Logging.Write("[Grind] continuing the already damaged selected target " + focused.Guid + "; attacker identity remains unknown");
             if (grindMode) LogFactionFight(reader, focused, true);
             engaged = true;
-            try { return Fight(hwnd, player.Location.X, player.Location.Y, false, true, focused.Guid, focused, grindMode); }
+            try { return FightDefenceWithHandoffs(hwnd, reader, grindMode, player, focused); }
             finally { ClickAimKeySteer.ReleaseHeld(); }
         }
         if (nearby.Count == 0)
@@ -3681,7 +3763,7 @@ internal static class GrindRunner
                     + "; proximity and TAB do not prove it is the attacker");
                 if (grindMode) LogFactionFight(reader, selected, true);
                 engaged = true;
-                try { return Fight(hwnd, player.Location.X, player.Location.Y, false, true, selected.Guid, selected, grindMode); }
+                try { return FightDefenceWithHandoffs(hwnd, reader, grindMode, player, selected); }
                 finally { ClickAimKeySteer.ReleaseHeld(); }
             }
         }
@@ -4365,12 +4447,7 @@ internal static class GrindRunner
             }
 
             if (target.Guid != defenceTarget)
-            {
-                string reason = "target changed during the fight; stopping rather than attacking another unit";
-                if (reader?.IsExperimental70707 == true)
-                    return StopFightForSafety(reason + " (expected " + defenceTarget + ", selected " + target.Guid + ")");
-                return reason;
-            }
+                return YieldForTargetChange(reader, fightMemory, defenceTarget);
             if (target.HasPlayerVtable)
                 return "the target turned out to be a player - disengaged";
 
@@ -4734,7 +4811,7 @@ internal static class GrindRunner
                     if (!recovered)
                     {
                         const string reason = "could not recover the same target after healing; stopped rather than switching mobs";
-                        if (reader?.IsExperimental70707 == true) return StopFightForSafety(reason);
+                        if (reader?.IsExperimental70707 == true) return YieldForTargetChange(reader, fightMemory, wanted);
                         _stop = true; ClickAimAbort.Request(); return reason;
                     }
                 }
@@ -4765,7 +4842,7 @@ internal static class GrindRunner
                 }
 
                 if (!FightAttackInputAllowed(reader, fightMemory, defenceTarget, expectedPull, !defenceOnly || defenceFactionFilter))
-                { ClickAimKeySteer.ReleaseHeld(); return "selected target or faction changed; attack input withheld"; }
+                { return YieldForTargetChange(reader, fightMemory, defenceTarget); }
                 if (!dot.IsDot || !ClickAimSettings.UseDamageOverTime) return "DoT role or setting changed; attack withheld";
                 ClickAimInput.TapKey(hwnd, dot.KeyVk, 40);
                 if (rotation.Class == ClickAimRotationClass.Shaman)
@@ -4892,7 +4969,7 @@ internal static class GrindRunner
                 _pendingCastId = castDamage!.Id;
                 _pendingCastMana = manaBefore;
                 if (!FightAttackInputAllowed(reader, fightMemory, defenceTarget, expectedPull, !defenceOnly || defenceFactionFilter))
-                { ClickAimKeySteer.ReleaseHeld(); return "selected target or faction changed; attack input withheld"; }
+                { return YieldForTargetChange(reader, fightMemory, defenceTarget); }
                 if (supplemental ? !castDamage!.IsDamage : (damageWasDot ? !castDamage!.IsDot || !ClickAimSettings.UseDamageOverTime : !castDamage!.IsDamage))
                     return "damage role or DoT setting changed; attack withheld";
                 ClickAimInput.TapKey(hwnd, castDamage!.KeyVk, 40);
@@ -5117,7 +5194,7 @@ internal static class GrindRunner
                 {
                     attackPressed = true;
                     if (!FightAttackInputAllowed(reader, fightMemory, defenceTarget, expectedPull, !defenceOnly || defenceFactionFilter))
-                    { ClickAimKeySteer.ReleaseHeld(); return "selected target or faction changed; attack input withheld"; }
+                    { return YieldForTargetChange(reader, fightMemory, defenceTarget); }
                     if (!auto.IsAttack) return "Attack role changed; attack withheld";
                     ClickAimInput.TapKey(hwnd, auto.KeyVk, 40);
                     MarkFocusedAttack(target.Guid);
@@ -5159,7 +5236,7 @@ internal static class GrindRunner
                 && (rotation.MeleeIntervalMs == 0 || myMana >= PowerForCast(meleeHit, 10)))
             {
                 if (!FightAttackInputAllowed(reader, fightMemory, defenceTarget, expectedPull, !defenceOnly || defenceFactionFilter))
-                { ClickAimKeySteer.ReleaseHeld(); return "selected target or faction changed; attack input withheld"; }
+                { return YieldForTargetChange(reader, fightMemory, defenceTarget); }
                 if (!meleeHit.IsDamage) return "melee ability role changed; attack withheld";
                 ClickAimInput.TapKey(hwnd, meleeHit.KeyVk, 40);
                 ClickAimClassRotation.Defer(_rotationCooldowns, rotation.MeleeGroup, rotation.MeleeIntervalMs, Environment.TickCount);

@@ -17,6 +17,7 @@ RotationTests.Run(); // hotbar/priority logic only, not client-state validation
 CombatResearchTests.Run(); // bounded read-only trace fixtures, not live offsets
 GatherSettingsTests.Run(); // persistence and default policy, not live mouse isolation
 DeathCheckpointTests.Run(); // synthetic recording policy, not a live death test
+DefenceHandoffTests.Run(); // target-switch policy only, not live defence
 CorpseDialogTests.Run(); // image matching only; no live capture or click
 CorpseSpotTests.Run(); // geometric heuristic only; no live NPC or mesh test
 
