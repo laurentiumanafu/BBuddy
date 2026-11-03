@@ -9,37 +9,34 @@ internal static class GatherSettingsTests
     {
         string oldPath = Styx.Helpers.Logging.ApplicationPath;
         string folder = Path.Combine(Path.GetTempPath(), "bbuddy-gather-fixture-" + Guid.NewGuid().ToString("N"));
-        bool oldValue = GatherSettings.AllowBackgroundCursorMovement;
+        bool oldMining = GatherSettings.Mining, oldHerbalism = GatherSettings.Herbalism;
+        uint oldMiningSkill = GatherSettings.MiningSkill, oldHerbSkill = GatherSettings.HerbalismSkill;
         try
         {
             Styx.Helpers.Logging.ApplicationPath = folder;
             string settings = Path.Combine(folder, "Settings", "clickaim-gather.txt");
-            GatherSettings.AllowBackgroundCursorMovement = false;
-            GatherSettings.Load();
-            Check(GatherSettings.AllowBackgroundCursorMovement, "missing file enables background default");
+            GatherSettings.Load(); // absent file must remain usable
             Directory.CreateDirectory(Path.GetDirectoryName(settings)!);
-            File.WriteAllText(settings, "Mining=True\n");
-            GatherSettings.AllowBackgroundCursorMovement = false;
+            File.WriteAllText(settings, "Mining=False\nHerbalism=True\nHerbalismSkill=5\nAllowBackgroundCursorMovement=False\n");
             GatherSettings.Load();
-            Check(GatherSettings.AllowBackgroundCursorMovement, "legacy file enables background default");
-            File.WriteAllText(settings, "AllowBackgroundCursorMovement=True\nAllowBackgroundCursorMovement=invalid\n");
-            GatherSettings.Load();
-            Check(!GatherSettings.AllowBackgroundCursorMovement, "invalid setting defaults to strict cursor guard");
-            GatherSettings.AllowBackgroundCursorMovement = true;
+            Check(!GatherSettings.Mining && GatherSettings.Herbalism && GatherSettings.HerbalismSkill == 5,
+                  "legacy false value does not prevent other settings loading");
+            Check(GatherBackgroundFocus.MayRelax(GatherBackgroundFocus.State.OtherApplication, true),
+                  "legacy false value cannot disable automatic background movement");
             Check(GatherSettings.Save(), "save succeeds");
-            GatherSettings.AllowBackgroundCursorMovement = false;
+            string saved = File.ReadAllText(settings);
+            Check(!saved.Contains("AllowBackgroundCursorMovement=") && saved.Contains("Herbalism=True") && saved.Contains("HerbalismSkill=5"),
+                  "obsolete mouse setting removed on save while profession settings persist");
+            GatherSettings.Mining = true; GatherSettings.Herbalism = false; GatherSettings.HerbalismSkill = 1;
             GatherSettings.Load();
-            Check(GatherSettings.AllowBackgroundCursorMovement, "explicit opt-in round trip");
-            GatherSettings.AllowBackgroundCursorMovement = false;
-            Check(GatherSettings.Save(), "save opt-out succeeds");
-            GatherSettings.AllowBackgroundCursorMovement = true;
-            GatherSettings.Load();
-            Check(!GatherSettings.AllowBackgroundCursorMovement, "explicit opt-out round trip");
+            Check(!GatherSettings.Mining && GatherSettings.Herbalism && GatherSettings.HerbalismSkill == 5,
+                  "profession settings round trip");
             Console.WriteLine("Gather settings synthetic fixtures passed.");
         }
         finally
         {
-            GatherSettings.AllowBackgroundCursorMovement = oldValue;
+            GatherSettings.Mining = oldMining; GatherSettings.Herbalism = oldHerbalism;
+            GatherSettings.MiningSkill = oldMiningSkill; GatherSettings.HerbalismSkill = oldHerbSkill;
             Styx.Helpers.Logging.ApplicationPath = oldPath;
             if (Directory.Exists(folder)) Directory.Delete(folder, true);
         }

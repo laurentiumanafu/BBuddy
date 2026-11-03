@@ -94,27 +94,34 @@ internal static class GatherInteraction
         return true;
     }
 
-    // In the opt-in background mode only desktop cursor stillness is relaxed.
-    // Each check fails closed if focus, window geometry or client size changes.
-    // A foreground transition requires a fresh search with the normal guard.
+    // Foreground cursor motion can change the game's hover, so abort that
+    // attempt and retry with a new baseline. Background desktop movement is
+    // irrelevant; either mode still rejects focus or window geometry changes.
     private static bool CursorGuard(IntPtr hwnd, bool background, int realX, int realY,
                                     int width, int height, int originX, int originY,
                                     out string reason, out bool moved)
     {
-        if (!background) return CursorStill(realX, realY, out reason, out moved);
         moved = false;
         GatherBackgroundFocus.State focus = GatherBackgroundFocus.Current(hwnd);
-        if (focus != GatherBackgroundFocus.State.OtherApplication)
+        GatherBackgroundFocus.State expected = background ? GatherBackgroundFocus.State.OtherApplication : GatherBackgroundFocus.State.Game;
+        if (focus != expected)
         {
-            moved = focus == GatherBackgroundFocus.State.Game;
-            reason = focus == GatherBackgroundFocus.State.Game
-                ? "WoW regained focus during background search; restarting with foreground cursor checks"
-                : "background focus could not be confirmed";
+            // A transient/unavailable focus never authorizes a click either;
+            // retry with a fresh focus observation instead of waiting for a cast.
+            moved = true;
+            reason = focus == GatherBackgroundFocus.State.Unavailable ? "game focus could not be confirmed; retrying"
+                           : "game focus changed during hover search; retrying with fresh focus checks";
             return false;
         }
         if (!ClickAimInput.ClientSize(hwnd, out int w, out int h) || w != width || h != height ||
             !GatherBackgroundFocus.TryClientOrigin(hwnd, out int x, out int y) || x != originX || y != originY)
-        { reason = "background game window minimized, moved, resized or unreadable"; return false; }
+        { reason = "game window minimized, moved, resized or unreadable"; return false; }
+        if (!background)
+        {
+            if (!ClickAimInput.MouseButtonsUp())
+            { moved = true; reason = "foreground mouse button held; retrying"; return false; }
+            return CursorStill(realX, realY, out reason, out moved);
+        }
         reason = "";
         return true;
     }
@@ -172,21 +179,17 @@ internal static class GatherInteraction
         Memory? memory = ObjectManager.Wow;
         WowBReader? reader = ObjectManager.WowB;
         if (memory == null || reader == null || memory.WindowHandle != hwnd || !memory.Is64BitTarget
-            || !ClickAimInput.ClientSize(hwnd, out int width, out int height)
-            || !ClickAimInput.TryCursorScreen(out int realX, out int realY)) return false;
-        int originX = 0, originY = 0;
-        bool background = false;
-        if (GatherSettings.AllowBackgroundCursorMovement)
-        {
-            GatherBackgroundFocus.State initialFocus = GatherBackgroundFocus.Current(hwnd);
-            if (initialFocus == GatherBackgroundFocus.State.OtherApplication)
-            {
-                bool geometryAvailable = GatherBackgroundFocus.TryClientOrigin(hwnd, out originX, out originY);
-                if (!geometryAvailable) { reason = "background game window minimized or unreadable"; return false; }
-                background = GatherBackgroundFocus.MayRelax(GatherSettings.AllowBackgroundCursorMovement, initialFocus, geometryAvailable);
-                Logging.Write("[Gather] experimental background mouse movement enabled for this search; final hover and node checks remain");
-            }
-        }
+            || !ClickAimInput.ClientSize(hwnd, out int width, out int height)) return false;
+        GatherBackgroundFocus.State initialFocus = GatherBackgroundFocus.Current(hwnd);
+        if (initialFocus == GatherBackgroundFocus.State.Unavailable)
+        { cursorMoved = true; reason = "game focus could not be confirmed; retrying"; return false; }
+        bool geometryAvailable = GatherBackgroundFocus.TryClientOrigin(hwnd, out int originX, out int originY);
+        if (!geometryAvailable) { reason = "game window minimized or unreadable"; return false; }
+        bool background = GatherBackgroundFocus.MayRelax(initialFocus, geometryAvailable);
+        int realX = 0, realY = 0;
+        if (!background && !ClickAimInput.TryCursorScreen(out realX, out realY))
+        { reason = "foreground desktop cursor unavailable"; return false; }
+        if (background) Logging.Write("[Gather] background mouse movement allowed; final hover and node checks remain");
         using var uncached = memory.TemporaryCacheState(false);
         if (reader.IsExperimental70707)
             Logging.Write("[Gather] 70707 hover GUID candidate RVA 0x" + reader.MouseoverGuidCandidateRva.ToString("X") +
@@ -194,10 +197,13 @@ internal static class GatherInteraction
         // First demand an away transition, so an old/stuck candidate cannot authorize a click.
         if (!CursorGuard(hwnd, background, realX, realY, width, height, originX, originY, out reason, out bool initialMoved))
         { cursorMoved = initialMoved; return false; }
+        if (ClickAimAbort.Requested) { reason = "stopped before hover-away"; return false; }
         reason = "failed to post hover-away mouse move";
         if (!ClickAimInput.PostMouseMoveFraction(hwnd, 0.05, 0.05)) return false;
         reason = "Stop requested while waiting for hover-away";
         if (ClickAimAbort.Wait(400)) return false;
+        if (!CursorGuard(hwnd, background, realX, realY, width, height, originX, originY, out reason, out bool awayMoved))
+        { cursorMoved = awayMoved; return false; }
         reason = "hover-away GUID could not be read";
         if (!ReadHover(memory, reader, out WowBGuid away)) return false;
         reason = "hover-away GUID remained on the node";
@@ -232,6 +238,8 @@ internal static class GatherInteraction
             if (!ClickAimInput.PostMouseMoveFraction(hwnd, x, y)) return false;
             reason = "Stop requested while waiting for hover update";
             if (ClickAimAbort.Wait(350)) return false;
+            if (!CursorGuard(hwnd, background, realX, realY, width, height, originX, originY, out reason, out bool afterHoverMoved))
+            { cursorMoved = afterHoverMoved; return false; }
             sampled++;
             reason = "hover GUID could not be read during search";
             if (!ReadHover(memory, reader, out WowBGuid hover)) return false;
@@ -289,7 +297,14 @@ internal static class GatherInteraction
                 if (!CursorGuard(hwnd, background, realX, realY, width, height, originX, originY, out cursorReason, out moved))
                 { validation = cursorReason; movedDuringValidation = moved; return false; }
                 if (!ReadHover(memory, reader, out WowBGuid final)) { validation = "final hover read failed"; return false; }
-                if (final != hoveredNode.Guid) { validation = "final hover changed to " + final; return false; }
+                if (final != hoveredNode.Guid)
+                {
+                    validation = "final hover changed to " + final;
+                    // No button-down was sent. In the foreground a real mouse
+                    // event may have displaced the hover even below 3 pixels.
+                    movedDuringValidation = !background;
+                    return false;
+                }
                 if (!CursorGuard(hwnd, background, realX, realY, width, height, originX, originY, out cursorReason, out moved))
                 { validation = cursorReason; movedDuringValidation = moved; return false; }
                 return true;

@@ -80,6 +80,16 @@ internal static class ClickAimInput
     [DllImport("user32.dll")]
     private static extern IntPtr GetForegroundWindow();
 
+    [DllImport("user32.dll")]
+    private static extern short GetAsyncKeyState(int key);
+
+    // Do not post a foreground gather click while the real mouse is held.
+    // Background interaction intentionally permits clicks in other applications.
+    internal static bool MouseButtonsUp()
+        => (GetAsyncKeyState(0x01) & 0x8000) == 0 && (GetAsyncKeyState(0x02) & 0x8000) == 0 &&
+           (GetAsyncKeyState(0x04) & 0x8000) == 0 && (GetAsyncKeyState(0x05) & 0x8000) == 0 &&
+           (GetAsyncKeyState(0x06) & 0x8000) == 0;
+
     // Desktop coordinates are used only to detect a human moving the real cursor.
     // The posted gather messages still go exclusively to the game window.
     internal static bool TryCursorScreen(out int x, out int y)
@@ -171,6 +181,7 @@ internal static class ClickAimInput
         reason = "client size changed during final validation";
         if (!ClientSize(hWnd, out int finalWidth, out int finalHeight)
             || finalWidth != expectedWidth || finalHeight != expectedHeight) return false;
+        if (ClickAimAbort.Requested) { reason = "stopped before right-button down"; return false; }
         reason = "posting right-button down failed";
         if (!PostMessageInternal(hWnd, WM_RBUTTONDOWN, new IntPtr(MK_RBUTTON), Lp(x, y))) return false;
         Thread.Sleep(45);

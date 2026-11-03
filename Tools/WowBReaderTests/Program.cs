@@ -39,11 +39,13 @@ Require(GatherBackgroundFocus.Classify(otherWindow, gameWindow, 9, 9) == GatherB
 Require(GatherBackgroundFocus.Classify(otherWindow, gameWindow, 10, 9) == GatherBackgroundFocus.State.OtherApplication, "different process foreground");
 Require(GatherBackgroundFocus.Classify(otherWindow, gameWindow, 0, 9) == GatherBackgroundFocus.State.Unavailable, "foreground process unavailable");
 Require(GatherBackgroundFocus.Classify(otherWindow, gameWindow, 10, 0) == GatherBackgroundFocus.State.Unavailable, "game process unavailable");
-Require(GatherBackgroundFocus.MayRelax(true, GatherBackgroundFocus.State.OtherApplication, true), "background opt-in with geometry");
-Require(!GatherBackgroundFocus.MayRelax(false, GatherBackgroundFocus.State.OtherApplication, true), "opt-in required");
-Require(!GatherBackgroundFocus.MayRelax(true, GatherBackgroundFocus.State.OtherApplication, false), "missing geometry rejected");
-Require(!GatherBackgroundFocus.MayRelax(true, GatherBackgroundFocus.State.Unavailable, true), "unavailable focus rejected");
-Require(!GatherBackgroundFocus.MayRelax(true, GatherBackgroundFocus.State.Game, true), "game focus rejected");
+Require(GatherBackgroundFocus.MayRelax(GatherBackgroundFocus.State.OtherApplication, true), "background cursor movement automatically allowed with geometry");
+Require(!GatherBackgroundFocus.MayRelax(GatherBackgroundFocus.State.OtherApplication, false), "missing geometry rejected");
+Require(!GatherBackgroundFocus.MayRelax(GatherBackgroundFocus.State.Unavailable, true), "unavailable focus rejected");
+Require(!GatherBackgroundFocus.MayRelax(GatherBackgroundFocus.State.Game, true), "foreground retains fresh cursor checks");
+Require(GatherBackgroundFocus.RetryCursorInterruption(false, true), "unposted cursor interruption retries promptly");
+Require(!GatherBackgroundFocus.RetryCursorInterruption(true, true) &&
+        !GatherBackgroundFocus.RetryCursorInterruption(false, false), "posted clicks and other failures retain normal cast wait");
 
 // A deterministic byte-addressed process-memory substitute. No game or native
 // calls: exercises the real pool reader and snapshot filtering logic.

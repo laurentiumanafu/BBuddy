@@ -3,9 +3,9 @@ using System.Runtime.InteropServices;
 
 namespace Styx.Logic.Pathing;
 
-// Focus is not proof of mouse isolation or authorization to click. The separate
-// experimental gather option only relaxes cursor stillness; all identity and
-// final hover checks still apply.
+// Focus is not proof of mouse isolation or authorization to click. Gathering
+// can ignore desktop cursor motion while another application is focused; all
+// identity, geometry and final hover checks still apply.
 internal static class GatherBackgroundFocus
 {
     internal enum State { OtherApplication, Unavailable, Game }
@@ -27,8 +27,12 @@ internal static class GatherBackgroundFocus
         return process == gameProcess ? State.Game : State.OtherApplication;
     }
 
-    internal static bool MayRelax(bool enabled, State state, bool geometryAvailable)
-        => enabled && state == State.OtherApplication && geometryAvailable;
+    internal static bool MayRelax(State state, bool geometryAvailable)
+        => state == State.OtherApplication && geometryAvailable;
+
+    // A cursor interruption is retryable only if no button-down was posted.
+    internal static bool RetryCursorInterruption(bool buttonDownSent, bool cursorInterrupted)
+        => !buttonDownSent && cursorInterrupted;
 
     internal static State Current(IntPtr hwnd)
     {
