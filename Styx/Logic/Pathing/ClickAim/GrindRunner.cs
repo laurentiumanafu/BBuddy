@@ -1080,6 +1080,7 @@ internal static class GrindRunner
         _healthPeak = 0;
         _buffsApplied = false;
         _healCostGuess = 0;
+        _healCostSpellId = 0;
         _castCosts.Clear();
         Logging.Write("[Grind] combat settings: " + ClickAimSettings.Describe() + "; rotation " + ClickAimSettings.RotationClass);
 
@@ -2011,7 +2012,7 @@ internal static class GrindRunner
             ClickAimInput.TapKey(hwnd, 0x70, 40);
             if (ClickAimAbort.Wait(TabSettleMs) || _stop) return;
             if (ObjectManager.Wow == memory && ObjectManager.WowB == reader && reader.ReadTargetGuid() == player)
-                Logging.Write("[Grind] moved selection off " + rejected + " to self (F1 verified)");
+                Logging.Write("[Grind] moved selection off " + rejected + " to self (F1 verified; dismissal only, no heal)");
             else
                 Logging.Write("[Grind] F1 did not confirm self-target; selection was not cleared");
         }
@@ -2349,46 +2350,10 @@ internal static class GrindRunner
 
     // ------------------------------------------------------------------ the heal's price
 
-    /// <summary>
-    /// Whether there is enough power to pay for a heal.
-    ///
-    /// Two rules, and both come from a real failure. The user's character was below 60% health
-    /// with no mana and the rotation kept pressing Healing Touch: every press failed for want of
-    /// mana, every press ate a global cooldown, and the mob finished the character off. So:
-    ///
-    ///  * power must be at least <see cref="ClickAimSettings.HealMinManaPercent"/> of the best
-    ///    maximum this session has seen (the max-power word reads 100 for 139 power on this
-    ///    build, hence the peak rather than the field);
-    ///  * and, once a heal has been seen to cost something, power must cover that cost with a
-    ///    little to spare - a heal that leaves nothing behind is a heal that stops the fight.
-    ///
-    /// When this says no, the rotation does NOT heal. It fights with auto-attack and anything
-    /// still affordable, which is what a player does.
-    /// </summary>
+    // This is a threshold and a net-spend estimate, not an authoritative spell-cost read.
     private static bool HealPowerOk(uint power, uint maxPower)
-    {
-        /* The price rule first, and it does not depend on a maximum being readable. The
-         * 22:47 run is why: the max-power word read 0 that session, the old code took "no
-         * denominator" for "no opinion" and returned true, and a shaman with 13 power pressed
-         * Healing Wave twice while a mob took it apart. A heal whose cost has been measured is
-         * a heal whose affordability can be answered outright. */
-        if (_healCostGuess > 0 && power < _healCostGuess + _healCostGuess / 4)
-            return false;
-
-        uint denom = DenomPower(maxPower);
-        if (denom == 0)
-        {
-            /* No maximum and no price learned yet: the only honest rule left is that a heal
-             * needs power to exist at all, so that the press is not a guaranteed refusal. */
-            return power > 0;
-        }
-
-        if (ClickAimSettings.HealMinManaPercent > 0
-            && power * 100.0 / denom < ClickAimSettings.HealMinManaPercent)
-            return false;
-
-        return true;
-    }
+        => ClickAimHealPolicy.PowerAllowed(power, maxPower, _manaPeak,
+                                          ClickAimSettings.HealMinManaPercent, _healCostGuess);
 
     /// <summary>
     /// The denominator for any power percentage: the recorded maximum, else the highest value
@@ -3303,11 +3268,12 @@ internal static class GrindRunner
     private static bool _buffsApplied;
 
     /// <summary>
-    /// What the heal has been seen to cost, in power. Learned from the first heal that actually
-    /// worked (power before minus power after), because this build exposes no spell costs and a
-    /// guess is what makes a character press a heal it cannot pay for.
+    /// Largest observed net power drop after this spell's heal key, reset for a different
+    /// spell/rank and for each run. Regeneration or other effects can distort this estimate;
+    /// it is not authoritative spell-cost or cast-success data.
     /// </summary>
     private static uint _healCostGuess;
+    private static int _healCostSpellId;
 
     /// <summary>
     /// What each damage spell has been seen to cost, by spell id. Same reasoning as the heal,
@@ -3549,7 +3515,7 @@ internal static class GrindRunner
     }
 
     // Gather uses the Grind rotation only while the player combat candidate is set.
-    // TAB confirms a changed selection, not that the selected NPC is the attacker.
+    // A nearby selection, even one made with TAB, does not identify the attacker.
     internal static void PrepareGatherDefence()
     {
         lock (StartStopGate)
@@ -3569,6 +3535,9 @@ internal static class GrindRunner
         ClickAimSettings.Load();
         _manaPeak = 0;
         _healthPeak = 0;
+        _healCostGuess = 0;
+        _healCostSpellId = 0;
+        _castCosts.Clear();
         _restHeldQuietAt = unchecked(Environment.TickCount - 15001);
         // Seed the observed peaks now; if already low and max-power is unreadable,
         // a reliable mana percentage cannot be reconstructed from one observation.
@@ -3736,22 +3705,20 @@ internal static class GrindRunner
             {
                 if (!TryReadGatherCombat(out fighting) || !fighting) return "combat ended or state unreadable";
                 WowBGuid before = reader.ReadTargetGuid();
-                if (before == candidate.Guid)
+                // Reuse an already-selected nearby candidate instead of selecting
+                // self to force TAB. Otherwise require TAB to select this candidate.
+                // In either case the live checks below still apply; neither
+                // proximity nor TAB proves hostility or attacker identity.
+                if (before != candidate.Guid)
                 {
-                    // TAB may keep a pre-existing selection without validating it. As in
-                    // Grind's heal routine, try F1 (default select self) and VERIFY it
-                    // actually selected the player before using TAB as a fresh selection.
-                    ClickAimInput.TapKey(hwnd, 0x70, 40);
+                    ClickAimInput.TapKey(hwnd, TabVk, 40);
                     if (ClickAimAbort.Wait(TabSettleMs)) return "stopped";
-                    before = reader.ReadTargetGuid();
-                    if (before != player.Guid) continue;
                 }
-                ClickAimInput.TapKey(hwnd, TabVk, 40);
-                if (ClickAimAbort.Wait(TabSettleMs)) return "stopped";
                 if (!TryReadGatherCombat(out fighting) || !fighting) return "combat ended or state unreadable";
                 if (!Capture(out snap) || snap == null || !snap.TryGetLocalPlayer(out player)
                     || !snap.TryGetSelectedTarget(out WowBObservedUnit selected)
-                    || selected.Guid == before || selected.Guid != candidate.Guid
+                    || selected.Guid != candidate.Guid || selected.UnitAddress != candidate.UnitAddress
+                    || selected.RecordAddress != candidate.RecordAddress
                     || selected.IsLocalPlayer || selected.HasPlayerVtable
                     || !reader.TryGetUnitFields(selected.UnitAddress, out WowBReader.WowBUnitFields current)
                     || !DefenceFieldsValid(current.Health, current.UnitFlags, grindMode && _notViable.Contains(selected.Guid))
@@ -3759,15 +3726,15 @@ internal static class GrindRunner
                     || ClickAimMath.Len(selected.Location.X - player.Location.X, selected.Location.Y - player.Location.Y) > GatherDefenceRadius)
                     continue;
                 Logging.Write((grindMode ? "[Grind]" : "[Gather]")
-                    + " combat: rotation on nearby TAB-selected NPC " + selected.Guid
-                    + "; proximity and TAB do not prove it is the attacker");
+                    + " combat: rotation on nearby " + (selected.Guid == before ? "already-selected" : "TAB-selected")
+                    + " NPC " + selected.Guid + "; proximity and TAB do not prove it is the attacker");
                 if (grindMode) LogFactionFight(reader, selected, true);
                 engaged = true;
                 try { return FightDefenceWithHandoffs(hwnd, reader, grindMode, player, selected); }
                 finally { ClickAimKeySteer.ReleaseHeld(); }
             }
         }
-        return "no nearby candidate confirmed by a changed TAB selection; holding position";
+        return "no eligible nearby NPC selected by the defensive TAB check; holding position";
     }
 
     private static bool InRealCombat()
@@ -4682,30 +4649,58 @@ internal static class GrindRunner
              * the rotation hammering the heal key while the mob finished it off. Below the line
              * the heal is skipped and the loop carries on to damage and auto-attack, which cost
              * nothing. */
+            if (heal != null && _healCostSpellId != heal.Id)
+            {
+                _healCostSpellId = heal.Id;
+                _healCostGuess = 0; // never apply another spell or rank's observed cost
+            }
             bool healPowerOk = heal != null && HealPowerOk(myMana, myMaxMana);
             if (heal != null && !healPowerOk && !healBlocked && !healRefusalLogged
                 && ClickAimSettings.HealBelowPercent > 0 && myPercent <= ClickAimSettings.HealBelowPercent)
             {
                 healRefusalLogged = true;
                 Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                    "[Grind] health {0:F0}% is under the heal line and there is {1}/{2} power - not "
-                    + "enough for {3} (needs {4}% and a cast's worth), so this fight is fought with "
-                    + "auto-attack and whatever still casts", myPercent, myMana,
+                    "[Grind] health {0:F0}% is under the heal line and there is {1}/{2} power - "
+                    + "{3} is below the heal safety gate ({4}% and any observed cost estimate), "
+                    + "so this fight uses auto-attack and whatever still casts", myPercent, myMana,
                     myMaxMana > 0 ? myMaxMana : _manaPeak, heal.Name,
                     ClickAimSettings.HealMinManaPercent));
             }
 
-            if (heal != null && healPowerOk && !healBlocked
-                && ClickAimSettings.HealBelowPercent > 0
-                && myMaxHealth > 0 && myPercent <= ClickAimSettings.HealBelowPercent
-                && unchecked(Environment.TickCount - lastHealMs) >= ClickAimCombat.HealRetryMs)
+            if (ClickAimHealPolicy.ShouldSelectSelf(heal, healBlocked, myHealth, myMaxHealth,
+                    ClickAimSettings.HealBelowPercent,
+                    unchecked(Environment.TickCount - lastHealMs) >= ClickAimCombat.HealRetryMs, healPowerOk)
+                && heal != null)
             {
-                lastHealMs = Environment.TickCount;
-                meleeSwinging = false;          // a cast stops auto-attack; it must be restarted
-                uint powerBeforeHeal = myMana;
                 StopAndSettle(hwnd);             // the chase may still be holding forward
                 if (_stop || ClickAimAbort.Requested) return "stopped";
-                ClickAimInput.TapKey(hwnd, 0x70, 40);                  // F1 = target self (Blizzard default)
+                // Recheck the actual slot, live role, attachment, player and vitals after
+                // stopping movement, before F1 can select the player.
+                uint powerBeforeHeal;
+                using (fightMemory.TemporaryCacheState(false))
+                {
+                    if (reader == null || ObjectManager.WowB != reader || ObjectManager.Wow != fightMemory)
+                        return "attachment changed; heal withheld";
+                    if (reader.IsExperimental70707 && !WowBGrindFactions.Experimental70707BarSafe(reader))
+                        return "action bar changed; heal withheld";
+                    if (!ClickAimHealPolicy.StillOnBar(heal, ClickAimCombat.ReadBar(reader)))
+                    { heal = null; continue; }
+                    if (!Capture(out WowBWorldSnapshot? healSnapshot) || healSnapshot == null ||
+                        !healSnapshot.TryGetLocalPlayer(out WowBObservedUnit healPlayer) ||
+                        healPlayer.Guid != me.Guid || healPlayer.UnitAddress != me.UnitAddress ||
+                        !reader.TryGetUnitFields(healPlayer.UnitAddress, out WowBReader.WowBUnitFields freshHeal))
+                        return reader.IsExperimental70707 ? StopFightForSafety("heal player vitals unreadable; stopping") : "heal player vitals unreadable; heal withheld";
+                    if (reader.ReadTargetGuid() != target.Guid)
+                        return YieldForTargetChange(reader, fightMemory, defenceTarget);
+                    if (!ClickAimHealPolicy.ShouldSelectSelf(heal, healBlocked, freshHeal.Health, freshHeal.MaxHealth,
+                        ClickAimSettings.HealBelowPercent, true, HealPowerOk(freshHeal.Power, freshHeal.MaxPower)))
+                        continue;
+                    powerBeforeHeal = freshHeal.Power;
+                    if (_stop || ClickAimAbort.Requested || ObjectManager.Wow != fightMemory || ObjectManager.WowB != reader) return "stopped or attachment changed; heal withheld";
+                    lastHealMs = Environment.TickCount;
+                    Logging.Write("[Grind] selecting self for " + heal.Name + " (actual mana cost unknown; threshold and observed drop are estimates)");
+                    ClickAimInput.TapKey(hwnd, 0x70, 40);                  // F1 = target self (Blizzard default)
+                }
                 if (ClickAimAbort.Wait(120) || _stop) return "stopped";
                 GreenMagic.Memory? healMemory = ObjectManager.Wow;
                 if (reader == null || healMemory == null || healMemory != fightMemory) return "self-target or attachment unreadable; heal withheld";
@@ -4714,10 +4709,40 @@ internal static class GrindRunner
                     if (ObjectManager.WowB != reader || ObjectManager.Wow != healMemory || reader.ReadTargetGuid() != me.Guid)
                         return "F1 did not confirm self-target; heal withheld";
                 }
-                if (_stop || ClickAimAbort.Requested) return "stopped";
-                if (reader.IsExperimental70707 && !WowBGrindFactions.Experimental70707BarSafe(reader)) return "action bar changed; heal withheld";
-                if (!heal.IsHeal) return "heal role changed; heal withheld";
-                ClickAimInput.TapKey(hwnd, heal.KeyVk, 40);
+                using (healMemory.TemporaryCacheState(false))
+                {
+                    if (_stop || ClickAimAbort.Requested || ObjectManager.Wow != healMemory || ObjectManager.WowB != reader) return "stopped or attachment changed; heal withheld";
+                    if (reader.IsExperimental70707 && !WowBGrindFactions.Experimental70707BarSafe(reader)) return "action bar changed; heal withheld";
+                    bool slotReady = ClickAimHealPolicy.StillOnBar(heal, ClickAimCombat.ReadBar(reader));
+                    WowBReader.WowBUnitFields finalHeal = default;
+                    bool fieldsReady = Capture(out WowBWorldSnapshot? finalSnapshot) && finalSnapshot != null &&
+                        finalSnapshot.TryGetLocalPlayer(out WowBObservedUnit finalPlayer) &&
+                        finalPlayer.Guid == me.Guid && finalPlayer.UnitAddress == me.UnitAddress &&
+                        reader.TryGetUnitFields(finalPlayer.UnitAddress, out finalHeal);
+                    if (!fieldsReady)
+                        return reader.IsExperimental70707 ? StopFightForSafety("heal player identity or vitals unreadable; stopping") : "heal player identity or vitals unreadable; heal withheld";
+                    if (finalHeal.MaxHealth > 0 && finalHeal.Health == 0)
+                        return reader.IsExperimental70707 ? StopFightForSafety("the character died before the heal; stopping") : "the character died before the heal; stopping the fight";
+                    bool vitalsReady = ClickAimHealPolicy.ShouldSelectSelf(heal, healBlocked, finalHeal.Health, finalHeal.MaxHealth,
+                        ClickAimSettings.HealBelowPercent, true, HealPowerOk(finalHeal.Power, finalHeal.MaxPower));
+                    if (_stop || ClickAimAbort.Requested || ObjectManager.Wow != healMemory || ObjectManager.WowB != reader || reader.ReadTargetGuid() != me.Guid)
+                        return "stopped or self-target changed; heal withheld";
+                    if (!slotReady || !vitalsReady)
+                    {
+                        Logging.Write("[Grind] heal slot, role or vitals changed after F1; heal withheld, restoring combat target");
+                        if (TryRestoreHealTarget(hwnd, reader, fightMemory, target.Guid, expectedPull, defenceOnly, defenceFactionFilter)) continue;
+                        if (_stop || ClickAimAbort.Requested) return "stopped";
+                        if (reader.IsExperimental70707) return YieldForTargetChange(reader, fightMemory, target.Guid);
+                        _stop = true; ClickAimAbort.Request();
+                        return "could not recover the same target after withholding heal; stopped rather than switching mobs";
+                    }
+                    powerBeforeHeal = finalHeal.Power;
+                    myHealth = finalHeal.Health;
+                    myMaxHealth = finalHeal.MaxHealth;
+                    myPercent = myHealth * 100.0 / myMaxHealth;
+                    meleeSwinging = false;          // a cast stops auto-attack; it must be restarted
+                    ClickAimInput.TapKey(hwnd, heal.KeyVk, 40);
+                }
 
                 /* Wait for the heal to actually land. Healing Touch is a 1.5 s cast on top
                  * of the retarget, and the previous version read my health once at 1.8 s and
@@ -4756,8 +4781,8 @@ internal static class GrindRunner
                         "[Grind] health {0:F0}% -> {1}/{2} with {3} (slot {4}){5}. Back to the mob",
                         myPercent, afterHealth, myMaxHealth, heal.Name, heal.Slot,
                         _healCostGuess > 0
-                            ? " for " + _healCostGuess.ToString(CultureInfo.InvariantCulture) + " power"
-                            : ""));
+                            ? " (observed net power drop up to " + _healCostGuess.ToString(CultureInfo.InvariantCulture) + "; actual cost unknown)"
+                            : " (actual cost unknown)"));
                 }
                 else
                 {
@@ -4788,32 +4813,13 @@ internal static class GrindRunner
                  * is not necessarily the thing that is hitting us. Cycle until the guid
                  * matches, and give up after four tries rather than churning the target. */
                 WowBGuid wanted = target.Guid;
-                bool recovered = false;
-                for (int tries = 0; tries < 4; tries++)
-                {
-                    if (_stop || ClickAimAbort.Requested) return "stopped";
-                    WowBWorldSnapshot? back;
-                    WowBObservedUnit selected;
-                    if (Capture(out back) && back != null && back.TryGetSelectedTarget(out selected)
-                        && selected.Guid == wanted &&
-                        (defenceOnly && !defenceFactionFilter || FactionPullStillAllowed(reader, expectedPull, selected)))
-                    { recovered = true; break; }
-                    ClickAimInput.TapKey(hwnd, TabVk, 40);
-                    if (ClickAimAbort.Wait(TabSettleMs)) return "stopped";
-                }
+                bool recovered = TryRestoreHealTarget(hwnd, reader, fightMemory, wanted, expectedPull, defenceOnly, defenceFactionFilter);
                 if (!recovered)
                 {
-                    // Check once more after the last TAB, then stop instead of
-                    // allowing defence to attack whichever different mob it chose.
-                    recovered = Capture(out WowBWorldSnapshot? finalBack) && finalBack != null &&
-                        finalBack.TryGetSelectedTarget(out WowBObservedUnit finalTarget) && finalTarget.Guid == wanted &&
-                        (defenceOnly && !defenceFactionFilter || FactionPullStillAllowed(reader, expectedPull, finalTarget));
-                    if (!recovered)
-                    {
-                        const string reason = "could not recover the same target after healing; stopped rather than switching mobs";
-                        if (reader?.IsExperimental70707 == true) return YieldForTargetChange(reader, fightMemory, wanted);
-                        _stop = true; ClickAimAbort.Request(); return reason;
-                    }
+                    if (_stop || ClickAimAbort.Requested) return "stopped";
+                    const string reason = "could not recover the same target after healing; stopped rather than switching mobs";
+                    if (reader.IsExperimental70707) return YieldForTargetChange(reader, fightMemory, wanted);
+                    _stop = true; ClickAimAbort.Request(); return reason;
                 }
                 continue;
             }
@@ -5300,6 +5306,28 @@ internal static class GrindRunner
                + (auto == null ? "" : " and auto-attack did not start")
                + "; its health is still "
                + (lastHealth >= 0 ? lastHealth.ToString(CultureInfo.InvariantCulture) : "unreadable");
+    }
+
+    // TAB is used only to restore the original target; no attack is sent here.
+    // A changed target remains subject to the normal defence handoff checks.
+    private static bool TryRestoreHealTarget(IntPtr hwnd, WowBReader reader, GreenMagic.Memory memory, WowBGuid wanted,
+                                             WowBObservedUnit expectedPull, bool defenceOnly, bool defenceFactionFilter)
+    {
+        for (int tries = 0; tries < 4; tries++)
+        {
+            if (_stop || ClickAimAbort.Requested || ObjectManager.WowB != reader || ObjectManager.Wow != memory ||
+                (reader.IsExperimental70707 && !WowBGrindFactions.Experimental70707BarSafe(reader))) return false;
+            if (Capture(out WowBWorldSnapshot? back) && back != null && back.TryGetSelectedTarget(out WowBObservedUnit selected) &&
+                selected.Guid == wanted &&
+                (defenceOnly && !defenceFactionFilter || FactionPullStillAllowed(reader, expectedPull, selected))) return true;
+            ClickAimInput.TapKey(hwnd, TabVk, 40);
+            if (ClickAimAbort.Wait(TabSettleMs)) return false;
+        }
+        return !_stop && !ClickAimAbort.Requested && ObjectManager.WowB == reader && ObjectManager.Wow == memory &&
+            (!reader.IsExperimental70707 || WowBGrindFactions.Experimental70707BarSafe(reader)) &&
+            Capture(out WowBWorldSnapshot? last) && last != null && last.TryGetSelectedTarget(out WowBObservedUnit finalTarget) &&
+            finalTarget.Guid == wanted &&
+            (defenceOnly && !defenceFactionFilter || FactionPullStillAllowed(reader, expectedPull, finalTarget));
     }
 
     /// <summary>

@@ -48,7 +48,7 @@
                 <TextBlock Grid.Row="2" Grid.Column="0" VerticalAlignment="Center" Margin="0,0,8,8"
                            Text="...but only while power is at least (percent)"/>
                 <TextBox x:Name="txtHealMana" Grid.Row="2" Grid.Column="1" Margin="0,0,0,8"
-                         ToolTip="A heal costs mana. Below this line the bot does not press it: it fights with auto-attack and whatever still casts."/>
+                         ToolTip="Below this power percentage, heals are withheld. The client spell cost is not readable: the percentage and any observed power drop are only estimates and cannot guarantee the heal is affordable."/>
 
                 <TextBlock Grid.Row="3" Grid.Column="0" VerticalAlignment="Center" Margin="0,0,8,8"
                            Text="Eat at or below (percent health)"/>

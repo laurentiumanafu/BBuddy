@@ -33,6 +33,7 @@ namespace Styx.WoWInternals
     }
     sealed class WowBReader
     {
+        public bool IsExperimental70707;
         public struct WowBUnitFields { public uint Health, UnitFlags, Level; }
         public Dictionary<ulong, WowBUnitFields> Fields = new();
         public WowBGuid Selected;
@@ -74,7 +75,7 @@ namespace Styx.Logic.Pathing
     static class RouteRunner
     {
         public static Func<bool>? ShouldInterrupt;
-        public static bool PollInterruptDuringWalk, RequireMeshDuringSession, LastRunInterrupted;
+        public static bool PollInterruptDuringWalk, RequireMeshDuringSession, LastRunInterrupted, StopRequested;
         public static bool RunWithinSession(ClickAimMover mover, IList<RoutePoint> route, int legs)
         { Harness.VendorRouteCalls++; return Harness.VendorRouteWorks && RequireMeshDuringSession && !(ShouldInterrupt?.Invoke() ?? false); }
         public static WoWPoint[]? TryCombatMeshPath(double x, double y, RoutePoint goal)
@@ -90,6 +91,7 @@ namespace Styx.Logic.Pathing
     static class ClickAimKeySteer
     {
         public static bool Face(double x, double y, IntPtr hwnd, double angle, int attempts) => true;
+        public static bool EnsureChaseTurnKeys(IntPtr hwnd, Func<bool> allowed, out string result) { result = ""; return allowed(); }
         public static int Releases;
         public static void ReleaseHeld() { Releases++; }
         public static void BeginMeshPoint() { }
@@ -125,6 +127,7 @@ namespace Styx.Logic.Pathing
     static class GrindFactionSettings { public static class Rules { public static bool Enabled; public static string Mode = "Allow"; public static string KeyText = "189"; } }
     static class WowBGrindFactions
     {
+        public static bool Experimental70707BarSafe(WowBReader reader) => true;
         public static bool Allowed = true;
         public static readonly Dictionary<ulong, bool> PerUnit = new();
         public static readonly HashSet<ulong> KnownRejected = new();
@@ -132,6 +135,12 @@ namespace Styx.Logic.Pathing
         public static bool AllowsPull(WowBReader? reader, WowBObservedUnit unit, out bool unknown)
         { bool allowed = PerUnit.TryGetValue(unit.UnitAddress, out bool value) ? value : Allowed;
           unknown = GrindFactionSettings.Rules.Enabled && !allowed && !KnownRejected.Contains(unit.UnitAddress); return !GrindFactionSettings.Rules.Enabled || allowed; }
+    }
+    static class ClickAimCombat { public const double CasterRangeYd = 28; }
+    static class WowBDefenceHandoff
+    {
+        public static bool MayQueue(WowBGuid previous, WowBGuid selected, bool stopped) => !stopped && !previous.IsEmpty && !selected.IsEmpty && previous != selected;
+        public static bool MayFight(WowBGuid queued, WowBGuid selected, bool stopped, bool fighting, bool isLocalPlayer, bool hasPlayerVtable, bool fieldsValid, bool factionAllowed, double distance, double maxDistance) => !stopped && fighting && !queued.IsEmpty && queued == selected && !isLocalPlayer && !hasPlayerVtable && fieldsValid && factionAllowed && double.IsFinite(distance) && distance >= 0 && distance <= maxDistance;
     }
     static class ClickAimSettings { public static int VendorSearchYd = 25, VendorWaitMs = 0, SellAfterLoots = 40; public static bool AutoSell = true; }
     static class VendorFile
@@ -150,6 +159,9 @@ namespace Styx.Logic.Pathing
     {
         // __PRODUCTION_LEVEL_CONSTANTS__
         private static bool _stop, _vendorDue, _combatHold, _running, _clickBiasKnown, _vendorImpossible, _vendorManualPending;
+        private static WowBGuid _defenceHandoffGuid, _focusedFightGuid;
+        private static bool _focusedDamageObserved;
+        private static bool CheckDeathCheckpoint(bool trackerOnly = false) => false;
         private static int _vendorRetryAt, _killsSinceTrip, _lootsSinceTrip, _interruptQuietUntil;
         internal static int VendorRouteCalls; internal static bool VendorRouteWorks = true;
         private static bool StopForRest(IntPtr hwnd) => !ClickAimAbort.Requested && !_stop;
@@ -217,7 +229,7 @@ namespace Styx.Logic.Pathing
             var player = new WowBObservedUnit { Guid = PlayerGuid, IsLocalPlayer = true, UnitAddress = 1 };
             var target = new WowBObservedUnit { Guid = TargetGuid, UnitAddress = 2, RecordAddress = 20, Location = new Location { X = distance } };
             snapshot = new WowBWorldSnapshot { Reader = reader, Player = player, Units = new() { player, target } };
-            _stop = false; ClickAimAbort.Requested = false; Combat = true; CombatReadable = true; fightCalls = 0;
+            _stop = false; RouteRunner.StopRequested = false; _defenceHandoffGuid = default; _focusedFightGuid = default; _focusedDamageObserved = false; ClickAimAbort.Requested = false; Combat = true; CombatReadable = true; fightCalls = 0;
             ClickAimInput.Keys = 0; ClickAimInput.Clicks = 0; _running = true; ClickAimInput.F1Works = true; ClickAimInput.TabWorks = true;
             ClickAimInput.CombatEndsOnTab = false; ClickAimInput.TargetDiesOnTab = false; ClickAimInput.StopOnTap = false; ClickAimInput.FactionChangesOnTab = false; ClickAimInput.TabTarget = TargetGuid;
             _notViable.Clear(); _tabRefusedUntil.Clear(); _vendorDue = false; _combatHold = false; steps = 0; dropped = 0;
@@ -270,7 +282,7 @@ namespace Styx.Logic.Pathing
             Setup(5); GrindFactionSettings.Rules.Enabled = true; WowBGrindFactions.Allowed = false;
             Require(Defend().Contains("faction blocked 1") && fightCalls == 0 && ClickAimInput.Keys == 0, "Grind defence does not attack unlisted or unknown faction");
             Setup(5); GrindFactionSettings.Rules.Enabled = true; ClickAimInput.FactionChangesOnTab = true;
-            Require(Defend().Contains("no nearby candidate confirmed") && fightCalls == 0, "defence rechecks faction after TAB");
+            Require(Defend().Contains("no eligible nearby NPC selected") && fightCalls == 0, "defence rechecks faction after TAB");
             Setup(5); GrindFactionSettings.Rules.Enabled = true; WowBGrindFactions.Allowed = false;
             Require(Defend(false) == "fight" && fightCalls == 1, "independent GatherBuddy defence remains unchanged");
             Setup(5); GrindFactionSettings.Rules.Enabled = true;
@@ -284,12 +296,22 @@ namespace Styx.Logic.Pathing
             Setup(5); _notViable.Add(TargetGuid); Require(Defend(false) == "fight" && fightCalls == 1, "Gather does not use Grind refusal list");
             Setup(5); ObjectManager.WowB!.Fields.Clear(); Require(Defend().Contains("unreadable 1") && fightCalls == 0, "unreadable fields rejected");
             Setup(5, distance: 13); Require(Defend().Contains("nearby 0") && fightCalls == 0, "outside defence radius rejected");
-            Setup(5); ClickAimInput.TabWorks = false; Require(Defend().Contains("no nearby candidate confirmed") && fightCalls == 0, "unchanged TAB is not confirmation");
-            Setup(5); ClickAimInput.TabTarget = new WowBGuid(3); Require(Defend().Contains("no nearby candidate confirmed") && fightCalls == 0, "different TAB target is not confirmation");
-            Setup(5); ObjectManager.WowB!.Selected = TargetGuid; Require(Defend() == "fight" && ClickAimInput.Keys == 2, "already selected requires verified F1 then TAB");
-            Setup(5); ObjectManager.WowB!.Selected = TargetGuid; ClickAimInput.F1Works = false; Require(fightCalls == 0 && Defend().Contains("no nearby candidate confirmed") && fightCalls == 0, "rebound F1 fails closed");
+            Setup(5); ClickAimInput.TabWorks = false; Require(Defend().Contains("no eligible nearby NPC selected") && fightCalls == 0, "unchanged TAB is not confirmation");
+            Setup(5); ClickAimInput.TabTarget = new WowBGuid(3); Require(Defend().Contains("no eligible nearby NPC selected") && fightCalls == 0, "different TAB target is not confirmation");
+            Setup(5); ObjectManager.WowB!.Selected = TargetGuid; Require(Defend() == "fight" && ClickAimInput.Keys == 0, "already selected defence does not use F1 or TAB");
+            Setup(5); ObjectManager.WowB!.Selected = TargetGuid; ClickAimInput.F1Works = false; Require(Defend() == "fight" && fightCalls == 1 && ClickAimInput.Keys == 0, "already-selected defence does not depend on F1");
+            Setup(5); ObjectManager.WowB!.IsExperimental70707 = true; ObjectManager.WowB.Selected = TargetGuid;
+            Require(Defend() == "fight" && fightCalls == 1 && ClickAimInput.Keys == 0, "70707 already-selected defence never self-selects");
+            Setup(5); ObjectManager.WowB!.IsExperimental70707 = true; ObjectManager.WowB.Selected = TargetGuid; GrindFactionSettings.Rules.Enabled = true; WowBGrindFactions.Allowed = false;
+            Require(Defend().Contains("faction blocked 1") && fightCalls == 0 && ClickAimInput.Keys == 0, "already-selected blocked faction still withheld");
+            Setup(5); ObjectManager.WowB!.Selected = PlayerGuid;
+            Require(TryRestoreHealTarget(new IntPtr(1), ObjectManager.WowB, ObjectManager.Wow!, TargetGuid, snapshot.Units[1], true, false) && ObjectManager.WowB.Selected == TargetGuid && ClickAimInput.Keys == 1, "withheld heal restores only original target");
+            Setup(5); ObjectManager.WowB!.Selected = PlayerGuid; ClickAimInput.TabWorks = false;
+            Require(!TryRestoreHealTarget(new IntPtr(1), ObjectManager.WowB, ObjectManager.Wow!, TargetGuid, snapshot.Units[1], true, false) && ClickAimInput.Keys == 4, "failed restoration stays bounded");
+            Setup(5); ObjectManager.WowB!.Selected = PlayerGuid; ClickAimInput.StopOnTap = true;
+            Require(!TryRestoreHealTarget(new IntPtr(1), ObjectManager.WowB, ObjectManager.Wow!, TargetGuid, snapshot.Units[1], true, false) && ClickAimInput.Keys == 1, "STOP interrupts target restoration");
             Setup(5); ClickAimInput.CombatEndsOnTab = true; Require(Defend().Contains("combat ended") && fightCalls == 0, "combat ending blocks fight");
-            Setup(5); ClickAimInput.TargetDiesOnTab = true; Require(Defend().Contains("no nearby candidate confirmed") && fightCalls == 0, "target fields rechecked after TAB");
+            Setup(5); ClickAimInput.TargetDiesOnTab = true; Require(Defend().Contains("no eligible nearby NPC selected") && fightCalls == 0, "target fields rechecked after TAB");
             Setup(5); ClickAimInput.StopOnTap = true; Require(Defend() == "stopped" && fightCalls == 0 && ClickAimInput.Keys == 1, "STOP during TAB blocks fight");
             Setup(5); CombatReadable = false; Require(Defend() == "" && fightCalls == 0 && ClickAimInput.Keys == 0, "unreadable combat blocks defence input");
             Setup(5); ClickAimAbort.Requested = true; Require(Defend() == "" && fightCalls == 0 && ClickAimInput.Keys == 0, "STOP blocks defence input");

@@ -13,6 +13,7 @@
     <Compile Include="../../Styx/Logic/Pathing/ClickAim/GatherBackgroundFocus.cs" Link="GatherBackgroundFocus.cs" />
     <Compile Include="../../Styx/Logic/Pathing/ClickAim/GatherSettings.cs" Link="GatherSettings.cs" />
     <Compile Include="../../Styx/Logic/Pathing/ClickAim/ClickAimCombat.cs" Link="ClickAimCombat.cs" />
+    <Compile Include="../../Styx/Logic/Pathing/ClickAim/ClickAimHealPolicy.cs" Link="ClickAimHealPolicy.cs" />
     <Compile Include="../../Styx/Logic/Pathing/ClickAim/ClickAimClassRotation.cs" Link="ClickAimClassRotation.cs" />
     <Compile Include="../../Styx/Logic/Pathing/ClickAim/WowBCombatResearch.cs" Link="WowBCombatResearch.cs" />
     <Compile Include="../../Styx/Logic/Pathing/ClickAim/WowBDeathCheckpoint.cs" Link="WowBDeathCheckpoint.cs" />

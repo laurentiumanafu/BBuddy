@@ -23,6 +23,7 @@ approach_policy = source[source.index("    private static bool ShouldApproachPoo
 approach = source[source.index("    private static string ApproachPoolCandidate("):source.index("    /// <summary>\n    /// Drops a target the fight could not walk to")]
 dismiss = source[source.index("    private static void DismissRejectedSelection("):source.index("    /// <summary>\n    /// Whether a mob of")]
 click_unit = source[source.index("    private static bool TryClickUnit(IntPtr hwnd, WowBObservedUnit unit, double px, double py,\n"):source.index("    /// <summary>\n    /// Finds the screen pixel")]
+restore = source[source.index("    private static bool TryRestoreHealTarget("):source.index("    /// <summary>\n    /// A unit's health straight out of its data block")]
 vendor_policy = source[source.index("    private static bool WaitVendorSafe("):source.index("    /// <summary>\n    /// Walks to one corpse")]
 chase = source[source.index("    private sealed class ChaseWatch"):source.index("    // A pool unit's position is only a navigation lead")]
 # Guard the control-flow wiring as well: approach is before pixel search and
@@ -37,16 +38,21 @@ assert source.count("_combatHold || _poolApproachHandled") == 2
 assert "out near, out nearYd, out live2, out unread2, null, false" in source
 fight = source[source.index("    private static string Fight("):source.index("    private static", source.index("    private static string Fight(") + 20)]
 assert fight.count("(!defenceOnly || defenceFactionFilter) && !FactionPullStillAllowed(") == 2
-assert fight.count("!FactionAttackInputAllowed(reader, expectedPull, !defenceOnly || defenceFactionFilter)") == 4
+assert fight.count("!FightAttackInputAllowed(reader, fightMemory, defenceTarget, expectedPull, !defenceOnly || defenceFactionFilter)") == 4
 assert "unverified melee right-click withheld" in fight
 assert "filtered pool check: no in-fight TAB" in fight
 assert "_running && GrindFactionSettings.Rules.Enabled" in source[source.index("    private static bool TryClickUnit(IntPtr hwnd, WowBObservedUnit unit, double px, double py,\n"):source.index("    private static bool FindUnitPixel(")]
 assert "grindMode && !WowBGrindFactions.AllowsPull(reader, selected" in defence
+assert "ClickAimInput.TapKey(hwnd, 0x70" not in defence
+assert "selected.Guid != candidate.Guid" in defence
+assert fight.index("ClickAimHealPolicy.StillOnBar(heal, ClickAimCombat.ReadBar(reader))") < fight.index("ClickAimInput.TapKey(hwnd, 0x70")
+assert fight.index("HealPowerOk(freshHeal.Power, freshHeal.MaxPower)") < fight.index("ClickAimInput.TapKey(hwnd, 0x70")
+assert fight.index("HealPowerOk(finalHeal.Power, finalHeal.MaxPower)") < fight.index("ClickAimInput.TapKey(hwnd, heal.KeyVk")
 assert "expectedPull: target" in engage
 assert "if (GrindFactionSettings.Rules.Enabled) poolPick = true;" in engage
 assert engage.count("ClearNonSelfFactionSelection(hwnd,") >= 3
 start_profile = source[source.index("    public static bool Start("):source.index("    internal static bool StartRoaming(")]
-start_roaming = source[source.index("    internal static bool StartRoaming("):source.index("    private static", source.index("    internal static bool StartRoaming(") + 30)]
+start_roaming = source[source.index("    internal static bool StartRoaming("):source.index("    private static void RunGuarded(")]
 assert "WowBGrindFactions.PrepareForGrind" in start_profile and "WowBGrindFactions.PrepareForGrind" in start_roaming
 assert fixture.count("// __PRODUCTION_METHODS__") == 1
 vendor_due = source[source.index("    private static bool VendorDue("):source.index("    /// <summary>\n    /// The original CopilotBuddy selling procedure")]
@@ -56,7 +62,7 @@ assert "TryClickRecordedMerchant(hwnd, point, npc" in vendor_trip
 assert "ChaseStep(hwnd, vendorWatch, npc" in vendor_trip
 assert "TryClickUnit(hwnd, npc" not in vendor_trip
 assert "return _lootsSinceTrip >= after;" in source
-fixture = fixture.replace("// __PRODUCTION_METHODS__", vendor_due + "\n" + vendor_trip + "\n" + vendor_policy + "\n" + level + "\n" + selection + "\n" + current_selection + "\n" + dismissible + "\n" + pull + "\n" + nearest + "\n" + approach_policy + "\n" + defence + "\n" + approach + "\n" + dismiss + "\n" + click_unit + "\n" + chase)
+fixture = fixture.replace("// __PRODUCTION_METHODS__", vendor_due + "\n" + vendor_trip + "\n" + vendor_policy + "\n" + restore + "\n" + level + "\n" + selection + "\n" + current_selection + "\n" + dismissible + "\n" + pull + "\n" + nearest + "\n" + approach_policy + "\n" + defence + "\n" + approach + "\n" + dismiss + "\n" + click_unit + "\n" + chase)
 # Read constants from production so boundary and movement tests cannot pass
 # against stale copies of the thresholds or watchdog limits.
 constants = []

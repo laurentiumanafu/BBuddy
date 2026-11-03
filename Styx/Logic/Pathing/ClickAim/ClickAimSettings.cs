@@ -40,7 +40,8 @@ internal static class ClickAimSettings
     /// and a caster that keeps pressing a heal it cannot afford dies with a full bar of nothing:
     /// the press fails, the global cooldown is gone, the mob keeps hitting, and the next press
     /// fails the same way. Below this line the rotation fights instead - auto-attack and any
-    /// spell it can still pay for. 0 removes the check.
+    /// spell it can still pay for. 0 removes the percentage check, but zero power is still
+    /// blocked. The percentage and observed net-spend estimate are not an actual spell-cost read.
     /// </summary>
     public static int HealMinManaPercent = 25;
 

@@ -24,6 +24,7 @@ Require(selectionOrder.Select(p => p.pid).SequenceEqual(new[] { 4, 9, 3, 5, 1, 2
 
 ExperimentalOffsetsTests.Run(); // synthetic routing checks, not live validation
 RotationTests.Run(); // hotbar/priority logic only, not client-state validation
+HealPolicyTests.Run(); // heal eligibility/slot policy only, not actual spell-cost data
 CombatResearchTests.Run(); // bounded read-only trace fixtures, not live offsets
 GatherSettingsTests.Run(); // persistence and default policy, not live mouse isolation
 DeathCheckpointTests.Run(); // synthetic recording policy, not a live death test
