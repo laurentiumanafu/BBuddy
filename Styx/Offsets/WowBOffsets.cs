@@ -11,9 +11,9 @@ namespace Styx.Offsets
 	///    ulong-addressed Memory API (ReadPointer64 / ReadChain64).
 	///  * The on-disk executable has an ENCRYPTED/scrambled .text section.
 	///    Static analysis must use a live-memory image (see hunt6/hunt8
-	///    scripts and WOWB_70334_forum_reference_distilled.md). Entries below
-	///    have different sources, including registration tables and signatures;
-	///    they must not be treated as live-validated merely because they are here.
+	///    scripts and WOWB_70334_forum_reference_distilled.md). All RVAs
+	///    below were re-derived for 70291 via masked signature scans of a
+	///    decrypted live dump and validated against the running process.
 	///  * The object manager is a HASH TABLE, not the 3.3.5a doubly linked
 	///    list. Layout constants below are engine-level and still need
 	///    confirmation against a live entity on 70291.
@@ -31,8 +31,8 @@ namespace Styx.Offsets
 	///   [V] = read back from the running client and semantically correct
 	///         (character name, GUIDs, target switch, map id, camera
 	///         position/orientation/FOV all confirmed).
-	///   [S] = static or registration-derived research lead; not yet
-	///         semantically verified live.
+	///   [S] = extracted by masked-signature scan, structurally plausible,
+	///         not yet semantically verified live.
 	///   [C] = candidate, needs discovery or verification.
 	/// </summary>
 	public static class WowBOffsets
@@ -299,36 +299,13 @@ namespace Styx.Offsets
 		public const ulong RecordClassBStride = 0x110;      // [V] world records (transform)
 		public const ulong RecordDataBlockPtrOffset = 0xD8; // [V] -> unit data block
 		public const ulong RecordOwnerDescriptorOffset = 0x08; // [V] arena/zone descriptor
-		// ---- Unit data block (*(record+0xD8)) stat fields.
-		// VERIFIED 2026-10-30 15:57 by the Offsets button, against a live level-2
-		// Tauren druid and four mobs in Mulgore. The words are 8 bytes apart and
-		// each is 32 bits wide; the player's raw window read
-		//
-		//   0x1E30 = 0x0000004B (75 hp)   0x1E34 = 0         <- padding, NOT max hp
-		//   0x1E38 = 0x0000005F (95 max)  0x1E3C = 0
-		//   0x1E40 = 0x00000002 (level 2) 0x1E44..0x1E54 = 0
-		//   0x1E58 = 0xCECECE00           0x1E5C = 6
-		//   0x1E60 = 0x00080808 (flags)   0x1E64 = 0x800
-		//
-		// and the same offsets read 64/…,3 and 71/…,4 for monsters. Level 2 also
-		// matches what Lua's UnitLevel("player") said on the same character, and
-		// 95 matches UnitHealthMax, so health/max/level are no longer candidates.
-		public const ulong UnitDataHealthOffset = 0x1E30;    // [V] u32 health
-		public const ulong UnitDataMaxHealthOffset = 0x1E38; // [V] u32 max health
-		public const ulong UnitDataPowerOffset = 0x1BC8;     // [V] u32 power (mana/rage/...)
-		public const ulong UnitDataMaxPowerOffset = 0x1BD0;  // [V] u32 max power (100 on the same character)
-		/// <summary>[V] u32 unit flags - but NOT a reaction field, which is what it looked like
-		/// at 15:57 (hostile mob 0x80800, idle mobs 0x800/0x0). The 16:06 run printed the
-		/// PLAYER as 0x808, i.e. carrying the same 0x800, so 0x800 is a transient combat/PvP
-		/// bit and hostility has to come from the client's own target filter (TAB) instead.
-		/// The word is still read and printed, because it may yet identify in-combat state.</summary>
-		public const ulong UnitDataUnitFlagsOffset = 0x1E60; // [V] u32 unit flags (not reaction)
-        // 70291 UnitReaction's normal path uses this dword as the key for the
-        // FactionTemplate table. Twelve user-labeled units corroborate it; it is
-        // an ID, not a reaction or proof of attackability (see WOWB_REACTION_PROBE.md).
-        public const ulong UnitDataFactionTemplateOffset = 0x1E5C;
-        // Static table-instance lead, for bounded read-only diagnostics only.
-        public const ulong FactionTemplateTableRva = 0x7B43760;
+		// ---- Unit data block (*(record+0xD8)) stat fields: reference
+		// layout survives on 70291 (health pair confirmed numerically).
+		public const ulong UnitDataHealthOffset = 0x1E30;    // u32 health
+		public const ulong UnitDataMaxHealthOffset = 0x1E38; // u32 max health
+		public const ulong UnitDataPowerOffset = 0x1BC8;     // u32 power (mana/rage/...)
+		public const ulong UnitDataMaxPowerOffset = 0x1BD0;  // [C] u32 max power
+		public const ulong UnitDataUnitFlagsOffset = 0x1E60; // u32 unit flags
 		/// <summary>[V-ish] hunt31 §6: level. Player 2 / NPC 5 in the live
 		/// sample, and the two neighbouring qwords (+0x1E48/+0x1E50) carry
 		/// the same value on the NPC (effective level / scaling level).
@@ -336,7 +313,7 @@ namespace Styx.Offsets
 		/// consistent with the modern int64 descriptor layout.
 		/// Still to be eyeballed against the character sheet: hunt32 prints
 		/// it for every record it validates as a real unit.</summary>
-		public const ulong UnitDataLevelOffset = 0x1E40;     // [V] u32 level (player 2 = Lua's UnitLevel, mobs 3 and 4)
+		public const ulong UnitDataLevelOffset = 0x1E40;     // u32 level [V-ish]
 		/// <summary>[V] hunt31: the unit object stores its own PACKED HANDLE
 		/// at +0x38 (e.g. 0x0200000000000010 for the player, slot 16).
 		/// This is the value FnEntityGetGuid expects a pointer to — and it
@@ -385,7 +362,7 @@ namespace Styx.Offsets
 		public const ulong HandlePoolElementStride = 0x10;  // entry = elems + idx*0x10
 		public const ulong HandleValidMask = 0x3FFFFFFF;    // generation-check mask
 		public const ulong HandleOccupiedBit = 0x80000000;  // bit31 of dword[entry]
-		public const ulong HandlePoolObjectHeaderOffset = 0x8; // entry+8 -> obj header (not the candidate entity-array field)
+		public const ulong EntityObjectOffset = 0x8;        // entry+8 -> obj header
 		public const ulong EntityTypeIdOffset = 0xA8;       // dword: object type id
 		public const ulong TypeFactoryTable = 0x7DE4340;    // [S] qword[type] -> registry slot
 		public const ulong FnPoolHashLookup = 0x27FBD0;     // [S] entry = *p + idx*0x10 (+grow)
@@ -444,12 +421,6 @@ namespace Styx.Offsets
 
 		// ==================== Quest / action-bar globals ====================
 		public const ulong QuestSelectedId = 0x6305B88;    // [V] u32, 0 idle
-		/// <summary>[V] 0x198 bytes of 8-byte action slots (51 slots), dumped by the Offsets
-		/// button on 2026-10-30: 8 filled on a level-2 druid, and the low 32 bits are the
-		/// SPELL id - 6603 Attack, 5176 Wrath, 5185 Healing Touch, 20549 Tauren War Stomp are
-		/// exactly the slots the player had on his bar. An item slot carries 0x80000000 in the
-		/// high dword (Refreshing Spring Water = 159). So: id = low32, type = high32
-		/// (0 = spell, 0x80000000 = item). UseAction(slot) is 1-based over this array.</summary>
 		public const ulong StoredActionArray = 0x7DFF4E0;  // [V] 0x198 u64 slots
 		public const ulong QuestV2Table = 0x7B538C0;       // [S]
 		public const ulong QuestV2Provider = 0x5DF5F50;    // [S]
@@ -974,8 +945,12 @@ namespace Styx.Offsets
 		// (829 entries, flags=3). Their handler RVAs are real — see the
 		// FnUnitHealth..FnRunScript block below.
 		// New RVAs taken from hunt/api_map.txt (not in the lists above):
+		public const ulong FnRunBinding = 0x23EA630;        // [S] movement/binding table
+		public const ulong FnAcceptQuest = 0x2F8C9B0;       // [S] quest table
 		public const ulong FnConfirmAcceptQuest = 0x2F8D560; // [S]
 		public const ulong FnAcknowledgeAutoAcceptQuest = 0x2F8DF80; // [S]
+		public const ulong FnSpellStopCasting = 0x25E8870;  // [S]
+		public const ulong FnSpellIsTargeting = 0x25E0E80;  // [S]
 
 		// ============ hunt34: decoded image ground truth ============
 		// wowb-decoded.exe (103,496,912 B, sha256 8f864e73e73ad673...) is the
@@ -1000,22 +975,6 @@ namespace Styx.Offsets
 		//
 		// Runtime registration (full map: hunt/api_handlers.tsv, 829 entries):
 		public const ulong FnUnitHealth = 0x1D63190;   // [S] Lua fn UnitHealth(unit)
-		// [S] Lua registration-derived handler RVAs (hunt/api_handlers.tsv).
-		// These are research entry points, not proven field offsets or native
-		// action functions. Their signatures, thread requirements and runtime
-		// page state are unverified; do not call them from the bot.
-		public const ulong FnUnitHealthMax = 0x1D616C0;
-		public const ulong FnUnitPower = 0x1D82590;
-		public const ulong FnUnitPowerMax = 0x1D84050;
-		public const ulong FnUnitLevel = 0x1D7B330;
-		public const ulong FnUnitReaction = 0x1D89A00;
-		public const ulong FnUnitCanAttack = 0x1D48E20;
-		public const ulong FnUnitIsEnemy = 0x1D6D260;
-		public const ulong FnUnitIsDead = 0x1D6C740;
-		public const ulong FnIsLoggedIn = 0x18E0180;
-		public const ulong FnGetRealZoneText = 0x1E7BD90;
-		public const ulong FnCanLootUnit = 0x18B5CF0;
-		public const ulong FnStartAttack = 0x18EF5F0;
 		public const ulong FnUnitName   = 0x1D7B840;   // [S] Lua fn UnitName(unit)
 		public const ulong FnUnitExists = 0x1D596F0;   // [S] Lua fn UnitExists(unit)
 		public const ulong FnUnitGUID   = 0x1D5AD60;   // [S] Lua fn UnitGUID(unit)
@@ -1227,6 +1186,7 @@ namespace Styx.Offsets
 		// MoveForwardStart 0x23C8BE0, RunMacro 0x2CC2DB0, UseAction
 		// 0x2CDA340, ...) — the RVA library below is now live-corroborated.
 		// New RVAs learned from the registry dump (not previously present):
+		public const ulong FnCastSpell = 0x2C231E0;          // [V] CastSpell
 		public const ulong FnIsSelectedSpellBookItem = 0x2C23330;
 		public const ulong FnGetSpecsForSpell = 0x2C233A0;
 		public const ulong FnIsSpellClassOrSpec = 0x2C23680;

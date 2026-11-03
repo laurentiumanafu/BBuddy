@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Globalization;
 using Styx.Helpers;
 using Styx.WoWInternals;

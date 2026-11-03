@@ -135,6 +135,7 @@ Build 70707 is the newest registered client and is preferred in the process sele
 
 The C++ navigation wrapper is built separately with Visual Studio 2022 (see `Navigation C++/README.md`).
 
+- Native 64-bit WoW client support is in progress: the bitness-agnostic memory/context/PE foundation has landed (see `X64_PORT_PLAN.md`), but offsets, the FASM injection engine and the x86-only native `Lib/*.dll` binaries still gate the x64 platform.
 ## Limitations
 
 - The 70707 client is the default, but its offsets, object layouts and some gameplay checks remain experimental; preference does not establish full client support or safety.

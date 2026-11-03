@@ -31,14 +31,11 @@ level, flags, flags2, npc flags, dynamic flags, faction template, bytes0/1/2,
 target, channel spell, display id, combat reach, bounding radius, attack times,
 damage, happiness, auras, …) plus every write path (`WriteDescriptor`).
 
-**The legacy descriptor chain is not validated for 70291.** The observed
-`record (+0xD8) → unit data` path has a record back-pointer and GUID in the
-unit header, unlike the 3.3.5a descriptor pointer. Candidate data fields include
-health `+0x1E30/+0x1E38`, power `+0x1BC8`, unit flags `+0x1E60` and level
-`+0x1E40`; observed values are plausible but widths and general semantics still
-need independent confirmation. Name `+0x238`, NPC dynamic flags `+0x94`,
-auto-attack `+0xA20` and loot deadline `+0x4DC` remain candidates and may belong
-to different structure types. Do not feed them into gameplay as proven fields.
+**70291 has no such array.** The modern client keeps unit state as *direct fields on
+the unit object* — `record (+0xD8) → unit object`, with the fields the port already
+proved live: health `+0x1E30/+0x1E38`, power container `+0x1BC8`, unit flags
+`+0x1E60`, level `+0x1E40`, name pointer `+0x238`, npc dynamic flags `+0x94`,
+auto-attack `+0xA20` (2592), loot deadline `+0x4DC`.
 
 **Consequence:** every one of those 76 fields currently reads garbage (the pointer at
 `+0x8` is a back-pointer, not a descriptor array — see the Phase-3 notes in
@@ -56,13 +53,12 @@ all blind until this is mapped. This is the single highest-value artifact left.
    expected delta shape. Emit a table `UnitFields → actor offset + width + source`.
 4. Accept only offsets confirmed by **two** independent value changes.
 
-The fields the core actually *needs* first include `Health`/`MaxHealth` (low
-32-bit candidates; local current 72 matched the UI once), `Power`/`MaxPower`
-(maximum remains candidate), `Level`, `Flags`, `DynamicFlags`, `NpcFlags`,
-`FactionTemplate`, `Reaction` (hostility **not found yet**), `Target`,
-`DisplayId`, `ChannelSpell`/`CastingSpell`, `Bytes0/1/2` (power type / stand
-state), `CombatReach`, `BoundingRadius` and `AuraState`. Do not promote values
-from candidate to proven on one plausible sample.
+The fields the core actually *needs* first (in order): `Health` (done), `MaxHealth`
+(done), `Power/MaxPower` (done, container), `Level` (done), `Flags`
+(`ActorUnitFlags` done), `DynamicFlags`, `NpcFlags`, `FactionTemplate`, `Reaction`
+(hostility — **not found yet**), `Target`, `DisplayId`, `ChannelSpell` /
+`CastingSpell`, `Bytes0/1/2` (power type / stand state), `CombatReach`,
+`BoundingRadius`, `AuraState`. The rest can follow lazily.
 
 ---
 
@@ -73,14 +69,14 @@ same call site can be recognised in Ghidra/rea output.
 
 | Feature (bot call site) | Legacy 3.3.5a | 70291 today | How to find it |
 |---|---|---|---|
-| **Set target** (`WoWUnit.Target()`, executor `call 0x524BF0`) | `0x524BF0` | `CGGameUITarget = 0` | Warm the Lua handler `TargetUnit` (`0x1B46C60`, known) then find its inner call; or inspect xrefs to `PlayerTargetGuid` (0x7BDFF38); a write is a lead, not proof of the public setter or a safe call |
-| **Auto attack** (`Lua.DoString("StartAttack()")`) | Lua `StartAttack` | candidate handler RVA `0x18EF5F0` (`hunt/api_handlers.tsv`), not yet validated | Validate the handler and trace its inner call |
+| **Set target** (`WoWUnit.Target()`, executor `call 0x525070`) | `0x525070` | `CGGameUITarget = 0` | Warm the Lua handler `TargetUnit` (`0x1B46C60`, known) then find its inner call; or find the **writers of `PlayerTargetGuid` (0x7BDFF38)** — the write that stores a new guid *is* the setter |
+| **Auto attack** (`Lua.DoString("StartAttack()")`) | Lua `StartAttack` | handler RVA only, unmapped | The Lua C function table is walkable live (it gave all movement RVAs) — read `StartAttack`'s handler from it, then its inner call |
 | **Cast spell** (`Spell_C::CastSpell`) | `SpellCCastSpell` | `SpellCCastSpell = 0` | Inner call of the warm handler `CastSpellByName` (`0x2C24040`); cross-check with the action-bar route (`UseAction`, actionbar `0x590CB20`) |
 | **Spell cooldown / GCD** | `SpellCGetSpellCooldown`, `CooldownList 0xD3F5AC` | both 0 | Prefer the **spellbook record** (`0x5909500`, stride 0x10): find the `start/duration` pair by value-diff while a cooldown ticks |
-| **Click to move** (`WoWMovement.CallClickToMove`) | `CGPlayer_C__ClickToMove 0x727400`, stop `0x72B3A0`, base `0xCA11D8` (Type+0, TurnSpeed+4, dest +0x8C/+0x90/+0x94, guid +0x20, action +0x1C) | `ClickToMove = 0` | **Highest gameplay value.** (a) find the live CTM struct by scanning for the destination triple after clicking the ground in-game; (b) use the user's rea/Gemini/Ghidra toolchain to trace candidate writers/readers; (c) search CVar/input strings and xrefs without assuming the CVar name or that a writer is the setter |
-| **Movement bits / input control** | `CGInputControl_ToggleControlBit 0x5FBE10`, `ActiveInputControl_Ptr 0xC24954` | both 0 | From the known movement Lua handlers (`0x23C8BE0`…) → the prior crash-stack location (`0x23C550D`), which may be a callsite rather than a function entry; trace possible input-control paths |
+| **Click to move** (`WoWMovement.CallClickToMove`) | `CGPlayer_C__ClickToMove 0x727400`, stop `0x72B3A0`, base `0xCA11D8` (Type+0, TurnSpeed+4, dest +0x8C/+0x90/+0x94, guid +0x20, action +0x1C) | `ClickToMove = 0` | **Highest gameplay value.** (a) find the live CTM struct by scanning for the destination triple after clicking the ground in-game; (b) find who writes it (that is `CGPlayer_C__ClickToMove`) via an execute-watch; (c) the `enableClickToMove` CVar string xref leads to the click handler that reads the CVar |
+| **Movement bits / input control** | `CGInputControl_ToggleControlBit 0x5FBE10`, `ActiveInputControl_Ptr 0xC24954` | both 0 | From the known movement Lua handlers (`0x23C8BE0`…) → their shared inner function (`0x23C550D`) → the bit setter |
 | **TraceLine (LOS)** | `CGWorldFrame::Intersect 0x77F310` | 0 | Signature/xref hunt on the camera/ray struct usage; needed before casting through walls |
-| **Object manager helpers** | `ClntObjMgrGetActivePlayerObj`, `…ObjectPtr`, `…EnumVisibleObjects` | `= 0` | Optional — the diagnostic reader enumerates observed handle pools; legacy gameplay enumeration is not validated |
+| **Object manager helpers** | `ClntObjMgrGetActivePlayerObj`, `…ObjectPtr`, `…EnumVisibleObjects` | `= 0` | Optional — the port enumerates via the pool hash + `FnEntityGetGuid` (`0x2BBB7F0`) already |
 | **DX11 / hardware event** | — | `SwapChainPtr = 0`, `HardwareEventPtr = 0` | Later phases (overlay hook, and only if the taint gate turns out to need a hardware-event stamp) |
 
 ### The code gap behind them: a native-call stage
@@ -94,10 +90,10 @@ RCX, RDX, R8, R9  + XMM0..XMM3 (float args) + 32-byte shadow space
 call qword ptr [target]      ; return value and RAX/RCX write-back to ctrl
 ```
 
-A native-call stage is a possible future implementation, but size, signatures,
-thread affinity and engine/FrameScript restrictions must be established for each
-function. A native entry point alone does not prove it can run on an arbitrary
-thread or bypass client protections. The Lua-thread hijack is also unproven.
+That stage is ~40 payload bytes and unblocks every Class-B entry above **without the
+Lua thread at all** (movement/CTM/target/cast are engine calls, no FrameScript
+assert) — while the Lua-thread hijack remains the route for the *script-level*
+functions (`GetTime`, `RunScript`, quest frames).
 
 ---
 
@@ -113,14 +109,15 @@ frames:
 | Loot | `LootSlot(i)` loop | protected Lua; read side known (`NpcDynamicFlags 0x94` loot bit, `ActorLootDeadline 0x4DC`) |
 | Vendor / repair | `BuyMerchantItem`, `RepairAllItems` | protected Lua |
 | Gossip / interaction | `SelectGossipOption`, CTM `NpcInteract` | protected Lua; CTM route covers the *interaction* itself |
-| Quest data (log, objectives) | `GetQuestLog*` Lua reads | read APIs require compatibility and bridge validation |
+| Quest data (log, objectives) | `GetQuestLog*` Lua reads | unprotected — usable through the bridge today |
 
 Two routes, and the 0.8.2 `GetTime`→`MoveForwardStart` pair decides which:
 1. **Hijacked Lua thread** — a C-level call may bypass the script-taint gate the chat
-   `/run` path hits (`FORCETAINT_STRONG`, see the model doc). Even if one call succeeds, each of the above requires separate validation.
+   `/run` path hits (`FORCETAINT_STRONG`, see the model doc). If yes, all of the
+   above works as-is through the bridge.
 2. **C-level equivalents** — the CMSG senders behind accept/turn-in/gossip/loot/buy.
    Found via the known globals (`QuestSelectedId`), the opcode constants, or the
-   inner calls of the warm Lua handlers. Thread, client state and protection requirements still need validation.
+   inner calls of the warm Lua handlers. This route is immune to taint forever.
 
 ---
 

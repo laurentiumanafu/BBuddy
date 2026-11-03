@@ -1,4 +1,4 @@
-﻿// TaxiFrame.cs - Taxi map UI frame
+// TaxiFrame.cs - Taxi map UI frame
 // Ported from HB 4.3.4 - Styx\Logic\Inventory\Frames\Taxi\TaxiFrame.cs
 
 using Styx.WoWInternals;

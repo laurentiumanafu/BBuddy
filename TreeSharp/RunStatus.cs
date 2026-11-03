@@ -1,4 +1,4 @@
-﻿#region License
+#region License
 
 // A simplistic Behavior Tree implementation in C#
 // Copyright (C) 2010-2011 ApocDev apocdev@gmail.com
