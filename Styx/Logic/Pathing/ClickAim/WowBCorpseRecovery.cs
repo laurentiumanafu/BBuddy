@@ -77,17 +77,28 @@ internal static class WowBCorpseRecovery
             Math.Abs(awayX - x) > 2 || Math.Abs(awayY - y) > 2) return false;
         string? FinalCheck()
         {
-            if (!Safety()) return "player state or recovery session changed";
-            if (!WowBCorpseDialogProbe.TryInspectForRecovery(memory, reader, hwnd, Safety,
-                    out var again, out byte[]? after, out bool afterBackground, out int w, out int h, out string captureReason))
-                return captureReason;
-            if (after == null || afterBackground != background || w != width || h != height) return "focus mode or client size changed";
-            if (!WowBCorpseDialogPattern.SuitableForClick(again, release, out int x2, out int y2))
-                return "button label, uniqueness, red background or heading did not match after hover";
-            if (Math.Abs(x2 - x) > 2 || Math.Abs(y2 - y) > 2) return "button position changed after hover";
-            if (background && !WowBCorpseDialogPattern.ButtonChanged(before, after, width, height, x, y))
-                return "background capture showed no fresh button response to hover; no click";
-            return Safety() ? null : "player state or recovery session changed";
+            string lastFailure = "hover response not observed";
+            // Background GPU rendering may lag behind the posted move. Give the
+            // frame a short bounded chance to update; never click on a stale frame.
+            for (int frame = 0; frame < 4; frame++)
+            {
+                if (!Safety()) return "player state or recovery session changed";
+                if (!WowBCorpseDialogProbe.TryInspectForRecovery(memory, reader, hwnd, Safety,
+                        out var again, out byte[]? after, out bool afterBackground, out int w, out int h, out string captureReason))
+                    return captureReason;
+                if (after == null || afterBackground != background || w != width || h != height) return "focus mode or client size changed";
+                if (!WowBCorpseDialogPattern.SuitableForClick(again, release, out int x2, out int y2))
+                    lastFailure = "after hover: release=" + again.ReleaseText + ", releaseUnique=" + again.ReleaseUnique +
+                        ", releaseRed=" + again.ReleaseButtonRed + ", heading=" + again.ResurrectText +
+                        ", accept=" + again.AcceptText + ", acceptUnique=" + again.AcceptUnique + ", acceptRed=" + again.AcceptButtonRed;
+                else if (Math.Abs(x2 - x) > 2 || Math.Abs(y2 - y) > 2)
+                    return "button position changed after hover";
+                else if (background && !WowBCorpseDialogPattern.ButtonChanged(before, after, width, height, x, y))
+                    lastFailure = "background capture showed no fresh button response to hover; no click";
+                else return Safety() ? null : "player state or recovery session changed";
+                if (frame < 3 && ClickAimAbort.Wait(180)) return "stopped while waiting for hover frame";
+            }
+            return lastFailure;
         }
         bool posted = ClickAimInput.ConfirmedLeftClick(hwnd, x, y, width, height, background, FinalCheck, out string reason);
         problem = reason;

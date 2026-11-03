@@ -172,7 +172,10 @@ internal static class WowBCorpseDialogPattern
         int b = pixels[pos], g = pixels[pos + 1], r = pixels[pos + 2];
         bool white = r > 155 && g > 155 && b > 155 && Math.Abs(r - g) < 45 && Math.Abs(g - b) < 45;
         bool yellow = r > 140 && g > 90 && b < 110 && r > g && 10 * g > 13 * b;
-        return palette == 0 ? white : palette == 1 ? yellow : white || yellow;
+        // The supplied 70707 hovered button renders the light glyphs with a
+        // red tint from the button glow; strict neutral-white misses them.
+        bool hovered = r >= 140 && g >= 100 && b >= 90 && 20 * g > 11 * r && 20 * b > 11 * r;
+        return palette == 0 ? white : palette == 1 ? yellow : palette == 3 ? hovered : white || yellow;
     }
 
     private static bool FindButton(byte[] pixels, int width, int height, int stride, Pattern[] patterns,
@@ -182,11 +185,14 @@ internal static class WowBCorpseDialogPattern
         // search so white neighboring text cannot invalidate an existing match.
         bool yellow = Find(pixels, width, height, stride, patterns, 1, out int yx, out int yy, out bool yu);
         bool white = Find(pixels, width, height, stride, patterns, 0, out int wx, out int wy, out bool wu);
-        if (!yellow && !white)
+        bool hovered = Find(pixels, width, height, stride, patterns, 3, out int hx, out int hy, out bool hu);
+        if (!yellow && !white && !hovered)
             return Find(pixels, width, height, stride, patterns, 2, out x, out y, out unique);
-        x = yellow ? yx : wx; y = yellow ? yy : wy;
-        unique = (!yellow || yu) && (!white || wu) &&
-                 (!yellow || !white || (Math.Abs(yx - wx) <= 3 && Math.Abs(yy - wy) <= 3));
+        x = yellow ? yx : white ? wx : hx; y = yellow ? yy : white ? wy : hy;
+        unique = (!yellow || yu) && (!white || wu) && (!hovered || hu) &&
+                 (!yellow || (Math.Abs(yx - x) <= 3 && Math.Abs(yy - y) <= 3)) &&
+                 (!white || (Math.Abs(wx - x) <= 3 && Math.Abs(wy - y) <= 3)) &&
+                 (!hovered || (Math.Abs(hx - x) <= 3 && Math.Abs(hy - y) <= 3));
         return true;
     }
 

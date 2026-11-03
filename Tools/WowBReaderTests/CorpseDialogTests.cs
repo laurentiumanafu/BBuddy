@@ -65,6 +65,29 @@ internal static class CorpseDialogTests
         var releaseResult = WowBCorpseDialogPattern.Inspect(releaseButton, width, height, stride);
         if (!WowBCorpseDialogPattern.SuitableForClick(releaseResult, true, out int rx, out _) || Math.Abs(rx - cx) > 1)
             throw new Exception("Unique release button was not located");
+        // Raster derived from the user's hovered-button screenshot, not a
+        // recording of the game screen. Its red-tinted glyphs differ from the
+        // original yellow mask and from neutral white.
+        string[] hoveredRaster = {
+            "...............#....................................##...........................",
+            "#####..........#..................................##.##..........#........#......",
+            "##..#..........#..................................#..............................",
+            "##..#....###...#....###....###...###....###.......##.....#.###...#...###..#...###",
+            "##.#....#...#..#...#...#.....#...#.....#...#.......###...##..##..#...##...#...#..",
+            "#.##....#####..#...#####....##...##....#####.........##..#....#..#...#....#...#..",
+            "#..#....#......#...#......#..#.....##..#..............#..#....#..#...#....#...#..",
+            "#...#...##.....#...##.....#..#......#..#..............#..#...##..#...#....#...#..",
+            "##...#...####..#....####..##..#..####...####......####...#.###...#...#....#....#.",
+            ".........................................................#.......................",
+            ".........................................................#.......................",
+            ".........................................................#.......................",
+        };
+        var tinted = Draw(hoveredRaster, false, releaseX, releaseY, width, height);
+        for (int i = 0; i < tinted.Length; i += 4)
+            if (tinted[i] != 0) { tinted[i] = 125; tinted[i + 1] = 140; tinted[i + 2] = 220; }
+        ButtonBackground(tinted, width, cx, releaseY + releasePattern.Length / 2);
+        if (!WowBCorpseDialogPattern.SuitableForClick(WowBCorpseDialogPattern.Inspect(tinted, width, height, stride), true, out int tintedX, out _) ||
+            tintedX != rx) throw new Exception("Screenshot-derived tinted hover raster did not match the release button");
         var highlighted = Draw(releasePattern, false, releaseX, releaseY, width, height);
         ButtonBackground(highlighted, width, cx, releaseY + releasePattern.Length / 2);
         var highlightedResult = WowBCorpseDialogPattern.Inspect(highlighted, width, height, stride);
