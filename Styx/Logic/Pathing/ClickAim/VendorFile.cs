@@ -38,6 +38,7 @@ internal static class VendorFile
 {
     private const string FileName = "clickaim-vendors.xml";
     private const string RootName = "HBProfile";
+    internal const int MaxPlanSteps = 200;
 
     /// <summary>Same folder as the calibration and the grind settings.</summary>
     public static string DefaultPath
@@ -387,6 +388,71 @@ internal static class VendorFile
             error = ex.Message;
             return false;
         }
+    }
+
+    /// <summary>
+    /// Copies independent step elements to another saved point. Locations,
+    /// maps, merchant confirmations and all other metadata are never copied.
+    /// The caller must explicitly approve replacement of an existing plan.
+    /// </summary>
+    public static bool CopySteps(int sourceIndex, int targetIndex, bool replaceExisting, out string error, string? path = null,
+        VendorPoint? expectedSource = null, VendorPoint? expectedTarget = null)
+    {
+        error = "";
+        if (sourceIndex < 0 || targetIndex < 0 || sourceIndex == targetIndex)
+        { error = "Choose two different vendor points."; return false; }
+        string file = path ?? DefaultPath;
+        try
+        {
+            lock (Gate)
+            {
+                if (!File.Exists(file)) { error = "There is no vendor file."; return false; }
+                if (expectedSource != null || expectedTarget != null)
+                {
+                    List<VendorPoint> current = Read(file);
+                    if (sourceIndex >= current.Count || targetIndex >= current.Count ||
+                        (expectedSource != null && !SamePoint(expectedSource, current[sourceIndex])) ||
+                        (expectedTarget != null && !SamePoint(expectedTarget, current[targetIndex])))
+                    { error = "A vendor or its steps changed; refresh and review the plan before copying."; return false; }
+                }
+                XDocument doc = XDocument.Load(file);
+                XElement? source = VendorAt(doc, sourceIndex), target = VendorAt(doc, targetIndex);
+                if (source == null || target == null) { error = "A vendor point no longer exists; refresh and try again."; return false; }
+                var copies = new List<XElement>();
+                foreach (XElement element in source.Elements())
+                {
+                    if (!string.Equals(element.Name.LocalName, "Step", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (ReadStep(element) == null) { error = "The source plan contains an invalid step."; return false; }
+                    copies.Add(new XElement(element));
+                    if (copies.Count > MaxPlanSteps) { error = "The source plan exceeds the selling step limit."; return false; }
+                }
+                if (copies.Count == 0) { error = "The source vendor has no recorded steps."; return false; }
+                var existing = new List<XElement>();
+                foreach (XElement element in target.Elements())
+                    if (string.Equals(element.Name.LocalName, "Step", StringComparison.OrdinalIgnoreCase)) existing.Add(element);
+                if (existing.Count != 0 && !replaceExisting)
+                { error = "The destination already has steps; replacement was not approved."; return false; }
+                foreach (XElement element in existing) element.Remove();
+                foreach (XElement copy in copies) target.Add(copy);
+                Save(doc, file);
+                return true;
+            }
+        }
+        catch (Exception ex) { error = ex.Message; return false; }
+    }
+
+    private static bool SamePoint(VendorPoint a, VendorPoint b)
+    {
+        if (a.Name != b.Name || a.X != b.X || a.Y != b.Y || a.Z != b.Z || a.TownMap != b.TownMap ||
+            a.MerchantGuids.Count != b.MerchantGuids.Count || a.Steps.Count != b.Steps.Count) return false;
+        for (int i = 0; i < a.MerchantGuids.Count; i++) if (a.MerchantGuids[i] != b.MerchantGuids[i]) return false;
+        for (int i = 0; i < a.Steps.Count; i++)
+        {
+            Step left = a.Steps[i], right = b.Steps[i];
+            if (left.Kind != right.Kind || left.Fx != right.Fx || left.Fy != right.Fy ||
+                left.Vk != right.Vk || left.WaitMs != right.WaitMs) return false;
+        }
+        return true;
     }
 
     /// <summary>Empties the sell plan of one point, keeping the point itself.</summary>

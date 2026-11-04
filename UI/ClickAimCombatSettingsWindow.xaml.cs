@@ -504,6 +504,7 @@ namespace CopilotBuddy.UI
             public int Index { get; set; }
             public string Place { get; set; }
             public string Steps { get; set; }
+            public string CopyLabel => Place + " — " + Steps + " step(s)";
 
             public VendorRow() { Place = ""; Steps = ""; }
 
@@ -545,6 +546,7 @@ namespace CopilotBuddy.UI
                 _vendors = new List<VendorFile.VendorPoint>();
                 lstVendors.ItemsSource = null;
                 lstSteps.ItemsSource = null;
+                cmbVendorCopySource.ItemsSource = null;
                 lblVendorPlan.Text = "The vendor file could not be read: " + ex.Message;
                 return;
             }
@@ -567,6 +569,10 @@ namespace CopilotBuddy.UI
 
             lstVendors.ItemsSource = null;
             lstVendors.ItemsSource = rows;
+            // A refresh may reorder or remove points; require an explicit new source choice.
+            cmbVendorCopySource.ItemsSource = null;
+            cmbVendorCopySource.ItemsSource = new List<VendorRow>(rows);
+            cmbVendorCopySource.SelectedIndex = -1;
 
             if (_vendors.Count == 0)
             {
@@ -616,6 +622,33 @@ namespace CopilotBuddy.UI
             var row = lstVendors.SelectedItem as VendorRow;
             if (row == null) return;
             LoadSteps(row.Index);
+        }
+
+        private void btnCopyVendorSteps_Click(object sender, RoutedEventArgs e)
+        {
+            if (ClickAimUi.Running || ClickAimUi.Paused)
+            { lblVendorNote.Text = "Stop the bot before copying a sell plan."; return; }
+            if (cmbVendorCopySource.SelectedItem is not VendorRow source || lstVendors.SelectedItem is not VendorRow target ||
+                source.Index < 0 || source.Index >= _vendors.Count || target.Index < 0 || target.Index >= _vendors.Count)
+            { lblVendorNote.Text = "Choose a source plan and select a destination vendor point."; return; }
+            if (source.Index == target.Index)
+            { lblVendorNote.Text = "Choose a different source and destination vendor."; return; }
+            VendorFile.VendorPoint from = _vendors[source.Index], to = _vendors[target.Index];
+            if (from.Steps.Count == 0) { lblVendorNote.Text = "The source vendor has no saved steps."; return; }
+            bool replacing = to.Steps.Count > 0;
+            string question = "Copy " + from.Steps.Count + " step(s) from " + from.Name + " to " + to.Name + "?\n\n" +
+                (replacing ? "This replaces the destination's " + to.Steps.Count + " existing step(s).\n\n" : "") +
+                "Only the steps are copied; the destination keeps its own town and merchant. " +
+                "Recorded screen clicks may act on different items if the interface or bag layout differs. Review the plan before running it.";
+            if (System.Windows.MessageBox.Show(question, "Copy sell steps", System.Windows.MessageBoxButton.YesNo,
+                System.Windows.MessageBoxImage.Warning) != System.Windows.MessageBoxResult.Yes) return;
+            if (ClickAimUi.Running || ClickAimUi.Paused)
+            { lblVendorNote.Text = "The bot started; no steps were copied."; return; }
+            if (!VendorFile.CopySteps(source.Index, target.Index, replacing, out string error, expectedSource: from, expectedTarget: to))
+            { lblVendorNote.Text = "Could not copy the sell steps: " + error; return; }
+            LoadVendor();
+            lstVendors.SelectedIndex = target.Index;
+            lblVendorNote.Text = "Copied the steps to " + to.Name + ". Town and merchant are unchanged; review the clicks before running.";
         }
 
         /// <summary>

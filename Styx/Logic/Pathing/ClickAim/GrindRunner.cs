@@ -275,7 +275,7 @@ internal static class GrindRunner
     private const int VendorRetryAfterFightMs = 15000;
 
     /// <summary>A plan longer than this is a recording accident, not a shopping list.</summary>
-    private const int SellPlanMaxSteps = 200;
+    private const int SellPlanMaxSteps = VendorFile.MaxPlanSteps;
 
     /// <summary>Corpses this run has already tried; a corpse that cannot be looted is not retried forever.</summary>
     private static readonly HashSet<WowBGuid> _looted = new HashSet<WowBGuid>();

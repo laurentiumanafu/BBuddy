@@ -176,7 +176,8 @@
         </TabItem>
         <!-- ===================================================== selling ============ -->
         <TabItem Header="Selling">
-            <Grid Margin="12">
+            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+            <Grid Margin="12" MinHeight="600">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="80"/>
@@ -238,7 +239,7 @@
                     </Grid.ColumnDefinitions>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="*" MinHeight="100"/>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
@@ -263,6 +264,12 @@
                         <Button Content="Record town hotspot" Height="24" Padding="8,0" Margin="0,4,4,0" Click="btnRecordTown_Click"/>
                         <Button Content="Remember selected merchant" Height="24" Padding="8,0" Margin="0,4,0,0" Click="btnRememberMerchant_Click"/>
                     </WrapPanel>
+                    <StackPanel Grid.Row="3" Grid.Column="0" Margin="0,2,0,0">
+                        <TextBlock Text="Copy steps from:" Margin="0,0,0,3"/>
+                        <ComboBox x:Name="cmbVendorCopySource" DisplayMemberPath="CopyLabel" ToolTip="Choose the saved source plan. The selected vendor point above is the destination."/>
+                        <Button Content="Copy to selected vendor" Height="24" Margin="0,4,0,0" Padding="8,0" HorizontalAlignment="Left" Click="btnCopyVendorSteps_Click"
+                                ToolTip="Copies steps only; the selected vendor keeps its own town and merchant. Review the plan before running it."/>
+                    </StackPanel>
 
                     <TextBlock Grid.Row="0" Grid.Column="2" Text="The sell plan (in order)" Margin="0,0,0,4" FontWeight="SemiBold"/>
                     <ListView x:Name="lstSteps" Grid.Row="1" Grid.Column="2" Margin="0,0,0,6"
@@ -301,6 +308,7 @@
                 <TextBlock x:Name="lblVendorPlan" Grid.Row="7" Grid.ColumnSpan="3" TextWrapping="Wrap"
                            Margin="0,6,0,0" FontSize="11" Opacity="0.75" VerticalAlignment="Top"/>
             </Grid>
+            </ScrollViewer>
         </TabItem>
 
         <TabItem Header="Factions">
