@@ -102,6 +102,19 @@ internal static class Experimental70790Tests
             exploratory.Contains("research subtotal unavailable") && WowBInventoryProbe.ObservedBags().Count == 0,
             "unreadable alternative reports raw research only, without subtotal or choices");
         Require(!WowBInventoryProbe.ClassifyBag(choices[0], WowBBagKind.Specialty, out _), "unresolved candidate cannot be classified");
+        // A nearby separately occupied record can place its GUID inside the
+        // broad scan window. Diagnose it without treating it as a resolved bag.
+        memory.U32(0x21000000 + WowBOffsets.HandlePoolCapacityOffset, 4);
+        memory.U32(0x22000030, (uint)WowBOffsets.HandleOccupiedBit); memory.U32(0x22000034, 0);
+        memory.U64(0x22000038, bagRecord + 0xC0);
+        memory.U64(bagRecord + 0x28, bagData);
+        memory.Guid(bagRecord + 0xD8, new WowBGuid(0x145D8, 0xC01180000000000));
+        string overlap = WowBInventoryProbe.Capture();
+        Require(overlap.Contains("+0xD8=other-record(+0xC0) GUID-low") && overlap.Contains("research subtotal unavailable") &&
+            WowBInventoryProbe.ObservedBags().Count == 0, "neighbor GUID overlap is diagnostic only");
+        memory.U32(0x22000030, 0); memory.U64(bagRecord + 0x28, 0);
+        memory.U64(bagRecord + 0xD8, bagData); memory.U64(bagRecord + 0xE0, 0);
+        memory.U32(0x21000000 + WowBOffsets.HandlePoolCapacityOffset, 3);
         ClickAimUi.Running = true;
         Require(!WowBInventoryProbe.TryCaptureSellingSubtotal(out _, out _), "unreadable alternative cannot authorize selling");
         ClickAimUi.Running = false;

@@ -159,6 +159,29 @@ internal static class WowBContainerResearchProbe
         return candidates.Count == 1 && unreadableFields == 0 && unavailableHeaders == 0 && changedFields == 0;
     }
 
+    // Some bounded scan windows can extend into other occupied pool records.
+    // Report verified GUID-field overlaps for stopped research only; this is not
+    // proof of record size and does not relax any resolution/selling guard.
+    private static string DescribeRecordOverlaps(Memory memory, WowBReader reader,
+        WowBReader.WowBPoolObject record, List<WowBReader.WowBPoolObject> records)
+    {
+        var overlaps = new List<string>();
+        foreach (var other in records)
+        {
+            if (other.RecordPtr <= record.RecordPtr || other.RecordPtr - record.RecordPtr > 0x168 ||
+                !reader.IsPoolRecordCurrent(other)) continue;
+            byte[]? guid = memory.ReadBytes64(other.RecordPtr + WowBOffsets.RecordGuidLoOffset, 16);
+            if (guid == null || guid.Length != 16 || GuidAt(guid, 0) != other.Guid ||
+                !Same(guid, memory.ReadBytes64(other.RecordPtr + WowBOffsets.RecordGuidLoOffset, 16)) ||
+                !reader.IsPoolRecordCurrent(other)) continue;
+            ulong delta = other.RecordPtr - record.RecordPtr;
+            overlaps.Add($"+0x{delta + WowBOffsets.RecordGuidLoOffset:X}=other-record(+0x{delta:X}) GUID-low");
+            if (overlaps.Count == 8) break;
+        }
+        return overlaps.Count == 0 ? "" : "  STOPPED RESEARCH ONLY: scan-window overlap " +
+            string.Join(", ", overlaps) + "; record sizes unproven, resolution unchanged.\n";
+    }
+
     // Read-only stopped research only. This never adds a BagChoice, contributes
     // to a subtotal, or authorizes selling; unreadable alternatives remain unknown.
     private static string DescribeExploratory(Memory memory, WowBReader reader, WowBObservedUnit player,
@@ -222,7 +245,10 @@ internal static class WowBContainerResearchProbe
                 {
                     text.AppendFormat(CultureInfo.InvariantCulture, "container-candidate[{0}] no unique stable identity-matching header; {1}. Unknown.\n", i, detail);
                     if (!active && reader.IsExperimental70790 && exploratory && pointerBytes != null && header != null)
+                    {
                         text.Append(DescribeExploratory(memory, reader, player, record, guid, data, sourceOffset, pointerBytes, header));
+                        text.Append(DescribeRecordOverlaps(memory, reader, record, records));
+                    }
                     continue;
                 }
                 text.AppendFormat(CultureInfo.InvariantCulture, "container-candidate[{0}] record scan {1}; selected source=+0x{2:X} (unverified).\n", i, detail, sourceOffset);
