@@ -285,3 +285,30 @@ bounded pseudo-disassembly from unique readable containing ranges for the two
 local sites. Backward paths, `.pdata` candidates and linear decoding are static
 leads only and can be incomplete or misaligned; no client functions are called.
 Nothing here establishes container boundaries, free slots, or 70291 offsets.
+
+### 70707 candidate container handler and helper trace
+
+The user's `WowBContainerCode70707` log matched the image and site markers.
+The candidate registration sequence pairs `GetContainerNumFreeSlots` with a
+pointer to RVA `0xD5C230`, and `GetContainerNumSlots` with `0xD5C730`, via
+arguments immediately before a common registration-like call. Unique `.pdata`
+ranges containing the local code start at `0xD5C242` and `0xD5C73E` respectively;
+those ranges do not themselves prove function entry points. Both traced paths
+hit a 200-instruction cap and include suspicious overlapping/obfuscated flows.
+
+In the apparent capacity path, the parsed argument has special `-1` and `-2`
+cases: the former reads a byte at `+0x7D04` from an object returned by
+`0x1F58470`, and the latter yields `0x20`. Otherwise an unsigned comparison
+against `0x16` precedes a call to `0x2567670`, followed by resolver candidate
+`0x19FAE20` and, on non-null, a dword read at returned object `+0xAC0`. In the
+apparent free-slots path, the argument and two output buffers are passed to
+`0x2569110`. These are promising static leads, not validated bag counts: object
+identity, index mappings, special bag semantics, error handling, output meaning,
+and actual player/bag coverage remain unresolved. Do not call these routines
+or reuse their offsets on 70291.
+
+`WowBContainerHelpers70707.java` traces those three direct-call targets with
+bounded pseudo-disassembly and checks both prior image markers and observed
+call/registration bytes first. It is read-only, does not execute client code,
+and may misdecode, follow invalid branches or truncate; its output cannot by
+itself authorize a bag-full decision.
