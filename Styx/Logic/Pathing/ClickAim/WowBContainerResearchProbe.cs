@@ -40,6 +40,32 @@ internal static class WowBContainerResearchProbe
     private static WowBReader? _previousReader;
     private static WowBGuid _previousPlayer;
     private static Candidate?[]? _previous;
+    private static bool _lastComplete;
+
+    internal sealed class BagChoice
+    {
+        internal readonly WowBGuid Player, Bag;
+        internal readonly int Index;
+        internal readonly uint Size;
+        internal BagChoice(WowBGuid player, WowBGuid bag, int index, uint size)
+        { Player = player; Bag = bag; Index = index; Size = size; }
+        public override string ToString()
+        {
+            WowBBagKind kind = WowBBagClassification.TryGet(Player, Bag, out WowBBagKind saved) ? saved : WowBBagKind.Unknown;
+            return "Candidate " + Index + " — " + Size + " candidate slots — " + kind + " (" + Bag + ")";
+        }
+    }
+    internal static void InvalidateChoices() => _lastComplete = false;
+    internal static List<BagChoice> LastChoices(Memory memory, WowBReader reader)
+    {
+        var result = new List<BagChoice>();
+        if (!_lastComplete || _previous == null || _previousMemory != memory || _previousReader != reader ||
+            ObjectManager.Wow != memory || ObjectManager.WowB != reader || ClickAimUi.Running || ClickAimUi.Paused)
+            return result;
+        for (int i = 0; i < _previous.Length; i++)
+            if (_previous[i] is Candidate item) result.Add(new BagChoice(_previousPlayer, item.Guid, i, item.Count));
+        return result;
+    }
 
     private static bool Same(byte[]? a, byte[]? b)
     {
@@ -77,7 +103,7 @@ internal static class WowBContainerResearchProbe
             reader.IsExperimental70707 && WowBGrindFactions.TraceBuild70707(memory, reader) &&
             WowBGrindFactions.TraceIdentity70707(memory, reader, player, true);
     }
-    private static void Forget() { _previousMemory = null; _previousReader = null; _previous = null; }
+    private static void Forget() { _previousMemory = null; _previousReader = null; _previous = null; _lastComplete = false; }
 
     // Search a bounded record window for pointers whose candidate headers repeat
     // BOTH the pool record and the full 128-bit identity. This is a diagnostic
@@ -127,7 +153,7 @@ internal static class WowBContainerResearchProbe
 
     // Caller holds the inventory probe lock and has disabled the memory cache.
     public static string Capture(Memory memory, WowBReader reader, WowBObservedUnit player,
-        out (int CandidateSize, int ZeroTags, int Resolved, int ZeroIdentities)? subtotal, bool active = false)
+        out (int CandidateSize, int ZeroTags, int Resolved, int ZeroIdentities, int OrdinarySize, int OrdinaryZeroTags, int Unclassified)? subtotal, bool active = false)
     {
         subtotal = null;
         try
@@ -205,6 +231,8 @@ internal static class WowBContainerResearchProbe
             // uniquely and stably. Zero identities, unscanned indexes, category
             // overlap and specialty bags remain unknown, so this is not a total.
             int sizeSum = 0, zeroSum = 0, resolved = 0, zeroIdentities = 0;
+            int ordinarySize = 0, ordinaryZero = 0, unclassified = 0;
+            var classifications = new Dictionary<WowBGuid, WowBBagKind>();
             bool allResolved = true;
             var identities = new HashSet<WowBGuid>();
             var dataAddresses = new HashSet<ulong>();
@@ -216,11 +244,31 @@ internal static class WowBContainerResearchProbe
                 if (item == null || !identities.Add(guid) || !dataAddresses.Add(item.Data)) { allResolved = false; continue; }
                 resolved++;
                 sizeSum += (int)item.Count;
+                int zeros = 0;
                 for (int j = 0; j < (int)item.Count; j++)
-                    if ((BitConverter.ToUInt64(item.Slots, j * SlotStride + 8) >> 58) == 0) zeroSum++;
+                    if ((BitConverter.ToUInt64(item.Slots, j * SlotStride + 8) >> 58) == 0) zeros++;
+                zeroSum += zeros;
+                if (reader.IsExperimental70755)
+                {
+                    WowBBagKind kind = WowBBagClassification.TryGet(player.Guid, guid, out WowBBagKind saved) ? saved : WowBBagKind.Unknown;
+                    classifications.Add(guid, kind);
+                    if (kind == WowBBagKind.Ordinary) { ordinarySize += (int)item.Count; ordinaryZero += zeros; }
+                    else if (kind == WowBBagKind.Unknown) unclassified++;
+                    text.AppendFormat(CultureInfo.InvariantCulture, "container-candidate[{0}] user category={1}; classification is per bag instance, not a detected item type.\n", i, kind);
+                }
             }
-            if (allResolved && resolved > 0) subtotal = (sizeSum, zeroSum, resolved, zeroIdentities);
-            if (!active) { _previousMemory = memory; _previousReader = reader; _previousPlayer = player.Guid; _previous = next; }
+            // A concurrent settings edit must not turn an observation into a false zero.
+            foreach (var pair in classifications)
+            {
+                WowBBagKind current = WowBBagClassification.TryGet(player.Guid, pair.Key, out WowBBagKind saved) ? saved : WowBBagKind.Unknown;
+                if (current != pair.Value) allResolved = false;
+            }
+            // A stable empty candidate table can represent a backpack with no
+            // additional bags on 70755. Zero identities remain unclassified,
+            // so this still cannot prove the table is complete.
+            bool complete = allResolved && (resolved > 0 || reader.IsExperimental70755);
+            if (complete) subtotal = (sizeSum, zeroSum, resolved, zeroIdentities, ordinarySize, ordinaryZero, unclassified);
+            if (!active) { _previousMemory = memory; _previousReader = reader; _previousPlayer = player.Guid; _previous = next; _lastComplete = complete; }
             text.AppendLine("Container code markers after: " + markerAfter + "; unreadable is not confirmation of a match.");
             text.AppendLine("Container reads are non-atomic; unresolved/zero candidates are unknown. Grind may use the subtotal experimentally for selling on 70707/70755.");
             return text.ToString();

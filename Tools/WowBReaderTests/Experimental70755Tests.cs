@@ -10,6 +10,9 @@ internal static class Experimental70755Tests
     private static void Require(bool ok, string message) { if (!ok) throw new Exception("70755 fixture: " + message); }
     public static void Run()
     {
+        string oldPath = Styx.Helpers.Logging.ApplicationPath;
+        string tempPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "bbuddy-bag-class-test-" + Guid.NewGuid().ToString("N"));
+        Styx.Helpers.Logging.ApplicationPath = tempPath;
         var memory = new Memory(); ulong image = memory.ImageBase64;
         var player = new WowBGuid(101, 202); var target = new WowBGuid(303, 404);
         memory.Guid(image + Wow70755Offsets.PlayerGuid, player);
@@ -82,9 +85,19 @@ internal static class Experimental70755Tests
         string bagReport = WowBInventoryProbe.Capture();
         Require(bagReport.Contains("70755 research subtotal: candidate sizes=18, zero-tags=18") &&
             bagReport.Contains("0x2473536=matched"), "70755 bag markers, table and subtotal routing");
+        var choices = WowBInventoryProbe.ObservedBags();
+        Require(choices.Count == 1 && choices[0].Bag == bag && choices[0].Player == player, "stable stopped snapshot exposes the observed bag instance");
         ClickAimUi.Running = true;
-        Require(WowBInventoryProbe.TryCaptureSellingSubtotal(out int tags, out WowBGuid owner) && tags == 18 && owner == player,
-            "70755 active selling subtotal routed independently");
+        Require(!WowBInventoryProbe.TryCaptureSellingSubtotal(out _, out _), "unclassified bag cannot authorize selling");
+        Require(!WowBInventoryProbe.ClassifyBag(choices[0], WowBBagKind.Specialty, out _), "running classification rejected");
+        ClickAimUi.Running = false;
+        Require(WowBInventoryProbe.ClassifyBag(choices[0], WowBBagKind.Specialty, out _), "confirm specialty instance");
+        Require(WowBBagClassification.TryGet(player, bag, out var bagKind) && bagKind == WowBBagKind.Specialty, "specialty persists");
+        Require(!WowBBagClassification.TryGet(new WowBGuid(1, 2), bag, out _), "classification is scoped to character");
+        Require(WowBInventoryProbe.Capture().Contains("ordinary-bag candidate subtotal: sizes=16, zero-tags=16"), "specialty zeros excluded from stopped subtotal");
+        ClickAimUi.Running = true;
+        Require(WowBInventoryProbe.TryCaptureSellingSubtotal(out int tags, out WowBGuid owner) && tags == 16 && owner == player,
+            "70755 active selling subtotal excludes specialty slots");
         memory.Bytes(image + 0x2473536, new byte[7]);
         Require(!WowBInventoryProbe.TryCaptureSellingSubtotal(out _, out _), "readable 70755 bag marker mismatch fails closed");
         memory.Bytes(image + 0x2473536, Convert.FromHexString("486390C00A0000"));
@@ -93,6 +106,48 @@ internal static class Experimental70755Tests
         Require(!WowBInventoryProbe.TryCaptureSellingSubtotal(out _, out _), "changing 70755 subtotal fails closed");
         memory.OnRead = null; memory.Bytes(units[0] + 0x7D04, new byte[] { 16 });
         ClickAimUi.Running = false;
+        // A second, ordinary bag must count, and cannot be assumed ordinary merely from size/index.
+        var ordinaryBag = new WowBGuid(3333, 4444);
+        ulong record2 = 0x23003000, data2 = 0x26000000;
+        memory.Guid(image + Wow70755Offsets.ContainerIdentityTableCandidate + 16, ordinaryBag);
+        memory.U32(0x21000000 + WowBOffsets.HandlePoolCapacityOffset, 4);
+        memory.U32(0x22000030, (uint)WowBOffsets.HandleOccupiedBit); memory.U32(0x22000034, 0); memory.U64(0x22000038, record2);
+        memory.Bytes(record2 + 0x28, new byte[0x160]); memory.Guid(record2 + WowBOffsets.RecordGuidLoOffset, ordinaryBag);
+        memory.U64(record2 + WowBOffsets.RecordDataBlockPtrOffset, data2);
+        memory.Bytes(data2, new byte[0x20]); memory.U64(data2 + 8, record2); memory.Guid(data2 + 0x10, ordinaryBag);
+        memory.U32(data2 + 0xAC0, 2); memory.Bytes(data2 + 0x488, new byte[32]);
+        Require(WowBInventoryProbe.Capture().Contains("classify every observed bag"), "new bag requires classification");
+        var both = WowBInventoryProbe.ObservedBags();
+        Require(both.Count == 2, "both candidate identities observed");
+        ClickAimUi.Running = true; Require(!WowBInventoryProbe.TryCaptureSellingSubtotal(out _, out _), "new ordinary bag is unknown, not guessed"); ClickAimUi.Running = false;
+        Require(WowBInventoryProbe.ClassifyBag(both[1], WowBBagKind.Ordinary, out _), "confirm ordinary bag");
+        Require(WowBInventoryProbe.Capture().Contains("ordinary-bag candidate subtotal: sizes=18, zero-tags=18"), "ordinary bag included, specialty excluded");
+        memory.Guid(image + Wow70755Offsets.ContainerIdentityTableCandidate + 16, new WowBGuid(99, 88));
+        Require(!WowBInventoryProbe.ClassifyBag(both[1], WowBBagKind.Specialty, out _), "stale selected identity cannot be classified");
+        memory.Guid(image + Wow70755Offsets.ContainerIdentityTableCandidate + 16, ordinaryBag);
+        string classesPath = System.IO.Path.Combine(tempPath, "Settings", "clickaim-bag-kinds-70755.txt");
+        string validClasses = System.IO.File.ReadAllText(classesPath);
+        System.IO.File.WriteAllText(classesPath, "invalid classification");
+        ClickAimUi.Running = true; Require(!WowBInventoryProbe.TryCaptureSellingSubtotal(out _, out _), "malformed classification file is unknown"); ClickAimUi.Running = false;
+        System.IO.File.WriteAllText(classesPath, validClasses);
+        ClickAimUi.Running = true;
+        Require(WowBInventoryProbe.TryCaptureSellingSubtotal(out tags, out _) && tags == 18, "active mixed bag count");
+        byte[] filled = new byte[51 * 16];
+        for (int i = 35; i < 51; i++) BitConverter.GetBytes(1UL << 58).CopyTo(filled, i * 16 + 8);
+        memory.Bytes(array, filled);
+        Require(WowBInventoryProbe.TryCaptureSellingSubtotal(out tags, out _) && tags == 2, "ordinary bag space prevents premature selling");
+        byte[] filledOrdinary = new byte[32]; BitConverter.GetBytes(1UL << 58).CopyTo(filledOrdinary, 8); BitConverter.GetBytes(1UL << 58).CopyTo(filledOrdinary, 24);
+        memory.Bytes(data2 + 0x488, filledOrdinary);
+        Require(WowBInventoryProbe.TryCaptureSellingSubtotal(out tags, out _) && tags == 0, "ordinary bags full despite specialty space");
+        memory.Guid(image + Wow70755Offsets.ContainerIdentityTableCandidate + 16, new WowBGuid(99, 88));
+        Require(!WowBInventoryProbe.TryCaptureSellingSubtotal(out _, out _), "unresolved changed identity fails closed");
+        memory.Guid(image + Wow70755Offsets.ContainerIdentityTableCandidate + 16, ordinaryBag);
+        memory.Bytes(image + Wow70755Offsets.ContainerIdentityTableCandidate, new byte[80]);
+        Require(WowBInventoryProbe.TryCaptureSellingSubtotal(out tags, out _) && tags == 0, "stable empty table supports backpack-only case");
+        memory.Guid(image + Wow70755Offsets.ContainerIdentityTableCandidate, bag);
+        memory.Guid(image + Wow70755Offsets.ContainerIdentityTableCandidate + 16, ordinaryBag);
+        ClickAimUi.Running = false;
+        memory.Bytes(array, new byte[51 * 16]);
         for (int i = 0; i < 12; i++) memory.U64(image + Wow70755Offsets.StoredActionArrayCandidate + (ulong)(8 * i), 0);
         memory.U64(image + Wow70755Offsets.StoredActionArrayCandidate, 6603);
         memory.U64(units[0] + Wow70707Offsets.HealthCandidateOffset, 148);
@@ -115,6 +170,8 @@ internal static class Experimental70755Tests
         WowBGrindFactions.EndExperimental70707();
         Require(!reader.TryReadMapId(out _), "ending the session revokes gameplay reads");
         ObjectManager.Wow = null; ObjectManager.WowB = null;
+        Styx.Helpers.Logging.ApplicationPath = oldPath;
+        if (System.IO.Directory.Exists(tempPath)) System.IO.Directory.Delete(tempPath, true);
         Console.WriteLine("70755 synthetic build routing and snapshot fixtures passed (no live-client validation)");
     }
 }

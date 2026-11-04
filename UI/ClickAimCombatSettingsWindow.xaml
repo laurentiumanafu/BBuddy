@@ -194,7 +194,7 @@
                 </Grid.RowDefinitions>
 
                 <TextBlock Grid.Row="0" Grid.ColumnSpan="3" TextWrapping="Wrap" Margin="0,0,0,10"
-                           Text="On 70707/70755 Grind sells when the experimental bag-candidate subtotal is zero twice; an unreadable subtotal waits rather than guessing. Other WowB builds use the corpse-interaction threshold below. Select a saved plan, record its town hotspot and remember a known merchant. The recorded click plan is replayed; sales are not verified."/>
+                           Text="On 70755, Grind uses the experimental ordinary-bag subtotal, excluding bags you mark as specialty. Unclassified or unreadable candidates wait rather than guessing. On 70707, all candidate bags count. Two fresh zero observations are required. Other WowB builds use the corpse-interaction threshold below. The recorded click plan is replayed; sales are not verified."/>
 
                 <CheckBox x:Name="chkAutoSell" Grid.Row="1" Grid.ColumnSpan="3" Margin="0,0,0,8"
                           Content="Walk to the vendor and sell when the bags are due"/>
@@ -219,7 +219,13 @@
 
                 <StackPanel Grid.Row="5" Grid.ColumnSpan="3">
                     <Button x:Name="btnInventoryProbe" Content="Bag research snapshot" Height="24" Padding="10,0" HorizontalAlignment="Left" Click="btnInventoryProbe_Click"
-                            ToolTip="Stopped bot only. Read-only candidate bytes; logged data can be sensitive. 70707/70755 auto-selling uses the candidate subtotal experimentally."/>
+                            ToolTip="Stopped bot only. Read-only candidate bytes; logged data can be sensitive."/>
+                    <TextBlock TextWrapping="Wrap" Margin="0,5,0,3" Text="70755: after a snapshot, identify each observed bag as ordinary or specialty. Candidate numbers are not bag slot numbers. Unknown bags prevent automatic selling; select a bag only when you know which it is."/>
+                    <ComboBox x:Name="cmbBagCandidate" MinWidth="250" HorizontalAlignment="Left" ToolTip="Candidates from the most recent stopped snapshot; size and identity do not automatically establish bag type."/>
+                    <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                        <Button Content="Mark ordinary" Height="24" Padding="8,0" Click="btnBagOrdinary_Click"/>
+                        <Button Content="Mark specialty" Height="24" Padding="8,0" Margin="8,0,0,0" Click="btnBagSpecialty_Click"/>
+                    </StackPanel>
                     <TextBlock x:Name="lblVendorNote" TextWrapping="Wrap" Margin="0,2,0,8" FontSize="11" Opacity="0.9"/>
                 </StackPanel>
 

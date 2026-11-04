@@ -156,6 +156,34 @@ namespace CopilotBuddy.UI
             finally { btnTargetInfo.IsEnabled = true; }
         }
 
+        private void RefreshObservedBags()
+        {
+            cmbBagCandidate.ItemsSource = WowBInventoryProbe.ObservedBags();
+            if (cmbBagCandidate.Items.Count > 0) cmbBagCandidate.SelectedIndex = 0;
+        }
+
+        private void btnBagOrdinary_Click(object sender, RoutedEventArgs e) => ClassifyBag(WowBBagKind.Ordinary);
+        private void btnBagSpecialty_Click(object sender, RoutedEventArgs e) => ClassifyBag(WowBBagKind.Specialty);
+
+        private async void ClassifyBag(WowBBagKind kind)
+        {
+            if (cmbBagCandidate.SelectedItem is not WowBContainerResearchProbe.BagChoice selected)
+            { lblVendorNote.Text = "Stop the bot, take a 70755 bag research snapshot, and select a candidate first."; return; }
+            cmbBagCandidate.IsEnabled = false;
+            btnInventoryProbe.IsEnabled = false;
+            try
+            {
+                var outcome = await Task.Run(() => {
+                    bool ok = WowBInventoryProbe.ClassifyBag(selected, kind, out string message);
+                    return (ok, message);
+                });
+                RefreshObservedBags();
+                lblVendorNote.Text = outcome.message;
+            }
+            catch (Exception ex) { lblVendorNote.Text = "Bag classification failed: " + ex.Message; }
+            finally { cmbBagCandidate.IsEnabled = true; btnInventoryProbe.IsEnabled = true; }
+        }
+
         private async void btnInventoryProbe_Click(object sender, RoutedEventArgs e)
         {
             if (ClickAimUi.Running || ClickAimUi.Paused) { lblVendorNote.Text = "Stop the bot and routes before the bag research snapshot."; return; }
@@ -166,6 +194,7 @@ namespace CopilotBuddy.UI
                 string report = await Task.Run(() => WowBInventoryProbe.Capture());
                 foreach (string line in report.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
                     Logging.Write("[Bag research] " + line);
+                RefreshObservedBags();
                 lblVendorNote.Text = report.StartsWith("70291 read-only", StringComparison.Ordinal) || report.StartsWith("70707 read-only", StringComparison.Ordinal) || report.StartsWith("70755 read-only", StringComparison.Ordinal)
                     ? "Bag research snapshot written to the bot log. Candidate data, GUID and addresses may be sensitive."
                     : report;

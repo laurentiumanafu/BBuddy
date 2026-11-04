@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
 using GreenMagic;
@@ -131,7 +132,10 @@ internal static class WowBInventoryProbe
                     final.UnitAddress != player.UnitAddress || final.RecordAddress != player.RecordAddress ||
                     !ValidPlayer(memory, reader, final) || !ClickAimUi.Running || ClickAimUi.Paused ||
                     ObjectManager.Wow != memory || ObjectManager.WowB != reader) return false;
-                zeroTags = special.Value.ZeroTags + containers.Value.ZeroTags;
+                // 70755 excludes only explicitly classified specialty instances;
+                // an unknown bag can neither authorize nor suppress a sale by guesswork.
+                if (reader.IsExperimental70755 && containers.Value.Unclassified != 0) return false;
+                zeroTags = special.Value.ZeroTags + (reader.IsExperimental70755 ? containers.Value.OrdinaryZeroTags : containers.Value.ZeroTags);
                 playerGuid = player.Guid;
                 return true;
             }
@@ -139,10 +143,42 @@ internal static class WowBInventoryProbe
         }
     }
 
+    internal static List<WowBContainerResearchProbe.BagChoice> ObservedBags()
+    {
+        lock (Gate)
+        {
+            Memory? memory = ObjectManager.Wow; WowBReader? reader = ObjectManager.WowB;
+            return memory == null || reader == null || !reader.IsExperimental70755
+                ? new List<WowBContainerResearchProbe.BagChoice>()
+                : WowBContainerResearchProbe.LastChoices(memory, reader);
+        }
+    }
+
+    internal static bool ClassifyBag(WowBContainerResearchProbe.BagChoice selected, WowBBagKind kind, out string message)
+    {
+        message = "Stop the bot and take a fresh bag snapshot first.";
+        lock (Gate)
+        {
+            if (ClickAimUi.Running || ClickAimUi.Paused || ObjectManager.WowB?.IsExperimental70755 != true) return false;
+            Memory? memory = ObjectManager.Wow; WowBReader? reader = ObjectManager.WowB;
+            Capture(); // revalidate the attachment, identities, signatures and candidate set
+            if (memory == null || reader == null || ObjectManager.Wow != memory || ObjectManager.WowB != reader) return false;
+            bool found = false;
+            foreach (var bag in WowBContainerResearchProbe.LastChoices(memory, reader))
+                if (bag.Player == selected.Player && bag.Bag == selected.Bag && bag.Size == selected.Size) found = true;
+            if (!found || ClickAimUi.Running || ClickAimUi.Paused)
+            { message = "Bag, player or bot state changed; take another snapshot."; return false; }
+            if (!WowBBagClassification.Save(selected.Player, selected.Bag, kind, out message)) return false;
+            message = "Saved " + kind + " for this bag instance. Take another snapshot to check the ordinary-bag subtotal.";
+            return true;
+        }
+    }
+
     public static string Capture()
     {
         lock (Gate)
         {
+            WowBContainerResearchProbe.InvalidateChoices();
             if (ClickAimUi.Running || ClickAimUi.Paused) return "Stop the bot and routes before the inventory probe.";
             Memory? memory = ObjectManager.Wow; WowBReader? reader = ObjectManager.WowB;
             if (memory == null || reader == null || !memory.Is64BitTarget) return "Attach to a registered 70291, 70707 or 70755 client and enter the world first.";
@@ -214,13 +250,22 @@ internal static class WowBInventoryProbe
                     {
                         CaptureSpecial70707(memory, reader, player, candidate, header, array, first!, count, out var specialAfter);
                         if (specialAfter.HasValue && special.Value == specialAfter.Value)
+                        {
                             text.AppendFormat(CultureInfo.InvariantCulture,
                                 "{4} research subtotal: candidate sizes={0}, zero-tags={1}; player-range plus {2} resolved container candidates, {3} zero identities not classified. May overlap or omit bags; NOT a verified total or free-slot verdict.\n",
                                 special.Value.CandidateSize + containers.Value.CandidateSize, special.Value.ZeroTags + containers.Value.ZeroTags,
                                 containers.Value.Resolved, containers.Value.ZeroIdentities, reader.ExperimentalBuildNumber);
-                        else text.AppendLine(reader.ExperimentalBuildNumber + " research subtotal unavailable: player-range candidate changed or became unreadable.");
+                            if (reader.IsExperimental70755)
+                            {
+                                if (containers.Value.Unclassified == 0)
+                                    text.AppendFormat(CultureInfo.InvariantCulture, "70755 ordinary-bag candidate subtotal: sizes={0}, zero-tags={1}; specialty bags excluded by user classification; still experimental.\n",
+                                        special.Value.CandidateSize + containers.Value.OrdinarySize, special.Value.ZeroTags + containers.Value.OrdinaryZeroTags);
+                                else text.AppendLine("70755 ordinary-bag candidate subtotal unavailable: classify every observed bag as ordinary or specialty first.");
+                            }
+                        }
+                        else { WowBContainerResearchProbe.InvalidateChoices(); text.AppendLine(reader.ExperimentalBuildNumber + " research subtotal unavailable: player-range candidate changed or became unreadable."); }
                     }
-                    else text.AppendLine(reader.ExperimentalBuildNumber + " research subtotal unavailable: one or more required candidates unresolved or unreadable.");
+                    else { WowBContainerResearchProbe.InvalidateChoices(); text.AppendLine(reader.ExperimentalBuildNumber + " research subtotal unavailable: one or more required candidates unresolved or unreadable."); }
                 }
                 text.AppendLine("Uninterpreted data and process addresses are sensitive. Reads are non-atomic; no inventory, item, bag capacity or mail eligibility is verified.");
                 _previousMemory = memory; _previousReader = reader; _previousPlayer = player.Guid;
