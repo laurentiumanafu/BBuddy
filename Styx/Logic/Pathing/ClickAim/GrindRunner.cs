@@ -814,6 +814,12 @@ internal static class GrindRunner
         }
         else Logging.Write("[Grind] profile-free mesh roaming; no profile level bands or blackspots, existing combat safety filters still apply");
         ProfileGrindArea area = areas[chosen];
+        // On 70755, avoid a fresh pull or roam leg while initial full-bag
+        // observations are being confirmed. A bounded wait never treats an
+        // unknown observation as full, and combat/STOP still take priority.
+        bool startupBagWait = trialReader?.IsExperimental70755 == true && ClickAimSettings.AutoSell;
+        long startupBagDeadline = Environment.TickCount64 + 15000;
+        if (startupBagWait) Logging.Write("[Grind] checking initial 70755 ordinary-bag candidate before roaming (up to 15 seconds; combat and STOP take priority).");
 
         try
         {
@@ -829,6 +835,31 @@ internal static class GrindRunner
                 { Logging.Write("[Grind] " + trialReader.ExperimentalBuildNumber + " action bar changed or became unreadable; stopping. Restart to rescan it."); break; }
                 if (roam != null && !roam.MapCurrent())
                 { Logging.Write("[Roam] map changed or became unreadable; stopping"); break; }
+                if (startupBagWait)
+                {
+                    bool enabled = ClickAimSettings.AutoSell;
+                    bool timedOut = Environment.TickCount64 >= startupBagDeadline;
+                    bool combatReadable = TryReadGatherCombat(out bool startupFighting);
+                    bool due = enabled && !timedOut && combatReadable && !startupFighting && VendorDue();
+                    WowBStartupBagDecision decision = WowBStartupBagCheck.Decide(enabled, timedOut,
+                        combatReadable, startupFighting, due, BagSellMonitor.HasFreshSpace);
+                    if (decision == WowBStartupBagDecision.Vendor)
+                    {
+                        startupBagWait = false;
+                        if (VendorTrip(hwnd, mover)) vendorTrips++;
+                        continue;
+                    }
+                    if (decision == WowBStartupBagDecision.Proceed) startupBagWait = false;
+                    else if (decision == WowBStartupBagDecision.Timeout)
+                    {
+                        startupBagWait = false;
+                        Logging.Write("[Grind] initial bag confirmation timed out; continuing without assuming the bags are full. Automatic checks continue.");
+                    }
+                    else if (decision == WowBStartupBagDecision.Hold)
+                    { ClickAimAbort.Wait(150); continue; }
+                    // In combat or with unreadable combat state, do not delay
+                    // the existing defensive/safety paths for this check.
+                }
                 /* Every LevelCheckMs, read the level again: a grind profile is a ladder, and the
                  * rung below the one you are on stops being worth fighting. One 32-bit read in
                  * the player's data block, and it is the only way this loop can ever climb.

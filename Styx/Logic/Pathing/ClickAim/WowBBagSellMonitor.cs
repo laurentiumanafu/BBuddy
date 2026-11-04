@@ -23,6 +23,20 @@ internal sealed class WowBBagSellPolicy
     }
 }
 
+internal enum WowBStartupBagDecision { Hold, Proceed, Vendor, Timeout, DeferToSafety }
+internal static class WowBStartupBagCheck
+{
+    internal static WowBStartupBagDecision Decide(bool enabled, bool timedOut, bool combatReadable,
+        bool inCombat, bool vendorDue, bool freshSpace)
+    {
+        if (!enabled) return WowBStartupBagDecision.Proceed;
+        if (timedOut) return WowBStartupBagDecision.Timeout;
+        if (!combatReadable || inCombat) return WowBStartupBagDecision.DeferToSafety;
+        if (vendorDue) return WowBStartupBagDecision.Vendor;
+        return freshSpace ? WowBStartupBagDecision.Proceed : WowBStartupBagDecision.Hold;
+    }
+}
+
 // Poll on the Grind thread. The bounded but potentially expensive pool scan is
 // performed off-thread, so STOP never waits for it. Old run/attachment results
 // and samples that took too long are discarded rather than used for selling.
@@ -46,18 +60,24 @@ internal sealed class WowBBagSellMonitor
     private long _started, _next, _observedAt;
     private int _generation, _taskGeneration;
     private bool _due;
+    private int? _latest;
     private int _lastReport = int.MinValue;
+
+    // The startup hold may release early only for a fresh, readable positive
+    // sample. Unknown or a single zero is not evidence of free space.
+    internal bool HasFreshSpace => _latest.HasValue && _latest.Value > 0 && _observedAt != 0 &&
+        _clock() - _observedAt <= MaxAgeMs;
 
     public void Reset()
     {
         _generation++; _next = 0; _observedAt = 0; _due = false;
-        _lastReport = int.MinValue; _player = default; _policy.Reset();
+        _lastReport = int.MinValue; _latest = null; _player = default; _policy.Reset();
     }
 
     public void TripCompleted()
     {
         _generation++; _next = 0; _observedAt = 0; _due = false;
-        _lastReport = int.MinValue; _policy.TripCompleted();
+        _lastReport = int.MinValue; _latest = null; _policy.TripCompleted();
     }
 
     public bool Poll(Memory memory, WowBReader reader, out string? report)
@@ -66,7 +86,7 @@ internal sealed class WowBBagSellMonitor
         long now = _clock();
         if (_reader != null && (_reader != reader || _memory != memory)) Reset();
         if (_observedAt != 0 && now - _observedAt > MaxAgeMs)
-        { _policy.Observe(null); _observedAt = 0; _due = false; }
+        { _policy.Observe(null); _observedAt = 0; _due = false; _latest = null; }
         if (_task != null && _task.IsCompleted)
         {
             (int ZeroTags, WowBGuid Player)? observation = null;
@@ -80,6 +100,7 @@ internal sealed class WowBBagSellMonitor
                 _player = observation.Value.Player;
             }
             int? value = observation?.ZeroTags;
+            _latest = value;
             bool wasDue = _due;
             _observedAt = now;
             _due = _policy.Observe(value);
