@@ -336,11 +336,12 @@ identities 0..4 from RVA `0x6D41CA0`, independent of the 70291 probe. It rejects
 readable mismatches in 70707 container code markers, reports unreadable markers,
 requires the separate player/build checks, a unique pool match with stable
 record/object identity, and an unsigned raw
-`+0xAC0` value at most 64 before sampling `+0x490` entries twice. Identities,
+`+0xAC0` value at most 64 before sampling candidate entries twice. Identities,
 headers, capacity, pool slot and data are rechecked; a final identity table,
 player and attachment check guards the aggregate, though reads cannot be made
-atomic. It prints raw `+0xAC0`, the number of entries whose first qword has zero
-high-six bits, and changes against a comparable prior candidate. These are
+atomic. The initial probe grouped 16-byte chunks at `+0x490` and counted the
+first qword's high-six bits; the 11:38 comparison below prompted a corrected
+candidate grouping at `+0x488`, counting the second qword instead. These are
 explicitly research observations, **not** validated capacity/free counts.
 Unreadable, zero, duplicate, missing, out-of-range, or unstable candidates remain
 unknown. The raw report contains GUIDs and process addresses; there are no game
@@ -423,3 +424,35 @@ otherwise take a fresh baseline first. A screenshot of the open bags or visible
 free counts can help establish which candidates correspond to which bags. No
 numeric slot IDs are required. A changed value will still need interpretation
 and wider validation before it could control selling.
+
+### 70707 live cross-container move and grouping correction: 11:38
+
+The user supplied two 11:38 snapshots. The first was a fresh application
+baseline, not comparable to a prior snapshot in that application; it showed
+candidate 1's `+0xAC0` value 6, with one nonzero tag out of six. The next
+snapshot showed the identity that had occupied player-array entry 36 returning
+there from zero, while the corresponding bytes in container candidate 1 became
+zero; the candidate tag-zero count changed from 5 to 6, with candidate 0
+unchanged. The exact 128-bit value matches across the player array and the
+container bytes. The earlier 11:36 snapshot from the same WoW process and
+identity showed both candidates' sampled words zero, but was a separate bot
+application session; do not treat it as an atomic baseline across the restart.
+All five container-specific code markers matched in both 11:38 snapshots.
+
+The old report grouped 16-byte chunks from `+0x490`; in this observation the
+item's low and high 64-bit halves appeared across two adjacent chunks. The
+client's helper examines the high qword at `+0x490 + 16*i`, and the contiguous
+identity observed here begins eight bytes earlier. The research probe now groups
+candidate 16-byte entries starting at `+0x488`, counting high bits from each
+entry's **second** qword. This is consistent with one live move, not proof of
+all container layouts or empty-slot semantics. Synthetic tests reproduce the
+observed cross-chunk case and assert it becomes one changed 16-byte candidate.
+
+The stopped 70707 snapshot also reports the experimental special-index path:
+local player candidate `+0x7D04`, the previously captured header flag at
+`+0x9480`, and, only when bounded and enabled, tag-zero observations over
+`+0x9460` entries starting at `0x23`. Size, array, identity, state and selected
+static markers are rechecked; readable marker mismatches reject, while
+unreadable markers are disclosed. The static helper's context and special index
+are not proven to mean the player's backpack; no reported value is used for
+selling or gameplay. If client state is incomplete, the result is unknown.

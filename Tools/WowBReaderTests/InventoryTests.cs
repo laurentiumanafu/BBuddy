@@ -75,6 +75,32 @@ namespace Styx.Logic.Pathing
             Check(WowBInventoryProbe.Capture().Contains("identity unavailable"), "70707 build marker mismatch denied");
             memory.Bytes(module + 0x2890305, Convert.FromHexString("448B8C86C01B0000"));
 
+            // Synthetic special-index candidate only, not a claim about backpack or bank layout.
+            memory.Bytes(module + 0x25691D6, Convert.FromHexString("4038A880940000"));
+            memory.Bytes(module + 0x25691E9, Convert.FromHexString("0FB6B8047D0000"));
+            memory.Bytes(module + 0x25691F4, Convert.FromHexString("83C723"));
+            memory.U32(header, 51); memory.Bytes(header + 0x20, new byte[] { 1 });
+            memory.Bytes(playerUnit + 0x7D04, new byte[] { 16 });
+            byte[] rootEntries = new byte[51 * 16];
+            for (int i = 35; i < 50; i++) BitConverter.GetBytes(1UL << 58).CopyTo(rootEntries, i * 16 + 8);
+            memory.Bytes(array, rootEntries);
+            string rootOneEmpty = WowBInventoryProbe.Capture();
+            Check(rootOneEmpty.Contains("raw player+0x7D04=16") && rootOneEmpty.Contains("high-qword high-six-zero=1") &&
+                rootOneEmpty.Contains("NOT a free-slot verdict"), "bounded special-index candidate reported");
+            Array.Clear(rootEntries, 36 * 16 + 8, 8); memory.Bytes(array, rootEntries);
+            Check(WowBInventoryProbe.Capture().Contains("high-qword high-six-zero=2"), "special-index tag comparison");
+            memory.Bytes(header + 0x20, new byte[] { 0 });
+            Check(WowBInventoryProbe.Capture().Contains("range unavailable or gated"), "special-index flag gate honored");
+            memory.Bytes(header + 0x20, new byte[] { 1 });
+            int specialReads = 0;
+            memory.OnRead = (address, length) => { if (address == playerUnit + 0x7D04 && length == 1 && ++specialReads == 2) memory.Bytes(address, new byte[] { 17 }); };
+            Check(WowBInventoryProbe.Capture().Contains("size, array, player or bot state unreadable/changed"), "changing special-index size rejected");
+            memory.OnRead = null; memory.Bytes(playerUnit + 0x7D04, new byte[] { 16 });
+            memory.Bytes(module + 0x25691D6, new byte[7]);
+            Check(WowBInventoryProbe.Capture().Contains("special-index research: readable signature mismatch"), "special-index signature mismatch rejected");
+            memory.Bytes(module + 0x25691D6, Convert.FromHexString("4038A880940000"));
+            memory.U32(header, 2); memory.Bytes(header + 0x20, new byte[] { 0 }); memory.Bytes(array, entries);
+
             // Synthetic container candidate: this exercises bounds and races, not live bag identity.
             memory.Bytes(module + 0xD5C7FC, Convert.FromHexString("E86FAE8001"));
             memory.Bytes(module + 0xD5C820, Convert.FromHexString("8B80C00A0000"));
@@ -92,22 +118,35 @@ namespace Styx.Logic.Pathing
             memory.U64(record + WowBOffsets.RecordDataBlockPtrOffset, data);
             memory.Bytes(data, new byte[0x20]); memory.U64(data + 8, record); memory.Guid(data + 0x10, container);
             memory.U32(data + 0xAC0, 2);
-            byte[] contents = new byte[32]; BitConverter.GetBytes(1UL << 58).CopyTo(contents, 0);
-            memory.Bytes(data + 0x490, contents);
+            byte[] contents = new byte[32]; BitConverter.GetBytes(1UL << 58).CopyTo(contents, 8);
+            memory.Bytes(data + 0x488, contents);
             string baseline = WowBInventoryProbe.Capture();
             Check(baseline.Contains("container-candidate[1]") && baseline.Contains("raw+0xAC0=2") &&
-                baseline.Contains("first-qword high-six-zero=1") && baseline.Contains("NOT verified capacity/free slots"), "container candidate baseline");
-            Array.Clear(contents, 0, 32); BitConverter.GetBytes(1UL << 58).CopyTo(contents, 16); memory.Bytes(data + 0x490, contents);
+                baseline.Contains("second-qword high-six-zero=1") && baseline.Contains("NOT verified capacity/free slots"), "container candidate baseline");
+            Array.Clear(contents, 0, 32); BitConverter.GetBytes(1UL << 58).CopyTo(contents, 24); memory.Bytes(data + 0x488, contents);
             string changed = WowBInventoryProbe.Capture();
             Check(changed.Contains("previous=comparable") && changed.Contains("  changed entries=2; zero tag"), "container entry comparison");
+            // Reproduce the observed split-half case: six 16-byte candidates
+            // start at +0x488; the helper's tag qword is at +0x490.
+            memory.U32(data + 0xAC0, 6);
+            byte[] six = new byte[96]; memory.Bytes(data + 0x488, six);
+            Check(WowBInventoryProbe.Capture().Contains("second-qword high-six-zero=6"), "six empty-looking entries are only a candidate");
+            BitConverter.GetBytes(0x8B21UL).CopyTo(six, 80);
+            BitConverter.GetBytes(0x0C01180000000000UL).CopyTo(six, 88);
+            memory.Bytes(data + 0x488, six);
+            string oneMoved = WowBInventoryProbe.Capture();
+            Check(oneMoved.Contains("second-qword high-six-zero=5") && oneMoved.Contains("changed entries=1") &&
+                oneMoved.Contains("entry[5] 00000000000000000000000000000000 -> 218B000000000000000000000018010C"),
+                "full candidate identity changes in one aligned entry");
+            memory.U32(data + 0xAC0, 2); memory.Bytes(data + 0x488, contents);
             memory.U32(data + 0xAC0, 65);
             Check(WowBInventoryProbe.Capture().Contains("exceeds diagnostic cap"), "oversized container candidate rejected");
             memory.U32(data + 0xAC0, 2);
             int slotReads = 0;
-            memory.OnRead = (address, count) => { if (address == data + 0x490 && count == 32 && ++slotReads == 2) { contents[2] ^= 1; memory.Bytes(address, contents); } };
+            memory.OnRead = (address, count) => { if (address == data + 0x488 && count == 32 && ++slotReads == 2) { contents[2] ^= 1; memory.Bytes(address, contents); } };
             Check(WowBInventoryProbe.Capture().Contains("unstable or unreadable; discarded"), "changing container contents discarded"); memory.OnRead = null;
-            memory.Remove(data + 0x490);
-            Check(WowBInventoryProbe.Capture().Contains("unstable or unreadable; discarded"), "unreadable slots unknown"); memory.Bytes(data + 0x490, contents);
+            memory.Remove(data + 0x488);
+            Check(WowBInventoryProbe.Capture().Contains("unstable or unreadable; discarded"), "unreadable slots unknown"); memory.Bytes(data + 0x488, contents);
             int tableReads = 0;
             memory.OnRead = (address, count) => { if (address == table && count == 80 && ++tableReads == 2) memory.Guid(table + 16, default); };
             Check(WowBInventoryProbe.Capture().Contains("identity table, player, attachment, code or bot state changed; discarded"), "changing identity table discarded"); memory.OnRead = null; memory.Guid(table + 16, container);
@@ -115,7 +154,7 @@ namespace Styx.Logic.Pathing
             Check(WowBInventoryProbe.Capture().Contains("no unique stable identity-matching header"), "container backpointer mismatch rejected"); memory.U64(data + 8, record);
             ulong fourAligned = 0x26000004;
             memory.Bytes(fourAligned, new byte[0x20]); memory.U64(fourAligned + 8, record); memory.Guid(fourAligned + 0x10, container);
-            memory.U32(fourAligned + 0xAC0, 2); memory.Bytes(fourAligned + 0x490, contents);
+            memory.U32(fourAligned + 0xAC0, 2); memory.Bytes(fourAligned + 0x488, contents);
             memory.U64(record + WowBOffsets.RecordDataBlockPtrOffset, fourAligned);
             Check(WowBInventoryProbe.Capture().Contains("selected source=+0xD8") &&
                 WowBInventoryProbe.Capture().Contains("object=0x26000004"), "four-byte-aligned identity-matching candidate diagnosed");
@@ -140,7 +179,7 @@ namespace Styx.Logic.Pathing
             memory.Guid(0x23003000 + WowBOffsets.RecordGuidLoOffset, container);
             Check(WowBInventoryProbe.Capture().Contains("pool matches=2; object unavailable/ambiguous"), "duplicate container identities rejected");
             memory.U32(0x21000000 + WowBOffsets.HandlePoolCapacityOffset, 3); memory.U32(0x22000030, 0);
-            memory.OnRead = (address, count) => { if (address == data + 0x490 && count == 32) memory.Guid(module + Wow70707Offsets.PlayerGuid, default); };
+            memory.OnRead = (address, count) => { if (address == data + 0x488 && count == 32) memory.Guid(module + Wow70707Offsets.PlayerGuid, default); };
             Check(WowBInventoryProbe.Capture().Contains("identity table, player, attachment, code or bot state changed; discarded"), "changed player during container read discarded");
             memory.OnRead = null; memory.Guid(module + Wow70707Offsets.PlayerGuid, player);
             memory.Remove(module + 0x2569186);
@@ -154,7 +193,7 @@ namespace Styx.Logic.Pathing
                 "readable mismatch rejected even when another marker unreadable");
             memory.Bytes(module + 0xD5C820, Convert.FromHexString("8B80C00A0000"));
             memory.Bytes(module + 0x2569186, Convert.FromHexString("486390C00A0000"));
-            memory.OnRead = (address, count) => { if (address == data + 0x490 && count == 32) memory.Bytes(module + 0xD5C820, new byte[6]); };
+            memory.OnRead = (address, count) => { if (address == data + 0x488 && count == 32) memory.Bytes(module + 0xD5C820, new byte[6]); };
             Check(WowBInventoryProbe.Capture().Contains("0xD5C820=MISMATCH") &&
                 WowBInventoryProbe.Capture().Contains("readable code marker mismatch"), "late readable code mismatch discards and blocks next capture");
             memory.OnRead = null; memory.Bytes(module + 0xD5C820, Convert.FromHexString("8B80C00A0000"));

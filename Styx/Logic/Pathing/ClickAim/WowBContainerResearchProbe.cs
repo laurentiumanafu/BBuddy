@@ -13,7 +13,10 @@ namespace Styx.Logic.Pathing;
 internal static class WowBContainerResearchProbe
 {
     private const ulong IdentityTableRva = 0x6D41CA0;
-    private const ulong SlotsOffset = 0x490, CapacityOffset = 0xAC0;
+    // The helper reads the tag/high qword at +0x490 + 16*i. A live
+    // comparison matched the complete 128-bit value eight bytes earlier.
+    // This grouping is a research hypothesis, not a validated slot layout.
+    private const ulong SlotsOffset = 0x488, CapacityOffset = 0xAC0;
     private const int CandidateIdentities = 5, SlotStride = 16, MaxSlots = 64;
     private const ulong UserLimit = 0x00007FFFFFFFFFFFUL;
     private static readonly (ulong Rva, string Bytes)[] Markers = {
@@ -166,13 +169,13 @@ internal static class WowBContainerResearchProbe
                 var current = new Candidate { Guid = guid, Data = data, Count = count, Slots = slots! };
                 next[i] = current;
                 int zeroTags = 0;
-                for (int j = 0; j < (int)count; j++) if ((BitConverter.ToUInt64(slots!, j * SlotStride) >> 58) == 0) zeroTags++;
+                for (int j = 0; j < (int)count; j++) if ((BitConverter.ToUInt64(slots!, j * SlotStride + 8) >> 58) == 0) zeroTags++;
                 Candidate? prior = comparable ? _previous![i] : null;
                 bool sameObject = prior != null && prior.Guid == guid && prior.Data == data && prior.Count == count;
-                text.AppendFormat(CultureInfo.InvariantCulture, "container-candidate[{0}] identity={1} object=0x{2:X} raw+0xAC0={3}; first-qword high-six-zero={4}; previous={5}. NOT verified capacity/free slots.\n",
+                text.AppendFormat(CultureInfo.InvariantCulture, "container-candidate[{0}] identity={1} object=0x{2:X} raw+0xAC0={3}; second-qword high-six-zero={4}; previous={5}. NOT verified capacity/free slots.\n",
                     i, guid, data, count, zeroTags, sameObject ? "comparable" : "none or changed identity/size");
                 if (!sameObject)
-                    text.AppendFormat(CultureInfo.InvariantCulture, "  raw+0x490 entries={0}\n", Convert.ToHexString(slots!));
+                    text.AppendFormat(CultureInfo.InvariantCulture, "  raw+0x488 candidate 16-byte entries={0}\n", Convert.ToHexString(slots!));
                 else
                 {
                     int changed = 0;

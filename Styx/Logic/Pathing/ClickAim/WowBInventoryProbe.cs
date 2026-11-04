@@ -49,6 +49,47 @@ internal static class WowBInventoryProbe
         return unreadable || Convert.ToHexString(bytes!) == expected;
     }
 
+    // Static 70707 helper has a special-index branch using +0x7D04 and
+    // +0x9480 to scan entries starting at 0x23. The helper's context is
+    // not proven to be the player. This is stopped-only research, not a
+    // backpack, bank, free-slot, or selling decision.
+    private static string CaptureSpecial70707(Memory memory, WowBReader reader, WowBObservedUnit player,
+        ulong candidate, byte[] header, ulong array, byte[] entries, uint count)
+    {
+        const ulong sizeOffset = 0x7D04;
+        const int start = 0x23, maxSize = 64;
+        if (player.UnitAddress > UserLimit - sizeOffset - 1) return "70707 special-index research: player address outside bounds.\n";
+        bool a = SignatureMatchesOrUnreadable(memory, 0x25691D6, "4038A880940000", out bool flagUnreadable);
+        bool b = SignatureMatchesOrUnreadable(memory, 0x25691E9, "0FB6B8047D0000", out bool sizeUnreadable);
+        bool c = SignatureMatchesOrUnreadable(memory, 0x25691F4, "83C723", out bool startUnreadable);
+        if (!a || !b || !c) return "70707 special-index research: readable signature mismatch; unavailable.\n";
+        byte[]? size = memory.ReadBytes64(player.UnitAddress + sizeOffset, 1);
+        byte[]? sizeAgain = memory.ReadBytes64(player.UnitAddress + sizeOffset, 1);
+        if (!Same(size, sizeAgain) || size == null || size.Length != 1 ||
+            !Same(header, memory.ReadBytes64(candidate, HeaderSize)) ||
+            !Same(entries, entries.Length == 0 ? Array.Empty<byte>() : memory.ReadBytes64(array, entries.Length)) ||
+            ClickAimUi.Running || ClickAimUi.Paused || ObjectManager.Wow != memory || ObjectManager.WowB != reader ||
+            !ValidPlayer(memory, reader, player))
+            return "70707 special-index research: size, array, player or bot state unreadable/changed; unavailable.\n";
+        bool aAfter = SignatureMatchesOrUnreadable(memory, 0x25691D6, "4038A880940000", out bool flagAfterUnreadable);
+        bool bAfter = SignatureMatchesOrUnreadable(memory, 0x25691E9, "0FB6B8047D0000", out bool sizeAfterUnreadable);
+        bool cAfter = SignatureMatchesOrUnreadable(memory, 0x25691F4, "83C723", out bool startAfterUnreadable);
+        if (!aAfter || !bAfter || !cAfter) return "70707 special-index research: readable signature mismatch after read; unavailable.\n";
+        int n = size[0], flag = header[0x20];
+        string signatures = "flag=" + (flagUnreadable ? "unreadable" : "matched") + "/" + (flagAfterUnreadable ? "unreadable" : "matched") +
+            ", size=" + (sizeUnreadable ? "unreadable" : "matched") + "/" + (sizeAfterUnreadable ? "unreadable" : "matched") +
+            ", start=" + (startUnreadable ? "unreadable" : "matched") + "/" + (startAfterUnreadable ? "unreadable" : "matched");
+        if (flag == 0 || n > maxSize || (ulong)start + (ulong)n > count)
+            return string.Format(CultureInfo.InvariantCulture,
+                "70707 special-index research: raw player+0x7D04={0}, header+0x20={1}; range unavailable or gated; code markers {2}. Not a free-slot verdict.\n", n, flag, signatures);
+        int zeroTags = 0;
+        for (int i = 0; i < n; i++)
+            if ((BitConverter.ToUInt64(entries, (start + i) * EntrySize + 8) >> 58) == 0) zeroTags++;
+        return string.Format(CultureInfo.InvariantCulture,
+            "70707 special-index research: raw player+0x7D04={0}, header+0x20={1}, raw candidate range=[0x23,0x{2:X}), high-qword high-six-zero={3}; code markers {4}. Context and slot meanings unverified; NOT a free-slot verdict.\n",
+            n, flag, start + n, zeroTags, signatures);
+    }
+
     public static string Capture()
     {
         lock (Gate)
@@ -114,7 +155,11 @@ internal static class WowBInventoryProbe
                     else text.AppendFormat(CultureInfo.InvariantCulture, "entry[{0}] {1}\n", i, current);
                 }
                 if (comparable) text.AppendFormat(CultureInfo.InvariantCulture, "changed entries={0}; identical bytes do not establish a slot was empty.\n", changed);
-                if (experimental) text.Append(WowBContainerResearchProbe.Capture(memory, reader, player));
+                if (experimental)
+                {
+                    text.Append(CaptureSpecial70707(memory, reader, player, candidate, header, array, first!, count));
+                    text.Append(WowBContainerResearchProbe.Capture(memory, reader, player));
+                }
                 text.AppendLine("Uninterpreted data and process addresses are sensitive. Reads are non-atomic; no inventory, item, bag capacity or mail eligibility is verified.");
                 _previousMemory = memory; _previousReader = reader; _previousPlayer = player.Guid;
                 _previousUnit = player.UnitAddress; _previousArray = array; _previousEntries = first;
