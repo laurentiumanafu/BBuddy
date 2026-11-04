@@ -144,12 +144,12 @@ internal static class WowBCombatResearch
             Memory? memory = ObjectManager.Wow;
             WowBReader? reader = ObjectManager.WowB;
             if (memory == null || reader == null || !memory.Is64BitTarget || !reader.IsExperimental70707)
-                return "Attach to the 70707 client and enter the world first.";
+                return "Attach to a 70707 or 70755 client and enter the world first.";
             using var uncached = memory.TemporaryCacheState(false);
             if (!WowBGrindFactions.TraceBuild70707(memory, reader) ||
                 !reader.TryCaptureWorldSnapshot(out WowBWorldSnapshot? snapshot) || snapshot == null ||
                 !snapshot.TryGetLocalPlayer(out WowBObservedUnit player))
-                return "70707 signatures or local player unavailable; capture not started.";
+                return reader.ExperimentalBuildNumber + " signatures or local player unavailable; capture not started.";
             WowBObservedUnit? target = null;
             if (!snapshot.TargetGuid.IsEmpty && snapshot.TryGetSelectedTarget(out WowBObservedUnit selectedUnit) &&
                 !selectedUnit.IsLocalPlayer && !selectedUnit.HasPlayerVtable)
@@ -170,7 +170,7 @@ internal static class WowBCombatResearch
             string reason = "completed";
             using (var output = new StreamWriter(new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.Read), Encoding.UTF8))
             {
-                output.WriteLine("70707 COMBAT RESEARCH v1: raw observations only; not verified casting, cooldown or aura state.");
+                output.WriteLine(reader.ExperimentalBuildNumber + " COMBAT RESEARCH v1: raw observations only; not verified casting, cooldown or aura state.");
                 output.WriteLine("UTC " + DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture) + "; label=" + cleanLabel);
                 output.WriteLine("player=" + player.Guid + " unit=0x" + player.UnitAddress.ToString("X", CultureInfo.InvariantCulture) +
                     " record=0x" + player.RecordAddress.ToString("X", CultureInfo.InvariantCulture) + "; target=" + snapshot.TargetGuid +

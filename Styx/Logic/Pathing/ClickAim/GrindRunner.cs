@@ -738,7 +738,7 @@ internal static class GrindRunner
         int started = Environment.TickCount;
         int budgetMs = minutes <= 0 ? int.MaxValue : minutes * 60000;
         if (trialReader != null)
-            Logging.Write("[Grind] EXPERIMENTAL 70707: continuous faction-filtered Grind. Candidate stats, reaction, flags, hotkeys and movement remain unverified. Monitor closely; use STOP if anything is wrong.");
+            Logging.Write("[Grind] EXPERIMENTAL " + trialReader.ExperimentalBuildNumber + ": continuous faction-filtered Grind. Candidate stats, reaction, flags, hotkeys and movement remain unverified. Monitor closely; use STOP if anything is wrong.");
 
         IntPtr hwnd = Handle();
         if (hwnd == IntPtr.Zero) { Logging.Write("[Grind] no game window"); return; }
@@ -824,9 +824,9 @@ internal static class GrindRunner
             {
                 if (CheckDeathCheckpoint()) break;
                 if (trialReader != null && (ObjectManager.WowB != trialReader || !trialReader.ExperimentalGrindActive))
-                { Logging.Write("[Grind] 70707 attachment or session authorization changed; stopping"); break; }
+                { Logging.Write("[Grind] " + trialReader.ExperimentalBuildNumber + " attachment or session authorization changed; stopping"); break; }
                 if (trialReader != null && !WowBGrindFactions.Experimental70707BarSafe(trialReader))
-                { Logging.Write("[Grind] 70707 action bar changed or became unreadable; stopping. Restart to rescan it."); break; }
+                { Logging.Write("[Grind] " + trialReader.ExperimentalBuildNumber + " action bar changed or became unreadable; stopping. Restart to rescan it."); break; }
                 if (roam != null && !roam.MapCurrent())
                 { Logging.Write("[Roam] map changed or became unreadable; stopping"); break; }
                 /* Every LevelCheckMs, read the level again: a grind profile is a ladder, and the

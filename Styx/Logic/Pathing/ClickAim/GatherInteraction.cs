@@ -192,7 +192,7 @@ internal static class GatherInteraction
         if (background) Logging.Write("[Gather] background mouse movement allowed; final hover and node checks remain");
         using var uncached = memory.TemporaryCacheState(false);
         if (reader.IsExperimental70707)
-            Logging.Write("[Gather] 70707 hover GUID candidate RVA 0x" + reader.MouseoverGuidCandidateRva.ToString("X") +
+            Logging.Write("[Gather] " + reader.ExperimentalBuildNumber + " hover GUID candidate RVA 0x" + reader.MouseoverGuidCandidateRva.ToString("X") +
                           "; click still requires a changed hover matching a fresh eligible node");
         // First demand an away transition, so an old/stuck candidate cannot authorize a click.
         if (!CursorGuard(hwnd, background, realX, realY, width, height, originX, originY, out reason, out bool initialMoved))

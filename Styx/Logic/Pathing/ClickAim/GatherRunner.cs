@@ -118,10 +118,10 @@ internal static class GatherRunner
             if (ObjectManager.WowB?.IsExperimental70707 == true)
             {
                 if (!WowBGrindFactions.PrepareForGrind(out string reason))
-                { Logging.Write("[Gather] 70707 preparation failed: " + reason); return false; }
+                { Logging.Write("[Gather] experimental preparation failed: " + reason); return false; }
                 experimentalReader = WowBGrindFactions.ExperimentalBoundReader;
                 if (experimentalReader == null) return false;
-                Logging.Write("[Gather] EXPERIMENTAL 70707: static node vtable candidate, faction-filtered defence only; monitor closely and use STOP.");
+                Logging.Write("[Gather] EXPERIMENTAL " + experimentalReader.ExperimentalBuildNumber + ": static node vtable candidate, faction-filtered defence only; monitor closely and use STOP.");
             }
             started = StartPrepared(profile, generation, experimentalReader);
             return started;
@@ -638,7 +638,7 @@ internal static class GatherRunner
             {
                 if (StopIfDeadOrGhost()) break;
                 if (reader.IsExperimental70707 && !WowBGrindFactions.Experimental70707BarSafe(reader))
-                { Logging.Write("[Gather] 70707 action bar changed or became unreadable; stopping"); break; }
+                { Logging.Write("[Gather] " + reader.ExperimentalBuildNumber + " action bar changed or became unreadable; stopping"); break; }
                 if (!MapStillCurrent() || (roam != null && !roam.MapCurrent())) break;
                 if (!GrindRunner.TryReadGatherCombat(out bool fighting))
                 {

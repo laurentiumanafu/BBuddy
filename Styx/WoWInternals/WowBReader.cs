@@ -42,10 +42,13 @@ namespace Styx.WoWInternals
         private const int MaxEntities = 262144; // safety cap for entity walks
 
         private readonly Memory _memory;
+        // Shared 70707-style feature family, with separate image-relative offsets.
         private readonly bool _experimental70707;
+        public bool IsExperimental70755 { get; }
+        public bool IsExperimental70707 => _experimental70707;
+        public int ExperimentalBuildNumber => IsExperimental70755 ? 70755 : _experimental70707 ? 70707 : 0;
         private volatile bool _experimentalGrindActive;
         private volatile int _experimentalGrindThread;
-        public bool IsExperimental70707 => _experimental70707;
         internal bool HasExperimentalGrindSession => _experimental70707 && _experimentalGrindActive;
         internal bool ExperimentalGrindActive => HasExperimentalGrindSession && _experimentalGrindThread == System.Threading.Thread.CurrentThread.ManagedThreadId;
         internal void SetExperimentalGrindActive(bool active)
@@ -60,26 +63,32 @@ namespace Styx.WoWInternals
                 _experimentalGrindThread = System.Threading.Thread.CurrentThread.ManagedThreadId;
         }
 
-        public WowBReader(Memory memory, bool experimental70707 = false)
+        public WowBReader(Memory memory, bool experimental70707 = false, bool experimental70755 = false)
         {
             _memory = memory ?? throw new ArgumentNullException(nameof(memory));
-            _experimental70707 = experimental70707;
+            if (experimental70707 && experimental70755) throw new ArgumentException("Select only one experimental build.");
+            IsExperimental70755 = experimental70755;
+            _experimental70707 = experimental70707 || experimental70755;
 
             if (!memory.Is64BitTarget)
                 throw new InvalidOperationException("WowBReader requires a native 64-bit target process.");
         }
 
         // Build-specific read-only candidate. A value alone never authorizes a click.
-        internal ulong MouseoverGuidCandidateRva => _experimental70707 ? Wow70707Offsets.MouseoverGuidCandidate : WowBOffsets.MouseoverGuidCandidate;
+        internal ulong MouseoverGuidCandidateRva => IsExperimental70755 ? Wow70755Offsets.MouseoverGuidCandidate : _experimental70707 ? Wow70707Offsets.MouseoverGuidCandidate : WowBOffsets.MouseoverGuidCandidate;
         internal bool TryReadMouseoverGuidCandidate(out WowBGuid guid) => TryReadGuid(Abs(MouseoverGuidCandidateRva), out guid);
-        private ulong PlayerGuidRva => _experimental70707 ? Wow70707Offsets.PlayerGuid : WowBOffsets.PlayerGuid;
-        private ulong PlayerNameRva => _experimental70707 ? Wow70707Offsets.PlayerNamePrimary : WowBOffsets.PlayerNamePrimary;
-        private ulong TargetGuidRva => _experimental70707 ? Wow70707Offsets.PlayerTargetGuid : WowBOffsets.PlayerTargetGuid;
+        private ulong PlayerGuidRva => IsExperimental70755 ? Wow70755Offsets.PlayerGuid : _experimental70707 ? Wow70707Offsets.PlayerGuid : WowBOffsets.PlayerGuid;
+        private ulong PlayerNameRva => IsExperimental70755 ? Wow70755Offsets.PlayerNamePrimary : _experimental70707 ? Wow70707Offsets.PlayerNamePrimary : WowBOffsets.PlayerNamePrimary;
+        private ulong TargetGuidRva => IsExperimental70755 ? Wow70755Offsets.PlayerTargetGuid : _experimental70707 ? Wow70707Offsets.PlayerTargetGuid : WowBOffsets.PlayerTargetGuid;
         private ulong LastTargetGuidRva => _experimental70707 ? 0UL : WowBOffsets.LastTargetGuid;
-        private ulong ObjectManagerRva => _experimental70707 ? Wow70707Offsets.ObjectManager : WowBOffsets.ObjectManager;
-        private ulong HandlePoolsRva => _experimental70707 ? Wow70707Offsets.HandlePools : WowBOffsets.HandlePools;
-        private ulong PlayerVtableRva => _experimental70707 ? Wow70707Offsets.PlayerVtable : WowBOffsets.PlayerObjectVtable;
-        private ulong UnitVtableRva => _experimental70707 ? Wow70707Offsets.UnitVtable : WowBOffsets.CGUnitFnTable;
+        private ulong ObjectManagerRva => IsExperimental70755 ? Wow70755Offsets.ObjectManager : _experimental70707 ? Wow70707Offsets.ObjectManager : WowBOffsets.ObjectManager;
+        private ulong HandlePoolsRva => IsExperimental70755 ? Wow70755Offsets.HandlePools : _experimental70707 ? Wow70707Offsets.HandlePools : WowBOffsets.HandlePools;
+        internal ulong PlayerVtableRva => IsExperimental70755 ? Wow70755Offsets.PlayerVtable : _experimental70707 ? Wow70707Offsets.PlayerVtable : WowBOffsets.PlayerObjectVtable;
+        internal ulong UnitVtableRva => IsExperimental70755 ? Wow70755Offsets.UnitVtable : _experimental70707 ? Wow70707Offsets.UnitVtable : WowBOffsets.CGUnitFnTable;
+        internal ulong GameObjectVtableCandidateRva => IsExperimental70755 ? Wow70755Offsets.GameObjectVtableCandidate : Wow70707Offsets.GameObjectVtableCandidate;
+        private ulong ExperimentalMapRootRva => IsExperimental70755 ? Wow70755Offsets.MapRoot : Wow70707Offsets.MapRoot;
+        private ulong ExperimentalCameraRootRva => IsExperimental70755 ? Wow70755Offsets.CameraWorldFrameGlobal : Wow70707Offsets.CameraWorldFrameGlobal;
+        private ulong ExperimentalActionArrayRva => IsExperimental70755 ? Wow70755Offsets.StoredActionArrayCandidate : Wow70707Offsets.StoredActionArrayCandidate;
         public bool IsKnownUnitVtable(ulong vtableRva) => vtableRva == PlayerVtableRva || vtableRva == UnitVtableRva;
         private ulong Abs(ulong imageRelative) => _memory.GetAbsolute64(imageRelative);
 
@@ -133,7 +142,7 @@ namespace Styx.WoWInternals
             try
             {
                 using var uncached = _memory.TemporaryCacheState(false);
-                ulong address = Abs(Wow70707Offsets.MapRoot);
+                ulong address = Abs(ExperimentalMapRootRva);
                 byte[]? pointer = _memory.ReadBytes64(address, 8);
                 if (pointer == null || pointer.Length != 8) return false;
                 ulong root = BitConverter.ToUInt64(pointer, 0);
@@ -1008,8 +1017,8 @@ namespace Styx.WoWInternals
             byte[]? header = _memory.ReadBytes64(unitPtr, 0x20);
             if (header == null || header.Length != 0x20) return false;
             ulong vt = BitConverter.ToUInt64(header, 0);
-            bool player = vt == Abs(Wow70707Offsets.PlayerVtable);
-            if (!player && vt != Abs(Wow70707Offsets.UnitVtable)) return false;
+            bool player = vt == Abs(PlayerVtableRva);
+            if (!player && vt != Abs(UnitVtableRva)) return false;
             ulong record = BitConverter.ToUInt64(header, 8);
             var guid = new WowBGuid(BitConverter.ToUInt64(header, 0x10), BitConverter.ToUInt64(header, 0x18));
             if (guid.IsEmpty || !IsUserPointer(record)) return false;
@@ -1163,7 +1172,7 @@ namespace Styx.WoWInternals
             snapshot = Array.Empty<ulong>();
             if (!ExperimentalGrindActive) return false;
             using var uncached = _memory.TemporaryCacheState(false);
-            ulong address = Abs(Wow70707Offsets.StoredActionArrayCandidate);
+            ulong address = Abs(ExperimentalActionArrayRva);
             byte[]? first = _memory.ReadBytes64(address, 12 * 8);
             byte[]? second = _memory.ReadBytes64(address, 12 * 8);
             if (first == null || second == null || first.Length != 96 || second.Length != 96 ||
@@ -1184,7 +1193,7 @@ namespace Styx.WoWInternals
             using IDisposable? uncached = _experimental70707 ? _memory.TemporaryCacheState(false) : null;
             // The 70707 first bar is experimental; only known qword packings are exposed.
             int count = _experimental70707 ? 12 : ActionSlotCount;
-            ulong rva = _experimental70707 ? Wow70707Offsets.StoredActionArrayCandidate : WowBOffsets.StoredActionArray;
+            ulong rva = _experimental70707 ? ExperimentalActionArrayRva : WowBOffsets.StoredActionArray;
             byte[]? bytes = _memory.ReadBytes64(Abs(rva), count * 8);
             if (bytes == null || bytes.Length != count * 8) return slots;
             if (_experimental70707)
@@ -1216,7 +1225,7 @@ namespace Styx.WoWInternals
             if (!_experimental70707) return false;
             using var uncached = _memory.TemporaryCacheState(false);
             if (!TryReadGuid(Abs(PlayerGuidRva), out WowBGuid before) || before.IsEmpty) return false;
-            ulong address = Abs(Wow70707Offsets.StoredActionArrayCandidate);
+            ulong address = Abs(ExperimentalActionArrayRva);
             byte[]? first = _memory.ReadBytes64(address, 96);
             byte[]? second = _memory.ReadBytes64(address, 96);
             if (first == null || second == null || first.Length != 96 || second.Length != 96 ||
@@ -1236,7 +1245,7 @@ namespace Styx.WoWInternals
             using var uncached = _memory.TemporaryCacheState(false);
             const int count = 12;
             if (!TryReadGuid(Abs(PlayerGuidRva), out WowBGuid before) || before.IsEmpty) return "player GUID unavailable";
-            ulong address = Abs(Wow70707Offsets.StoredActionArrayCandidate);
+            ulong address = Abs(ExperimentalActionArrayRva);
             byte[]? first = _memory.ReadBytes64(address, count * 8);
             byte[]? second = _memory.ReadBytes64(address, count * 8);
             if (first == null || second == null || first.Length != count * 8 || second.Length != count * 8 ||
@@ -1461,15 +1470,15 @@ namespace Styx.WoWInternals
             ulong manager = _memory.ReadPointer64(Abs(ObjectManagerRva));
             ulong pool0 = _memory.ReadPointer64(Abs(HandlePoolsRva));
             ulong pool1 = _memory.ReadPointer64(Abs(HandlePoolsRva) + 8);
-            ulong mapRoot = _memory.ReadPointer64(Abs(Wow70707Offsets.MapRoot));
+            ulong mapRoot = _memory.ReadPointer64(Abs(ExperimentalMapRootRva));
             string mapCandidate = TryReadExperimentalMapCandidate(out uint observedMap)
                 ? observedMap.ToString(System.Globalization.CultureInfo.InvariantCulture) : "unreadable-or-unstable";
-            ulong frame = _memory.ReadPointer64(Abs(Wow70707Offsets.CameraWorldFrameGlobal));
+            ulong frame = _memory.ReadPointer64(Abs(ExperimentalCameraRootRva));
             ulong camera = IsUserPointer(frame) ? _memory.ReadPointer64(frame + Wow70707Offsets.CameraPointerOffset) : 0;
             byte[]? zoomBytes = IsUserPointer(camera) ? _memory.ReadBytes64(camera + Wow70707Offsets.CameraZoomOffset, 4) : null;
             string zoom = zoomBytes == null || zoomBytes.Length != 4 ? "unreadable" :
                 BitConverter.ToSingle(zoomBytes, 0).ToString("R", System.Globalization.CultureInfo.InvariantCulture);
-            return $"[70707 candidates] playerGuid={player}; targetGuid={target}; playerName=\"{name}\"; " +
+            return $"[{ExperimentalBuildNumber} candidates] playerGuid={player}; targetGuid={target}; playerName=\"{name}\"; " +
                 $"objectManager=0x{manager:X}; pool0=0x{pool0:X}; pool1=0x{pool1:X}; mapRoot=0x{mapRoot:X}; mapRoot+0x20Candidate={mapCandidate}; " +
                 $"cameraFrame=0x{frame:X}; camera=0x{camera:X}; zoomCandidate={zoom}. " +
                 "Unverified observations; pointer 0 can mean zero or unreadable. Map ID, camera position and unit layouts are not established.";

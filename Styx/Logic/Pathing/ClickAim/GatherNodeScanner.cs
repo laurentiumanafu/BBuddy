@@ -92,11 +92,11 @@ internal static class GatherNodeScanner
     // Demand independent GUID and object-entry agreement, known vtable and backpointer.
     // A match is only an observation, never proof of harvestability.
     private static bool MatchingHeader(byte[]? header, ulong imageBase, ulong record, WowBGuid guid,
-                                       out uint entry, bool experimental70707 = false)
+                                       out uint entry, bool experimental70707 = false, ulong? candidateVtable = null)
     {
         entry = 0;
         if (header == null || header.Length != HeaderSize || guid.IsEmpty) return false;
-        ulong vtable = experimental70707 ? Wow70707Offsets.GameObjectVtableCandidate : NodeVtableCandidate;
+        ulong vtable = candidateVtable ?? (experimental70707 ? Wow70707Offsets.GameObjectVtableCandidate : NodeVtableCandidate);
         if (BitConverter.ToUInt64(header, 0) != imageBase + vtable
             || BitConverter.ToUInt64(header, 8) != record
             || new WowBGuid(BitConverter.ToUInt64(header, 16), BitConverter.ToUInt64(header, 24)) != guid)
@@ -141,7 +141,8 @@ internal static class GatherNodeScanner
                 ulong ptr = BitConverter.ToUInt64(ptrBytes, 0);
                 if (ptr <= 0x10000UL || ptr >= 0x00007FFFFFFFFF00UL || (ptr & 3UL) != 0) { stats.HeaderRejected++; continue; }
                 byte[]? header = memory.ReadBytes64(ptr, HeaderSize);
-                if (!MatchingHeader(header, memory.ImageBase64, record.RecordPtr, record.Guid, out uint entry, reader.IsExperimental70707)
+                if (!MatchingHeader(header, memory.ImageBase64, record.RecordPtr, record.Guid, out uint entry, reader.IsExperimental70707,
+                    reader.IsExperimental70707 ? reader.GameObjectVtableCandidateRva : null)
                     || entry != kind.Entry) { stats.HeaderRejected++; continue; }
                 byte[]? position = memory.ReadBytes64(record.RecordPtr + WowBOffsets.RecordPositionOffset, 12);
                 if (position == null || position.Length != 12) continue;
@@ -160,7 +161,8 @@ internal static class GatherNodeScanner
                 if (ptrAfter == null || ptrAfter.Length != 8 || BitConverter.ToUInt64(ptrAfter, 0) != ptr
                     || guidAfter == null || guidAfter.Length != 16
                     || new WowBGuid(BitConverter.ToUInt64(guidAfter, 0), BitConverter.ToUInt64(guidAfter, 8)) != record.Guid
-                    || !MatchingHeader(headerAfter, memory.ImageBase64, record.RecordPtr, record.Guid, out uint entryAfter, reader.IsExperimental70707)
+                    || !MatchingHeader(headerAfter, memory.ImageBase64, record.RecordPtr, record.Guid, out uint entryAfter, reader.IsExperimental70707,
+                        reader.IsExperimental70707 ? reader.GameObjectVtableCandidateRva : null)
                     || entryAfter != entry || !reader.IsPoolRecordCurrent(record)) { stats.Changed++; continue; }
                 found.Add(record.Guid);
                 nodes.Add(new Node(record.Guid, kind, herb, new WoWPoint(x, y, z), distance));
@@ -241,6 +243,10 @@ internal static class GatherNodeScanner
         checkFixture(MatchingHeader(data, image, rec, copper, out uint newEntry, true) && newEntry == 1731);
         checkFixture(!MatchingHeader(data, image, rec, copper, out _));
         checkFixture(!MatchingHeader(data, image, rec + 8, copper, out _, true));
+        Array.Copy(BitConverter.GetBytes(image + Wow70755Offsets.GameObjectVtableCandidate), 0, data, 0, 8);
+        checkFixture(MatchingHeader(data, image, rec, copper, out uint newestEntry, true, Wow70755Offsets.GameObjectVtableCandidate) && newestEntry == 1731);
+        checkFixture(!MatchingHeader(data, image, rec, copper, out _, true));
+        checkFixture(!MatchingHeader(data, image, rec + 8, copper, out _, true, Wow70755Offsets.GameObjectVtableCandidate));
         Array.Copy(BitConverter.GetBytes(image + NodeVtableCandidate), 0, data, 0, 8);
         Array.Copy(BitConverter.GetBytes(1618u), 0, data, 0x90, 4);
         checkFixture(!MatchingHeader(data, image, rec, copper, out _));

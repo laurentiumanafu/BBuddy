@@ -122,6 +122,7 @@ namespace Styx.WoWInternals
         public static int ReadCount;
         public static Func<int, WowBGuid>? OnRead;
         public bool IsExperimental70707 => true;
+        public int ExperimentalBuildNumber => 70707;
         public ulong MouseoverGuidCandidateRva => 1;
         public bool TryReadMouseoverGuidCandidate(out WowBGuid guid)
         {

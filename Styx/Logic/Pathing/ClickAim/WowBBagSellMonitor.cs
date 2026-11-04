@@ -83,14 +83,14 @@ internal sealed class WowBBagSellMonitor
             bool wasDue = _due;
             _observedAt = now;
             _due = _policy.Observe(value);
-            if (_due && !wasDue) report = "[Grind] two experimental 70707 zero-tag observations: vendor trip is due when safe.";
+            if (_due && !wasDue) report = "[Grind] two experimental " + reader.ExperimentalBuildNumber + " zero-tag observations: vendor trip is due when safe.";
             int status = value ?? -1;
             if (status != _lastReport)
             {
                 _lastReport = status;
                 report = value.HasValue
-                    ? "[Grind] experimental 70707 bag candidate zero-tag subtotal=" + value.Value + "; auto-sell requires two consecutive zero observations."
-                    : "[Grind] experimental 70707 bag subtotal unavailable; automatic selling waits (Sell now remains available).";
+                    ? "[Grind] experimental " + reader.ExperimentalBuildNumber + " bag candidate zero-tag subtotal=" + value.Value + "; auto-sell requires two consecutive zero observations."
+                    : "[Grind] experimental " + reader.ExperimentalBuildNumber + " bag subtotal unavailable; automatic selling waits (Sell now remains available).";
             }
         }
         if (_task == null && now >= _next)

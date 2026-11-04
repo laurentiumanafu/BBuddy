@@ -57,7 +57,7 @@
                 <TextBlock Grid.Row="4" Grid.Column="0" VerticalAlignment="Center" Margin="0,0,8,8"
                            Text="Drink at or below (percent mana)"/>
                 <TextBox x:Name="txtDrink" Grid.Row="4" Grid.Column="1" Margin="0,0,0,8"
-                         ToolTip="On 70707, voluntary pulls wait until mana recovers to this value, even when the drink key has no item. Combat and Stop take priority. 0 disables this rule."/>
+                         ToolTip="On 70707/70755, voluntary pulls wait until mana recovers to this value, even when the drink key has no item. Combat and Stop take priority. 0 disables this rule."/>
 
                 <CheckBox x:Name="chkDot" Grid.Row="5" Grid.ColumnSpan="2" Margin="0,8,0,4"
                           Content="Use damage-over-time spells (Moonfire, Corruption, Serpent Sting ...)"/>
@@ -68,7 +68,7 @@
 
                 <CheckBox x:Name="chkBuffs" Grid.Row="7" Grid.ColumnSpan="2" Margin="0,4,0,12"
                           Content="Apply self-buffs on start, periodically, and after resurrection"
-                          ToolTip="Grind and GatherBuddy attempt hotbar buffs outside combat. On 70707, selected Mage and Shaman buffs use experimental aura timing; other or uncertain cases use a 30-minute attempt timer. Cast success is not verified."/>
+                          ToolTip="Grind and GatherBuddy attempt hotbar buffs outside combat. On 70707/70755, selected Mage and Shaman buffs use experimental aura timing; other or uncertain cases use a 30-minute attempt timer. Cast success is not verified."/>
 
                 <TextBlock Grid.Row="8" Grid.Column="0" VerticalAlignment="Center" Margin="0,0,8,8"
                            Text="Food slot (0 = find it on the bar)"/>
@@ -87,7 +87,7 @@
 
                 <TextBlock Grid.Row="12" Grid.ColumnSpan="2" TextWrapping="Wrap" Margin="0,12,0,0"
                            VerticalAlignment="Top" FontSize="11" Opacity="0.7"
-                           Text="The character eats and drinks between fights, out of combat. On 70707 it also waits for the mana threshold before a new pull if drinking fails or no drink is available; that wait is not limited by the food/drink timer."/>
+                           Text="The character eats and drinks between fights, out of combat. On 70707/70755 it also waits for the mana threshold before a new pull if drinking fails or no drink is available; that wait is not limited by the food/drink timer."/>
             </Grid>
         </TabItem>
 
@@ -104,16 +104,16 @@
 
                 <StackPanel Grid.Row="0" Margin="0,0,0,8">
                     <TextBlock TextWrapping="Wrap" Margin="0,0,0,6"
-                               Text="Stage 1: choose a low-level hotbar priority. Auto uses recognizable class spells; ambiguous bars use Generic. The rotation does not read spec, cooldowns, forms, runes, combo points or pets. Selected 70707 buffs use experimental aura candidates."/>
+                               Text="Stage 1: choose a low-level hotbar priority. Auto uses recognizable class spells; ambiguous bars use Generic. The rotation does not read spec, cooldowns, forms, runes, combo points or pets. Selected 70707/70755 buffs use experimental aura candidates."/>
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="Rotation class:" VerticalAlignment="Center" Margin="0,0,8,0"/>
                         <ComboBox x:Name="cmbRotation" Width="145"/>
                     </StackPanel>
                     <TextBlock TextWrapping="Wrap" FontSize="11" Opacity="0.7" Margin="0,5,0,0"
-                               Text="Generic retains the older first-spell behavior, including its limitations. Class profiles omit rune abilities, feral forms, finishers and pet actions unless manually overridden. On 70707 only verified mana-type characters pass the existing combat gate."/>
+                               Text="Generic retains the older first-spell behavior, including its limitations. Class profiles omit rune abilities, feral forms, finishers and pet actions unless manually overridden. On 70707/70755 the experimental gate supports mana-type and candidate rage-type characters; rage-dependent actions remain withheld."/>
                     <CheckBox x:Name="chkBuffsInCombat" Margin="0,8,0,0"
                               Content="Re-cast supported buffs when they run out during combat"
-                              ToolTip="Requires Apply self-buffs. Experimental 70707 Lightning Shield and Frost Armor, observed ranks only. Uses mana estimates; exact cost and cast success are not verified. Other buffs remain out-of-combat only."/>
+                              ToolTip="Requires Apply self-buffs. Experimental 70707/70755 Lightning Shield and Frost Armor, observed ranks only. Uses mana estimates; exact cost and cast success are not verified. Other buffs remain out-of-combat only."/>
                 </StackPanel>
 
                 <ListView x:Name="lstSpells" Grid.Row="1" Margin="0,0,0,8"
@@ -158,7 +158,7 @@
         <!-- ================================================ combat research ========= -->
         <TabItem Header="Combat research">
             <StackPanel Margin="12">
-                <TextBlock FontWeight="Bold" Text="70707 spell-state research (read-only)" Margin="0,0,0,8"/>
+                <TextBlock FontWeight="Bold" Text="70707/70755 spell-state research (read-only)" Margin="0,0,0,8"/>
                 <TextBlock TextWrapping="Wrap" Margin="0,0,0,8"
                            Text="Stop the bot. Select a target before recording if you need target data, then start the trace. Wait for the Recording message, return to the game, wait about five seconds and manually cast one spell once. Keep the same character and target selected."/>
                 <TextBlock TextWrapping="Wrap" Margin="0,0,0,10"
@@ -194,7 +194,7 @@
                 </Grid.RowDefinitions>
 
                 <TextBlock Grid.Row="0" Grid.ColumnSpan="3" TextWrapping="Wrap" Margin="0,0,0,10"
-                           Text="On 70707 Grind sells when the experimental bag-candidate subtotal is zero twice; an unreadable subtotal waits rather than guessing. Other WowB builds use the corpse-interaction threshold below. Select a saved plan, record its town hotspot and remember a known merchant. The recorded click plan is replayed; sales are not verified."/>
+                           Text="On 70707/70755 Grind sells when the experimental bag-candidate subtotal is zero twice; an unreadable subtotal waits rather than guessing. Other WowB builds use the corpse-interaction threshold below. Select a saved plan, record its town hotspot and remember a known merchant. The recorded click plan is replayed; sales are not verified."/>
 
                 <CheckBox x:Name="chkAutoSell" Grid.Row="1" Grid.ColumnSpan="3" Margin="0,0,0,8"
                           Content="Walk to the vendor and sell when the bags are due"/>
@@ -219,7 +219,7 @@
 
                 <StackPanel Grid.Row="5" Grid.ColumnSpan="3">
                     <Button x:Name="btnInventoryProbe" Content="Bag research snapshot" Height="24" Padding="10,0" HorizontalAlignment="Left" Click="btnInventoryProbe_Click"
-                            ToolTip="Stopped bot only. Read-only candidate bytes; logged data can be sensitive. 70707 auto-selling uses the candidate subtotal experimentally."/>
+                            ToolTip="Stopped bot only. Read-only candidate bytes; logged data can be sensitive. 70707/70755 auto-selling uses the candidate subtotal experimentally."/>
                     <TextBlock x:Name="lblVendorNote" TextWrapping="Wrap" Margin="0,2,0,8" FontSize="11" Opacity="0.9"/>
                 </StackPanel>
 
@@ -300,7 +300,7 @@
         <TabItem Header="Factions">
             <ScrollViewer VerticalScrollBarVisibility="Auto">
                 <StackPanel Margin="12">
-                    <TextBlock TextWrapping="Wrap" Text="Stop the bot and scan nearby NPC faction-template IDs without selecting them. On 70707 keys and gameplay are experimental; Grind requires Allow or Blacklist mode. IDs are not names or proof of hostility or merchant status."/>
+                    <TextBlock TextWrapping="Wrap" Text="Stop the bot and scan nearby NPC faction-template IDs without selecting them. On 70707/70755 keys and gameplay are experimental; Grind requires Allow or Blacklist mode. IDs are not names or proof of hostility or merchant status."/>
                     <Button x:Name="btnFactionScan" Content="Scan nearby NPC factions (100 horizontal yd)" Height="30" Margin="0,10,0,0" Click="btnFactionScan_Click"/>
                     <TextBox x:Name="txtFactionReport" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" Height="145" Margin="0,8,0,8"/>
                     <TextBlock Text="Filter mode (only one applies)" FontWeight="SemiBold" Margin="0,2,0,4"/>

@@ -78,13 +78,13 @@ internal sealed class WowBDeathCheckpoint
             {
                 if (!WowBGrindFactions.TryReadGhostFlagCandidate(memory, reader, player, out bool ghostFlag))
                 {
-                    Logging.Write("[Corpse] 70707 ghost flag candidate unavailable or changed; stopping rather than guessing");
+                    Logging.Write("[Corpse] " + reader.ExperimentalBuildNumber + " ghost flag candidate unavailable or changed; stopping rather than guessing");
                     observed = true;
                     return true;
                 }
                 if (ghostFlag)
                 {
-                    Logging.Write("[Corpse] 70707 ghost flag candidate is set; stopping for manual recovery");
+                    Logging.Write("[Corpse] " + reader.ExperimentalBuildNumber + " ghost flag candidate is set; stopping for manual recovery");
                     observed = true;
                     return true;
                 }
@@ -118,7 +118,7 @@ internal sealed class WowBDeathCheckpoint
                 // One write per run; never overwrite an earlier candidate at a graveyard.
                 _saved = true;
                 Recorded = new Candidate(current.Guid, map, position);
-                Save(current.Guid, map, reader.IsExperimental70707, position);
+                Save(current.Guid, map, reader.ExperimentalBuildNumber, position);
             }
             else if (!_saved)
             {
@@ -131,7 +131,7 @@ internal sealed class WowBDeathCheckpoint
         catch (Exception ex) { Logging.Write("[Corpse] checkpoint observation failed: " + ex.Message); return false; }
     }
 
-    private static void Save(WowBGuid player, uint map, bool build70707, WoWPoint position)
+    private static void Save(WowBGuid player, uint map, int experimentalBuild, WoWPoint position)
     {
         try
         {
@@ -142,7 +142,7 @@ internal sealed class WowBDeathCheckpoint
             File.WriteAllLines(path, new[] {
                 "WOWB DEATH CHECKPOINT v1; candidate only, not verified corpse or ghost state",
                 "UTC=" + DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture),
-                "player=" + player, "client=" + (build70707 ? "70707" : "wowb-legacy-offsets"),
+                "player=" + player, "client=" + (experimentalBuild != 0 ? experimentalBuild.ToString(CultureInfo.InvariantCulture) : "wowb-legacy-offsets"),
                 "map=" + map.ToString(CultureInfo.InvariantCulture),
                 "x=" + position.X.ToString("R", CultureInfo.InvariantCulture),
                 "y=" + position.Y.ToString("R", CultureInfo.InvariantCulture),

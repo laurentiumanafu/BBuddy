@@ -36,7 +36,7 @@ internal static class WowBGrindFactions
         try
         {
             if (_boundReader?.HasExperimentalGrindSession == true)
-            { reason = "another 70707 session is active"; return false; }
+            { reason = "another " + _boundReader.ExperimentalBuildNumber + " session is active"; return false; }
             return PrepareCore(out reason);
         }
         finally { System.Threading.Volatile.Write(ref _preparing, 0); }
@@ -68,44 +68,44 @@ internal static class WowBGrindFactions
     {
         reason = "";
         if (!rules.Enabled)
-        { reason = "70707 requires a nonempty Allow or Blacklist faction filter"; return false; }
+        { reason = (ObjectManager.WowB?.ExperimentalBuildNumber ?? 70707) + " requires a nonempty Allow or Blacklist faction filter"; return false; }
         Memory? memory = ObjectManager.Wow;
         WowBReader? reader = ObjectManager.WowB;
         if (memory == null || reader == null || !reader.IsExperimental70707 || !memory.Is64BitTarget)
-        { reason = "70707 attachment unavailable"; return false; }
+        { reason = "experimental client attachment unavailable"; return false; }
         bool armed = false;
         try
         {
             using var uncached = memory.TemporaryCacheState(false);
             // These image-specific anchors are partial guards, not full build validation.
             if (!CheckExperimentalBuild(memory, out string signatureReport))
-            { reason = "70707 experimental signature check failed: " + signatureReport; return false; }
-            Logging.Write("[70707] partial signature check: " + signatureReport);
+            { reason = reader.ExperimentalBuildNumber + " experimental signature check failed: " + signatureReport; return false; }
+            Logging.Write("[" + reader.ExperimentalBuildNumber + "] partial signature check: " + signatureReport);
             if (!reader.TryCaptureWorldSnapshot(out WowBWorldSnapshot? snapshot) || snapshot == null ||
                 !snapshot.TryGetLocalPlayer(out WowBObservedUnit player))
-            { reason = "70707 player snapshot unavailable"; return false; }
+            { reason = reader.ExperimentalBuildNumber + " player snapshot unavailable"; return false; }
             reader.SetExperimentalGrindActive(true);
             if (!reader.TryReadExperimentalActionSnapshot(out ulong[] rawBar) || reader.ReadActionBar().Count == 0)
-            { reason = "70707 action bar unreadable or empty"; return false; }
+            { reason = reader.ExperimentalBuildNumber + " action bar unreadable or empty"; return false; }
             _experimentalBar = rawBar;
             if (!Experimental70707BarSafe(reader))
-            { reason = "70707 action bar changed"; return false; }
+            { reason = reader.ExperimentalBuildNumber + " action bar changed"; return false; }
             if (!reader.TryReadMapId(out _) || !reader.TryGetPlayerObject(out _) ||
                 !reader.TryGetUnitFields(player.UnitAddress, out WowBReader.WowBUnitFields self) || self.Health == 0 ||
                 ObjectManager.Wow != memory || ObjectManager.WowB != reader)
-            { reason = "70707 candidate map, player or supported power type unavailable"; return false; }
+            { reason = reader.ExperimentalBuildNumber + " candidate map, player or supported power type unavailable"; return false; }
             if (self.PlayerPowerTypeCandidate == 1)
-                Logging.Write("[70707] player power type candidate 1 (rage): value unavailable; mana recovery is skipped and resource-dependent abilities are withheld, but auto-attack is available");
+                Logging.Write("[" + reader.ExperimentalBuildNumber + "] player power type candidate 1 (rage): value unavailable; mana recovery is skipped and resource-dependent abilities are withheld, but auto-attack is available");
             if (!TryReadGhostFlagCandidate(memory, reader, player, out bool ghostFlag))
-            { reason = "70707 ghost flag candidate unavailable or changed; refusing to start"; return false; }
+            { reason = reader.ExperimentalBuildNumber + " ghost flag candidate unavailable or changed; refusing to start"; return false; }
             if (ghostFlag)
-            { reason = "70707 ghost flag candidate is set; manually recover before starting"; return false; }
+            { reason = reader.ExperimentalBuildNumber + " ghost flag candidate is set; manually recover before starting"; return false; }
             _boundMemory = memory; _boundReader = reader;
             GrindFactionSettings.Activate(rules);
             armed = true;
             return true;
         }
-        catch (Exception ex) { reason = "70707 session initialization failed: " + ex.Message; return false; }
+        catch (Exception ex) { reason = reader.ExperimentalBuildNumber + " session initialization failed: " + ex.Message; return false; }
         finally { if (!armed) { reader.SetExperimentalGrindActive(false); _experimentalBar = null; } }
     }
 
@@ -128,9 +128,12 @@ internal static class WowBGrindFactions
     private static bool CheckExperimentalBuild(Memory memory, out string report)
     {
         if (!memory.Is64BitTarget) { report = "target is not x64"; return false; }
-        ulong[] rvas = { 0x2080D2C, 0x20AAF97, 0x2890305, 0xA538FD };
-        string[] expected = { "488D0DCD38A004E808A843FE8B93541E0000", "F2480F2A83281E0000",
-                              "448B8C86C01B0000", "488D0D5CB32E06488D34C1488B04C1" };
+        bool newer = ObjectManager.Wow == memory && ObjectManager.WowB?.IsExperimental70755 == true;
+        ulong[] rvas = newer ? new ulong[] { 0x1F9163C, 0x1FBB6F7, 0x2797405, 0xA2BA4D }
+                             : new ulong[] { 0x2080D2C, 0x20AAF97, 0x2890305, 0xA538FD };
+        string[] expected = newer
+            ? new[] { "488D0DBDEB9F04E8189852FE8B93541E0000", "F2480F2A83281E0000", "448B8C86C01B0000", "488D0D2CEE2106488D34C1488B04C1" }
+            : new[] { "488D0DCD38A004E808A843FE8B93541E0000", "F2480F2A83281E0000", "448B8C86C01B0000", "488D0D5CB32E06488D34C1488B04C1" };
         int matches = 0, mismatches = 0;
         var observations = new List<string>();
         for (int i = 0; i < rvas.Length; i++)
@@ -202,7 +205,7 @@ internal static class WowBGrindFactions
             if (!reader.IsExperimental70707 || ObjectManager.Wow != memory || ObjectManager.WowB != reader ||
                 unit.Guid.IsEmpty || unit.IsLocalPlayer != local || unit.HasPlayerVtable != local || !SameIdentity(memory, unit)) return false;
             byte[]? vt = memory.ReadBytes64(unit.UnitAddress, 8);
-            ulong expected = local ? Wow70707Offsets.PlayerVtable : Wow70707Offsets.UnitVtable;
+            ulong expected = local ? reader.PlayerVtableRva : reader.UnitVtableRva;
             return vt != null && vt.Length == 8 && BitConverter.ToUInt64(vt, 0) == memory.ImageBase64 + expected &&
                 (local ? reader.TryReadTraceLocalGuid(out WowBGuid guid) && guid == unit.Guid :
                          reader.TryReadTraceTargetGuid(out WowBGuid selectedGuid) && selectedGuid == unit.Guid) &&
@@ -245,7 +248,7 @@ internal static class WowBGrindFactions
             {
                 byte[]? vt = memory.ReadBytes64(unit.UnitAddress, 8);
                 if (unit.IsLocalPlayer || unit.HasPlayerVtable || vt == null || vt.Length != 8 ||
-                    BitConverter.ToUInt64(vt, 0) != memory.ImageBase64 + Wow70707Offsets.UnitVtable) return false;
+                    BitConverter.ToUInt64(vt, 0) != memory.ImageBase64 + reader.UnitVtableRva) return false;
             }
             return ObjectManager.Wow == memory && ObjectManager.WowB == reader && SameIdentity(memory, unit);
         }
@@ -363,7 +366,7 @@ internal static class WowBGrindFactions
         byte[]? first = memory.ReadBytes64(unit.UnitAddress + Wow70707Offsets.FactionKeyCandidateOffset, 4);
         byte[]? second = memory.ReadBytes64(unit.UnitAddress + Wow70707Offsets.FactionKeyCandidateOffset, 4);
         byte[]? vtAfter = memory.ReadBytes64(unit.UnitAddress, 8);
-        if (vt == null || vt.Length != 8 || BitConverter.ToUInt64(vt, 0) != memory.ImageBase64 + Wow70707Offsets.UnitVtable ||
+        if (vt == null || vt.Length != 8 || BitConverter.ToUInt64(vt, 0) != memory.ImageBase64 + reader.UnitVtableRva ||
             vtAfter == null || vtAfter.Length != 8 || BitConverter.ToUInt64(vtAfter, 0) != BitConverter.ToUInt64(vt, 0) ||
             first == null || first.Length != 4 || second == null || second.Length != 4 ||
             BitConverter.ToUInt32(first, 0) == 0 || BitConverter.ToUInt32(first, 0) != BitConverter.ToUInt32(second, 0) ||
@@ -387,7 +390,7 @@ internal static class WowBGrindFactions
     private static string ScanExperimental70707(Memory memory, WowBReader reader)
     {
         if (!reader.TryCaptureWorldSnapshot(out WowBWorldSnapshot? before) || before == null ||
-            !before.TryGetLocalPlayer(out WowBObservedUnit player)) return "70707 candidate player/world snapshot could not be read.";
+            !before.TryGetLocalPlayer(out WowBObservedUnit player)) return reader.ExperimentalBuildNumber + " candidate player/world snapshot could not be read.";
         var rows = new List<Row>();
         int unreadable = 0;
         foreach (WowBObservedUnit unit in before.Units)
@@ -420,7 +423,7 @@ internal static class WowBGrindFactions
         }
         if (ObjectManager.Wow != memory || ObjectManager.WowB != reader || ClickAimUi.Running || ClickAimUi.Paused)
             return "Attachment or bot state changed during the scan; results discarded.";
-        var result = new StringBuilder("70707 RESEARCH ONLY: candidate faction-key words (no selection required; approximate 100 yd radius):\n");
+        var result = new StringBuilder(reader.ExperimentalBuildNumber + " RESEARCH ONLY: candidate faction-key words (no selection required; approximate 100 yd radius):\n");
         if (groups.Count == 0) result.AppendLine("No readable candidate keys were observed.");
         foreach (var group in groups)
         {
@@ -430,7 +433,7 @@ internal static class WowBGrindFactions
                     row.Distance, row.Level == 0 ? "?" : row.Level.ToString(CultureInfo.InvariantCulture), row.Unit.Guid);
         }
         result.AppendFormat(CultureInfo.InvariantCulture,
-            "Unreadable/changed candidates: {0}. Vtable, position and field meanings remain unverified; no code signatures checked here. These observations do not establish NPC names, friendliness or attackability. Experimental 70707 Grind uses the selected Allow or Blacklist filter. Reads are non-atomic and can omit units.", unreadable);
+            "Unreadable/changed candidates: {0}. Vtable, position and field meanings remain unverified; no code signatures checked here. These observations do not establish NPC names, friendliness or attackability. Experimental {1} Grind uses the selected Allow or Blacklist filter. Reads are non-atomic and can omit units.", unreadable, reader.ExperimentalBuildNumber);
         return result.ToString();
     }
 }

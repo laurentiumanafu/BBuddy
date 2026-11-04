@@ -130,9 +130,9 @@ namespace CopilotBuddy.UI
             {
                 string report = await Task.Run(() => WowBGrindFactions.ScanNearby());
                 txtFactionReport.Text = report;
-                if (report.StartsWith("70707 RESEARCH ONLY", StringComparison.Ordinal))
+                if (report.StartsWith("70707 RESEARCH ONLY", StringComparison.Ordinal) || report.StartsWith("70755 RESEARCH ONLY", StringComparison.Ordinal))
                     foreach (string line in report.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
-                        Logging.Write("[70707 faction research] " + line);
+                        Logging.Write("[Faction research] " + line);
             }
             catch (Exception ex) { txtFactionReport.Text = "Faction scan failed: " + ex.Message; }
             finally { btnFactionScan.IsEnabled = true; }
@@ -166,7 +166,7 @@ namespace CopilotBuddy.UI
                 string report = await Task.Run(() => WowBInventoryProbe.Capture());
                 foreach (string line in report.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
                     Logging.Write("[Bag research] " + line);
-                lblVendorNote.Text = report.StartsWith("70291 read-only", StringComparison.Ordinal) || report.StartsWith("70707 read-only", StringComparison.Ordinal)
+                lblVendorNote.Text = report.StartsWith("70291 read-only", StringComparison.Ordinal) || report.StartsWith("70707 read-only", StringComparison.Ordinal) || report.StartsWith("70755 read-only", StringComparison.Ordinal)
                     ? "Bag research snapshot written to the bot log. Candidate data, GUID and addresses may be sensitive."
                     : report;
             }
@@ -337,7 +337,7 @@ namespace CopilotBuddy.UI
                 }
                 note = string.Format(CultureInfo.InvariantCulture,
                     "{0} spell(s) on the bar, {1} set by hand.{2}", _rows.Count, overrides,
-                    experimentalPreview ? " 70707 preview: candidate slots and default keys are unverified; no gameplay session was started." : "");
+                    experimentalPreview ? " experimental preview: candidate slots and default keys are unverified; no gameplay session was started." : "");
             }
             else
             {
@@ -352,7 +352,7 @@ namespace CopilotBuddy.UI
                     _rows.Add(row);
                 }
                 note = previewUnavailable
-                    ? "70707 candidate action bar unavailable or changed; press Refresh. Showing any hand-set roles only."
+                    ? "experimental candidate action bar unavailable or changed; press Refresh. Showing any hand-set roles only."
                     : ids.Count == 0
                         ? "Attach to the game to see the action bar. Nothing is set by hand yet."
                         : "Not attached: showing the " + ids.Count.ToString(CultureInfo.InvariantCulture)
@@ -688,7 +688,7 @@ namespace CopilotBuddy.UI
             if (reader?.IsExperimental70707 == true)
             {
                 if (!TryTownPosition(reader, out _, out x, out y, out z))
-                { lblVendorNote.Text = "Stop the bot and stand at the vendor; the 70707 position candidate is unavailable."; return; }
+                { lblVendorNote.Text = "Stop the bot and stand at the vendor; the experimental position candidate is unavailable."; return; }
             }
             else
             {

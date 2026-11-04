@@ -108,7 +108,7 @@ namespace CopilotBuddy.UI
                         continue;
 
                     using var memory = new Memory(process.Id);
-                    if (!memory.IsProcessOpen || (build == ClientAttachPolicy.ExperimentalBuild && !memory.Is64BitTarget))
+                    if (!memory.IsProcessOpen || (ClientAttachPolicy.IsExperimentalBuild(build) && !memory.Is64BitTarget))
                         continue;
 
                     string? characterName;
@@ -116,8 +116,8 @@ namespace CopilotBuddy.UI
                     {
                         // The 70707 name is a candidate read, not login validation.
                         // Keep the existing 70291 selector behavior unchanged.
-                        characterName = build == ClientAttachPolicy.ExperimentalBuild
-                            ? memory.ReadString64(memory.GetAbsolute64(Wow70707Offsets.PlayerNamePrimary), 32)
+                        characterName = ClientAttachPolicy.IsExperimentalBuild(build)
+                            ? memory.ReadString64(memory.GetAbsolute64(build == ClientAttachPolicy.ExperimentalBuild70755 ? Wow70755Offsets.PlayerNamePrimary : Wow70707Offsets.PlayerNamePrimary), 32)
                             : build == ObjectManager.SupportedBuildWowB &&
                               process.ProcessName.Equals("WowB", StringComparison.OrdinalIgnoreCase)
                                 ? memory.ReadString64(memory.GetAbsolute64(WowBOffsets.PlayerNamePrimary), 48)
@@ -151,8 +151,7 @@ namespace CopilotBuddy.UI
                 }
             }
 
-            // The highest registered build is the default, not an arbitrary
-            // newer/unknown WowB executable accepted by the legacy name rule.
+            // The highest registered build is the default; unknown builds are not assumed compatible.
             // Keep the selector for multiple processes, including multiple
             // characters on the preferred build.
             foreach (var entry in _processes.OrderByDescending(p => ClientAttachPolicy.SelectionPriority(p.Build))

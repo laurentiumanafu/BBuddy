@@ -446,7 +446,7 @@ namespace CopilotBuddy.UI
                             continue;
                         }
 
-                        // Keep existing unversioned/WowB discovery rules and discover 70707 automatically.
+                        // Only known builds have registered offsets; newest supported build sorts first.
                         if (ClientAttachPolicy.IsCandidate(build, proc.ProcessName))
                         {
                             candidates.Add(proc);
@@ -454,8 +454,8 @@ namespace CopilotBuddy.UI
                         }
                         else
                         {
-                            Logging.Write(Colors.Orange, "{0} (PID {1}) skipped: unsupported build {2} (expected {3}, {4}, or experimental {5}).",
-                                proc.ProcessName, proc.Id, build, ObjectManager.SupportedBuild, ObjectManager.SupportedBuildWowB, ClientAttachPolicy.ExperimentalBuild);
+                            Logging.Write(Colors.Orange, "{0} (PID {1}) skipped: unsupported build {2} (expected {3}, {4}, or experimental {5}/{6}).",
+                                proc.ProcessName, proc.Id, build, ObjectManager.SupportedBuild, ObjectManager.SupportedBuildWowB, ClientAttachPolicy.ExperimentalBuild, ClientAttachPolicy.ExperimentalBuild70755);
                         }
                     }
                     catch { /* Access denied or process exited */ }
@@ -483,7 +483,7 @@ namespace CopilotBuddy.UI
                                 candidates.Add(proc);
                             else
                             {
-                                Logging.Write(Colors.Orange, "PID {0} skipped: unsupported build {1} (expected {2}, {3}, or experimental {4}).", pid, build, ObjectManager.SupportedBuild, ObjectManager.SupportedBuildWowB, ClientAttachPolicy.ExperimentalBuild);
+                                Logging.Write(Colors.Orange, "PID {0} skipped: unsupported build {1} (expected {2}, {3}, or experimental {4}/{5}).", pid, build, ObjectManager.SupportedBuild, ObjectManager.SupportedBuildWowB, ClientAttachPolicy.ExperimentalBuild, ClientAttachPolicy.ExperimentalBuild70755);
                             }
                         }
                     }
@@ -511,9 +511,9 @@ namespace CopilotBuddy.UI
                 try
                 {
                         using var tempMemory = new Memory(proc.Id);
-                        if (ObjectManager.GetBuildNumber(proc) == ClientAttachPolicy.ExperimentalBuild && !tempMemory.Is64BitTarget)
+                        if (ClientAttachPolicy.IsExperimentalBuild(ObjectManager.GetBuildNumber(proc)) && !tempMemory.Is64BitTarget)
                         {
-                            Logging.Write(Colors.Orange, "PID {0}: experimental build 70707 requires a 64-bit client.", proc.Id);
+                            Logging.Write(Colors.Orange, "PID {0}: experimental modern builds require a 64-bit client.", proc.Id);
                             continue;
                         }
 
