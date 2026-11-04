@@ -1,5 +1,7 @@
 # RESUME — CopilotBuddy x64 port (read this first)
 
+> **Newer handoff (2026-11-04):** Start with [HANDOFF_FUTURE_WOW_BUILDS.md](HANDOFF_FUTURE_WOW_BUILDS.md) for the user-tested 70755 baseline and future decoded-build procedure. The historical task lists, branch references, and Lua plans below may be superseded; do not execute Lua.
+
 > **State as of 2026-10-30 — read this before anything below.** The Lua bridge is
 > **retired**: both mechanisms crashed `wowb.exe` (70291) within a second of Start
 > (`FrameScript_IsLuaThread` at `FrameScriptEvents.cpp:208`; then

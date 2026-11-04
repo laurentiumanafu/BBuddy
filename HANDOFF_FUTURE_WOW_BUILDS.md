@@ -1,0 +1,95 @@
+# BBuddy handoff: current state and future decoded WoW builds
+
+**Handoff date:** 2026-11-04. Intended for a new agent or developer if the chat is lost. Read the repository and `git status` first; this document is a snapshot, not a substitute for checking later changes.
+
+## Start here
+
+1. Open the current BBuddy checkout; inspect `git status -sb`, `git log -10 --oneline`, and the active branch. Preserve any uncommitted work. In Arena, use the branch assigned to the **current session**, not a branch name remembered from an old chat. Do not reset or overwrite the working tree just to make it clean. If a restored sandbox has old Git metadata but newer working files, compare tracked **and untracked** files against the fetched branch first; reconcile only after verifying their contents and an empty index.
+2. Read this file, then `hunt/WOW_70755_PORT.md`, `hunt/WOWB_INVENTORY_INVESTIGATION.md`, and the relevant source/tests below. `RESUME.md` and `WOWB_OFFSET_RUNBOOK.md` contain useful older research but are historical: their old task lists, branch names, Lua plans, and claims about live validation can be superseded. Sections within research documents also record earlier stages; read the later updates before treating an older warning as the current implementation.
+3. The user normally builds and tests on Windows (`F:\…\BBuddy-clickaim\`), with .NET 10 and x64. They prefer autonomous progress and will test locally. Give exact results and remaining uncertainty; **never claim a Windows build or in-game test unless it actually happened**. Preserve 3.3.5a build 12340 and modern build 70291, as well as registered 70707 and 70755 behavior.
+4. The user explicitly accepted experimental local testing and the possibility of crashes/hangs. STOP responsiveness remains essential. **Do not use or revive Lua execution**: earlier bridge attempts crashed the client. Read-only investigation of Lua API registration strings/handlers in a disassembler is different from executing Lua.
+
+## Current baseline
+
+As of this handoff, branch `arena/c29e49eb-bbuddy` was pushed through `b21ee3a` ("Allow copying sell steps between vendors"). This is historical context, not a direction to change a future session's branch. The default is the newest **registered** build, currently **1.60.1.70755**; unknown/unreadable build numbers are not assumed compatible. `ClientAttachPolicy` selects the highest registered build. The historical property `IsExperimental70707` means the **shared 70707-style family**, which currently includes 70755; it is not an exact-version check. Use `IsExperimental70755`/`ExperimentalBuildNumber` for specific behavior.
+
+User-confirmed on 70755: the bot generally works; manual Sell Now sold items; the startup bag-check priority worked; copying a saved vendor plan to another merchant works. Prior user-confirmed functionality includes corpse-return fallback, Shaman buff recasting, and improvements to nearby scans/movement. Treat each result as confirmation of that observed scenario, not universal proof of every behavior or build. Loot/skinning, some resources, hostility, NPC typing and many inherited layouts still have unverified cases.
+
+### Existing vendoring
+
+- On 70755 the experimental free-space candidate counts the player range plus containers the user has explicitly identified as **ordinary**; explicitly classified **specialty** bags are excluded. Classifications are per character GUID and bag GUID in `Settings/clickaim-bag-kinds-70755.txt`. Unknown, changing or unresolved candidates fail closed. Do not identify bag type from candidate index, capacity, or GUID bits. Zero identities cannot establish complete enumeration; reads are non-atomic and candidates can omit or overlap bags.
+- At startup 70755 waits up to 15 seconds for a first bag decision before fresh pulls/roaming: fresh positive releases the hold, two fresh zero observations initiate a trip, and unknown/one zero never means full. Combat, unreadable combat state and STOP defer to existing safety; a timeout does not imply full. Later monitoring continues. 70707 and older startup behavior differs; do not casually change it.
+- Stopped-bot **Bag research snapshot** and Ordinary/Specialty controls are in Combat settings → Selling. Controlled 70755 test: moving Light Leather from the identified skinning bag back to an ordinary slot changed the ordinary candidate subtotal **1 → 0**, while combined subtotal stayed 3. That supports this observed case only. The auto trip began after two zeros; the user stopped it during approach. A separate Sell Now trip replayed three steps and the user confirmed the sale.
+- Each vendor has its own town location/map, explicitly remembered merchant, and saved click/key/wait plan in `Settings/clickaim-vendors.xml`. In Selling, stop the bot, select the destination, choose **Copy steps from**, and press **Copy to selected vendor**. Confirmation is required; existing steps are replaced, not appended. Town/merchant metadata is not copied. The source stays independent. Saved clicks are client-window-relative: differing window, merchant UI, bag layout or contents can cause the wrong action. Review and test; replay does not verify sales.
+
+## Source map: where a new build touches the bot
+
+Use `rg -n '70755|70707|IsExperimental70707|IsExperimental70755' Styx UI Tools` and trace actual callers; this is not a complete list and hardcoded branches exist outside the offsets file.
+
+| Area | Files and responsibilities |
+|---|---|
+| Build discovery | `Styx/WoWInternals/ClientAttachPolicy.cs`, `ObjectManager.cs`, `UI/ProcessSelectorWindow.xaml.cs`: registered versions, preference, version parsing, attach, constructor selection and process-list name reads. Preserve rejection of unknown versions. Windows file-version fields can split a five-digit build; inspect `ObjectManager.cs` rather than guessing. |
+| Per-build static data | `Styx/Offsets/WowBOffsets.cs`, `Wow70707Offsets.cs`, `Wow70755Offsets.cs`: image-relative RVAs and candidate structure offsets. 70755 still inherits many 70707 *member* layouts. A separate global RVA table alone does not make them compatible. |
+| Object/identity data | `Styx/WoWInternals/WowBReader.cs`, `WowBWorldSnapshot.cs`, `WowBGuid.cs`: module base, 128-bit GUIDs, roots, handle-pool enumeration, vtables, player and target, position/map, snapshots, action bar, unit fields, session gates. `ObjectManager.cs` wires this into the bot. |
+| Build/identity guards | `Styx/Logic/Pathing/ClickAim/WowBGrindFactions.cs`, `WowBInventoryProbe.cs`, `WowBContainerResearchProbe.cs`: build-specific marker RVAs, player/map/action checks, repeated reads and gameplay sessions. Trace exact-build checks, not just class names. A readable mismatch must not silently pass. |
+| Gameplay | `GrindRunner.cs`, `GatherRunner.cs`, `GatherInteraction.cs`, `GatherNodeScanner.cs`, `ClickAimMover.cs`, `ClickAimCombat.cs`, `ClickAimBuffController.cs`, `WowBCorpseRecovery.cs`, `WowBDeathCheckpoint.cs`, `WowBSkinning.cs`, `WowBKnownMerchants.cs`. Version-sensitive logic and labels can be scattered. Search for offsets and hardcoded `70755`, not just the central reader. |
+| Inventory and selling | `WowBInventoryProbe.cs`, `WowBContainerResearchProbe.cs`, `WowBBagClassification.cs`, `WowBBagSellMonitor.cs`, `GrindRunner.cs`, `VendorFile.cs`, `UI/ClickAimCombatSettingsWindow.xaml{,.cs}`. New builds need their own validated routing, classification policy and UI/log labels; do not fall through to 70707's unfiltered subtotal by accident. |
+| Tests | `Tools/WowBReaderTests/` (production sources with synthetic memory), `Tools/WowBBagSellTests/`, `Tools/WowBInventoryTests/`, and dedicated `WowB*Tests` fixtures. Add explicit old/new/unknown routing and failure cases. |
+
+## Procedure for the next decoded build
+
+### 1. Establish the exact input
+
+- Obtain the user's decoded executable/archive via the connected Drive or the user's supplied location. Record version, filename, size, x64 architecture, PE image base and SHA-256; archive checksums are helpful too. A Drive file can be replaced under the same ID: recheck contents and hashes, don't assume it is the older archive. Keep executables, archives, giant dumps, credentials and sensitive logs out of Git.
+- PowerShell example: `Get-FileHash 'C:\path\Wow-decoded.exe' -Algorithm SHA256`; use the Windows file properties or PE tooling for file version and architecture. The known 70755 image used for this port has SHA-256 `c9a02b3449b0cedae584022605a18f3b9c9b6be4487f3401ff1a216cb24c058c`; do not apply this hash to a different file.
+- Preserve a known-good working installation/settings separately. Verify which executable and process are actually attached; logs and memory dumps can contain character GUIDs, addresses and other sensitive data.
+
+### 2. Static investigation: produce candidates, not claims
+
+As a **comparison starting point only**, 70755 image-relative candidates are: player GUID `0x5017E50`, player name `0x5017E60`, target GUID `0x6A29BB8`, object manager `0x6C2C138`, handle pools `0x4723BE0`, map root `0x6C2C0B8`, action array `0x6C4A880`, player/unit/game-object vtables `0x40E15D8`/`0x40F55D8`/`0x40EA0F0`. Inventory handler/lookup are `0x25D2A70`/`0x20733B0`, bag identity table `0x6C4D8C0`. The unit vtable is weakly inferred; other candidates also have limitations. Detailed evidence and marker sites are in `hunt/WOW_70755_PORT.md` and source. None of these RVAs is a future-build offset.
+
+- Use Ghidra/REA/Gemini CLI when available; `WOWB_OFFSET_RUNBOOK.md` covers setup and big-image analysis. The user's script directory is `C:\ghidra-scripts\`. `hunt/` contains bounded Ghidra investigations, including `WowBInventoryTrace70707.java`, `WowBInventoryLookup70707.java`, `WowBContainerSearch70707.java`, `WowBContainerRefs70707.java`, `WowBContainerCode70707.java`, and `WowBContainerHelpers70707.java`. **Their seeds and marker checks are for 70707**; they are examples to adapt to a separately identified new image, not scripts to run unchanged and trust against it. Existing reports have bounded and sometimes overlapping pseudo-disassembly; inspect control flow, bytes and context.
+- Ghidra displays image-base-relative code as absolute virtual addresses. Verify the program's actual image base, then `RVA = Ghidra VA − image base`; at runtime use the attached module's actual base + RVA (ASLR). Never hardcode the Ghidra absolute VA as a process address.
+- Compare the prior known image and new image using several independent code references, instruction context, RIP-relative target calculations and, where appropriate, vtable method families. Find player GUID **and name separately**, selected/mouseover GUIDs, object manager, handle pools, map root, player/unit/game-object vtables, action array and camera roots. A masked match, a single method, adjacent global or table order is a lead, not proof. 70755's unit vtable was especially weakly inferred. Distinguish a 128-bit GUID from a name/pointer; don't repeat the earlier mistaken inference that the adjacent 70755 value was the player name.
+- Inspect structure layouts independently: object records and stable pointers, local/selected unit, positions, health/max/level, faction, power/resource type and arrays, ghost/death flags, action packing, map, cursor/interaction and movement semantics. A global changing consistently does not establish a nested field or call ABI. Do not call discovered client helpers or inject code just because static tracing found an address.
+- For inventory trace registration references for `GetInventoryItemID`, `GetContainerNumSlots`, `GetContainerNumFreeSlots`, and related handlers to the lookup and container identity/slot helpers. API names are research leads only, not permission to execute Lua. For each candidate record evidence, actual bytes, bounds, confidence and alternative interpretations. Partial code signatures are not full executable authentication; unreadable is **not** a match. Never assume older helper offsets, vtable order, bag sizes or bag-family interpretation survived.
+
+### 3. Integrate without silent compatibility assumptions
+
+1. Add a distinct build-specific offset/candidate profile and tests. Route **every** build-specific global, marker, layout and policy through the correct build; add a distinct exact-build discriminator or a clearer profile abstraction. Audit every `IsExperimental70755 ? ... : ...`, `IsExperimental70707`, and 70707 offset use, including selector, startup guards, action bar, faction, gather, corpse, bag and merchant logic. Shared family behavior is acceptable only where supported by evidence; unknown functionality should be unavailable rather than silently falling back to another build.
+2. Register only the known build in `ClientAttachPolicy` and wire the correct profile in `ObjectManager` and selector. Preserve unknown-build rejection and older registrations. Once intentionally registered, the current policy prefers the highest build; explicitly test selection with multiple clients and tell the user when the default changes. Version number alone is not proof of offsets.
+3. Keep bounded, uncached/stability-checked reads and full 128-bit identity checks. Revalidate player, pool record, map and other roots where existing code requires it; avoid treating absent/unreadable memory as zero. Runtime marker failures should be explicit. The 70755 startup guard requires at least two readable matching markers and no readable mismatch alongside other checks. Some inventory helpers permit unreadable code pages under independent build/player guards; this is an existing experimental compromise, **not** evidence of a match and not a blanket policy for new builds.
+4. Gate new or unverified actions appropriately. Do not let new automatic selling default to 70707 combined-bag behavior: first validate ordinary/specialty separation, identity and completeness limitations. Decide deliberately how per-build classifications and settings migrate. Maintain STOP and combat priority, no silent overwrites of user plans, and independent map/merchant information. Don't break 12340, 70291, 70707 or 70755.
+5. Add a dated new-build report under `hunt/`: binary hash, tool and method, exact RVAs vs member offsets, matching/reference evidence, observed transitions, confidence, caveats, guard behavior, user-reported tests and unresolved items. Keep old historical observations intact; clearly mark superseded conclusions.
+
+### 4. Synthetic checks and Windows build
+
+Synthetic fixtures prove routing and policy under the fake memory they contain; they do not validate a live client. Add tests for exact-version selection, wrong/missing/unreadable markers, bad identity, stale/changing records, old builds, unknown builds, STOP, and non-atomic bag observations; cover mixed ordinary/specialty/unclassified bags and vendor copying/replacement where relevant.
+
+With .NET 10 SDK and Python available, from the repo root:
+
+```powershell
+# Actual Windows/WPF application compile (x64; user may run Tools\Build.cmd -full instead):
+dotnet build CopilotBuddy.csproj -c Release -p:Platform=x64
+# Production reader wired to synthetic memory, not a client:
+dotnet run --project Tools/WowBReaderTests/WowBReaderTests.csproj -c Release
+python Tools/WowBBagSellTests/run.py
+$env:PYTHONPATH = 'Tools'; python -m unittest discover -s Tools/WowBInventoryTests -v
+# Run the existing C# lints; some need tree_sitter and tree_sitter_c_sharp:
+Get-ChildItem Tools/lint_cs_*.py | ForEach-Object { python $_.FullName }
+git diff --check
+```
+
+Additional fixture directories under `Tools/` have their own runners; inspect them before running. `Tools/WowBDefenceTests/run.py` previously failed because it extracts a removed `PullWorthTaking` method; do not call it passing unless repaired and actually run. `lint_cs_types.py` has previously reported the heuristic finding `GreenMagic/LuaBridge64.cs:1752`; review, don't silently assert zero. The prior sandbox used temporary Roslyn/Pythonnet in `/tmp` to compile isolated production fixtures; those files may disappear and are **not** a complete Windows build. Report each check, failure, skip, and limitation honestly.
+
+### 5. Supervised live validation on the new build
+
+Begin stopped in a safe area, with automatic selling disabled until the new bag candidates are understood. Capture logs before and after **one controlled change at a time**. Check build, local character GUID/name, coordinates, health/level, target clear/select/change, map and snapshot stability against what is visible. Verify select-free nearby scan separately. Test no action and immediate STOP first, then short movement/mesh and known friendly/enemy interaction. Test supervised combat, resource affordability, looting and beast-only skinning, gathering, buffs, death/release/return/resurrection, and background focus in small steps. A logged click is not proof of a successful interaction.
+
+For bags, display all ordinary and specialty bags. With snapshots taken while stopped, compare visible ordinary free slots against the candidate subtotal. Use a non-stacking item to test one-slot changes and move the **same item identity** between an ordinary slot and a positively identified specialty bag; reverse the move. Repeat on representative normal equipped bags and a backpack-only state. A stackable pickup may change quantity without changing free-slot count. Unknown/read failures must not trigger a vendor. Verify two fresh zeros, stale/positive/latch behavior, startup priority and STOP. Then separately validate merchant selection and a reviewed sell plan with low-risk items. Automatically replayed clicks are not sale verification; never assume an omitted/unresolved bag has no free space.
+
+At each stage distinguish **static candidate**, **synthetic result**, **observed log**, **user-confirmed action**, and **unverified assumption**. Stop if offsets, identities, safety checks or behavior disagree. Ask the user for only the missing targeted log/screenshot/controlled comparison; logs can be shared via Drive after reviewing sensitive data.
+
+## Handoff message template for a new chat
+
+> Please continue BBuddy. First read `HANDOFF_FUTURE_WOW_BUILDS.md`, check the current branch/status and recent commits, and preserve local changes. The latest user-confirmed baseline is 70755. For the new decoded build, identify the exact binary, derive and document build-specific candidates, retain old builds and no-Lua behavior, run the relevant synthetic checks, and tell me what Windows/live checks are still needed. Do not assume older offsets or specialty-bag behavior are compatible.
