@@ -398,3 +398,28 @@ unconfirmed rather than aborting this read-only diagnostic. Separate build and
 player/attachment checks remain mandatory, and all record, bounds, stability
 and bot-state guards remain in force. This is not full image authentication,
 and does not authorize gameplay decisions or change the stricter 70291 path.
+
+### 70707 container candidate baseline: 11:36
+
+The user's stopped snapshot completed the bounded record scan. Both nonzero
+identity-table candidates had exactly one stable header matching the full
+identity and its pool-record back-pointer, at record `+0x28`. One candidate
+object was four-byte aligned but not eight-byte aligned. The candidate identities
+also match, respectively, entries 30 and 31 of the previously captured
+`localPlayer+0x9460` array in this session. Each object's raw `+0xAC0` was 6,
+and its six 16-byte `+0x490` entries were all zero. The other three candidate
+identities were zero. The handler code markers were readable and matched, while
+three helper code markers were unreadable both before and after. The separate
+player/build checks and record/data stability guards passed. Neither the two
+identities' visible bag locations nor the meaning of the six zero entries has
+been verified; the 11:36 capture provides a baseline, not a capacity or
+free-slot verdict.
+
+Next, without restarting the bot application or changing attachment, move one
+whole stack from the backpack into an empty square in another equipped bag,
+wait for the move to complete and take a snapshot; move it back and take another
+snapshot. The prior baseline can be reused if the application remains open;
+otherwise take a fresh baseline first. A screenshot of the open bags or visible
+free counts can help establish which candidates correspond to which bags. No
+numeric slot IDs are required. A changed value will still need interpretation
+and wider validation before it could control selling.
