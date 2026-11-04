@@ -24,6 +24,17 @@ class InventoryTraceTests(unittest.TestCase):
         self.assertIn("private static final int MAX_CALL_TARGETS = 0;", script)
         self.assertIn("new PseudoDisassembler(currentProgram)", script)
 
+    def test_70707_lookup_trace_uses_observed_call_targets(self):
+        script = (ROOT / "hunt/WowBInventoryLookup70707.java").read_text()
+        self.assertIn("class WowBInventoryLookup70707 extends GhidraScript", script)
+        self.assertIn('dir.resolve("WowBInventoryLookup70707-"', script)
+        for rva in ("2162D00", "286B290", "26C8DF0", "2080D2C", "20AAF97", "2890305", "A538FD"):
+            self.assertIn("0x" + rva + "L", script)
+        self.assertIn("private static final int MAX_CALL_TARGETS = 0;", script)
+        self.assertIn("new PseudoDisassembler(currentProgram)", script)
+        self.assertIn("if (!markersMatch)", script)
+        self.assertNotIn("executeInTarget", script)
+
     def test_name_addresses_match_recorded_dump_and_bounds_exist(self):
         script = (ROOT / "hunt/WowBInventoryTrace70291.java").read_text()
         names = (ROOT / "hunt/api_names_runtime.txt").read_text()

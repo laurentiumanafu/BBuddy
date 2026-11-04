@@ -138,3 +138,27 @@ observed; otherwise it prints a new baseline. A changed address, incomplete
 snapshot or zero changes does not prove the hypothesis false. Do not delete or
 send any items for this experiment. This probe was tested with synthetic reads,
 not a real Windows client; no bag detection has been enabled.
+
+## 70707 static trace: 2026-11-04
+
+The user ran `WowBInventoryTrace70707` on `Wow-decoded.exe` with image base
+`0x140000000`; four previously observed 70707 code markers matched. These
+markers are a sanity check rather than a complete image authentication. The
+bounded pseudo-disassembly completed; instructions and paths can still be
+incomplete or misdecoded.
+
+The `GetInventoryItemID` handler at RVA `0x26CAA90` has a branch at
+`0x26CAB79` that passes a resolved context plus `0x9460` to a helper at
+`0x2162D00`, using a slot-like argument; if it returns non-null the handler
+reads a dword at returned pointer `+0x90`. This is structurally similar to the
+previously traced 70291 `+0x9440` / `0x290CFC0` path, but the context is not
+proven to be our local player, the argument is not proven to be a bag slot,
+and neither `+0x9460` nor the returned value is a free-slot count. A separate
+branch uses a `<0x13` bound and `0x260` stride; do not conflate it with bag
+contents. There is no live inventory evidence in this static report.
+
+`WowBInventoryLookup70707.java` follows the observed helper at `0x2162D00`
+and the context/argument helpers `0x286B290` and `0x26C8DF0`. It prints bounded
+pseudo-disassembly and direct-call leads only, verifies the same four static
+markers, and does not execute client functions, run Lua, attach to a process,
+or modify the Ghidra listing. It has not yet been run against the user's image.
