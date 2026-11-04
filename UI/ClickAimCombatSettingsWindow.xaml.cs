@@ -166,7 +166,7 @@ namespace CopilotBuddy.UI
                 string report = await Task.Run(() => WowBInventoryProbe.Capture());
                 foreach (string line in report.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
                     Logging.Write("[Bag research] " + line);
-                lblVendorNote.Text = report.StartsWith("70291 read-only", StringComparison.Ordinal)
+                lblVendorNote.Text = report.StartsWith("70291 read-only", StringComparison.Ordinal) || report.StartsWith("70707 read-only", StringComparison.Ordinal)
                     ? "Bag research snapshot written to the bot log. Candidate data, GUID and addresses may be sensitive."
                     : report;
             }

@@ -257,6 +257,7 @@ internal static class ExperimentalOffsetsTests
         memory.Bytes(module + 0x20AAF97, Convert.FromHexString("F2480F2A83281E0000"));
         memory.Bytes(module + 0x2890305, Convert.FromHexString("448B8C86C01B0000"));
         memory.Bytes(module + 0xA538FD, Convert.FromHexString("488D0D5CB32E06488D34C1488B04C1"));
+        InventoryTests.Run70707(memory, 0x24000000, player);
         Require(GrindFactionSettings.Save(GrindFactionMode.Off, "36", "", out _), "save off mode");
         Require(!WowBGrindFactions.PrepareForGrind(out _), "70707 off mode fails closed");
         Require(GrindFactionSettings.Save(GrindFactionMode.Allow, "36", "", out _), "restore allowlist");

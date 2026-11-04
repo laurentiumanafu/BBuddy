@@ -161,4 +161,41 @@ contents. There is no live inventory evidence in this static report.
 and the context/argument helpers `0x286B290` and `0x26C8DF0`. It prints bounded
 pseudo-disassembly and direct-call leads only, verifies the same four static
 markers, and does not execute client functions, run Lua, attach to a process,
-or modify the Ghidra listing. It has not yet been run against the user's image.
+or modify the Ghidra listing.
+
+### Focused 70707 lookup and live comparison probe
+
+The subsequent user-supplied lookup trace matched all four static markers.
+At `0x2162D00`, one path bounds an index against the dword at the input base,
+then uses `arrayPointer + index * 16` (pointer at input `+8`) as the argument
+of a tail-call to `0x19FAE20`, previously identified as a candidate GUID
+resolver. The surrounding control flow includes special index ranges. This
+strengthens the structural similarity to 70291 but does not prove the entries
+are GUIDs, reveal backpack or container slot ranges, or prove that the resolved
+handler context is the local player object. The context helper `0x286B290`
+resolves a GUID via `0x19FAE20` but the GUID's provenance remains unknown.
+
+**Combat settings → Selling → Bag research snapshot** now also supports a
+stopped 70707 attachment. It treats `localPlayer+0x9460` as a *hypothesis*,
+checks local identity and partial build markers before and after the bounded,
+uncached read, checks lookup/handler signatures when readable, reads the candidate
+header and at most 256 16-byte entries twice, and rejects unstable or unreadable
+data. A readable signature mismatch rejects; code pages inaccessible at runtime
+are reported and do not waive the separate 70707 build and identity checks.
+Results can still be wrong or incomplete, and do not establish the context owner,
+slot meaning, empty entries, item GUIDs or bag count. The probe does not grant a
+Grind session, run client code, click, move items, or affect selling.
+
+For an initial comparison with the bot and all routes stopped: keep the same
+character and attachment, take a baseline, manually move one recognizable item
+from a known backpack slot to a known empty slot in the same backpack, capture,
+move it back, capture, then repeat with a different item. Wait for each capture
+to finish. Record the visible bag capacity, free count and source/destination
+positions with each snapshot. Moving an item between empty and occupied slots
+should not change total free slots; the experiment tests whether the raw entries
+track its movement, not whether we can already count free slots. An array
+reallocation, zero changes, a missing signature or an unreadable result is not
+proof that the bag is empty. The output includes player GUID, raw candidate data
+and process addresses, which can be sensitive. No live 70707 capture has yet
+been performed. The 70291 probe remains separate and retains its strict code
+signatures.

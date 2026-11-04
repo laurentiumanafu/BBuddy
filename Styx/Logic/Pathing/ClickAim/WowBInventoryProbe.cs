@@ -6,14 +6,16 @@ using Styx.WoWInternals;
 
 namespace Styx.Logic.Pathing;
 
-// Research only. The observed +0x9440 base and array format are static leads,
-// not a validated player inventory, slot list, item ID or free-slot count.
+// Research only. The 70291 +0x9440 and 70707 +0x9460 context offsets and
+// array formats are static leads, not validated player inventories or slot counts.
 internal static class WowBInventoryProbe
 {
-    private const ulong CandidateOffset = 0x9440, LookupRva = 0x290CFC0, HandlerRva = 0x2F5F2B0;
+    private const ulong Candidate70291 = 0x9440, Lookup70291 = 0x290CFC0, Handler70291 = 0x2F5F2B0;
+    private const ulong Candidate70707 = 0x9460, Lookup70707 = 0x2162D00, Handler70707 = 0x26CAA90;
     private const int HeaderSize = 0x28, EntrySize = 16, MaxEntries = 256;
     private const ulong UserLimit = 0x00007FFFFFFFFFFFUL;
-    private const string LookupSignature = "48895C2408574883EC208BDA488BF9";
+    private const string LookupSignature70291 = "48895C2408574883EC208BDA488BF9";
+    private const string LookupSignature70707 = "48895C2408574883EC2080792000";
     private const string HandlerSignature = "48895C24084889742418574881EC2004";
     private static readonly object Gate = new object();
     private static Memory? _previousMemory;
@@ -29,25 +31,48 @@ internal static class WowBInventoryProbe
         return true;
     }
 
+    private static bool ValidPlayer(Memory memory, WowBReader reader, WowBObservedUnit player)
+    {
+        if (!player.IsLocalPlayer || !player.HasPlayerVtable) return false;
+        return reader.IsExperimental70707
+            ? WowBGrindFactions.TraceBuild70707(memory, reader) && WowBGrindFactions.TraceIdentity70707(memory, reader, player, true)
+            : WowBGrindFactions.ValidateDiagnosticUnit(memory, reader, player);
+    }
+
+    // 70707 code pages can be inaccessible at runtime. A readable mismatch
+    // rejects the probe; an unreadable marker is reported and the separate
+    // partial build/identity checks remain mandatory. 70291 stays strict.
+    private static bool SignatureMatchesOrUnreadable(Memory memory, ulong rva, string expected, out bool unreadable)
+    {
+        byte[]? bytes = memory.ReadBytes64(memory.GetAbsolute64(rva), expected.Length / 2);
+        unreadable = bytes == null || bytes.Length * 2 != expected.Length;
+        return unreadable || Convert.ToHexString(bytes!) == expected;
+    }
+
     public static string Capture()
     {
         lock (Gate)
         {
             if (ClickAimUi.Running || ClickAimUi.Paused) return "Stop the bot and routes before the inventory probe.";
             Memory? memory = ObjectManager.Wow; WowBReader? reader = ObjectManager.WowB;
-            if (memory == null || reader == null || !memory.Is64BitTarget) return "Attach to wowb.exe 70291 and enter the world first.";
+            if (memory == null || reader == null || !memory.Is64BitTarget) return "Attach to wowb.exe 70291 or 70707 and enter the world first.";
             try
             {
                 using var uncached = memory.TemporaryCacheState(false);
-                byte[]? lookup = memory.ReadBytes64(memory.GetAbsolute64(LookupRva), 15);
-                byte[]? handler = memory.ReadBytes64(memory.GetAbsolute64(HandlerRva), 16);
-                if (lookup == null || handler == null || Convert.ToHexString(lookup) != LookupSignature || Convert.ToHexString(handler) != HandlerSignature)
+                bool experimental = reader.IsExperimental70707;
+                ulong candidateOffset = experimental ? Candidate70707 : Candidate70291;
+                ulong lookupRva = experimental ? Lookup70707 : Lookup70291;
+                ulong handlerRva = experimental ? Handler70707 : Handler70291;
+                string lookupSignature = experimental ? LookupSignature70707 : LookupSignature70291;
+                if (!SignatureMatchesOrUnreadable(memory, lookupRva, lookupSignature, out bool lookupUnreadable) ||
+                    !SignatureMatchesOrUnreadable(memory, handlerRva, HandlerSignature, out bool handlerUnreadable) ||
+                    (!experimental && (lookupUnreadable || handlerUnreadable)))
                     return "Inventory trace signatures unreadable or different; no probe captured.";
                 if (!reader.TryCaptureWorldSnapshot(out WowBWorldSnapshot? before) || before == null ||
-                    !before.TryGetLocalPlayer(out WowBObservedUnit player) || !player.IsLocalPlayer || !player.HasPlayerVtable ||
-                    !WowBGrindFactions.ValidateDiagnosticUnit(memory, reader, player) || player.UnitAddress > UserLimit - CandidateOffset - HeaderSize)
+                    !before.TryGetLocalPlayer(out WowBObservedUnit player) || !ValidPlayer(memory, reader, player) ||
+                    player.UnitAddress > UserLimit - candidateOffset - HeaderSize)
                     return "Player or build identity unavailable; no probe captured.";
-                ulong candidate = player.UnitAddress + CandidateOffset;
+                ulong candidate = player.UnitAddress + candidateOffset;
                 byte[]? header = memory.ReadBytes64(candidate, HeaderSize);
                 if (header == null || header.Length != HeaderSize) return "Candidate header unreadable; no probe captured.";
                 uint count = BitConverter.ToUInt32(header, 0);
@@ -63,15 +88,18 @@ internal static class WowBInventoryProbe
                     !reader.TryCaptureWorldSnapshot(out WowBWorldSnapshot? after) || after == null ||
                     !after.TryGetLocalPlayer(out WowBObservedUnit final) || after.LocalGuid != before.LocalGuid ||
                     final.UnitAddress != player.UnitAddress || final.RecordAddress != player.RecordAddress ||
-                    !WowBGrindFactions.ValidateDiagnosticUnit(memory, reader, final) || ClickAimUi.Running || ClickAimUi.Paused)
+                    !ValidPlayer(memory, reader, final) || ClickAimUi.Running || ClickAimUi.Paused)
                     return "Candidate, player, attachment or bot state changed/unreadable; probe discarded.";
 
                 bool comparable = _previousMemory == memory && _previousReader == reader && _previousPlayer == player.Guid &&
                     _previousUnit == player.UnitAddress && _previousArray == array && _previousEntries != null && _previousEntries.Length == length;
                 var text = new StringBuilder();
-                text.AppendLine("70291 read-only inventory research snapshot; candidate only, not a bag or full-slot verdict.");
+                text.AppendLine((experimental ? "70707" : "70291") + " read-only inventory research snapshot; candidate only, not a bag or full-slot verdict.");
+                if (experimental)
+                    text.AppendLine("70707 static context is not proven to be the player object; code signatures: lookup=" +
+                        (lookupUnreadable ? "unreadable" : "matched") + ", handler=" + (handlerUnreadable ? "unreadable" : "matched") + ".");
                 text.AppendFormat(CultureInfo.InvariantCulture, "UTC {0:O}; player GUID {1}; player object 0x{2:X}; candidate header +0x{3:X}=0x{4:X}; raw header={5}\n",
-                    DateTime.UtcNow, player.Guid, player.UnitAddress, CandidateOffset, candidate, Convert.ToHexString(header));
+                    DateTime.UtcNow, player.Guid, player.UnitAddress, candidateOffset, candidate, Convert.ToHexString(header));
                 text.AppendFormat(CultureInfo.InvariantCulture, "candidate count={0}; array=0x{1:X}; stride=16; previous={2}\n", count, array, comparable ? "comparable" : "none or different context");
                 int changed = 0;
                 for (int i = 0; i < (int)count; i++)
