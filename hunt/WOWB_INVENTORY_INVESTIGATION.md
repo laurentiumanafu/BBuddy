@@ -241,3 +241,25 @@ positive control. Name/pointer matches and linear decoding can be incomplete or
 misleading, and absent names or references do not prove an API is missing. It
 does not run client code or change the Ghidra listing. As before, findings for
 70707 do not establish 70291 offsets or authorize bag-full decisions.
+
+### 70707 container registration search result
+
+The user's completed `WowBContainerSearch70707` report matched all four image
+markers. Its `GetInventoryItemID` positive control found the expected direct
+name pointer at RVA `0x492EDC0` and executable following-qword candidate
+`0x26CAA90`. Exact, NUL-terminated container names were found in `.rdata`:
+`GetContainerNumSlots` at RVA `0x40FDAD0`, `GetContainerNumFreeSlots` at
+`0x40FDA90`, and `GetContainerItemInfo` at `0x40FDF88`. None had an exact
+existing Ghidra xref or a direct preferred-VA64 pointer in initialized readable
+blocks. Thus no container handler was discovered; these names may be referenced
+indirectly, encoded differently, or not represent native registrations.
+
+`WowBContainerRefs70707.java` checks the same image and exact name bytes before
+printing nearby printable strings, scanning for matching little-endian RVA32
+bytes, and scanning executable bytes for a limited set of RIP-relative MOV/LEA
+encodings into that region. The scans are bounded and read-only. Raw RVA matches
+can be coincidences, and RIP candidates may start in the middle of instructions;
+none proves a callable handler or runtime behavior. Scan errors, output caps,
+other reference encodings, and the absence of a hit must not be interpreted as
+proof that no reference exists. This static search does not inspect live bags or
+authorize bag-full detection.
