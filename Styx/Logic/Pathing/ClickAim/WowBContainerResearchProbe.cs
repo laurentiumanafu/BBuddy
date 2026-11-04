@@ -114,14 +114,40 @@ internal static class WowBContainerResearchProbe
     // BOTH the pool record and the full 128-bit identity. This is a diagnostic
     // heuristic, not a proof that the result is the resolver's object. Deduplicate
     // identical pointers and fail closed on multiple distinct matches.
-    private static bool FindCandidate(Memory memory, WowBReader.WowBPoolObject record, WowBGuid guid,
-        out ulong data, out ulong sourceOffset, out byte[]? pointerBytes, out byte[]? header, out bool exploratory, out string detail)
+    private static bool FindCandidate(Memory memory, WowBReader reader, List<WowBReader.WowBPoolObject> records,
+        WowBReader.WowBPoolObject record, WowBGuid guid, out ulong data, out ulong sourceOffset,
+        out byte[]? pointerBytes, out byte[]? header, out bool exploratory, out string detail)
     {
         data = 0; sourceOffset = 0; pointerBytes = null; header = null; exploratory = false;
+        // The 70790 broad scan can overlap separately occupied records. Treat an
+        // unreadable pointer-like qword as GUID data only when a stable neighboring
+        // pool record proves that exact address is part of its full GUID. Readable
+        // headers are still checked normally; no record stride is assumed.
+        var neighborFields = new Dictionary<ulong, (WowBReader.WowBPoolObject Record, byte[] Guid)>();
+        var ambiguousFields = new HashSet<ulong>();
+        var usedNeighbors = new List<(WowBReader.WowBPoolObject Record, byte[] Guid)>();
+        if (reader.IsExperimental70790)
+        {
+            foreach (var other in records)
+            {
+                if (other.RecordPtr <= record.RecordPtr || other.RecordPtr - record.RecordPtr > 0x168 ||
+                    !reader.IsPoolRecordCurrent(other)) continue;
+                byte[]? otherGuid = memory.ReadBytes64(other.RecordPtr + WowBOffsets.RecordGuidLoOffset, 16);
+                if (otherGuid == null || otherGuid.Length != 16 || GuidAt(otherGuid, 0) != other.Guid ||
+                    !Same(otherGuid, memory.ReadBytes64(other.RecordPtr + WowBOffsets.RecordGuidLoOffset, 16)) ||
+                    !reader.IsPoolRecordCurrent(other)) continue;
+                ulong low = other.RecordPtr - record.RecordPtr + WowBOffsets.RecordGuidLoOffset;
+                foreach (ulong offset in new[] { low, low + 8 })
+                {
+                    if (offset < 0x28 || offset > 0x180 || (offset & 7) != 0 || ambiguousFields.Contains(offset)) continue;
+                    if (!neighborFields.TryAdd(offset, (other, otherGuid))) { neighborFields.Remove(offset); ambiguousFields.Add(offset); }
+                }
+            }
+        }
         var candidates = new HashSet<ulong>();
         var pointerLeads = new List<string>();
         string rawD8 = "unreadable", d8Header = "unavailable";
-        int unreadableFields = 0, unavailableHeaders = 0, changedFields = 0;
+        int unreadableFields = 0, unavailableHeaders = 0, changedFields = 0, neighborGuidFields = 0;
         var fieldReads = new List<(ulong Offset, byte[] Value)>();
         if (!UserRange(record.RecordPtr, 0x188)) { detail = "record window outside user range"; return false; }
         for (ulong offset = 0x28; offset <= 0x180; offset += 8)
@@ -143,7 +169,16 @@ internal static class WowBContainerResearchProbe
             if (!Pointer(address, CapacityOffset + 4)) continue;
             if (pointerLeads.Count < 12) pointerLeads.Add($"+0x{offset:X}:0x{address:X}");
             byte[]? sampleHeader = memory.ReadBytes64(address, 0x20);
-            if (sampleHeader == null || sampleHeader.Length != 0x20) { unavailableHeaders++; continue; }
+            if (sampleHeader == null || sampleHeader.Length != 0x20)
+            {
+                if (neighborFields.TryGetValue(offset, out var neighbor))
+                {
+                    int guidOffset = checked((int)(record.RecordPtr + offset - neighbor.Record.RecordPtr - WowBOffsets.RecordGuidLoOffset));
+                    if (BitConverter.ToUInt64(neighbor.Guid, guidOffset) == address)
+                    { usedNeighbors.Add(neighbor); neighborGuidFields++; continue; }
+                }
+                unavailableHeaders++; continue;
+            }
             if (BitConverter.ToUInt64(sampleHeader, 8) != record.RecordPtr || GuidAt(sampleHeader, 0x10) != guid) continue;
             if (!Same(sampleHeader, memory.ReadBytes64(address, 0x20)) ||
                 !Same(value, memory.ReadBytes64(record.RecordPtr + offset, 8))) { unavailableHeaders++; continue; }
@@ -152,7 +187,11 @@ internal static class WowBContainerResearchProbe
         }
         foreach (var field in fieldReads)
             if (!Same(field.Value, memory.ReadBytes64(record.RecordPtr + field.Offset, 8))) changedFields++;
-        detail = $"record+0xD8={rawD8} raw32={d8Header}; pointer-like fields=[{string.Join(",", pointerLeads)}] (max 12); identity-matching headers={candidates.Count}; unreadable fields={unreadableFields}; unavailable headers={unavailableHeaders}; changed fields={changedFields}";
+        foreach (var neighbor in usedNeighbors)
+            if (!reader.IsPoolRecordCurrent(neighbor.Record) ||
+                !Same(neighbor.Guid, memory.ReadBytes64(neighbor.Record.RecordPtr + WowBOffsets.RecordGuidLoOffset, 16)) ||
+                !reader.IsPoolRecordCurrent(neighbor.Record)) changedFields++;
+        detail = $"record+0xD8={rawD8} raw32={d8Header}; pointer-like fields=[{string.Join(",", pointerLeads)}] (max 12); identity-matching headers={candidates.Count}; unreadable fields={unreadableFields}; unavailable headers={unavailableHeaders}; verified neighbor GUID fields={neighborGuidFields}; changed fields={changedFields}";
         // A unique observed header is useful for stopped research even if other
         // pointer-like values were unreadable. It is NOT a resolved container.
         exploratory = candidates.Count == 1 && unreadableFields == 0 && changedFields == 0 && unavailableHeaders > 0;
@@ -241,7 +280,7 @@ internal static class WowBContainerResearchProbe
                 foreach (var item in records) if (item.Guid == guid) { matches++; record = item; }
                 if (matches != 1 || !reader.IsPoolRecordCurrent(record))
                 { text.AppendFormat(CultureInfo.InvariantCulture, "container-candidate[{0}] identity={1} pool matches={2}; object unavailable/ambiguous.\n", i, guid, matches); continue; }
-                if (!FindCandidate(memory, record, guid, out ulong data, out ulong sourceOffset, out byte[]? pointerBytes, out byte[]? header, out bool exploratory, out string detail))
+                if (!FindCandidate(memory, reader, records, record, guid, out ulong data, out ulong sourceOffset, out byte[]? pointerBytes, out byte[]? header, out bool exploratory, out string detail))
                 {
                     text.AppendFormat(CultureInfo.InvariantCulture, "container-candidate[{0}] no unique stable identity-matching header; {1}. Unknown.\n", i, detail);
                     if (!active && reader.IsExperimental70790 && exploratory && pointerBytes != null && header != null)

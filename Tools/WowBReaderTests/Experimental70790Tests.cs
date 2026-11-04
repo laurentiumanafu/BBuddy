@@ -111,10 +111,40 @@ internal static class Experimental70790Tests
         memory.Guid(bagRecord + 0xD8, new WowBGuid(0x145D8, 0xC01180000000000));
         string overlap = WowBInventoryProbe.Capture();
         Require(overlap.Contains("+0xD8=other-record(+0xC0) GUID-low") && overlap.Contains("research subtotal unavailable") &&
-            WowBInventoryProbe.ObservedBags().Count == 0, "neighbor GUID overlap is diagnostic only");
+            overlap.Contains("verified neighbor GUID fields=1") && WowBInventoryProbe.ObservedBags().Count == 0,
+            "neighbor overlap does not hide a different unreadable field");
+        memory.U64(bagRecord + 0x40, 0);
+        string resolvedOverlap = WowBInventoryProbe.Capture();
+        Require(resolvedOverlap.Contains("verified neighbor GUID fields=1") &&
+            resolvedOverlap.Contains("70790 research subtotal: candidate sizes=18, zero-tags=18") &&
+            WowBInventoryProbe.ObservedBags().Count == 1, "stable neighbor GUID is not an unreadable alternative");
+        memory.U32(0x21000000 + WowBOffsets.HandlePoolCapacityOffset, 5);
+        memory.U32(0x22000040, (uint)WowBOffsets.HandleOccupiedBit); memory.U32(0x22000044, 0);
+        memory.U64(0x22000048, bagRecord + 0xC0);
+        Require(WowBInventoryProbe.Capture().Contains("research subtotal unavailable"), "ambiguous neighbor ownership fails closed");
+        memory.U32(0x22000040, 0); memory.U32(0x21000000 + WowBOffsets.HandlePoolCapacityOffset, 4);
+        memory.OnRead = (address, count) => {
+            if (address == 0x145D8 && count == 0x20) memory.U64(bagRecord + 0xE0, 0xC01180000000001);
+        };
+        string changedNeighbor = WowBInventoryProbe.Capture();
+        Require(changedNeighbor.Contains("research subtotal unavailable") &&
+            WowBInventoryProbe.ObservedBags().Count == 0, "changed neighbor identity fails closed: " + changedNeighbor);
+        memory.OnRead = null; memory.Guid(bagRecord + 0xD8, new WowBGuid(0x145D8, 0xC01180000000000));
+        memory.OnRead = (address, count) => {
+            if (address == 0x145D8 && count == 0x20) memory.U32(0x22000030, 0);
+        };
+        Require(WowBInventoryProbe.Capture().Contains("research subtotal unavailable"), "changed neighbor pool slot fails closed");
+        memory.OnRead = null; memory.U32(0x22000030, (uint)WowBOffsets.HandleOccupiedBit);
+        ulong neighborPointsToHeader = 0x25020000;
+        memory.Bytes(neighborPointsToHeader, new byte[0x20]); memory.U64(neighborPointsToHeader + 8, bagRecord);
+        memory.Guid(neighborPointsToHeader + 0x10, bag);
+        memory.Guid(bagRecord + 0xD8, new WowBGuid(neighborPointsToHeader, 0xC01180000000000));
+        Require(WowBInventoryProbe.Capture().Contains("research subtotal unavailable"),
+            "readable matching header in neighbor GUID remains ambiguous");
         memory.U32(0x22000030, 0); memory.U64(bagRecord + 0x28, 0);
         memory.U64(bagRecord + 0xD8, bagData); memory.U64(bagRecord + 0xE0, 0);
         memory.U32(0x21000000 + WowBOffsets.HandlePoolCapacityOffset, 3);
+        memory.U64(bagRecord + 0x40, 0x145D8);
         ClickAimUi.Running = true;
         Require(!WowBInventoryProbe.TryCaptureSellingSubtotal(out _, out _), "unreadable alternative cannot authorize selling");
         ClickAimUi.Running = false;
@@ -136,6 +166,19 @@ internal static class Experimental70790Tests
         ClickAimUi.Running = true;
         Require(WowBInventoryProbe.TryCaptureSellingSubtotal(out int tags, out WowBGuid owner) && tags == 16 && owner == player,
             "70790 active selling subtotal excludes specialty slots");
+        memory.U32(0x21000000 + WowBOffsets.HandlePoolCapacityOffset, 4);
+        memory.U32(0x22000030, (uint)WowBOffsets.HandleOccupiedBit); memory.U64(0x22000038, bagRecord + 0xC0);
+        memory.U64(bagRecord + 0x28, bagData);
+        memory.Guid(bagRecord + 0xD8, new WowBGuid(0x145D8, 0xC01180000000000));
+        Require(WowBInventoryProbe.TryCaptureSellingSubtotal(out tags, out owner) && tags == 16 && owner == player,
+            "classified specialty with verified neighbor overlap still excludes its slots");
+        memory.OnRead = (address, count) => {
+            if (address == 0x145D8 && count == 0x20) memory.U32(0x22000030, 0);
+        };
+        Require(!WowBInventoryProbe.TryCaptureSellingSubtotal(out _, out _), "unstable neighbor blocks active selling");
+        memory.OnRead = null; memory.U32(0x22000030, 0); memory.U64(bagRecord + 0x28, 0);
+        memory.U64(bagRecord + 0xD8, bagData); memory.U64(bagRecord + 0xE0, 0);
+        memory.U32(0x21000000 + WowBOffsets.HandlePoolCapacityOffset, 3);
         memory.U64(bagRecord + 0x40, 0x145D8);
         Require(!WowBInventoryProbe.TryCaptureSellingSubtotal(out _, out _), "unreadable alternative blocks selling even for classified bag");
         memory.U64(bagRecord + 0x40, 0);
