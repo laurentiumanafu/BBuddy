@@ -312,3 +312,44 @@ bounded pseudo-disassembly and checks both prior image markers and observed
 call/registration bytes first. It is read-only, does not execute client code,
 and may misdecode, follow invalid branches or truncate; its output cannot by
 itself authorize a bag-full decision.
+
+### 70707 candidate container fields and stopped comparison probe
+
+The user's `WowBContainerHelpers70707` report matched all image/call markers.
+The free-slot candidate at `0x2569110` completed within its 300-instruction
+bound. For inputs 0..22 it obtains a candidate 16-byte identity from the table
+at RVA `0x6D41CA0` (for indexes 5..22 an additional untraced gate applies),
+passes it to the `0x19FAE20` resolver candidate, reads the returned object's
+signed dword `+0xAC0`, then examines one qword at `+0x490 + 16*i` for each
+entry, decrementing the initial value when that qword shifted right 58 is
+nonzero. The two negative-index paths instead inspect the `+0x9460` array;
+one conditionally examines indices `0x23` through `0x23+byte(+0x7D04)`
+(exclusive) when a candidate flag is set, and the other scans `0x70..0x8F`.
+The static
+code's context resolver `0x1F58470` hit its 300-instruction limit amid
+obfuscated/overlapping flow; its return identity is not proven. The high-six
+bits are not proven to represent item presence, nor are the negative index
+meanings, all equipped containers, ordinary-bag capacity or special bag rules.
+
+The stopped-only **Bag research snapshot** additionally samples 70707 candidate
+identities 0..4 from RVA `0x6D41CA0`, independent of the 70291 probe. It requires
+readable matching 70707 container code markers, the existing player/build checks,
+a unique pool match with stable record/object identity, and an unsigned raw
+`+0xAC0` value at most 64 before sampling `+0x490` entries twice. Identities,
+headers, capacity, pool slot and data are rechecked; a final identity table,
+player and attachment check guards the aggregate, though reads cannot be made
+atomic. It prints raw `+0xAC0`, the number of entries whose first qword has zero
+high-six bits, and changes against a comparable prior candidate. These are
+explicitly research observations, **not** validated capacity/free counts.
+Unreadable, zero, duplicate, missing, out-of-range, or unstable candidates remain
+unknown. The raw report contains GUIDs and process addresses; there are no game
+function calls, Lua, automatic decisions or changes to the selling fallback.
+
+For live comparison after building the updated version, stop the bot and routes,
+keep one character and attachment, take a baseline snapshot, manually move one
+whole stack from the backpack into an empty square in an equipped bag, wait for
+the move to finish, snapshot, then move it back and snapshot again. Screenshots
+of open bags or visible free counts can help correlate the reported candidates;
+numeric slot IDs are not needed. Do not split or merge stacks during this test.
+Keep the bags unchanged until each snapshot completes. No match or incomplete
+reads are inconclusive, not evidence of full or empty bags.

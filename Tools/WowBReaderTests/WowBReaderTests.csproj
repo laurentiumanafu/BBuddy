@@ -24,6 +24,7 @@
     <Compile Include="../../Styx/Logic/Pathing/ClickAim/ClickAimSettings.cs" Link="ClickAimSettings.cs" />
     <Compile Include="../../Styx/Logic/Pathing/ClickAim/VendorFile.cs" Link="VendorFile.cs" />
     <Compile Include="../../Styx/Logic/Pathing/ClickAim/WowBInventoryProbe.cs" Link="WowBInventoryProbe.cs" />
+    <Compile Include="../../Styx/Logic/Pathing/ClickAim/WowBContainerResearchProbe.cs" Link="WowBContainerResearchProbe.cs" />
     <Compile Include="../../Styx/Logic/Pathing/ClickAim/WowBKnownMerchants.cs" Link="WowBKnownMerchants.cs" />
     <Compile Include="../../Styx/Logic/Pathing/ClickAim/WowBTargetInfo.cs" Link="WowBTargetInfo.cs" />
     <Compile Include="../../Styx/Logic/Pathing/ClickAim/WowBGrindFactions.cs" Link="WowBGrindFactions.cs" />

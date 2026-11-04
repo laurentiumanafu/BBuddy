@@ -74,7 +74,57 @@ namespace Styx.Logic.Pathing
             memory.Bytes(module + 0x2890305, new byte[8]);
             Check(WowBInventoryProbe.Capture().Contains("identity unavailable"), "70707 build marker mismatch denied");
             memory.Bytes(module + 0x2890305, Convert.FromHexString("448B8C86C01B0000"));
-            Console.WriteLine("70707 inventory probe synthetic fixtures passed (no live inventory validation)");
+
+            // Synthetic container candidate: this exercises bounds and races, not live bag identity.
+            memory.Bytes(module + 0xD5C7FC, Convert.FromHexString("E86FAE8001"));
+            memory.Bytes(module + 0xD5C820, Convert.FromHexString("8B80C00A0000"));
+            memory.Bytes(module + 0x2569186, Convert.FromHexString("486390C00A0000"));
+            memory.Bytes(module + 0x2569194, Convert.FromHexString("4C8D8090040000"));
+            memory.Bytes(module + 0x25691A0, Convert.FromHexString("498B00"));
+            ulong table = module + 0x6D41CA0, record = 0x23002000, data = 0x25000000;
+            WowBGuid container = new WowBGuid(1234, 5678);
+            memory.Bytes(table, new byte[80]); memory.Guid(table + 16, container);
+            memory.U32(0x21000000 + WowBOffsets.HandlePoolCapacityOffset, 3);
+            memory.U32(0x22000020, (uint)WowBOffsets.HandleOccupiedBit);
+            memory.U32(0x22000024, 0); memory.U64(0x22000028, record);
+            memory.Guid(record + WowBOffsets.RecordGuidLoOffset, container);
+            memory.U64(record + WowBOffsets.RecordDataBlockPtrOffset, data);
+            memory.Bytes(data, new byte[0x20]); memory.U64(data + 8, record); memory.Guid(data + 0x10, container);
+            memory.U32(data + 0xAC0, 2);
+            byte[] contents = new byte[32]; BitConverter.GetBytes(1UL << 58).CopyTo(contents, 0);
+            memory.Bytes(data + 0x490, contents);
+            string baseline = WowBInventoryProbe.Capture();
+            Check(baseline.Contains("container-candidate[1]") && baseline.Contains("raw+0xAC0=2") &&
+                baseline.Contains("first-qword high-six-zero=1") && baseline.Contains("NOT verified capacity/free slots"), "container candidate baseline");
+            Array.Clear(contents, 0, 32); BitConverter.GetBytes(1UL << 58).CopyTo(contents, 16); memory.Bytes(data + 0x490, contents);
+            string changed = WowBInventoryProbe.Capture();
+            Check(changed.Contains("previous=comparable") && changed.Contains("  changed entries=2; zero tag"), "container entry comparison");
+            memory.U32(data + 0xAC0, 65);
+            Check(WowBInventoryProbe.Capture().Contains("exceeds diagnostic cap"), "oversized container candidate rejected");
+            memory.U32(data + 0xAC0, 2);
+            int slotReads = 0;
+            memory.OnRead = (address, count) => { if (address == data + 0x490 && count == 32 && ++slotReads == 2) { contents[2] ^= 1; memory.Bytes(address, contents); } };
+            Check(WowBInventoryProbe.Capture().Contains("unstable or unreadable; discarded"), "changing container contents discarded"); memory.OnRead = null;
+            memory.Remove(data + 0x490);
+            Check(WowBInventoryProbe.Capture().Contains("unstable or unreadable; discarded"), "unreadable slots unknown"); memory.Bytes(data + 0x490, contents);
+            int tableReads = 0;
+            memory.OnRead = (address, count) => { if (address == table && count == 80 && ++tableReads == 2) memory.Guid(table + 16, default); };
+            Check(WowBInventoryProbe.Capture().Contains("identity table, player, attachment, code or bot state changed; discarded"), "changing identity table discarded"); memory.OnRead = null; memory.Guid(table + 16, container);
+            memory.U64(data + 8, 0x23004000);
+            Check(WowBInventoryProbe.Capture().Contains("header identity or +0xAC0 unreadable/mismatched"), "container backpointer mismatch rejected"); memory.U64(data + 8, record);
+            memory.U32(0x21000000 + WowBOffsets.HandlePoolCapacityOffset, 4);
+            memory.U32(0x22000030, (uint)WowBOffsets.HandleOccupiedBit); memory.U32(0x22000034, 0); memory.U64(0x22000038, 0x23003000);
+            memory.Guid(0x23003000 + WowBOffsets.RecordGuidLoOffset, container);
+            Check(WowBInventoryProbe.Capture().Contains("pool matches=2; object unavailable/ambiguous"), "duplicate container identities rejected");
+            memory.U32(0x21000000 + WowBOffsets.HandlePoolCapacityOffset, 3); memory.U32(0x22000030, 0);
+            memory.OnRead = (address, count) => { if (address == data + 0x490 && count == 32) memory.Guid(module + Wow70707Offsets.PlayerGuid, default); };
+            Check(WowBInventoryProbe.Capture().Contains("identity table, player, attachment, code or bot state changed; discarded"), "changed player during container read discarded");
+            memory.OnRead = null; memory.Guid(module + Wow70707Offsets.PlayerGuid, player);
+            memory.Remove(module + 0x2569186);
+            Check(WowBInventoryProbe.Capture().Contains("markers or player unavailable"), "unreadable container code marker unavailable");
+            memory.U32(0x21000000 + WowBOffsets.HandlePoolCapacityOffset, 2);
+            memory.U32(0x22000020, 0);
+            Console.WriteLine("70707 inventory and container probe synthetic fixtures passed (no live inventory validation)");
         }
     }
 }

@@ -114,6 +114,7 @@ internal static class WowBInventoryProbe
                     else text.AppendFormat(CultureInfo.InvariantCulture, "entry[{0}] {1}\n", i, current);
                 }
                 if (comparable) text.AppendFormat(CultureInfo.InvariantCulture, "changed entries={0}; identical bytes do not establish a slot was empty.\n", changed);
+                if (experimental) text.Append(WowBContainerResearchProbe.Capture(memory, reader, player));
                 text.AppendLine("Uninterpreted data and process addresses are sensitive. Reads are non-atomic; no inventory, item, bag capacity or mail eligibility is verified.");
                 _previousMemory = memory; _previousReader = reader; _previousPlayer = player.Guid;
                 _previousUnit = player.UnitAddress; _previousArray = array; _previousEntries = first;
