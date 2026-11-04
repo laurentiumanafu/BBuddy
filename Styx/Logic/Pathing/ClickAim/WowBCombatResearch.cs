@@ -144,7 +144,7 @@ internal static class WowBCombatResearch
             Memory? memory = ObjectManager.Wow;
             WowBReader? reader = ObjectManager.WowB;
             if (memory == null || reader == null || !memory.Is64BitTarget || !reader.IsExperimental70707)
-                return "Attach to a 70707 or 70755 client and enter the world first.";
+                return "Attach to a 70707, 70755 or 70790 client and enter the world first.";
             using var uncached = memory.TemporaryCacheState(false);
             if (!WowBGrindFactions.TraceBuild70707(memory, reader) ||
                 !reader.TryCaptureWorldSnapshot(out WowBWorldSnapshot? snapshot) || snapshot == null ||

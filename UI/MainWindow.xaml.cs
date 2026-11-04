@@ -454,8 +454,8 @@ namespace CopilotBuddy.UI
                         }
                         else
                         {
-                            Logging.Write(Colors.Orange, "{0} (PID {1}) skipped: unsupported build {2} (expected {3}, {4}, or experimental {5}/{6}).",
-                                proc.ProcessName, proc.Id, build, ObjectManager.SupportedBuild, ObjectManager.SupportedBuildWowB, ClientAttachPolicy.ExperimentalBuild, ClientAttachPolicy.ExperimentalBuild70755);
+                            Logging.Write(Colors.Orange, "{0} (PID {1}) skipped: unsupported build {2} (expected {3}, {4}, or experimental {5}/{6}/{7}).",
+                                proc.ProcessName, proc.Id, build, ObjectManager.SupportedBuild, ObjectManager.SupportedBuildWowB, ClientAttachPolicy.ExperimentalBuild, ClientAttachPolicy.ExperimentalBuild70755, ClientAttachPolicy.ExperimentalBuild70790);
                         }
                     }
                     catch { /* Access denied or process exited */ }
@@ -483,7 +483,7 @@ namespace CopilotBuddy.UI
                                 candidates.Add(proc);
                             else
                             {
-                                Logging.Write(Colors.Orange, "PID {0} skipped: unsupported build {1} (expected {2}, {3}, or experimental {4}/{5}).", pid, build, ObjectManager.SupportedBuild, ObjectManager.SupportedBuildWowB, ClientAttachPolicy.ExperimentalBuild, ClientAttachPolicy.ExperimentalBuild70755);
+                                Logging.Write(Colors.Orange, "PID {0} skipped: unsupported build {1} (expected {2}, {3}, or experimental {4}/{5}/{6}).", pid, build, ObjectManager.SupportedBuild, ObjectManager.SupportedBuildWowB, ClientAttachPolicy.ExperimentalBuild, ClientAttachPolicy.ExperimentalBuild70755, ClientAttachPolicy.ExperimentalBuild70790);
                             }
                         }
                     }

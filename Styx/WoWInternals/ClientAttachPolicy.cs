@@ -10,10 +10,11 @@ namespace Styx.WoWInternals
         // The current default remains experimental: preference is not validation.
         internal const int ExperimentalBuild = 70707;
         internal const int ExperimentalBuild70755 = 70755;
-        internal static bool IsExperimentalBuild(int build) => build == ExperimentalBuild || build == ExperimentalBuild70755;
+        internal const int ExperimentalBuild70790 = 70790;
+        internal static bool IsExperimentalBuild(int build) => build == ExperimentalBuild || build == ExperimentalBuild70755 || build == ExperimentalBuild70790;
 
         // Versioned offsets are distinct; unknown builds are never assumed compatible.
-        private static readonly int[] RegisteredBuilds = { SupportedLegacyBuild, SupportedModernBuild, ExperimentalBuild, ExperimentalBuild70755 };
+        private static readonly int[] RegisteredBuilds = { SupportedLegacyBuild, SupportedModernBuild, ExperimentalBuild, ExperimentalBuild70755, ExperimentalBuild70790 };
         internal static int DefaultBuild => RegisteredBuilds.Max();
         internal static bool IsRegisteredBuild(int build) => Array.IndexOf(RegisteredBuilds, build) >= 0;
         internal static int SelectionPriority(int build) => IsRegisteredBuild(build) ? build : -1;

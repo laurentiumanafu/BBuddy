@@ -330,7 +330,8 @@ namespace Styx.WoWInternals
                 // DX11PresentHook64 once the graphics offsets land
                 // (X64_PORT_PLAN.md §6). The reader validates the 64-bit
                 // read path and logs a full state snapshot on attach.
-                WowB = new WowBReader(memory, initialBuild == ClientAttachPolicy.ExperimentalBuild, initialBuild == ClientAttachPolicy.ExperimentalBuild70755);
+                WowB = new WowBReader(memory, initialBuild == ClientAttachPolicy.ExperimentalBuild,
+                    initialBuild == ClientAttachPolicy.ExperimentalBuild70755, initialBuild == ClientAttachPolicy.ExperimentalBuild70790);
                 if (ClientAttachPolicy.IsExperimentalBuild(initialBuild))
                 {
                     try { Logging.Write(WowB.DescribeExperimental70707()); }

@@ -814,12 +814,12 @@ internal static class GrindRunner
         }
         else Logging.Write("[Grind] profile-free mesh roaming; no profile level bands or blackspots, existing combat safety filters still apply");
         ProfileGrindArea area = areas[chosen];
-        // On 70755, avoid a fresh pull or roam leg while initial full-bag
+        // On 70755/70790, avoid a fresh pull or roam leg while initial full-bag
         // observations are being confirmed. A bounded wait never treats an
         // unknown observation as full, and combat/STOP still take priority.
-        bool startupBagWait = trialReader?.IsExperimental70755 == true && ClickAimSettings.AutoSell;
+        bool startupBagWait = trialReader?.UsesOrdinaryBagPolicy == true && ClickAimSettings.AutoSell;
         long startupBagDeadline = Environment.TickCount64 + 15000;
-        if (startupBagWait) Logging.Write("[Grind] checking initial 70755 ordinary-bag candidate before roaming (up to 15 seconds; combat and STOP take priority).");
+        if (startupBagWait) Logging.Write("[Grind] checking initial " + trialReader!.ExperimentalBuildNumber + " ordinary-bag candidate before roaming (up to 15 seconds; combat and STOP take priority).");
 
         try
         {

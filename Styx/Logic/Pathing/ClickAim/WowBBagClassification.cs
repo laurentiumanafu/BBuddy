@@ -6,8 +6,9 @@ using Styx.WoWInternals;
 
 namespace Styx.Logic.Pathing;
 
-// Explicit user classifications of individual 70755 bag instances, scoped to
-// a character. A size, index or GUID bit pattern does not establish bag family.
+// Explicit user classifications of individual 70755/70790 bag instances, scoped
+// to a character. The existing 70755 file is shared only by exact character and
+// bag GUID. A size, index or GUID bit pattern does not establish bag family.
 internal enum WowBBagKind { Unknown, Ordinary, Specialty }
 internal static class WowBBagClassification
 {

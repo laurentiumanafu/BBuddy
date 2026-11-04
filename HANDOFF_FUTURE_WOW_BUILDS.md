@@ -2,6 +2,8 @@
 
 **Handoff date:** 2026-11-04. Intended for a new agent or developer if the chat is lost. Read the repository and `git status` first; this document is a snapshot, not a substitute for checking later changes.
 
+> **Newer 70790 port:** `hunt/WOW_70790_PORT.md` supersedes the default-build statements below. 70790 is the requested default and future target; 70755 is the last user-tested baseline. The 70790 port is experimental and has not yet been tested in a live client or full Windows build.
+
 ## Start here
 
 1. Open the current BBuddy checkout; inspect `git status -sb`, `git log -10 --oneline`, and the active branch. Preserve any uncommitted work. In Arena, use the branch assigned to the **current session**, not a branch name remembered from an old chat. Do not reset or overwrite the working tree just to make it clean. If a restored sandbox has old Git metadata but newer working files, compare tracked **and untracked** files against the fetched branch first; reconcile only after verifying their contents and an empty index.

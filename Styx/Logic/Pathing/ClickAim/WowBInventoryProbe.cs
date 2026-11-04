@@ -61,9 +61,9 @@ internal static class WowBInventoryProbe
         const ulong sizeOffset = 0x7D04;
         const int start = 0x23, maxSize = 64;
         if (player.UnitAddress > UserLimit - sizeOffset - 1) return reader.ExperimentalBuildNumber + " special-index research: player address outside bounds.\n";
-        bool a = SignatureMatchesOrUnreadable(memory, reader.IsExperimental70755 ? 0x2473586UL : 0x25691D6UL, "4038A880940000", out bool flagUnreadable);
-        bool b = SignatureMatchesOrUnreadable(memory, reader.IsExperimental70755 ? 0x2473599UL : 0x25691E9UL, "0FB6B8047D0000", out bool sizeUnreadable);
-        bool c = SignatureMatchesOrUnreadable(memory, reader.IsExperimental70755 ? 0x24735A4UL : 0x25691F4UL, "83C723", out bool startUnreadable);
+        bool a = SignatureMatchesOrUnreadable(memory, reader.IsExperimental70790 ? 0x2606EB6UL : reader.IsExperimental70755 ? 0x2473586UL : 0x25691D6UL, "4038A880940000", out bool flagUnreadable);
+        bool b = SignatureMatchesOrUnreadable(memory, reader.IsExperimental70790 ? 0x2606EC9UL : reader.IsExperimental70755 ? 0x2473599UL : 0x25691E9UL, "0FB6B8047D0000", out bool sizeUnreadable);
+        bool c = SignatureMatchesOrUnreadable(memory, reader.IsExperimental70790 ? 0x2606ED4UL : reader.IsExperimental70755 ? 0x24735A4UL : 0x25691F4UL, "83C723", out bool startUnreadable);
         if (!a || !b || !c) return reader.ExperimentalBuildNumber + " special-index research: readable signature mismatch; unavailable.\n";
         byte[]? size = memory.ReadBytes64(player.UnitAddress + sizeOffset, 1);
         byte[]? sizeAgain = memory.ReadBytes64(player.UnitAddress + sizeOffset, 1);
@@ -73,9 +73,9 @@ internal static class WowBInventoryProbe
             ClickAimUi.Running != active || ClickAimUi.Paused || ObjectManager.Wow != memory || ObjectManager.WowB != reader ||
             !ValidPlayer(memory, reader, player))
             return reader.ExperimentalBuildNumber + " special-index research: size, array, player or bot state unreadable/changed; unavailable.\n";
-        bool aAfter = SignatureMatchesOrUnreadable(memory, reader.IsExperimental70755 ? 0x2473586UL : 0x25691D6UL, "4038A880940000", out bool flagAfterUnreadable);
-        bool bAfter = SignatureMatchesOrUnreadable(memory, reader.IsExperimental70755 ? 0x2473599UL : 0x25691E9UL, "0FB6B8047D0000", out bool sizeAfterUnreadable);
-        bool cAfter = SignatureMatchesOrUnreadable(memory, reader.IsExperimental70755 ? 0x24735A4UL : 0x25691F4UL, "83C723", out bool startAfterUnreadable);
+        bool aAfter = SignatureMatchesOrUnreadable(memory, reader.IsExperimental70790 ? 0x2606EB6UL : reader.IsExperimental70755 ? 0x2473586UL : 0x25691D6UL, "4038A880940000", out bool flagAfterUnreadable);
+        bool bAfter = SignatureMatchesOrUnreadable(memory, reader.IsExperimental70790 ? 0x2606EC9UL : reader.IsExperimental70755 ? 0x2473599UL : 0x25691E9UL, "0FB6B8047D0000", out bool sizeAfterUnreadable);
+        bool cAfter = SignatureMatchesOrUnreadable(memory, reader.IsExperimental70790 ? 0x2606ED4UL : reader.IsExperimental70755 ? 0x24735A4UL : 0x25691F4UL, "83C723", out bool startAfterUnreadable);
         if (!aAfter || !bAfter || !cAfter) return reader.ExperimentalBuildNumber + " special-index research: readable signature mismatch after read; unavailable.\n";
         int n = size[0], flag = header[0x20];
         string signatures = "flag=" + (flagUnreadable ? "unreadable" : "matched") + "/" + (flagAfterUnreadable ? "unreadable" : "matched") +
@@ -106,8 +106,8 @@ internal static class WowBInventoryProbe
             try
             {
                 using var uncached = memory.TemporaryCacheState(false);
-                if (!SignatureMatchesOrUnreadable(memory, reader.IsExperimental70755 ? Wow70755Offsets.InventoryLookup : Lookup70707, LookupSignature70707, out _) ||
-                    !SignatureMatchesOrUnreadable(memory, reader.IsExperimental70755 ? Wow70755Offsets.InventoryHandler : Handler70707, HandlerSignature, out _) ||
+                if (!SignatureMatchesOrUnreadable(memory, reader.IsExperimental70790 ? Wow70790Offsets.InventoryLookup : reader.IsExperimental70755 ? Wow70755Offsets.InventoryLookup : Lookup70707, LookupSignature70707, out _) ||
+                    !SignatureMatchesOrUnreadable(memory, reader.IsExperimental70790 ? Wow70790Offsets.InventoryHandler : reader.IsExperimental70755 ? Wow70755Offsets.InventoryHandler : Handler70707, HandlerSignature, out _) ||
                     !reader.TryCaptureWorldSnapshot(out WowBWorldSnapshot? before) || before == null ||
                     !before.TryGetLocalPlayer(out WowBObservedUnit player) || !ValidPlayer(memory, reader, player) ||
                     player.UnitAddress > UserLimit - Candidate70707 - HeaderSize) return false;
@@ -125,8 +125,8 @@ internal static class WowBInventoryProbe
                 CaptureSpecial70707(memory, reader, player, candidate, header, array, entries!, count, out var specialAfter, true);
                 if (!special.HasValue || special.Value.CandidateSize == 0 || !containers.HasValue ||
                     !specialAfter.HasValue || special.Value != specialAfter.Value ||
-                    !SignatureMatchesOrUnreadable(memory, reader.IsExperimental70755 ? Wow70755Offsets.InventoryLookup : Lookup70707, LookupSignature70707, out _) ||
-                    !SignatureMatchesOrUnreadable(memory, reader.IsExperimental70755 ? Wow70755Offsets.InventoryHandler : Handler70707, HandlerSignature, out _) ||
+                    !SignatureMatchesOrUnreadable(memory, reader.IsExperimental70790 ? Wow70790Offsets.InventoryLookup : reader.IsExperimental70755 ? Wow70755Offsets.InventoryLookup : Lookup70707, LookupSignature70707, out _) ||
+                    !SignatureMatchesOrUnreadable(memory, reader.IsExperimental70790 ? Wow70790Offsets.InventoryHandler : reader.IsExperimental70755 ? Wow70755Offsets.InventoryHandler : Handler70707, HandlerSignature, out _) ||
                     !reader.TryCaptureWorldSnapshot(out WowBWorldSnapshot? after) || after == null ||
                     !after.TryGetLocalPlayer(out WowBObservedUnit final) || after.LocalGuid != before.LocalGuid ||
                     final.UnitAddress != player.UnitAddress || final.RecordAddress != player.RecordAddress ||
@@ -134,8 +134,8 @@ internal static class WowBInventoryProbe
                     ObjectManager.Wow != memory || ObjectManager.WowB != reader) return false;
                 // 70755 excludes only explicitly classified specialty instances;
                 // an unknown bag can neither authorize nor suppress a sale by guesswork.
-                if (reader.IsExperimental70755 && containers.Value.Unclassified != 0) return false;
-                zeroTags = special.Value.ZeroTags + (reader.IsExperimental70755 ? containers.Value.OrdinaryZeroTags : containers.Value.ZeroTags);
+                if (reader.UsesOrdinaryBagPolicy && containers.Value.Unclassified != 0) return false;
+                zeroTags = special.Value.ZeroTags + (reader.UsesOrdinaryBagPolicy ? containers.Value.OrdinaryZeroTags : containers.Value.ZeroTags);
                 playerGuid = player.Guid;
                 return true;
             }
@@ -148,7 +148,7 @@ internal static class WowBInventoryProbe
         lock (Gate)
         {
             Memory? memory = ObjectManager.Wow; WowBReader? reader = ObjectManager.WowB;
-            return memory == null || reader == null || !reader.IsExperimental70755
+            return memory == null || reader == null || !reader.UsesOrdinaryBagPolicy
                 ? new List<WowBContainerResearchProbe.BagChoice>()
                 : WowBContainerResearchProbe.LastChoices(memory, reader);
         }
@@ -159,7 +159,7 @@ internal static class WowBInventoryProbe
         message = "Stop the bot and take a fresh bag snapshot first.";
         lock (Gate)
         {
-            if (ClickAimUi.Running || ClickAimUi.Paused || ObjectManager.WowB?.IsExperimental70755 != true) return false;
+            if (ClickAimUi.Running || ClickAimUi.Paused || ObjectManager.WowB?.UsesOrdinaryBagPolicy != true) return false;
             Memory? memory = ObjectManager.Wow; WowBReader? reader = ObjectManager.WowB;
             Capture(); // revalidate the attachment, identities, signatures and candidate set
             if (memory == null || reader == null || ObjectManager.Wow != memory || ObjectManager.WowB != reader) return false;
@@ -181,14 +181,14 @@ internal static class WowBInventoryProbe
             WowBContainerResearchProbe.InvalidateChoices();
             if (ClickAimUi.Running || ClickAimUi.Paused) return "Stop the bot and routes before the inventory probe.";
             Memory? memory = ObjectManager.Wow; WowBReader? reader = ObjectManager.WowB;
-            if (memory == null || reader == null || !memory.Is64BitTarget) return "Attach to a registered 70291, 70707 or 70755 client and enter the world first.";
+            if (memory == null || reader == null || !memory.Is64BitTarget) return "Attach to a registered 70291, 70707, 70755 or 70790 client and enter the world first.";
             try
             {
                 using var uncached = memory.TemporaryCacheState(false);
                 bool experimental = reader.IsExperimental70707;
                 ulong candidateOffset = experimental ? Candidate70707 : Candidate70291;
-                ulong lookupRva = reader.IsExperimental70755 ? Wow70755Offsets.InventoryLookup : experimental ? Lookup70707 : Lookup70291;
-                ulong handlerRva = reader.IsExperimental70755 ? Wow70755Offsets.InventoryHandler : experimental ? Handler70707 : Handler70291;
+                ulong lookupRva = reader.IsExperimental70790 ? Wow70790Offsets.InventoryLookup : reader.IsExperimental70755 ? Wow70755Offsets.InventoryLookup : experimental ? Lookup70707 : Lookup70291;
+                ulong handlerRva = reader.IsExperimental70790 ? Wow70790Offsets.InventoryHandler : reader.IsExperimental70755 ? Wow70755Offsets.InventoryHandler : experimental ? Handler70707 : Handler70291;
                 string lookupSignature = experimental ? LookupSignature70707 : LookupSignature70291;
                 if (!SignatureMatchesOrUnreadable(memory, lookupRva, lookupSignature, out bool lookupUnreadable) ||
                     !SignatureMatchesOrUnreadable(memory, handlerRva, HandlerSignature, out bool handlerUnreadable) ||
@@ -255,12 +255,12 @@ internal static class WowBInventoryProbe
                                 "{4} research subtotal: candidate sizes={0}, zero-tags={1}; player-range plus {2} resolved container candidates, {3} zero identities not classified. May overlap or omit bags; NOT a verified total or free-slot verdict.\n",
                                 special.Value.CandidateSize + containers.Value.CandidateSize, special.Value.ZeroTags + containers.Value.ZeroTags,
                                 containers.Value.Resolved, containers.Value.ZeroIdentities, reader.ExperimentalBuildNumber);
-                            if (reader.IsExperimental70755)
+                            if (reader.UsesOrdinaryBagPolicy)
                             {
                                 if (containers.Value.Unclassified == 0)
-                                    text.AppendFormat(CultureInfo.InvariantCulture, "70755 ordinary-bag candidate subtotal: sizes={0}, zero-tags={1}; specialty bags excluded by user classification; still experimental.\n",
+                                    text.AppendFormat(CultureInfo.InvariantCulture, reader.ExperimentalBuildNumber + " ordinary-bag candidate subtotal: sizes={0}, zero-tags={1}; specialty bags excluded by user classification; still experimental.\n",
                                         special.Value.CandidateSize + containers.Value.OrdinarySize, special.Value.ZeroTags + containers.Value.OrdinaryZeroTags);
-                                else text.AppendLine("70755 ordinary-bag candidate subtotal unavailable: classify every observed bag as ordinary or specialty first.");
+                                else text.AppendLine(reader.ExperimentalBuildNumber + " ordinary-bag candidate subtotal unavailable: classify every observed bag as ordinary or specialty first.");
                             }
                         }
                         else { WowBContainerResearchProbe.InvalidateChoices(); text.AppendLine(reader.ExperimentalBuildNumber + " research subtotal unavailable: player-range candidate changed or became unreadable."); }
