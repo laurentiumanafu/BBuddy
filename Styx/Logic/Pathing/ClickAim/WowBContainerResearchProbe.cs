@@ -115,9 +115,9 @@ internal static class WowBContainerResearchProbe
     // heuristic, not a proof that the result is the resolver's object. Deduplicate
     // identical pointers and fail closed on multiple distinct matches.
     private static bool FindCandidate(Memory memory, WowBReader.WowBPoolObject record, WowBGuid guid,
-        out ulong data, out ulong sourceOffset, out byte[]? pointerBytes, out byte[]? header, out string detail)
+        out ulong data, out ulong sourceOffset, out byte[]? pointerBytes, out byte[]? header, out bool exploratory, out string detail)
     {
-        data = 0; sourceOffset = 0; pointerBytes = null; header = null;
+        data = 0; sourceOffset = 0; pointerBytes = null; header = null; exploratory = false;
         var candidates = new HashSet<ulong>();
         var pointerLeads = new List<string>();
         string rawD8 = "unreadable", d8Header = "unavailable";
@@ -153,7 +153,39 @@ internal static class WowBContainerResearchProbe
         foreach (var field in fieldReads)
             if (!Same(field.Value, memory.ReadBytes64(record.RecordPtr + field.Offset, 8))) changedFields++;
         detail = $"record+0xD8={rawD8} raw32={d8Header}; pointer-like fields=[{string.Join(",", pointerLeads)}] (max 12); identity-matching headers={candidates.Count}; unreadable fields={unreadableFields}; unavailable headers={unavailableHeaders}; changed fields={changedFields}";
+        // A unique observed header is useful for stopped research even if other
+        // pointer-like values were unreadable. It is NOT a resolved container.
+        exploratory = candidates.Count == 1 && unreadableFields == 0 && changedFields == 0 && unavailableHeaders > 0;
         return candidates.Count == 1 && unreadableFields == 0 && unavailableHeaders == 0 && changedFields == 0;
+    }
+
+    // Read-only stopped research only. This never adds a BagChoice, contributes
+    // to a subtotal, or authorizes selling; unreadable alternatives remain unknown.
+    private static string DescribeExploratory(Memory memory, WowBReader reader, WowBObservedUnit player,
+        WowBReader.WowBPoolObject record, WowBGuid guid, ulong data, ulong sourceOffset, byte[] pointerBytes, byte[] header)
+    {
+        if (ClickAimUi.Running || ClickAimUi.Paused || !SamePlayer(memory, reader, player, false) ||
+            !reader.IsPoolRecordCurrent(record) || !UserRange(data, CapacityOffset + 4)) return "";
+        byte[]? capacity = memory.ReadBytes64(data + CapacityOffset, 4);
+        if (capacity == null || capacity.Length != 4) return "  exploratory candidate capacity unreadable; no subtotal.\n";
+        uint count = BitConverter.ToUInt32(capacity, 0);
+        if (count > MaxSlots || !UserRange(data, SlotsOffset + (ulong)count * SlotStride))
+            return "  exploratory candidate capacity outside bounds; no subtotal.\n";
+        int length = checked((int)count * SlotStride);
+        byte[]? slots = length == 0 ? Array.Empty<byte>() : memory.ReadBytes64(data + SlotsOffset, length);
+        byte[]? slotsAgain = length == 0 ? Array.Empty<byte>() : memory.ReadBytes64(data + SlotsOffset, length);
+        byte[]? recordGuid = memory.ReadBytes64(record.RecordPtr + WowBOffsets.RecordGuidLoOffset, 16);
+        if (!Same(slots, slotsAgain) || !Same(capacity, memory.ReadBytes64(data + CapacityOffset, 4)) ||
+            !Same(header, memory.ReadBytes64(data, 0x20)) ||
+            !Same(pointerBytes, memory.ReadBytes64(record.RecordPtr + sourceOffset, 8)) ||
+            recordGuid == null || recordGuid.Length != 16 || GuidAt(recordGuid, 0) != guid ||
+            !reader.IsPoolRecordCurrent(record) || !SamePlayer(memory, reader, player, false))
+            return "  exploratory candidate changed or became unreadable; no subtotal.\n";
+        int zeros = 0;
+        for (int i = 0; i < (int)count; i++) if ((BitConverter.ToUInt64(slots!, i * SlotStride + 8) >> 58) == 0) zeros++;
+        return string.Format(CultureInfo.InvariantCulture,
+            "  STOPPED RESEARCH ONLY: identity={0} unique observed header at record+0x{1:X}, candidate size={2}, high-qword zero-tags={3}; raw entries={4}. Other pointers were unreadable: unresolved, NOT counted or classifiable.\n",
+            guid, sourceOffset, count, zeros, Convert.ToHexString(slots!));
     }
 
     // Caller holds the inventory probe lock and has disabled the memory cache.
@@ -186,8 +218,13 @@ internal static class WowBContainerResearchProbe
                 foreach (var item in records) if (item.Guid == guid) { matches++; record = item; }
                 if (matches != 1 || !reader.IsPoolRecordCurrent(record))
                 { text.AppendFormat(CultureInfo.InvariantCulture, "container-candidate[{0}] identity={1} pool matches={2}; object unavailable/ambiguous.\n", i, guid, matches); continue; }
-                if (!FindCandidate(memory, record, guid, out ulong data, out ulong sourceOffset, out byte[]? pointerBytes, out byte[]? header, out string detail))
-                { text.AppendFormat(CultureInfo.InvariantCulture, "container-candidate[{0}] no unique stable identity-matching header; {1}. Unknown.\n", i, detail); continue; }
+                if (!FindCandidate(memory, record, guid, out ulong data, out ulong sourceOffset, out byte[]? pointerBytes, out byte[]? header, out bool exploratory, out string detail))
+                {
+                    text.AppendFormat(CultureInfo.InvariantCulture, "container-candidate[{0}] no unique stable identity-matching header; {1}. Unknown.\n", i, detail);
+                    if (!active && reader.IsExperimental70790 && exploratory && pointerBytes != null && header != null)
+                        text.Append(DescribeExploratory(memory, reader, player, record, guid, data, sourceOffset, pointerBytes, header));
+                    continue;
+                }
                 text.AppendFormat(CultureInfo.InvariantCulture, "container-candidate[{0}] record scan {1}; selected source=+0x{2:X} (unverified).\n", i, detail, sourceOffset);
                 byte[]? capacity = memory.ReadBytes64(data + CapacityOffset, 4);
                 if (capacity == null || capacity.Length != 4)

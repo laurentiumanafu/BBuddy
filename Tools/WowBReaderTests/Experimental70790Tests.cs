@@ -94,6 +94,24 @@ internal static class Experimental70790Tests
             bagReport.Contains("0x2606E66=matched"), "70790 bag markers, table and subtotal routing");
         var choices = WowBInventoryProbe.ObservedBags();
         Require(choices.Count == 1 && choices[0].Bag == bag && choices[0].Player == player, "stable stopped snapshot exposes the observed bag instance");
+        // A pointer-like value that cannot be read must not prevent a stopped
+        // diagnostic of the one observed header, but must never authorize selling.
+        memory.U64(bagRecord + 0x40, 0x145D8);
+        string exploratory = WowBInventoryProbe.Capture();
+        Require(exploratory.Contains("STOPPED RESEARCH ONLY") && exploratory.Contains("candidate size=2, high-qword zero-tags=2") &&
+            exploratory.Contains("research subtotal unavailable") && WowBInventoryProbe.ObservedBags().Count == 0,
+            "unreadable alternative reports raw research only, without subtotal or choices");
+        Require(!WowBInventoryProbe.ClassifyBag(choices[0], WowBBagKind.Specialty, out _), "unresolved candidate cannot be classified");
+        ClickAimUi.Running = true;
+        Require(!WowBInventoryProbe.TryCaptureSellingSubtotal(out _, out _), "unreadable alternative cannot authorize selling");
+        ClickAimUi.Running = false;
+        ulong duplicateData = 0x25010000;
+        memory.U64(bagRecord + 0x48, duplicateData); memory.Bytes(duplicateData, new byte[0x20]);
+        memory.U64(duplicateData + 8, bagRecord); memory.Guid(duplicateData + 0x10, bag);
+        Require(!WowBInventoryProbe.Capture().Contains("STOPPED RESEARCH ONLY"), "ambiguous identity headers receive no exploratory candidate");
+        memory.U64(bagRecord + 0x40, 0); memory.U64(bagRecord + 0x48, 0);
+        WowBInventoryProbe.Capture(); choices = WowBInventoryProbe.ObservedBags();
+        Require(choices.Count == 1, "choices return only after the ambiguity is gone");
         ClickAimUi.Running = true;
         Require(!WowBInventoryProbe.TryCaptureSellingSubtotal(out _, out _), "unclassified bag cannot authorize selling");
         Require(!WowBInventoryProbe.ClassifyBag(choices[0], WowBBagKind.Specialty, out _), "running classification rejected");
@@ -105,6 +123,9 @@ internal static class Experimental70790Tests
         ClickAimUi.Running = true;
         Require(WowBInventoryProbe.TryCaptureSellingSubtotal(out int tags, out WowBGuid owner) && tags == 16 && owner == player,
             "70790 active selling subtotal excludes specialty slots");
+        memory.U64(bagRecord + 0x40, 0x145D8);
+        Require(!WowBInventoryProbe.TryCaptureSellingSubtotal(out _, out _), "unreadable alternative blocks selling even for classified bag");
+        memory.U64(bagRecord + 0x40, 0);
         memory.Bytes(image + 0x2606E66, new byte[7]);
         Require(!WowBInventoryProbe.TryCaptureSellingSubtotal(out _, out _), "readable 70790 bag marker mismatch fails closed");
         memory.Bytes(image + 0x2606E66, Convert.FromHexString("486390C00A0000"));
