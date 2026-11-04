@@ -263,3 +263,25 @@ none proves a callable handler or runtime behavior. Scan errors, output caps,
 other reference encodings, and the absence of a hit must not be interpreted as
 proof that no reference exists. This static search does not inspect live bags or
 authorize bag-full detection.
+
+### 70707 container reference follow-up result
+
+The user's `WowBContainerRefs70707` report matched the four image markers and
+all four name markers. Neighboring strings include API usage descriptions,
+confirming the labels relate to `C_Container`, but not where the data lives.
+No exact RVA32 patterns were found. The raw executable scan reported candidate
+seven-byte LEAs to `GetContainerNumFreeSlots` at `0xD5C2E2` and `0xD65BE5`,
+and to `GetContainerNumSlots` at `0xD5C82B` and `0xD65C04`. Each is accompanied
+by an overlapping six-byte decode starting one byte later; these are not
+independent observations and may be mid-instruction decodes. The nearby scan
+reported 142 matches but displayed only 32; the exact scan reported 12 and was
+not capped. The scan reported no block errors or cancellation, within its
+stated instruction-encoding and chunk bounds. These are unverified code
+references, not proven handler entries or layouts.
+
+`WowBContainerCode70707.java` checks the image and site bytes, reports bounded
+context, looks for containing PE `.pdata` runtime-function ranges, and performs
+bounded pseudo-disassembly from unique readable containing ranges for the two
+local sites. Backward paths, `.pdata` candidates and linear decoding are static
+leads only and can be incomplete or misaligned; no client functions are called.
+Nothing here establishes container boundaries, free slots, or 70291 offsets.
