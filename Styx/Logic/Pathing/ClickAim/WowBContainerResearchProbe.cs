@@ -44,18 +44,24 @@ internal static class WowBContainerResearchProbe
     // Alignment alone never establishes an object's identity or type.
     private static bool Pointer(ulong p, ulong width) => UserRange(p, width) && (p & 3) == 0;
     private static WowBGuid GuidAt(byte[] b, int offset) => new WowBGuid(BitConverter.ToUInt64(b, offset), BitConverter.ToUInt64(b, offset + 8));
-    private static bool Signatures(Memory memory, out string reason)
+    // Code pages can be temporarily unreadable on 70707. For this stopped,
+    // read-only research only, report unreadable markers and rely on the
+    // independent build/player guards; any readable mismatch still rejects.
+    private static bool Signatures(Memory memory, out string report)
     {
+        bool match = true;
+        var statuses = new List<string>();
         foreach (var marker in Markers)
         {
             byte[]? bytes = memory.ReadBytes64(memory.GetAbsolute64(marker.Rva), marker.Bytes.Length / 2);
-            if (bytes == null || bytes.Length * 2 != marker.Bytes.Length)
-            { reason = $"code marker 0x{marker.Rva:X} unreadable"; return false; }
-            if (Convert.ToHexString(bytes) != marker.Bytes)
-            { reason = $"code marker 0x{marker.Rva:X} mismatch"; return false; }
+            string status;
+            if (bytes == null || bytes.Length * 2 != marker.Bytes.Length) status = "unreadable";
+            else if (Convert.ToHexString(bytes) == marker.Bytes) status = "matched";
+            else { status = "MISMATCH"; match = false; }
+            statuses.Add($"0x{marker.Rva:X}={status}");
         }
-        reason = "matched";
-        return true;
+        report = string.Join(", ", statuses);
+        return match;
     }
     private static bool SamePlayer(Memory memory, WowBReader reader, WowBObservedUnit player)
     {
@@ -118,8 +124,8 @@ internal static class WowBContainerResearchProbe
         {
             if (!SamePlayer(memory, reader, player))
             { Forget(); return "Container research: 70707 player, build or stopped state unavailable; no container candidates captured.\n"; }
-            if (!Signatures(memory, out string markerReason))
-            { Forget(); return "Container research: 70707 markers or player unavailable (" + markerReason + "); no container candidates captured.\n"; }
+            if (!Signatures(memory, out string markerBefore))
+            { Forget(); return "Container research: readable code marker mismatch (" + markerBefore + "); no container candidates captured.\n"; }
             ulong table = memory.GetAbsolute64(IdentityTableRva);
             byte[]? identityBytes = memory.ReadBytes64(table, CandidateIdentities * SlotStride);
             if (identityBytes == null || identityBytes.Length != CandidateIdentities * SlotStride)
@@ -128,6 +134,7 @@ internal static class WowBContainerResearchProbe
             var next = new Candidate?[CandidateIdentities];
             var text = new StringBuilder();
             text.AppendLine("70707 container research: indexes 0..4 are static candidates, not user bag numbers; no bag/full verdict.");
+            text.AppendLine("Container code markers before: " + markerBefore + "; unreadable is not confirmation of a match.");
             bool comparable = _previousMemory == memory && _previousReader == reader && _previousPlayer == player.Guid && _previous != null;
             for (int i = 0; i < CandidateIdentities; i++)
             {
@@ -178,12 +185,14 @@ internal static class WowBContainerResearchProbe
                     text.AppendFormat(CultureInfo.InvariantCulture, "  changed entries={0}; zero tag is not a verified empty slot.\n", changed);
                 }
             }
-            if (!Same(identityBytes, memory.ReadBytes64(table, CandidateIdentities * SlotStride)) || !Signatures(memory, out _) ||
+            bool markersAfterValid = Signatures(memory, out string markerAfter);
+            if (!Same(identityBytes, memory.ReadBytes64(table, CandidateIdentities * SlotStride)) || !markersAfterValid ||
                 !reader.TryCaptureWorldSnapshot(out WowBWorldSnapshot? after) || after == null ||
                 !after.TryGetLocalPlayer(out WowBObservedUnit final) || final.Guid != player.Guid ||
                 final.UnitAddress != player.UnitAddress || final.RecordAddress != player.RecordAddress || !SamePlayer(memory, reader, final))
-            { Forget(); return "Container research: identity table, player, attachment, code or bot state changed; discarded.\n"; }
+            { Forget(); return "Container research: identity table, player, attachment, code or bot state changed; discarded. Code markers after: " + markerAfter + ".\n"; }
             _previousMemory = memory; _previousReader = reader; _previousPlayer = player.Guid; _previous = next;
+            text.AppendLine("Container code markers after: " + markerAfter + "; unreadable is not confirmation of a match.");
             text.AppendLine("Container reads are non-atomic; unresolved/zero candidates are unknown. No selling or gameplay uses these observations.");
             return text.ToString();
         }

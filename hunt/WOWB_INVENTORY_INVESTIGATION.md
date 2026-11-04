@@ -332,9 +332,10 @@ bits are not proven to represent item presence, nor are the negative index
 meanings, all equipped containers, ordinary-bag capacity or special bag rules.
 
 The stopped-only **Bag research snapshot** additionally samples 70707 candidate
-identities 0..4 from RVA `0x6D41CA0`, independent of the 70291 probe. It requires
-readable matching 70707 container code markers, the existing player/build checks,
-a unique pool match with stable record/object identity, and an unsigned raw
+identities 0..4 from RVA `0x6D41CA0`, independent of the 70291 probe. It rejects
+readable mismatches in 70707 container code markers, reports unreadable markers,
+requires the separate player/build checks, a unique pool match with stable
+record/object identity, and an unsigned raw
 `+0xAC0` value at most 64 before sampling `+0x490` entries twice. Identities,
 headers, capacity, pool slot and data are rechecked; a final identity table,
 player and attachment check guards the aggregate, though reads cannot be made
@@ -381,3 +382,19 @@ multiple matches describe bag state. Logs contain raw data and process addresses
 The probe remains read-only and does not affect selling. A single stopped
 snapshot is enough to diagnose the pointer rejection; item movement need not be
 repeated unless the new report resolves candidates.
+
+### 70707 live marker availability: 11:32
+
+The user's next stopped snapshot recorded `code marker 0xD5C7FC unreadable`
+and did not reach the container record scan. This differs from the 11:26 later
+snapshots, where the container marker check succeeded, but the log alone does
+not establish why the code page was unreadable. No new pointer values were
+captured and no bag state was determined.
+
+The stopped 70707 container research now follows the existing 70707 inventory
+probe's partial-signature policy: every marker is checked and reported before
+and after, any readable mismatch rejects, and unreadable markers remain explicitly
+unconfirmed rather than aborting this read-only diagnostic. Separate build and
+player/attachment checks remain mandatory, and all record, bounds, stability
+and bot-state guards remain in force. This is not full image authentication,
+and does not authorize gameplay decisions or change the stricter 70291 path.

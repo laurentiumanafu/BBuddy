@@ -144,7 +144,25 @@ namespace Styx.Logic.Pathing
             Check(WowBInventoryProbe.Capture().Contains("identity table, player, attachment, code or bot state changed; discarded"), "changed player during container read discarded");
             memory.OnRead = null; memory.Guid(module + Wow70707Offsets.PlayerGuid, player);
             memory.Remove(module + 0x2569186);
-            Check(WowBInventoryProbe.Capture().Contains("markers or player unavailable"), "unreadable container code marker unavailable");
+            string missingMarker = WowBInventoryProbe.Capture();
+            Check(missingMarker.Contains("0x2569186=unreadable") && missingMarker.Contains("raw+0xAC0=2") &&
+                missingMarker.Contains("unreadable is not confirmation of a match"), "unreadable container marker reported while identity guards remain active");
+            memory.Bytes(module + 0xD5C820, new byte[6]);
+            string mismatchedMarker = WowBInventoryProbe.Capture();
+            Check(mismatchedMarker.Contains("readable code marker mismatch") && mismatchedMarker.Contains("0xD5C820=MISMATCH") &&
+                mismatchedMarker.Contains("0x2569186=unreadable") && !mismatchedMarker.Contains("raw+0xAC0=2"),
+                "readable mismatch rejected even when another marker unreadable");
+            memory.Bytes(module + 0xD5C820, Convert.FromHexString("8B80C00A0000"));
+            memory.Bytes(module + 0x2569186, Convert.FromHexString("486390C00A0000"));
+            memory.OnRead = (address, count) => { if (address == data + 0x490 && count == 32) memory.Bytes(module + 0xD5C820, new byte[6]); };
+            Check(WowBInventoryProbe.Capture().Contains("0xD5C820=MISMATCH") &&
+                WowBInventoryProbe.Capture().Contains("readable code marker mismatch"), "late readable code mismatch discards and blocks next capture");
+            memory.OnRead = null; memory.Bytes(module + 0xD5C820, Convert.FromHexString("8B80C00A0000"));
+            memory.OnRead = (address, count) => { if (address == table && count == 80) memory.Remove(module + 0x2569186); };
+            string lateUnreadable = WowBInventoryProbe.Capture();
+            Check(lateUnreadable.Contains("0x2569186=matched") && lateUnreadable.Contains("0x2569186=unreadable") &&
+                lateUnreadable.Contains("raw+0xAC0=2"), "marker transitions to unreadable reported without discarding guarded research");
+            memory.OnRead = null;
             memory.U32(0x21000000 + WowBOffsets.HandlePoolCapacityOffset, 2);
             memory.U32(0x22000020, 0);
             Console.WriteLine("70707 inventory and container probe synthetic fixtures passed (no live inventory validation)");
