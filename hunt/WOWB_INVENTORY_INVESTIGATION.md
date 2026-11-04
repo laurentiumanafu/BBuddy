@@ -490,3 +490,17 @@ were not classified, declines to report a subtotal for unresolved nonzero or
 duplicate identities, and explicitly warns that candidates can overlap or omit
 bags. Reads remain non-atomic. The subtotal is never used in gameplay or selling,
 and its equality to the annotated screenshot is not proof of a general total.
+
+### 70707 user-confirmed empty slots: 11:53
+
+A fresh application session and stopped snapshot reported candidate sizes of
+`20+6+6=32` and zero-tag counts of `5+6+6=17`; the user confirmed there were
+17 empty slots in total. Both nonzero container candidates resolved, and three
+zero identities remained unclassified. The lookup marker matched, but the
+inventory handler, all three special-index markers and all five container
+markers were unreadable in this snapshot (before and after). Unreadable is not
+an image-signature match. This independently confirms that the reported
+research subtotal matches the user's count for this configuration; it does not
+validate other bag configurations, a change in the number of occupied slots,
+or completeness of the candidate set. It remains non-atomic research data and
+is not used for selling or gameplay.
