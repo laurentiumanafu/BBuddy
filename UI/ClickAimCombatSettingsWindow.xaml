@@ -194,13 +194,13 @@
                 </Grid.RowDefinitions>
 
                 <TextBlock Grid.Row="0" Grid.ColumnSpan="3" TextWrapping="Wrap" Margin="0,0,0,10"
-                           Text="After the configured number of corpse loot interactions (not verified bag contents), Grind walks to the recorded town hotspot. Select a saved plan, stand in town and record its hotspot; then select each known merchant and remember it. The nearest recorded merchant is approached by mesh before the existing click plan is replayed."/>
+                           Text="On 70707 Grind sells when the experimental bag-candidate subtotal is zero twice; an unreadable subtotal waits rather than guessing. Other WowB builds use the corpse-interaction threshold below. Select a saved plan, record its town hotspot and remember a known merchant. The recorded click plan is replayed; sales are not verified."/>
 
                 <CheckBox x:Name="chkAutoSell" Grid.Row="1" Grid.ColumnSpan="3" Margin="0,0,0,8"
                           Content="Walk to the vendor and sell when the bags are due"/>
 
                 <TextBlock Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2" VerticalAlignment="Center" Margin="0,0,8,8"
-                           Text="...after this many corpse loot interactions"/>
+                           Text="Other WowB builds: after this many corpse interactions"/>
                 <TextBox x:Name="txtSellAfter" Grid.Row="2" Grid.Column="2" HorizontalAlignment="Left"
                          Width="80" Margin="0,0,0,8"/>
 
@@ -219,7 +219,7 @@
 
                 <StackPanel Grid.Row="5" Grid.ColumnSpan="3">
                     <Button x:Name="btnInventoryProbe" Content="Bag research snapshot" Height="24" Padding="10,0" HorizontalAlignment="Left" Click="btnInventoryProbe_Click"
-                            ToolTip="Stopped bot only. Read-only candidate bytes, not a bag-full or item detector; logged data can be sensitive."/>
+                            ToolTip="Stopped bot only. Read-only candidate bytes; logged data can be sensitive. 70707 auto-selling uses the candidate subtotal experimentally."/>
                     <TextBlock x:Name="lblVendorNote" TextWrapping="Wrap" Margin="0,2,0,8" FontSize="11" Opacity="0.9"/>
                 </StackPanel>
 

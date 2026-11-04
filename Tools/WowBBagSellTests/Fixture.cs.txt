@@ -1,0 +1,46 @@
+using System;
+namespace GreenMagic { sealed class Memory { } }
+namespace Styx.WoWInternals
+{
+    sealed class WowBReader { public bool IsExperimental70707; }
+    static class ObjectManager { public static WowBReader? WowB; public static GreenMagic.Memory? Wow; }
+}
+namespace Styx.Helpers { static class Logging { public static void Write(string message) { } } }
+namespace Styx.Logic.Pathing
+{
+    using Styx.Helpers;
+    using Styx.WoWInternals;
+    static class ClickAimSettings { public static bool AutoSell = true; public static int SellAfterLoots = 40; }
+    static class ClickAimAbort { public static bool Requested; }
+    static class RouteRunner { public static bool StopRequested; }
+    sealed class WowBBagSellMonitor
+    {
+        public bool Due; public int Polls;
+        public bool Poll(GreenMagic.Memory memory, WowBReader reader, out string? report)
+        { Polls++; report = null; return Due; }
+    }
+    static class Fixture
+    {
+        private static bool _running = true, _stop, _vendorDue, _vendorImpossible, _vendorManualPending, combat;
+        private static int _vendorRetryAt, _lootsSinceTrip;
+        private static readonly WowBBagSellMonitor BagSellMonitor = new WowBBagSellMonitor();
+        private static bool UnderAttack() => combat;
+        // __PRODUCTION_VENDOR_DUE__
+        private static void Check(bool value, string reason) { if (!value) throw new Exception(reason); }
+        public static void Main()
+        {
+            ObjectManager.Wow = new GreenMagic.Memory(); ObjectManager.WowB = new WowBReader();
+            _lootsSinceTrip = 39; Check(!VendorDue(), "70291 below threshold");
+            _lootsSinceTrip = 40; Check(VendorDue(), "70291 threshold remains");
+            ObjectManager.WowB.IsExperimental70707 = true;
+            Check(!VendorDue() && BagSellMonitor.Polls == 1, "70707 ignores loot threshold when unknown");
+            BagSellMonitor.Due = true; Check(VendorDue(), "70707 confirmed zero requests trip");
+            combat = true; Check(!VendorDue(), "combat blocks trip"); combat = false;
+            ClickAimAbort.Requested = true; Check(!VendorDue(), "STOP blocks automatic trip"); ClickAimAbort.Requested = false;
+            ClickAimSettings.AutoSell = false; Check(!VendorDue(), "auto-sell switch blocks automatic trip");
+            _vendorDue = true; Check(VendorDue(), "manual request is independent of auto-sell");
+            _vendorDue = false; _vendorManualPending = true; Check(VendorDue(), "interrupted manual trip remains pending");
+            Console.WriteLine("70707 and legacy vendor-due wiring synthetic fixtures passed");
+        }
+    }
+}

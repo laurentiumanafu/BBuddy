@@ -488,8 +488,9 @@ first five container candidates resolve and remain bounded/stable. The player
 range is rechecked after container sampling. It reports how many zero identities
 were not classified, declines to report a subtotal for unresolved nonzero or
 duplicate identities, and explicitly warns that candidates can overlap or omit
-bags. Reads remain non-atomic. The subtotal is never used in gameplay or selling,
-and its equality to the annotated screenshot is not proof of a general total.
+bags. Reads remain non-atomic. At the time of this report the subtotal was not
+used in gameplay or selling; see the later experimental auto-selling change
+below. Equality to the screenshot is not proof of a general total.
 
 ### 70707 user-confirmed empty slots: 11:53
 
@@ -502,8 +503,8 @@ markers were unreadable in this snapshot (before and after). Unreadable is not
 an image-signature match. This independently confirms that the reported
 research subtotal matches the user's count for this configuration; it does not
 validate other bag configurations, a change in the number of occupied slots,
-or completeness of the candidate set. It remains non-atomic research data and
-is not used for selling or gameplay.
+or completeness of the candidate set. It was then non-atomic research data,
+not used for selling or gameplay.
 
 ### 70707 new occupied slot: 11:57
 
@@ -518,3 +519,28 @@ in this 11:57 capture. This supports the candidate interpretation for an actual
 increase in occupied slots in this configuration, but neither non-atomic
 cross-session comparison nor this one bag configuration validates other bags,
 zero identity semantics or automatic full-bag selling.
+
+### Experimental Grind auto-selling based on the candidate subtotal
+
+At the user's request, Grind on 70707 now takes a vendor trip after two fresh,
+consecutive zero-tag subtotals rather than after 40 corpse interactions. This is
+an experimental use of the candidate hypothesis: zero identities, omitted or
+overlapping bags, specialty bags and non-atomic changes remain unverified. A
+zero subtotal has not yet been validated against a live completely full bag.
+
+The existing bounded reads run in the background at approximately five-second
+intervals; the local player, build, attachment, relevant headers, identity table,
+unique resolved objects and candidate bytes are checked. Readable signature
+mismatches reject; temporarily unreadable code pages are still allowed with the
+independent build/identity checks. A missing, unstable, stale or unresolved
+observation does not mean zero and does not trigger the 40-interaction fallback
+on 70707. STOP does not wait for the background scan. Manual Sell now remains
+available, combat and existing vendor/mesh guards still apply, and older WowB
+builds retain their existing threshold.
+
+After a plan completes, its clicks and sales remain unverified. To avoid an
+endless repeat trip if the plan did not sell anything, automatic selling rearms
+only when a later candidate subtotal shows space; the user can still ask for a
+manual trip. Synthetic tests cover the observation, zero confirmation, unknown
+values, stale data, STOP and the older-build threshold, not a live full bag,
+merchant window or successful sale.

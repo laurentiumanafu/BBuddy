@@ -11,6 +11,14 @@ namespace Styx.Logic.Pathing
         private static void Check(bool condition, string text) { if (!condition) throw new Exception("Inventory probe fixture failed: " + text); }
         public static void Run(Memory memory, ulong playerUnit)
         {
+            var sellPolicy = new WowBBagSellPolicy();
+            Check(!sellPolicy.Observe(16) && !sellPolicy.Observe(0), "one zero alone does not sell");
+            Check(!sellPolicy.Observe(null) && !sellPolicy.Observe(0) && sellPolicy.Observe(0), "unknown resets consecutive zero observations");
+            sellPolicy.TripCompleted();
+            Check(!sellPolicy.Observe(0) && !sellPolicy.Observe(0), "completed replay waits for space instead of looping");
+            Check(!sellPolicy.Observe(1) && !sellPolicy.Observe(0) && sellPolicy.Observe(0), "space rearms next full bag trip");
+            sellPolicy.Reset();
+            Check(!sellPolicy.Observe(-1) && !sellPolicy.Observe(0), "negative and reset cannot fabricate a full observation");
             ulong header = playerUnit + 0x9440, array = 0x33000000;
             memory.Bytes(memory.GetAbsolute64(0x290CFC0), Convert.FromHexString("48895C2408574883EC208BDA488BF9"));
             memory.Bytes(memory.GetAbsolute64(0x2F5F2B0), Convert.FromHexString("48895C24084889742418574881EC2004"));
@@ -128,6 +136,58 @@ namespace Styx.Logic.Pathing
             Check(subtotal.Contains("research subtotal: candidate sizes=18, zero-tags=3") &&
                 subtotal.Contains("1 resolved container candidates, 4 zero identities not classified") &&
                 subtotal.Contains("NOT a verified total or free-slot verdict"), "bounded research-only subtotal");
+            Check(!WowBInventoryProbe.TryCaptureSellingSubtotal(out _, out _), "selling read denied while stopped");
+            ClickAimUi.Running = true;
+            Check(WowBInventoryProbe.TryCaptureSellingSubtotal(out int availableTags, out var sellingPlayer) && availableTags == 3 && sellingPlayer == player, "running selling observation has same subtotal");
+            long clock = 100;
+            (int ZeroTags, WowBGuid Player)? sample = (0, player);
+            var monitor = new WowBBagSellMonitor(() => clock, () => System.Threading.Tasks.Task.FromResult(sample));
+            var activeReader = ObjectManager.WowB!;
+            Check(!monitor.Poll(memory, activeReader, out _), "async monitor does not block on first sample");
+            clock++; Check(!monitor.Poll(memory, activeReader, out _), "first zero does not trigger");
+            clock += 5000; Check(!monitor.Poll(memory, activeReader, out _), "second sample is scheduled off-thread");
+            clock++; Check(monitor.Poll(memory, activeReader, out _), "two fresh zero samples trigger");
+            monitor.TripCompleted();
+            clock++; Check(!monitor.Poll(memory, activeReader, out _), "completed trip clears pending trigger");
+            clock++; Check(!monitor.Poll(memory, activeReader, out _), "still full after trip does not loop");
+            sample = (1, player); clock += 5000; monitor.Poll(memory, activeReader, out _);
+            clock++; Check(!monitor.Poll(memory, activeReader, out _), "space rearms after trip");
+            sample = (0, player); clock += 5000; monitor.Poll(memory, activeReader, out _);
+            clock++; Check(!monitor.Poll(memory, activeReader, out _), "fresh zero after space needs confirmation");
+            clock += 16000; Check(!monitor.Poll(memory, activeReader, out _), "stale zero cannot trigger");
+            clock++; Check(!monitor.Poll(memory, activeReader, out _), "stale sample broke zero streak");
+            monitor.Reset(); sample = (0, player); clock++; monitor.Poll(memory, activeReader, out _);
+            clock++; Check(!monitor.Poll(memory, activeReader, out _), "first player zero");
+            sample = (0, new WowBGuid(987, 654)); clock += 5000; monitor.Poll(memory, activeReader, out _);
+            clock++; Check(!monitor.Poll(memory, activeReader, out _), "player change resets zero streak");
+            var delayed = new System.Threading.Tasks.TaskCompletionSource<(int ZeroTags, WowBGuid Player)?>();
+            var oldRun = new WowBBagSellMonitor(() => clock, () => delayed.Task);
+            Check(!oldRun.Poll(memory, activeReader, out _), "unfinished scan does not block");
+            oldRun.Reset(); delayed.SetResult((0, player)); clock++;
+            Check(!oldRun.Poll(memory, activeReader, out _), "old run result discarded");
+            clock++; Check(!oldRun.Poll(memory, activeReader, out _), "only one new-run zero observed");
+            byte[] filledRoot = (byte[])rootEntries.Clone();
+            for (int i = 35; i < 51; i++) BitConverter.GetBytes(1UL << 58).CopyTo(filledRoot, i * 16 + 8);
+            byte[] filledBag = (byte[])contents.Clone(); BitConverter.GetBytes(1UL << 58).CopyTo(filledBag, 24);
+            memory.Bytes(array, filledRoot); memory.Bytes(data + 0x488, filledBag);
+            Check(WowBInventoryProbe.TryCaptureSellingSubtotal(out int fullTags, out _) && fullTags == 0, "zero candidate subtotal observed while running");
+            memory.Guid(table + 32, container);
+            Check(!WowBInventoryProbe.TryCaptureSellingSubtotal(out _, out _), "duplicate candidate makes selling subtotal unknown");
+            memory.Guid(table + 32, new WowBGuid(4321, 8765));
+            Check(!WowBInventoryProbe.TryCaptureSellingSubtotal(out _, out _), "unresolved candidate makes selling subtotal unknown");
+            memory.Guid(table + 32, default);
+            memory.Bytes(playerUnit + 0x7D04, new byte[] { 0 });
+            Check(!WowBInventoryProbe.TryCaptureSellingSubtotal(out _, out _), "zero-size player range cannot trigger selling");
+            memory.Bytes(playerUnit + 0x7D04, new byte[] { 16 });
+            memory.Bytes(module + 0xD5C820, new byte[6]);
+            Check(!WowBInventoryProbe.TryCaptureSellingSubtotal(out _, out _), "mismatched code cannot trigger selling");
+            memory.Bytes(module + 0xD5C820, Convert.FromHexString("8B80C00A0000"));
+            memory.OnRead = (address, length) => { if (address == data + 0x488 && length == 32) memory.U64(array + 35 * 16 + 8, 0); };
+            Check(!WowBInventoryProbe.TryCaptureSellingSubtotal(out _, out _), "changed player range during scan cannot trigger selling");
+            memory.OnRead = null; memory.Bytes(array, filledRoot);
+            memory.OnRead = (address, length) => { if (address == data + 0x488 && length == 32) ClickAimUi.Running = false; };
+            Check(!WowBInventoryProbe.TryCaptureSellingSubtotal(out _, out _), "stop during selling read discards observation");
+            memory.OnRead = null; ClickAimUi.Running = false; memory.Bytes(array, rootEntries); memory.Bytes(data + 0x488, contents);
             memory.Guid(table + 32, new WowBGuid(4321, 8765));
             string incompleteSubtotal = WowBInventoryProbe.Capture();
             Check(incompleteSubtotal.Contains("research subtotal unavailable") && !incompleteSubtotal.Contains("candidate sizes=18"), "missing nonzero identity prevents subtotal");

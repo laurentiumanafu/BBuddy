@@ -6,8 +6,8 @@ using Styx.WoWInternals;
 
 namespace Styx.Logic.Pathing;
 
-// Research only. The 70291 +0x9440 and 70707 +0x9460 context offsets and
-// array formats are static leads, not validated player inventories or slot counts.
+// Candidate observations. The 70291 +0x9440 and 70707 +0x9460 contexts
+// are not universally validated player inventories or slot counts.
 internal static class WowBInventoryProbe
 {
     private const ulong Candidate70291 = 0x9440, Lookup70291 = 0x290CFC0, Handler70291 = 0x2F5F2B0;
@@ -51,10 +51,9 @@ internal static class WowBInventoryProbe
 
     // Static 70707 helper has a special-index branch using +0x7D04 and
     // +0x9480 to scan entries starting at 0x23. The helper's context is
-    // not proven to be the player. This is stopped-only research, not a
-    // backpack, bank, free-slot, or selling decision.
+    // not proven to be the player; the resulting subtotal is experimental.
     private static string CaptureSpecial70707(Memory memory, WowBReader reader, WowBObservedUnit player,
-        ulong candidate, byte[] header, ulong array, byte[] entries, uint count, out (int CandidateSize, int ZeroTags)? observation)
+        ulong candidate, byte[] header, ulong array, byte[] entries, uint count, out (int CandidateSize, int ZeroTags)? observation, bool active = false)
     {
         observation = null;
         const ulong sizeOffset = 0x7D04;
@@ -69,7 +68,7 @@ internal static class WowBInventoryProbe
         if (!Same(size, sizeAgain) || size == null || size.Length != 1 ||
             !Same(header, memory.ReadBytes64(candidate, HeaderSize)) ||
             !Same(entries, entries.Length == 0 ? Array.Empty<byte>() : memory.ReadBytes64(array, entries.Length)) ||
-            ClickAimUi.Running || ClickAimUi.Paused || ObjectManager.Wow != memory || ObjectManager.WowB != reader ||
+            ClickAimUi.Running != active || ClickAimUi.Paused || ObjectManager.Wow != memory || ObjectManager.WowB != reader ||
             !ValidPlayer(memory, reader, player))
             return "70707 special-index research: size, array, player or bot state unreadable/changed; unavailable.\n";
         bool aAfter = SignatureMatchesOrUnreadable(memory, 0x25691D6, "4038A880940000", out bool flagAfterUnreadable);
@@ -90,6 +89,53 @@ internal static class WowBInventoryProbe
         return string.Format(CultureInfo.InvariantCulture,
             "70707 special-index research: raw player+0x7D04={0}, header+0x20={1}, raw candidate range=[0x23,0x{2:X}), high-qword high-six-zero={3}; code markers {4}. Context and slot meanings unverified; NOT a free-slot verdict.\n",
             n, flag, start + n, zeroTags, signatures);
+    }
+
+    // Caller runs this off the Grind thread. Unknown, incomplete, changing or
+    // unsupported observations return false, never a zero-slot verdict.
+    public static bool TryCaptureSellingSubtotal(out int zeroTags, out WowBGuid playerGuid)
+    {
+        zeroTags = 0; playerGuid = default;
+        lock (Gate)
+        {
+            Memory? memory = ObjectManager.Wow; WowBReader? reader = ObjectManager.WowB;
+            if (!ClickAimUi.Running || ClickAimUi.Paused || memory == null || reader == null ||
+                !memory.Is64BitTarget || !reader.IsExperimental70707) return false;
+            try
+            {
+                using var uncached = memory.TemporaryCacheState(false);
+                if (!SignatureMatchesOrUnreadable(memory, Lookup70707, LookupSignature70707, out _) ||
+                    !SignatureMatchesOrUnreadable(memory, Handler70707, HandlerSignature, out _) ||
+                    !reader.TryCaptureWorldSnapshot(out WowBWorldSnapshot? before) || before == null ||
+                    !before.TryGetLocalPlayer(out WowBObservedUnit player) || !ValidPlayer(memory, reader, player) ||
+                    player.UnitAddress > UserLimit - Candidate70707 - HeaderSize) return false;
+                ulong candidate = player.UnitAddress + Candidate70707;
+                byte[]? header = memory.ReadBytes64(candidate, HeaderSize);
+                if (header == null || header.Length != HeaderSize) return false;
+                uint count = BitConverter.ToUInt32(header, 0);
+                ulong array = BitConverter.ToUInt64(header, 8);
+                if (count == 0 || count > MaxEntries || array < 0x10000 || array > UserLimit - (ulong)count * EntrySize) return false;
+                int length = checked((int)count * EntrySize);
+                byte[]? entries = memory.ReadBytes64(array, length);
+                if (!Same(entries, memory.ReadBytes64(array, length)) || !Same(header, memory.ReadBytes64(candidate, HeaderSize))) return false;
+                CaptureSpecial70707(memory, reader, player, candidate, header, array, entries!, count, out var special, true);
+                WowBContainerResearchProbe.Capture(memory, reader, player, out var containers, true);
+                CaptureSpecial70707(memory, reader, player, candidate, header, array, entries!, count, out var specialAfter, true);
+                if (!special.HasValue || special.Value.CandidateSize == 0 || !containers.HasValue ||
+                    !specialAfter.HasValue || special.Value != specialAfter.Value ||
+                    !SignatureMatchesOrUnreadable(memory, Lookup70707, LookupSignature70707, out _) ||
+                    !SignatureMatchesOrUnreadable(memory, Handler70707, HandlerSignature, out _) ||
+                    !reader.TryCaptureWorldSnapshot(out WowBWorldSnapshot? after) || after == null ||
+                    !after.TryGetLocalPlayer(out WowBObservedUnit final) || after.LocalGuid != before.LocalGuid ||
+                    final.UnitAddress != player.UnitAddress || final.RecordAddress != player.RecordAddress ||
+                    !ValidPlayer(memory, reader, final) || !ClickAimUi.Running || ClickAimUi.Paused ||
+                    ObjectManager.Wow != memory || ObjectManager.WowB != reader) return false;
+                zeroTags = special.Value.ZeroTags + containers.Value.ZeroTags;
+                playerGuid = player.Guid;
+                return true;
+            }
+            catch { return false; }
+        }
     }
 
     public static string Capture()

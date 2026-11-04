@@ -441,11 +441,11 @@ internal static class GrindRunner
     private static int _restHeldQuietAt;
 
     /// <summary>
-    /// Bodies looted since the last trip. This is the bag-full stand-in: the container slots
-    /// cannot be read on this build, so the count of things taken is the count of things the
-    /// bags now hold. See <see cref="ClickAimSettings.SellAfterLoots"/>.
+    /// Corpse interactions since the last trip. Used only as the older-build
+    /// fallback; on 70707 the experimental candidate subtotal controls auto-selling.
     /// </summary>
     private static int _lootsSinceTrip;
+    private static readonly WowBBagSellMonitor BagSellMonitor = new WowBBagSellMonitor();
 
     /// <summary>Set when a trip cannot work at all (no point, no plan); selling stops for the run.</summary>
     private static bool _vendorImpossible;
@@ -458,10 +458,7 @@ internal static class GrindRunner
     private static int _sellClicks;
 
     /// <summary>
-    /// Monsters killed since the last trip - the other half of the bag-full stand-in, because the
-    /// user's own words are "if 20 monsters are defeated". Counted next to the loots rather than
-    /// instead of them: a kill whose corpse could not be looted still filled a bag slot, and a
-    /// body looted twice cannot happen, so the two numbers are compared separately.
+    /// Kills since the last trip, for logging only. A kill does not prove an item was looted.
     /// </summary>
     private static int _killsSinceTrip;
 
@@ -792,6 +789,7 @@ internal static class GrindRunner
         _vendorImpossible = false;
         _vendorRetryAt = 0;
         _lootsSinceTrip = 0;
+        BagSellMonitor.Reset();
         _killsSinceTrip = 0;
         _sellClicks = 0;
         _unreachableUntil.Clear();
@@ -981,7 +979,7 @@ internal static class GrindRunner
                 /* The same radius the character fights in: a leg is walked through the same
                  * circle a hotspot is cleared in, so "monsters between hotspots" are monsters
                  * this stops for. */
-                bool resourceInterrupt = false;
+                bool resourceInterrupt = false, vendorInterrupt = false;
                 int lastFightCheck = unchecked(Environment.TickCount - 500);
                 int lastRoamMapCheck = unchecked(Environment.TickCount - 500);
                 RouteRunner.ShouldInterrupt = () =>
@@ -994,7 +992,9 @@ internal static class GrindRunner
                     if (unchecked(Environment.TickCount - lastFightCheck) >= 500)
                     {
                         lastFightCheck = Environment.TickCount;
-                        if (CheckDeathCheckpoint() || FightNeeded(hwnd, SearchYd)) return true;
+                        if (CheckDeathCheckpoint()) return true;
+                        if (VendorDue()) { vendorInterrupt = true; return true; }
+                        if (FightNeeded(hwnd, SearchYd)) return true;
                     }
                     if (gatherDuringGrind && GatherRunner.HasGrindResource(GatherAreaSafe))
                     { resourceInterrupt = true; return true; }
@@ -1010,6 +1010,12 @@ internal static class GrindRunner
                 {
                     if (roam != null && !roam.MapCurrent())
                     { Logging.Write("[Roam] map changed or became unreadable; stopping"); break; }
+                    if (vendorInterrupt)
+                    {
+                        if (roam == null) index--;
+                        Logging.Write("[Grind] vendor trip due; pausing the hotspot leg before the next pull");
+                        continue;
+                    }
                     if (resourceInterrupt)
                     {
                         if (roam == null) index--; // resume the same profile hotspot after the detour
@@ -2227,6 +2233,7 @@ internal static class GrindRunner
          * character stand in a field, and a dwell is thirty seconds of exactly that. */
         while (!_stop && !_vendorDue && unchecked(Environment.TickCount - dwellStart) < HotspotDwellMs)
         {
+            if (VendorDue()) break;
             string report;
             if (TryEngage(hwnd, out report))
             {
@@ -2859,9 +2866,8 @@ internal static class GrindRunner
     }
 
     /// <summary>
-    /// Whether this is the moment to go and sell: something was looted since the last trip (the
-    /// stand-in for a full bag), or the window asked for it - and never while a mob is on the
-    /// character, because a fight outranks the bags.
+    /// Sell on a manual request, the experimental 70707 candidate subtotal,
+    /// or the older-build loot-interaction proxy; never while under attack.
     /// </summary>
     private static bool VendorDue()
     {
@@ -2878,6 +2884,16 @@ internal static class GrindRunner
 
         if (_vendorManualPending) return true;
         if (!ClickAimSettings.AutoSell) return false;
+        WowBReader? reader = ObjectManager.WowB;
+        GreenMagic.Memory? memory = ObjectManager.Wow;
+        if (reader == null || memory == null) return false;
+        if (reader.IsExperimental70707)
+        {
+            bool due = BagSellMonitor.Poll(memory, reader, out string? report);
+            if (report != null) Logging.Write(report);
+            return due && !_stop && !ClickAimAbort.Requested && !RouteRunner.StopRequested &&
+                ObjectManager.WowB == reader && ObjectManager.Wow == memory;
+        }
         int after = ClickAimSettings.SellAfterLoots;
         if (after <= 0) return false;
 
@@ -2894,9 +2910,8 @@ internal static class GrindRunner
     /// merchant window, <c>Vendors.SellAllItems()</c> sold everything, and the frame was closed.
     /// Three of those four middle steps are a Lua call or a 3.3.5a address on this build:
     ///
-    ///   * the bag slots cannot be counted (there is no container offset in
-    ///     <see cref="Styx.Offsets.WowBOffsets"/>), so "full" is the number of bodies looted since
-    ///     the last trip - <see cref="ClickAimSettings.SellAfterLoots"/> - and a button;
+    ///   * 70707 uses an experimental candidate subtotal, while older WowB builds retain
+    ///     the corpse-interaction proxy <see cref="ClickAimSettings.SellAfterLoots"/>;
     ///   * <c>MerchantFrame.Instance.IsVisible</c> does not exist, so the window is given
     ///     <see cref="ClickAimSettings.VendorWaitMs"/> and then the plan runs;
     ///   * <c>SellAllItems</c> is a Lua call, so selling is right-clicking the items in the bags,
@@ -3071,6 +3086,11 @@ internal static class GrindRunner
         _killsSinceTrip = 0;
         _vendorManualPending = false;
         _vendorRetryAt = 0;
+        if (vendorReader.IsExperimental70707)
+        {
+            BagSellMonitor.TripCompleted();
+            Logging.Write("[Grind] sell plan replayed; sales were not verified. Auto-selling waits for the candidate subtotal to show space before rearming.");
+        }
 
         // A replay does not establish that the merchant opened or any items sold.
         BagSlotHunt.Sample("after vendor replay (sales unverified)");
@@ -3700,7 +3720,7 @@ internal static class GrindRunner
 
     private static bool GatherAreaSafe()
     {
-        if (_stop || ClickAimAbort.Requested || _vendorDue) return false;
+        if (_stop || ClickAimAbort.Requested || _vendorDue || VendorDue()) return false;
         WowBReader? reader = ObjectManager.WowB;
         GreenMagic.Memory? memory = ObjectManager.Wow;
         if (reader == null || memory == null) return false;

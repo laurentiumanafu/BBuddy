@@ -81,18 +81,16 @@ internal static class ClickAimSettings
     /// <summary>
     /// Go to a vendor on the bot's own initiative once the bags are full.
     ///
-    /// The original LevelBot asked <c>Me.FreeNormalBagSlots</c>; this build has no container
-    /// offset, so "full" is counted the only way that can be counted here - bodies looted since
-    /// the last trip (<see cref="SellAfterLoots"/>). It is a proxy and it is labelled as one:
-    /// when a bag-slot offset is found this number is replaced by the real count, and nothing
-    /// else about the trip changes.
+    /// 70707 uses a guarded experimental candidate subtotal; other WowB builds use
+    /// corpse interactions as a proxy (<see cref="SellAfterLoots"/>). Neither proves
+    /// all bag layouts or that merchant clicks sold anything.
     /// </summary>
     public static bool AutoSell = true;
 
     /// <summary>
-    /// Sell after this many looted bodies; 0 means only when the window's "Sell now"
-    /// button is pressed. This is a count of corpse loot interactions, not verified items or
-    /// successful auto-loot; it is only a proxy for bag contents.
+    /// On older WowB builds, sell after this many corpse interactions; 0 disables
+    /// that proxy. 70707 instead uses the experimental bag candidate subtotal.
+    /// The manual "Sell now" button is independent of both policies.
     /// </summary>
     public static int SellAfterLoots = 40;
 
@@ -386,7 +384,7 @@ internal static class ClickAimSettings
         return string.Format(CultureInfo.InvariantCulture,
             "heal at {0}% (0 = never) and only above {8}% power, eat at {1}%, drink at {2}%, "
             + "damage over time {3}, buffs {4}, combat buffs {14}, food slot {5}, drink slot {6}, "
-            + "{7} spell role(s) set by hand; selling {9} (after {10} corpse loot interaction(s), "
+            + "{7} spell role(s) set by hand; selling {9} (70707 experimental zero subtotal; other WowB builds after {10} corpse interaction(s), "
             + "{11} ms for the merchant window, vendor NPC looked for within {12} yd; bag offset hunt {13})",
             HealBelowPercent, EatBelowPercent, DrinkBelowPercent,
             UseDamageOverTime ? "on" : "off", UseBuffs ? "on" : "off",

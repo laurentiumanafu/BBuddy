@@ -8,8 +8,8 @@ using Styx.WoWInternals;
 
 namespace Styx.Logic.Pathing;
 
-// 70707 research only. No Lua/client calls and no gameplay or selling decisions.
-// All fields and pool-to-object relationships remain candidates until live-tested.
+// 70707 candidate observations. No Lua/client calls. The same guarded
+// subtotal is also used experimentally by Grind's auto-selling policy.
 internal static class WowBContainerResearchProbe
 {
     private const ulong IdentityTableRva = 0x6D41CA0;
@@ -47,9 +47,9 @@ internal static class WowBContainerResearchProbe
     // Alignment alone never establishes an object's identity or type.
     private static bool Pointer(ulong p, ulong width) => UserRange(p, width) && (p & 3) == 0;
     private static WowBGuid GuidAt(byte[] b, int offset) => new WowBGuid(BitConverter.ToUInt64(b, offset), BitConverter.ToUInt64(b, offset + 8));
-    // Code pages can be temporarily unreadable on 70707. For this stopped,
-    // read-only research only, report unreadable markers and rely on the
-    // independent build/player guards; any readable mismatch still rejects.
+    // Code pages can be temporarily unreadable on 70707. Report unreadable
+    // markers in the diagnostic and require independent build/player guards;
+    // any readable mismatch rejects even the experimental active observation.
     private static bool Signatures(Memory memory, out string report)
     {
         bool match = true;
@@ -66,9 +66,9 @@ internal static class WowBContainerResearchProbe
         report = string.Join(", ", statuses);
         return match;
     }
-    private static bool SamePlayer(Memory memory, WowBReader reader, WowBObservedUnit player)
+    private static bool SamePlayer(Memory memory, WowBReader reader, WowBObservedUnit player, bool active)
     {
-        return !ClickAimUi.Running && !ClickAimUi.Paused && ObjectManager.Wow == memory && ObjectManager.WowB == reader &&
+        return ClickAimUi.Running == active && !ClickAimUi.Paused && ObjectManager.Wow == memory && ObjectManager.WowB == reader &&
             reader.IsExperimental70707 && WowBGrindFactions.TraceBuild70707(memory, reader) &&
             WowBGrindFactions.TraceIdentity70707(memory, reader, player, true);
     }
@@ -122,12 +122,12 @@ internal static class WowBContainerResearchProbe
 
     // Caller holds the inventory probe lock and has disabled the memory cache.
     public static string Capture(Memory memory, WowBReader reader, WowBObservedUnit player,
-        out (int CandidateSize, int ZeroTags, int Resolved, int ZeroIdentities)? subtotal)
+        out (int CandidateSize, int ZeroTags, int Resolved, int ZeroIdentities)? subtotal, bool active = false)
     {
         subtotal = null;
         try
         {
-            if (!SamePlayer(memory, reader, player))
+            if (!SamePlayer(memory, reader, player, active))
             { Forget(); return "Container research: 70707 player, build or stopped state unavailable; no container candidates captured.\n"; }
             if (!Signatures(memory, out string markerBefore))
             { Forget(); return "Container research: readable code marker mismatch (" + markerBefore + "); no container candidates captured.\n"; }
@@ -194,7 +194,7 @@ internal static class WowBContainerResearchProbe
             if (!Same(identityBytes, memory.ReadBytes64(table, CandidateIdentities * SlotStride)) || !markersAfterValid ||
                 !reader.TryCaptureWorldSnapshot(out WowBWorldSnapshot? after) || after == null ||
                 !after.TryGetLocalPlayer(out WowBObservedUnit final) || final.Guid != player.Guid ||
-                final.UnitAddress != player.UnitAddress || final.RecordAddress != player.RecordAddress || !SamePlayer(memory, reader, final))
+                final.UnitAddress != player.UnitAddress || final.RecordAddress != player.RecordAddress || !SamePlayer(memory, reader, final, active))
             { Forget(); return "Container research: identity table, player, attachment, code or bot state changed; discarded. Code markers after: " + markerAfter + ".\n"; }
             // Aggregate only nonzero identity-table entries that all resolved
             // uniquely and stably. Zero identities, unscanned indexes, category
@@ -215,9 +215,9 @@ internal static class WowBContainerResearchProbe
                     if ((BitConverter.ToUInt64(item.Slots, j * SlotStride + 8) >> 58) == 0) zeroSum++;
             }
             if (allResolved && resolved > 0) subtotal = (sizeSum, zeroSum, resolved, zeroIdentities);
-            _previousMemory = memory; _previousReader = reader; _previousPlayer = player.Guid; _previous = next;
+            if (!active) { _previousMemory = memory; _previousReader = reader; _previousPlayer = player.Guid; _previous = next; }
             text.AppendLine("Container code markers after: " + markerAfter + "; unreadable is not confirmation of a match.");
-            text.AppendLine("Container reads are non-atomic; unresolved/zero candidates are unknown. No selling or gameplay uses these observations.");
+            text.AppendLine("Container reads are non-atomic; unresolved/zero candidates are unknown. Grind may use the subtotal experimentally for selling on 70707.");
             return text.ToString();
         }
         catch (Exception ex) { subtotal = null; Forget(); return "Container research unavailable: " + ex.Message + "\n"; }
