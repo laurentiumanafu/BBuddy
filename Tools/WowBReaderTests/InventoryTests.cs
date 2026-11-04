@@ -88,6 +88,7 @@ namespace Styx.Logic.Pathing
             memory.U32(0x22000020, (uint)WowBOffsets.HandleOccupiedBit);
             memory.U32(0x22000024, 0); memory.U64(0x22000028, record);
             memory.Guid(record + WowBOffsets.RecordGuidLoOffset, container);
+            memory.Bytes(record + 0x28, new byte[0x160]);
             memory.U64(record + WowBOffsets.RecordDataBlockPtrOffset, data);
             memory.Bytes(data, new byte[0x20]); memory.U64(data + 8, record); memory.Guid(data + 0x10, container);
             memory.U32(data + 0xAC0, 2);
@@ -111,7 +112,29 @@ namespace Styx.Logic.Pathing
             memory.OnRead = (address, count) => { if (address == table && count == 80 && ++tableReads == 2) memory.Guid(table + 16, default); };
             Check(WowBInventoryProbe.Capture().Contains("identity table, player, attachment, code or bot state changed; discarded"), "changing identity table discarded"); memory.OnRead = null; memory.Guid(table + 16, container);
             memory.U64(data + 8, 0x23004000);
-            Check(WowBInventoryProbe.Capture().Contains("header identity or +0xAC0 unreadable/mismatched"), "container backpointer mismatch rejected"); memory.U64(data + 8, record);
+            Check(WowBInventoryProbe.Capture().Contains("no unique stable identity-matching header"), "container backpointer mismatch rejected"); memory.U64(data + 8, record);
+            ulong fourAligned = 0x26000004;
+            memory.Bytes(fourAligned, new byte[0x20]); memory.U64(fourAligned + 8, record); memory.Guid(fourAligned + 0x10, container);
+            memory.U32(fourAligned + 0xAC0, 2); memory.Bytes(fourAligned + 0x490, contents);
+            memory.U64(record + WowBOffsets.RecordDataBlockPtrOffset, fourAligned);
+            Check(WowBInventoryProbe.Capture().Contains("selected source=+0xD8") &&
+                WowBInventoryProbe.Capture().Contains("object=0x26000004"), "four-byte-aligned identity-matching candidate diagnosed");
+            memory.U64(record + WowBOffsets.RecordDataBlockPtrOffset, 7);
+            string invalidPointer = WowBInventoryProbe.Capture();
+            Check(invalidPointer.Contains("record+0xD8=0x7") && invalidPointer.Contains("no unique stable identity-matching header"), "invalid pointer reported as unknown");
+            memory.U64(record + WowBOffsets.RecordDataBlockPtrOffset, 0); memory.U64(record + 0xE0, data);
+            Check(WowBInventoryProbe.Capture().Contains("selected source=+0xE0"), "bounded alternative pointer candidate diagnosed");
+            memory.Remove(record + 0x180);
+            Check(WowBInventoryProbe.Capture().Contains("unreadable fields=1"), "incomplete record scan is unknown"); memory.U64(record + 0x180, 0);
+            memory.U64(record + 0xE8, fourAligned);
+            Check(WowBInventoryProbe.Capture().Contains("identity-matching headers=2"), "ambiguous candidate objects rejected");
+            memory.U64(record + 0xE8, 0x27000000);
+            Check(WowBInventoryProbe.Capture().Contains("unavailable headers=1"), "unreadable possible header makes candidate unknown");
+            memory.U64(record + 0xE8, 0); memory.U64(record + 0xE0, 0); memory.U64(record + WowBOffsets.RecordDataBlockPtrOffset, data);
+            int alternativeReads = 0;
+            memory.OnRead = (address, count) => { if (address == record + 0xE0 && count == 8 && ++alternativeReads == 2) memory.U64(address, fourAligned); };
+            Check(WowBInventoryProbe.Capture().Contains("changed fields=1"), "changing alternative record field makes candidate unknown");
+            memory.OnRead = null; memory.U64(record + 0xE0, 0);
             memory.U32(0x21000000 + WowBOffsets.HandlePoolCapacityOffset, 4);
             memory.U32(0x22000030, (uint)WowBOffsets.HandleOccupiedBit); memory.U32(0x22000034, 0); memory.U64(0x22000038, 0x23003000);
             memory.Guid(0x23003000 + WowBOffsets.RecordGuidLoOffset, container);

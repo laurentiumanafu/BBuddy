@@ -353,3 +353,31 @@ of open bags or visible free counts can help correlate the reported candidates;
 numeric slot IDs are not needed. Do not split or merge stacks during this test.
 Keep the bags unchanged until each snapshot completes. No match or incomplete
 reads are inconclusive, not evidence of full or empty bags.
+
+### 70707 live container probe: 2026-11-04 11:26
+
+The user's first snapshot reported `markers or player unavailable` for the
+container portion; the message did not distinguish which guard failed. It did
+capture the original `+0x9460` candidate array. In the two later snapshots,
+entry 38 changed from nonzero to zero, then returned to the same value; no
+other entry in that array changed. The new container probe then resolved two
+nonzero identity-table entries to unique current pool records but rejected both
+record `+0xD8` values as outside its pointer filter. The probe did not log the
+values, so zero, misalignment, range failure and other causes cannot be
+distinguished. The other three identity-table entries were zero, whose meanings
+remain unknown. No container contents or free slots were validated.
+
+The stopped-only probe now distinguishes the failed code marker from player
+identity checks, logs the raw `+0xD8` value and a double-read bounded header if
+it points into user space, and scans record `+0x28..+0x180` at eight-byte steps
+for pointers to candidate headers containing both the record back-pointer and
+full identity. Four-byte-aligned candidate addresses are eligible, not just
+eight-byte-aligned ones. It rechecks the record fields and candidate header,
+requires one distinct matching header and rejects unreadable fields, unreadable
+candidate headers, or changes; it also retains the earlier object, identity,
+capacity, snapshot and bot-state checks. The bounded scan is a heuristic and
+cannot prove that its match is the client's resolver result or that zero or
+multiple matches describe bag state. Logs contain raw data and process addresses.
+The probe remains read-only and does not affect selling. A single stopped
+snapshot is enough to diagnose the pointer rejection; item movement need not be
+repeated unless the new report resolves candidates.

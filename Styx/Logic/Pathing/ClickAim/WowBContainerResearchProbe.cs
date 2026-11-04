@@ -39,15 +39,22 @@ internal static class WowBContainerResearchProbe
         for (int i = 0; i < a.Length; i++) if (a[i] != b[i]) return false;
         return true;
     }
-    private static bool Pointer(ulong p, ulong width) => p > 0x10000 && (p & 7) == 0 && p <= UserLimit - width;
+    private static bool UserRange(ulong p, ulong width) => p > 0x10000 && p <= UserLimit - width;
+    // Packed four-byte-aligned objects were observed in other 70707 diagnostics.
+    // Alignment alone never establishes an object's identity or type.
+    private static bool Pointer(ulong p, ulong width) => UserRange(p, width) && (p & 3) == 0;
     private static WowBGuid GuidAt(byte[] b, int offset) => new WowBGuid(BitConverter.ToUInt64(b, offset), BitConverter.ToUInt64(b, offset + 8));
-    private static bool Signatures(Memory memory)
+    private static bool Signatures(Memory memory, out string reason)
     {
         foreach (var marker in Markers)
         {
             byte[]? bytes = memory.ReadBytes64(memory.GetAbsolute64(marker.Rva), marker.Bytes.Length / 2);
-            if (bytes == null || Convert.ToHexString(bytes) != marker.Bytes) return false;
+            if (bytes == null || bytes.Length * 2 != marker.Bytes.Length)
+            { reason = $"code marker 0x{marker.Rva:X} unreadable"; return false; }
+            if (Convert.ToHexString(bytes) != marker.Bytes)
+            { reason = $"code marker 0x{marker.Rva:X} mismatch"; return false; }
         }
+        reason = "matched";
         return true;
     }
     private static bool SamePlayer(Memory memory, WowBReader reader, WowBObservedUnit player)
@@ -58,13 +65,61 @@ internal static class WowBContainerResearchProbe
     }
     private static void Forget() { _previousMemory = null; _previousReader = null; _previous = null; }
 
+    // Search a bounded record window for pointers whose candidate headers repeat
+    // BOTH the pool record and the full 128-bit identity. This is a diagnostic
+    // heuristic, not a proof that the result is the resolver's object. Deduplicate
+    // identical pointers and fail closed on multiple distinct matches.
+    private static bool FindCandidate(Memory memory, WowBReader.WowBPoolObject record, WowBGuid guid,
+        out ulong data, out ulong sourceOffset, out byte[]? pointerBytes, out byte[]? header, out string detail)
+    {
+        data = 0; sourceOffset = 0; pointerBytes = null; header = null;
+        var candidates = new HashSet<ulong>();
+        var pointerLeads = new List<string>();
+        string rawD8 = "unreadable", d8Header = "unavailable";
+        int unreadableFields = 0, unavailableHeaders = 0, changedFields = 0;
+        var fieldReads = new List<(ulong Offset, byte[] Value)>();
+        if (!UserRange(record.RecordPtr, 0x188)) { detail = "record window outside user range"; return false; }
+        for (ulong offset = 0x28; offset <= 0x180; offset += 8)
+        {
+            byte[]? value = memory.ReadBytes64(record.RecordPtr + offset, 8);
+            if (value == null || value.Length != 8) { unreadableFields++; continue; }
+            fieldReads.Add((offset, value));
+            ulong address = BitConverter.ToUInt64(value, 0);
+            if (offset == WowBOffsets.RecordDataBlockPtrOffset)
+            {
+                rawD8 = $"0x{address:X}";
+                if (UserRange(address, 0x20))
+                {
+                    byte[]? sample = memory.ReadBytes64(address, 0x20);
+                    byte[]? again = memory.ReadBytes64(address, 0x20);
+                    d8Header = Same(sample, again) ? Convert.ToHexString(sample!) : "unreadable/changed";
+                }
+            }
+            if (!Pointer(address, CapacityOffset + 4)) continue;
+            if (pointerLeads.Count < 12) pointerLeads.Add($"+0x{offset:X}:0x{address:X}");
+            byte[]? sampleHeader = memory.ReadBytes64(address, 0x20);
+            if (sampleHeader == null || sampleHeader.Length != 0x20) { unavailableHeaders++; continue; }
+            if (BitConverter.ToUInt64(sampleHeader, 8) != record.RecordPtr || GuidAt(sampleHeader, 0x10) != guid) continue;
+            if (!Same(sampleHeader, memory.ReadBytes64(address, 0x20)) ||
+                !Same(value, memory.ReadBytes64(record.RecordPtr + offset, 8))) { unavailableHeaders++; continue; }
+            if (!candidates.Add(address)) continue;
+            data = address; sourceOffset = offset; pointerBytes = value; header = sampleHeader;
+        }
+        foreach (var field in fieldReads)
+            if (!Same(field.Value, memory.ReadBytes64(record.RecordPtr + field.Offset, 8))) changedFields++;
+        detail = $"record+0xD8={rawD8} raw32={d8Header}; pointer-like fields=[{string.Join(",", pointerLeads)}] (max 12); identity-matching headers={candidates.Count}; unreadable fields={unreadableFields}; unavailable headers={unavailableHeaders}; changed fields={changedFields}";
+        return candidates.Count == 1 && unreadableFields == 0 && unavailableHeaders == 0 && changedFields == 0;
+    }
+
     // Caller holds the inventory probe lock and has disabled the memory cache.
     public static string Capture(Memory memory, WowBReader reader, WowBObservedUnit player)
     {
         try
         {
-            if (!SamePlayer(memory, reader, player) || !Signatures(memory))
-            { Forget(); return "Container research: 70707 markers or player unavailable; no container candidates captured.\n"; }
+            if (!SamePlayer(memory, reader, player))
+            { Forget(); return "Container research: 70707 player, build or stopped state unavailable; no container candidates captured.\n"; }
+            if (!Signatures(memory, out string markerReason))
+            { Forget(); return "Container research: 70707 markers or player unavailable (" + markerReason + "); no container candidates captured.\n"; }
             ulong table = memory.GetAbsolute64(IdentityTableRva);
             byte[]? identityBytes = memory.ReadBytes64(table, CandidateIdentities * SlotStride);
             if (identityBytes == null || identityBytes.Length != CandidateIdentities * SlotStride)
@@ -83,17 +138,12 @@ internal static class WowBContainerResearchProbe
                 foreach (var item in records) if (item.Guid == guid) { matches++; record = item; }
                 if (matches != 1 || !reader.IsPoolRecordCurrent(record))
                 { text.AppendFormat(CultureInfo.InvariantCulture, "container-candidate[{0}] identity={1} pool matches={2}; object unavailable/ambiguous.\n", i, guid, matches); continue; }
-                byte[]? pointerBytes = memory.ReadBytes64(record.RecordPtr + WowBOffsets.RecordDataBlockPtrOffset, 8);
-                if (pointerBytes == null || pointerBytes.Length != 8)
-                { text.AppendFormat(CultureInfo.InvariantCulture, "container-candidate[{0}] data pointer unreadable.\n", i); continue; }
-                ulong data = BitConverter.ToUInt64(pointerBytes, 0);
-                if (!Pointer(data, CapacityOffset + 4))
-                { text.AppendFormat(CultureInfo.InvariantCulture, "container-candidate[{0}] data pointer outside bounds.\n", i); continue; }
-                byte[]? header = memory.ReadBytes64(data, 0x20);
+                if (!FindCandidate(memory, record, guid, out ulong data, out ulong sourceOffset, out byte[]? pointerBytes, out byte[]? header, out string detail))
+                { text.AppendFormat(CultureInfo.InvariantCulture, "container-candidate[{0}] no unique stable identity-matching header; {1}. Unknown.\n", i, detail); continue; }
+                text.AppendFormat(CultureInfo.InvariantCulture, "container-candidate[{0}] record scan {1}; selected source=+0x{2:X} (unverified).\n", i, detail, sourceOffset);
                 byte[]? capacity = memory.ReadBytes64(data + CapacityOffset, 4);
-                if (header == null || header.Length != 0x20 || BitConverter.ToUInt64(header, 8) != record.RecordPtr || GuidAt(header, 0x10) != guid ||
-                    capacity == null || capacity.Length != 4)
-                { text.AppendFormat(CultureInfo.InvariantCulture, "container-candidate[{0}] header identity or +0xAC0 unreadable/mismatched.\n", i); continue; }
+                if (capacity == null || capacity.Length != 4)
+                { text.AppendFormat(CultureInfo.InvariantCulture, "container-candidate[{0}] +0xAC0 unreadable.\n", i); continue; }
                 uint count = BitConverter.ToUInt32(capacity, 0);
                 if (count > MaxSlots)
                 { text.AppendFormat(CultureInfo.InvariantCulture, "container-candidate[{0}] raw +0xAC0={1} exceeds diagnostic cap {2}; unknown.\n", i, count, MaxSlots); continue; }
@@ -103,7 +153,7 @@ internal static class WowBContainerResearchProbe
                 byte[]? recordGuid = memory.ReadBytes64(record.RecordPtr + WowBOffsets.RecordGuidLoOffset, 16);
                 if (!Same(slots, slotsAgain) || !Same(header, memory.ReadBytes64(data, 0x20)) ||
                     !Same(capacity, memory.ReadBytes64(data + CapacityOffset, 4)) ||
-                    !Same(pointerBytes, memory.ReadBytes64(record.RecordPtr + WowBOffsets.RecordDataBlockPtrOffset, 8)) ||
+                    !Same(pointerBytes, memory.ReadBytes64(record.RecordPtr + sourceOffset, 8)) ||
                     recordGuid == null || recordGuid.Length != 16 || GuidAt(recordGuid, 0) != guid || !reader.IsPoolRecordCurrent(record))
                 { text.AppendFormat(CultureInfo.InvariantCulture, "container-candidate[{0}] unstable or unreadable; discarded.\n", i); continue; }
                 var current = new Candidate { Guid = guid, Data = data, Count = count, Slots = slots! };
@@ -128,7 +178,7 @@ internal static class WowBContainerResearchProbe
                     text.AppendFormat(CultureInfo.InvariantCulture, "  changed entries={0}; zero tag is not a verified empty slot.\n", changed);
                 }
             }
-            if (!Same(identityBytes, memory.ReadBytes64(table, CandidateIdentities * SlotStride)) || !Signatures(memory) ||
+            if (!Same(identityBytes, memory.ReadBytes64(table, CandidateIdentities * SlotStride)) || !Signatures(memory, out _) ||
                 !reader.TryCaptureWorldSnapshot(out WowBWorldSnapshot? after) || after == null ||
                 !after.TryGetLocalPlayer(out WowBObservedUnit final) || final.Guid != player.Guid ||
                 final.UnitAddress != player.UnitAddress || final.RecordAddress != player.RecordAddress || !SamePlayer(memory, reader, final))
