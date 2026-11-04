@@ -217,10 +217,27 @@ change could reflect a different container, an item on the cursor, a partial
 observation, or other effects; the log does not distinguish them.
 
 The 145 entries must not be counted as backpack capacity: the array can include
-other categories. Next use the same stopped-only probe with a known backpack and
-another equipped bag: take a baseline, move one complete stack from the backpack
-to an empty square in the other bag, take a snapshot, move it back, then take a
-third snapshot. Record the visible number of empty backpack squares before and
-after (or screenshots); no numeric slot IDs are necessary. This is an initial
-cross-container observation, not proof of capacity or all-bag support. Preserve
-unknown on incomplete reads, and retain the existing selling fallback.
+other categories. Preserve unknown on incomplete reads and retain the existing
+selling fallback.
+
+### 70707 rough-stone cross-bag comparison
+
+In the subsequent user-reported rough-stone move to another bag, the comparable
+baseline at 10:59:39 had no changes relative to the previous snapshot. At
+10:59:44 only entry 42 changed, from a nonzero 16-byte value to zero; at 10:59:47
+it returned to the identical value, again with no other entry change. Both
+signatures matched and the same candidate header, count and array address were
+reported. This is consistent with a moved stack leaving and returning to the
+candidate array, with its destination contents tracked somewhere else. The log
+alone cannot exclude a cursor-held or otherwise intermediate state, a stack
+merge, non-atomic observations, or other interpretations. It does not prove the
+destination bag layout, capacity, free count, or the identity of the value.
+
+`WowBContainerSearch70707.java` is a bounded, static-only follow-up: with the
+same four marker checks, it searches for exact container API names and raw
+little-endian pointers to the strings, then follows executable adjacent-qword
+candidates with bounded pseudo-disassembly. `GetInventoryItemID` is the known
+positive control. Name/pointer matches and linear decoding can be incomplete or
+misleading, and absent names or references do not prove an API is missing. It
+does not run client code or change the Ghidra listing. As before, findings for
+70707 do not establish 70291 offsets or authorize bag-full decisions.

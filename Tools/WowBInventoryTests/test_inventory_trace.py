@@ -35,6 +35,19 @@ class InventoryTraceTests(unittest.TestCase):
         self.assertIn("if (!markersMatch)", script)
         self.assertNotIn("executeInTarget", script)
 
+    def test_70707_container_search_is_bounded_and_read_only(self):
+        script = (ROOT / "hunt/WowBContainerSearch70707.java").read_text()
+        self.assertIn("class WowBContainerSearch70707 extends GhidraScript", script)
+        for name in ("GetInventoryItemID", "GetContainerNumSlots", "GetContainerNumFreeSlots", "GetContainerItemInfo"):
+            self.assertIn('"' + name + '"', script)
+        for guard in ("MAX_NAMES_PER_STRING", "MAX_POINTER_REFS_PER_NAME", "MAX_TRACES_PER_NAME", "MAX_INSTRUCTIONS", "MAX_BLOCKS"):
+            self.assertRegex(script, r"private static final int " + guard + r" = [0-9]+;")
+        for marker in ("2080D2C", "20AAF97", "2890305", "A538FD"):
+            self.assertIn("0x" + marker + "L", script)
+        self.assertIn("new PseudoDisassembler(currentProgram)", script)
+        self.assertIn("findBytes", script)
+        self.assertNotIn("executeInTarget", script)
+
     def test_name_addresses_match_recorded_dump_and_bounds_exist(self):
         script = (ROOT / "hunt/WowBInventoryTrace70291.java").read_text()
         names = (ROOT / "hunt/api_names_runtime.txt").read_text()
