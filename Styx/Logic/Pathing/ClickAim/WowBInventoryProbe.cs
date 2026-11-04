@@ -54,8 +54,9 @@ internal static class WowBInventoryProbe
     // not proven to be the player. This is stopped-only research, not a
     // backpack, bank, free-slot, or selling decision.
     private static string CaptureSpecial70707(Memory memory, WowBReader reader, WowBObservedUnit player,
-        ulong candidate, byte[] header, ulong array, byte[] entries, uint count)
+        ulong candidate, byte[] header, ulong array, byte[] entries, uint count, out (int CandidateSize, int ZeroTags)? observation)
     {
+        observation = null;
         const ulong sizeOffset = 0x7D04;
         const int start = 0x23, maxSize = 64;
         if (player.UnitAddress > UserLimit - sizeOffset - 1) return "70707 special-index research: player address outside bounds.\n";
@@ -85,6 +86,7 @@ internal static class WowBInventoryProbe
         int zeroTags = 0;
         for (int i = 0; i < n; i++)
             if ((BitConverter.ToUInt64(entries, (start + i) * EntrySize + 8) >> 58) == 0) zeroTags++;
+        observation = (n, zeroTags);
         return string.Format(CultureInfo.InvariantCulture,
             "70707 special-index research: raw player+0x7D04={0}, header+0x20={1}, raw candidate range=[0x23,0x{2:X}), high-qword high-six-zero={3}; code markers {4}. Context and slot meanings unverified; NOT a free-slot verdict.\n",
             n, flag, start + n, zeroTags, signatures);
@@ -157,8 +159,21 @@ internal static class WowBInventoryProbe
                 if (comparable) text.AppendFormat(CultureInfo.InvariantCulture, "changed entries={0}; identical bytes do not establish a slot was empty.\n", changed);
                 if (experimental)
                 {
-                    text.Append(CaptureSpecial70707(memory, reader, player, candidate, header, array, first!, count));
-                    text.Append(WowBContainerResearchProbe.Capture(memory, reader, player));
+                    text.Append(CaptureSpecial70707(memory, reader, player, candidate, header, array, first!, count, out var special));
+                    text.Append(WowBContainerResearchProbe.Capture(memory, reader, player, out var containers));
+                    // Recheck the player-range bytes after the container scan;
+                    // cross-process sampling is still not atomic.
+                    if (special.HasValue && containers.HasValue)
+                    {
+                        CaptureSpecial70707(memory, reader, player, candidate, header, array, first!, count, out var specialAfter);
+                        if (specialAfter.HasValue && special.Value == specialAfter.Value)
+                            text.AppendFormat(CultureInfo.InvariantCulture,
+                                "70707 research subtotal: candidate sizes={0}, zero-tags={1}; player-range plus {2} resolved container candidates, {3} zero identities not classified. May overlap or omit bags; NOT a verified total or free-slot verdict.\n",
+                                special.Value.CandidateSize + containers.Value.CandidateSize, special.Value.ZeroTags + containers.Value.ZeroTags,
+                                containers.Value.Resolved, containers.Value.ZeroIdentities);
+                        else text.AppendLine("70707 research subtotal unavailable: player-range candidate changed or became unreadable.");
+                    }
+                    else text.AppendLine("70707 research subtotal unavailable: one or more required candidates unresolved or unreadable.");
                 }
                 text.AppendLine("Uninterpreted data and process addresses are sensitive. Reads are non-atomic; no inventory, item, bag capacity or mail eligibility is verified.");
                 _previousMemory = memory; _previousReader = reader; _previousPlayer = player.Guid;

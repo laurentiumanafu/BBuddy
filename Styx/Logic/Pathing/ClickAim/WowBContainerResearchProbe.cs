@@ -121,8 +121,10 @@ internal static class WowBContainerResearchProbe
     }
 
     // Caller holds the inventory probe lock and has disabled the memory cache.
-    public static string Capture(Memory memory, WowBReader reader, WowBObservedUnit player)
+    public static string Capture(Memory memory, WowBReader reader, WowBObservedUnit player,
+        out (int CandidateSize, int ZeroTags, int Resolved, int ZeroIdentities)? subtotal)
     {
+        subtotal = null;
         try
         {
             if (!SamePlayer(memory, reader, player))
@@ -194,11 +196,30 @@ internal static class WowBContainerResearchProbe
                 !after.TryGetLocalPlayer(out WowBObservedUnit final) || final.Guid != player.Guid ||
                 final.UnitAddress != player.UnitAddress || final.RecordAddress != player.RecordAddress || !SamePlayer(memory, reader, final))
             { Forget(); return "Container research: identity table, player, attachment, code or bot state changed; discarded. Code markers after: " + markerAfter + ".\n"; }
+            // Aggregate only nonzero identity-table entries that all resolved
+            // uniquely and stably. Zero identities, unscanned indexes, category
+            // overlap and specialty bags remain unknown, so this is not a total.
+            int sizeSum = 0, zeroSum = 0, resolved = 0, zeroIdentities = 0;
+            bool allResolved = true;
+            var identities = new HashSet<WowBGuid>();
+            var dataAddresses = new HashSet<ulong>();
+            for (int i = 0; i < CandidateIdentities; i++)
+            {
+                WowBGuid guid = GuidAt(identityBytes, i * SlotStride);
+                if (guid.IsEmpty) { zeroIdentities++; continue; }
+                Candidate? item = next[i];
+                if (item == null || !identities.Add(guid) || !dataAddresses.Add(item.Data)) { allResolved = false; continue; }
+                resolved++;
+                sizeSum += (int)item.Count;
+                for (int j = 0; j < (int)item.Count; j++)
+                    if ((BitConverter.ToUInt64(item.Slots, j * SlotStride + 8) >> 58) == 0) zeroSum++;
+            }
+            if (allResolved && resolved > 0) subtotal = (sizeSum, zeroSum, resolved, zeroIdentities);
             _previousMemory = memory; _previousReader = reader; _previousPlayer = player.Guid; _previous = next;
             text.AppendLine("Container code markers after: " + markerAfter + "; unreadable is not confirmation of a match.");
             text.AppendLine("Container reads are non-atomic; unresolved/zero candidates are unknown. No selling or gameplay uses these observations.");
             return text.ToString();
         }
-        catch (Exception ex) { Forget(); return "Container research unavailable: " + ex.Message + "\n"; }
+        catch (Exception ex) { subtotal = null; Forget(); return "Container research unavailable: " + ex.Message + "\n"; }
     }
 }

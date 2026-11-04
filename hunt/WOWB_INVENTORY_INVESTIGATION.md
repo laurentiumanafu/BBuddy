@@ -456,3 +456,37 @@ static markers are rechecked; readable marker mismatches reject, while
 unreadable markers are disclosed. The static helper's context and special index
 are not proven to mean the player's backpack; no reported value is used for
 selling or gameplay. If client state is incomplete, the result is unknown.
+
+### 70707 annotated cross-container comparison: 11:44
+
+The user supplied a screenshot of the combined backpack with a stack of 20
+marked at its source and an arrow toward an empty lower-right square. The
+screenshot appears to show 32 squares, 15 containing items and 17 empty, though
+two squares are partially covered by the annotation; the image is not an
+independent proof of bag boundaries or of exact capture timing.
+
+Three comparable stopped snapshots establish the following observations:
+
+| Snapshot | Player-range raw size / zero-tag | Candidate 0 size / zero-tag | Candidate 1 size / zero-tag |
+|---|---:|---:|---:|
+| Baseline | 20 / 5 | 6 / 6 | 6 / 6 |
+| After move | 20 / 6 | 6 / 6 | 6 / 5 |
+| Move back | 20 / 5 | 6 / 6 | 6 / 6 |
+
+The exact 128-bit value moved from player-array entry 36 to one corrected
+16-byte candidate entry in container 1 and back. The player and container
+zero-tag changes are opposite, and `20+6+6=32` and `5+6+6=17`, matching the
+apparent screenshot. All special-index and container code markers reported
+matched. This is substantially stronger live evidence for this character and
+move, but the screenshot alone does not prove coverage for other bag layouts,
+zero identities, bank/reagent/specialty bags, stacks or in-combat changes.
+Neither candidate values nor the arithmetic authorize bag-full selling.
+
+The stopped 70707 research report now includes an **observed-candidate
+subtotal** when the special player range and every nonzero identity among the
+first five container candidates resolve and remain bounded/stable. The player
+range is rechecked after container sampling. It reports how many zero identities
+were not classified, declines to report a subtotal for unresolved nonzero or
+duplicate identities, and explicitly warns that candidates can overlap or omit
+bags. Reads remain non-atomic. The subtotal is never used in gameplay or selling,
+and its equality to the annotated screenshot is not proof of a general total.

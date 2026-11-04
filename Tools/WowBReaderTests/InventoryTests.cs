@@ -123,6 +123,27 @@ namespace Styx.Logic.Pathing
             string baseline = WowBInventoryProbe.Capture();
             Check(baseline.Contains("container-candidate[1]") && baseline.Contains("raw+0xAC0=2") &&
                 baseline.Contains("second-qword high-six-zero=1") && baseline.Contains("NOT verified capacity/free slots"), "container candidate baseline");
+            memory.U32(header, 51); memory.Bytes(header + 0x20, new byte[] { 1 }); memory.Bytes(array, rootEntries);
+            string subtotal = WowBInventoryProbe.Capture();
+            Check(subtotal.Contains("research subtotal: candidate sizes=18, zero-tags=3") &&
+                subtotal.Contains("1 resolved container candidates, 4 zero identities not classified") &&
+                subtotal.Contains("NOT a verified total or free-slot verdict"), "bounded research-only subtotal");
+            memory.Guid(table + 32, new WowBGuid(4321, 8765));
+            string incompleteSubtotal = WowBInventoryProbe.Capture();
+            Check(incompleteSubtotal.Contains("research subtotal unavailable") && !incompleteSubtotal.Contains("candidate sizes=18"), "missing nonzero identity prevents subtotal");
+            memory.Guid(table + 32, container);
+            Check(WowBInventoryProbe.Capture().Contains("research subtotal unavailable"), "duplicate table identity prevents subtotal");
+            memory.Guid(table + 32, default);
+            memory.U32(data + 0xAC0, 65);
+            Check(WowBInventoryProbe.Capture().Contains("research subtotal unavailable"), "oversized container prevents subtotal");
+            memory.U32(data + 0xAC0, 2);
+            memory.OnRead = (address, length) => { if (address == data + 0x488 && length == 32) memory.U64(array + 35 * 16 + 8, 0); };
+            Check(WowBInventoryProbe.Capture().Contains("research subtotal unavailable: player-range candidate changed"), "player-range changes after container read prevent subtotal");
+            memory.OnRead = null; memory.Bytes(array, rootEntries);
+            memory.OnRead = (address, length) => { if (address == data + 0x488 && length == 32) memory.Bytes(module + 0x25691D6, new byte[7]); };
+            Check(WowBInventoryProbe.Capture().Contains("research subtotal unavailable: player-range candidate changed"), "late special-index marker mismatch prevents subtotal");
+            memory.OnRead = null; memory.Bytes(module + 0x25691D6, Convert.FromHexString("4038A880940000"));
+            memory.U32(header, 2); memory.Bytes(header + 0x20, new byte[] { 0 }); memory.Bytes(array, entries);
             Array.Clear(contents, 0, 32); BitConverter.GetBytes(1UL << 58).CopyTo(contents, 24); memory.Bytes(data + 0x488, contents);
             string changed = WowBInventoryProbe.Capture();
             Check(changed.Contains("previous=comparable") && changed.Contains("  changed entries=2; zero tag"), "container entry comparison");
