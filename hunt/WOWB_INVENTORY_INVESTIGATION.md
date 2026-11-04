@@ -196,6 +196,31 @@ should not change total free slots; the experiment tests whether the raw entries
 track its movement, not whether we can already count free slots. An array
 reallocation, zero changes, a missing signature or an unreadable result is not
 proof that the bag is empty. The output includes player GUID, raw candidate data
-and process addresses, which can be sensitive. No live 70707 capture has yet
-been performed. The 70291 probe remains separate and retains its strict code
-signatures.
+and process addresses, which can be sensitive. The 70291 probe remains separate
+and retains its strict code signatures.
+
+### 70707 controlled item-move log, 2026-11-04
+
+The user reported moving copper ore and silverleaf; the exact screen slots and
+which item corresponds to each change were not recorded. The first snapshot's
+candidate header contained 145 entries and an inline 128-bit value equal to the
+local player GUID in that session. The candidate array address, count and
+header were unchanged across the later snapshots. During one move, entry 41
+changed from a nonzero 16-byte value to zero; the following snapshot restored
+the same value in entry 41. No other array entry changed in either observation.
+A separate move caused the same 16-byte value to move from entry 50 to entry 49,
+and the next snapshot reversed the change exactly. This is live evidence that
+at least some candidate entries track moves of inventory-related data; it is not
+proof of the item names, the slot numbering, that zeros always mean available
+slots, or that the array contains every equipped bag's contents. The one-entry
+change could reflect a different container, an item on the cursor, a partial
+observation, or other effects; the log does not distinguish them.
+
+The 145 entries must not be counted as backpack capacity: the array can include
+other categories. Next use the same stopped-only probe with a known backpack and
+another equipped bag: take a baseline, move one complete stack from the backpack
+to an empty square in the other bag, take a snapshot, move it back, then take a
+third snapshot. Record the visible number of empty backpack squares before and
+after (or screenshots); no numeric slot IDs are necessary. This is an initial
+cross-container observation, not proof of capacity or all-bag support. Preserve
+unknown on incomplete reads, and retain the existing selling fallback.
