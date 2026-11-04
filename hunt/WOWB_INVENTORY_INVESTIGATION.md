@@ -504,3 +504,17 @@ research subtotal matches the user's count for this configuration; it does not
 validate other bag configurations, a change in the number of occupied slots,
 or completeness of the candidate set. It remains non-atomic research data and
 is not used for selling or gameplay.
+
+### 70707 new occupied slot: 11:57
+
+After the user picked up an item that occupied a new slot, the stopped report
+showed candidate sizes `20+6+6=32` and zero tags `4+6+6=16`, down from 17 in
+the 11:53 report. Comparing the two separately captured 145-entry player arrays,
+only entry 49 changed: its 16-byte candidate identity went from zero to nonzero.
+The same two container candidates still showed six zero tags apiece; three
+identity-table entries remained zero/unknown. Lookup and handler signatures,
+all three special-index markers and all five container markers were matched
+in this 11:57 capture. This supports the candidate interpretation for an actual
+increase in occupied slots in this configuration, but neither non-atomic
+cross-session comparison nor this one bag configuration validates other bags,
+zero identity semantics or automatic full-bag selling.
