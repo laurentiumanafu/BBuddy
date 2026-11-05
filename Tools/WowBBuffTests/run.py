@@ -25,9 +25,11 @@ assert gather.count('GrindRunner.BuffForGather(hwnd, mover, () => _stop)') == 1
 gather_loop = gather[gather.index('    private static void Run(List<RoutePoint>'):]
 assert gather_loop.index('if (fighting)') < gather_loop.index('GrindRunner.RestForGather(hwnd)') < gather_loop.index('GrindRunner.BuffForGather(hwnd, mover, () => _stop)') < gather_loop.index('GatherAtNode(hwnd, node)')
 assert 'TryQuietPlayer' in controller and 'TryReadGhostFlagCandidate' in controller and 'SameSlot' in controller
-assert 'reader.ReadTargetGuid() != player.Guid' in controller
-fight = grind[grind.index('    private static string Fight('):grind.index('    private static bool TryRestoreHealTarget(')]
-assert fight.index('TryRestoreHealTarget(') < fight.index('Buffs.TryApplyInCombat(') < fight.index('/* ---- 1b. the damage-over-time spell')
+assert 'reader.ReadTargetGuid() != selected' in controller
+fight = grind[grind.index('    private static string Fight('):grind.index("    /// <summary>\n    /// A unit's health straight out of its data block")]
+assert fight.index('ClickAimInput.TapKey(hwnd, heal.KeyVk') < fight.index('Buffs.TryApplyInCombat(') < fight.index('/* ---- 1b. the damage-over-time spell')
+quiet_method = controller[controller.index('    internal bool TryApply('):controller.index('// 70707 research candidate') ]
+assert '0x70' not in quiet_method and 'TabVk' not in quiet_method
 assert '() => FightAttackInputAllowed(reader, fightMemory, defenceTarget, expectedPull, !defenceOnly || defenceFactionFilter)' in fight
 assert 'report = Fight(hwnd, player.Location.X, player.Location.Y, false, true, target.Guid, target, grindMode)' in grind
 combat_method = controller[controller.index('    internal bool TryApplyInCombat('):controller.index('    // Returns true only if at least one buff key')]

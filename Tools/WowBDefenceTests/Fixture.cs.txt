@@ -304,12 +304,6 @@ namespace Styx.Logic.Pathing
             Require(Defend() == "fight" && fightCalls == 1 && ClickAimInput.Keys == 0, "70707 already-selected defence never self-selects");
             Setup(5); ObjectManager.WowB!.IsExperimental70707 = true; ObjectManager.WowB.Selected = TargetGuid; GrindFactionSettings.Rules.Enabled = true; WowBGrindFactions.Allowed = false;
             Require(Defend().Contains("faction blocked 1") && fightCalls == 0 && ClickAimInput.Keys == 0, "already-selected blocked faction still withheld");
-            Setup(5); ObjectManager.WowB!.Selected = PlayerGuid;
-            Require(TryRestoreHealTarget(new IntPtr(1), ObjectManager.WowB, ObjectManager.Wow!, TargetGuid, snapshot.Units[1], true, false) && ObjectManager.WowB.Selected == TargetGuid && ClickAimInput.Keys == 1, "withheld heal restores only original target");
-            Setup(5); ObjectManager.WowB!.Selected = PlayerGuid; ClickAimInput.TabWorks = false;
-            Require(!TryRestoreHealTarget(new IntPtr(1), ObjectManager.WowB, ObjectManager.Wow!, TargetGuid, snapshot.Units[1], true, false) && ClickAimInput.Keys == 4, "failed restoration stays bounded");
-            Setup(5); ObjectManager.WowB!.Selected = PlayerGuid; ClickAimInput.StopOnTap = true;
-            Require(!TryRestoreHealTarget(new IntPtr(1), ObjectManager.WowB, ObjectManager.Wow!, TargetGuid, snapshot.Units[1], true, false) && ClickAimInput.Keys == 1, "STOP interrupts target restoration");
             Setup(5); ClickAimInput.CombatEndsOnTab = true; Require(Defend().Contains("combat ended") && fightCalls == 0, "combat ending blocks fight");
             Setup(5); ClickAimInput.TargetDiesOnTab = true; Require(Defend().Contains("no eligible nearby NPC selected") && fightCalls == 0, "target fields rechecked after TAB");
             Setup(5); ClickAimInput.StopOnTap = true; Require(Defend() == "stopped" && fightCalls == 0 && ClickAimInput.Keys == 1, "STOP during TAB blocks fight");

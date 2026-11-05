@@ -163,9 +163,8 @@ internal sealed class ClickAimBuffController
         catch { return false; }
     }
 
-    // Returns true only if at least one buff key was attempted. Selecting self
-    // and restoring/retargeting are never used for attack; the ordinary target
-    // acquisition loop will pick the next mob afterwards.
+    // Returns true only if at least one buff key was attempted. Leave the
+    // existing selection alone and rely on the client's self-cast behavior.
     internal bool TryApply(IntPtr hwnd, Func<bool> stopped, Action stopMovement, Action? onAttempt = null)
     {
         long now = _clock();
@@ -192,23 +191,11 @@ internal sealed class ClickAimBuffController
         try { stopMovement(); }
         catch { Logging.Write("[Buff] could not stop movement; buff keys withheld"); return false; }
         if (ClickAimAbort.Wait(250) || !SameQuietPlayer(memory, reader, hwnd, stopped, player, map)) return false;
+        WowBGuid selected;
         using (memory.TemporaryCacheState(false))
         {
-            WowBGuid selected = reader.ReadTargetGuid();
-            if (selected != player.Guid)
-            {
-                if (!SameQuietPlayer(memory, reader, hwnd, stopped, player, map) || reader.ReadTargetGuid() != selected ||
-                    !SameSlot(due[0], ClickAimCombat.ReadBar(reader)) || !Allowed(memory, reader, hwnd, stopped)) return false;
-                Logging.Write("[Buff] selecting self for scheduled buffs (not a heal)");
-                ClickAimInput.TapKey(hwnd, 0x70, 40); // default F1 self-target binding
-                if (ClickAimAbort.Wait(120) || !SameQuietPlayer(memory, reader, hwnd, stopped, player, map)) return false;
-                if (reader.ReadTargetGuid() != player.Guid)
-                {
-                    _nextScan = _clock() + 30000;
-                    Logging.Write("[Buff] F1 did not confirm self-target; buff keys withheld and retry delayed");
-                    return false;
-                }
-            }
+            if (!SameQuietPlayer(memory, reader, hwnd, stopped, player, map)) return false;
+            selected = reader.ReadTargetGuid();
         }
 
         bool attempted = false;
@@ -216,20 +203,20 @@ internal sealed class ClickAimBuffController
         {
             using (memory.TemporaryCacheState(false))
             {
-                if (!SameQuietPlayer(memory, reader, hwnd, stopped, player, map) || reader.ReadTargetGuid() != player.Guid ||
+                if (!SameQuietPlayer(memory, reader, hwnd, stopped, player, map) || reader.ReadTargetGuid() != selected ||
                     !SameSlot(action, ClickAimCombat.ReadBar(reader)) || !Allowed(memory, reader, hwnd, stopped)) break;
-                // Re-read after F1 and between keys. An unreadable candidate
+                // Re-read between keys. An unreadable candidate
                 // falls back to the original timer; it never means absent.
                 aura = reader.IsExperimental70707 && WowBInlineAuraCandidate.Supported(action.Id)
                     ? WowBInlineAuraCandidate.Capture(memory, player) : null;
                 if (!_schedule.Due(action.Id, _clock(), aura?.Remaining(action.Id))) continue;
-                if (!SameQuietPlayer(memory, reader, hwnd, stopped, player, map) || reader.ReadTargetGuid() != player.Guid ||
+                if (!SameQuietPlayer(memory, reader, hwnd, stopped, player, map) || reader.ReadTargetGuid() != selected ||
                     !SameSlot(action, ClickAimCombat.ReadBar(reader)) || !Allowed(memory, reader, hwnd, stopped)) break;
                 ClickAimInput.TapKey(hwnd, action.KeyVk, 40);
                 _schedule.RecordAttempt(action.Id, _clock());
                 onAttempt?.Invoke();
                 attempted = true;
-                Logging.Write("[Buff] attempted " + action.Name + " (slot " + action.Slot + "); application and duration are not verified");
+                Logging.Write("[Buff] attempted " + action.Name + " (slot " + action.Slot + ") without changing target; self-cast, application and duration are not verified");
             }
             // Give the global cooldown time without hiding STOP or combat for 1.8 s.
             for (int waited = 0; waited < ClickAimCombat.CastSettleMs; waited += 150)

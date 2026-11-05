@@ -4728,6 +4728,7 @@ internal static class GrindRunner
         int lastMeleeDamageMs = 0;
         int lastAttackPressMs = 0;
         bool attackPressed = false;     // the Attack key has been pressed this fight
+        bool preserveAttackAfterHeal = false; // casting doesn't reveal whether Attack is still on
         bool shockMeleeLogged = false, conservativeShockAttack = false;
         int lastShockDamageMs = 0;
         bool noSafeAutoLogged = false;
@@ -5098,19 +5099,21 @@ internal static class GrindRunner
                     ClickAimSettings.HealMinManaPercent));
             }
 
-            if (ClickAimHealPolicy.ShouldSelectSelf(heal, healBlocked, myHealth, myMaxHealth,
+            if (ClickAimHealPolicy.ShouldAttemptHeal(heal, healBlocked, myHealth, myMaxHealth,
                     ClickAimSettings.HealBelowPercent,
                     unchecked(Environment.TickCount - lastHealMs) >= ClickAimCombat.HealRetryMs, healPowerOk)
                 && heal != null)
             {
                 StopAndSettle(hwnd);             // the chase may still be holding forward
                 if (_stop || ClickAimAbort.Requested) return "stopped";
-                // Recheck the actual slot, live role, attachment, player and vitals after
-                // stopping movement, before F1 can select the player.
+                // Keep the enemy selected. The client is expected to self-cast
+                // the heal; changing targets would stop the ongoing auto-attack.
+                // Revalidate the slot, player, vitals, selected target and faction
+                // after stopping movement and immediately before the key.
                 uint powerBeforeHeal;
                 using (fightMemory.TemporaryCacheState(false))
                 {
-                    if (reader == null || ObjectManager.WowB != reader || ObjectManager.Wow != fightMemory)
+                    if (ObjectManager.WowB != reader || ObjectManager.Wow != fightMemory)
                         return "attachment changed; heal withheld";
                     if (reader.IsExperimental70707 && !WowBGrindFactions.Experimental70707BarSafe(reader))
                         return "action bar changed; heal withheld";
@@ -5119,64 +5122,34 @@ internal static class GrindRunner
                     if (!Capture(out WowBWorldSnapshot? healSnapshot) || healSnapshot == null ||
                         !healSnapshot.TryGetLocalPlayer(out WowBObservedUnit healPlayer) ||
                         healPlayer.Guid != me.Guid || healPlayer.UnitAddress != me.UnitAddress ||
+                        healPlayer.RecordAddress != me.RecordAddress ||
                         !reader.TryGetUnitFields(healPlayer.UnitAddress, out WowBReader.WowBUnitFields freshHeal))
                         return reader.IsExperimental70707 ? StopFightForSafety("heal player vitals unreadable; stopping") : "heal player vitals unreadable; heal withheld";
-                    if (reader.ReadTargetGuid() != target.Guid)
-                        return YieldForTargetChange(reader, fightMemory, defenceTarget);
-                    if (!ClickAimHealPolicy.ShouldSelectSelf(heal, healBlocked, freshHeal.Health, freshHeal.MaxHealth,
+                    if (freshHeal.MaxHealth > 0 && freshHeal.Health == 0)
+                        return reader.IsExperimental70707 ? StopFightForSafety("the character died before the heal; stopping") : "the character died before the heal; stopping the fight";
+                    if (!ClickAimHealPolicy.ShouldAttemptHeal(heal, healBlocked, freshHeal.Health, freshHeal.MaxHealth,
                         ClickAimSettings.HealBelowPercent, true, HealPowerOk(freshHeal.Power, freshHeal.MaxPower)))
                         continue;
+                    if (!FightAttackInputAllowed(reader, fightMemory, defenceTarget, expectedPull, !defenceOnly || defenceFactionFilter))
+                        return YieldForTargetChange(reader, fightMemory, defenceTarget);
+                    if (!ClickAimHealPolicy.StillOnBar(heal, ClickAimCombat.ReadBar(reader)))
+                    { heal = null; continue; }
+                    if (_stop || ClickAimAbort.Requested || ObjectManager.Wow != fightMemory || ObjectManager.WowB != reader)
+                        return "stopped or attachment changed; heal withheld";
+                    if (reader.ReadTargetGuid() != defenceTarget)
+                        return YieldForTargetChange(reader, fightMemory, defenceTarget);
                     powerBeforeHeal = freshHeal.Power;
-                    if (_stop || ClickAimAbort.Requested || ObjectManager.Wow != fightMemory || ObjectManager.WowB != reader) return "stopped or attachment changed; heal withheld";
-                    lastHealMs = Environment.TickCount;
-                    Logging.Write("[Grind] selecting self for " + heal.Name + " (actual mana cost unknown; threshold and observed drop are estimates)");
-                    ClickAimInput.TapKey(hwnd, 0x70, 40);                  // F1 = target self (Blizzard default)
-                }
-                if (ClickAimAbort.Wait(120) || _stop) return "stopped";
-                GreenMagic.Memory? healMemory = ObjectManager.Wow;
-                if (reader == null || healMemory == null || healMemory != fightMemory) return "self-target or attachment unreadable; heal withheld";
-                using (healMemory.TemporaryCacheState(false))
-                {
-                    if (ObjectManager.WowB != reader || ObjectManager.Wow != healMemory || reader.ReadTargetGuid() != me.Guid)
-                        return "F1 did not confirm self-target; heal withheld";
-                }
-                using (healMemory.TemporaryCacheState(false))
-                {
-                    if (_stop || ClickAimAbort.Requested || ObjectManager.Wow != healMemory || ObjectManager.WowB != reader) return "stopped or attachment changed; heal withheld";
-                    if (reader.IsExperimental70707 && !WowBGrindFactions.Experimental70707BarSafe(reader)) return "action bar changed; heal withheld";
-                    bool slotReady = ClickAimHealPolicy.StillOnBar(heal, ClickAimCombat.ReadBar(reader));
-                    WowBReader.WowBUnitFields finalHeal = default;
-                    bool fieldsReady = Capture(out WowBWorldSnapshot? finalSnapshot) && finalSnapshot != null &&
-                        finalSnapshot.TryGetLocalPlayer(out WowBObservedUnit finalPlayer) &&
-                        finalPlayer.Guid == me.Guid && finalPlayer.UnitAddress == me.UnitAddress &&
-                        reader.TryGetUnitFields(finalPlayer.UnitAddress, out finalHeal);
-                    if (!fieldsReady)
-                        return reader.IsExperimental70707 ? StopFightForSafety("heal player identity or vitals unreadable; stopping") : "heal player identity or vitals unreadable; heal withheld";
-                    if (finalHeal.MaxHealth > 0 && finalHeal.Health == 0)
-                        return reader.IsExperimental70707 ? StopFightForSafety("the character died before the heal; stopping") : "the character died before the heal; stopping the fight";
-                    bool vitalsReady = ClickAimHealPolicy.ShouldSelectSelf(heal, healBlocked, finalHeal.Health, finalHeal.MaxHealth,
-                        ClickAimSettings.HealBelowPercent, true, HealPowerOk(finalHeal.Power, finalHeal.MaxPower));
-                    if (_stop || ClickAimAbort.Requested || ObjectManager.Wow != healMemory || ObjectManager.WowB != reader || reader.ReadTargetGuid() != me.Guid)
-                        return "stopped or self-target changed; heal withheld";
-                    if (!slotReady || !vitalsReady)
-                    {
-                        Logging.Write("[Grind] heal slot, role or vitals changed after F1; heal withheld, restoring combat target");
-                        if (TryRestoreHealTarget(hwnd, reader, fightMemory, target.Guid, expectedPull, defenceOnly, defenceFactionFilter)) continue;
-                        if (_stop || ClickAimAbort.Requested) return "stopped";
-                        if (reader.IsExperimental70707) return YieldForTargetChange(reader, fightMemory, target.Guid);
-                        _stop = true; ClickAimAbort.Request();
-                        return "could not recover the same target after withholding heal; stopped rather than switching mobs";
-                    }
-                    powerBeforeHeal = finalHeal.Power;
-                    myHealth = finalHeal.Health;
-                    myMaxHealth = finalHeal.MaxHealth;
+                    myHealth = freshHeal.Health;
+                    myMaxHealth = freshHeal.MaxHealth;
                     myPercent = myHealth * 100.0 / myMaxHealth;
-                    meleeSwinging = false;          // a cast stops auto-attack; it must be restarted
+                    lastHealMs = Environment.TickCount;
+                    if (attackPressed || lastMeleeClickMs != 0) preserveAttackAfterHeal = true;
+                    Logging.Write("[Grind] attempting " + heal.Name + " without changing target (self-cast, auto-attack state and actual mana cost unverified)");
                     ClickAimInput.TapKey(hwnd, heal.KeyVk, 40);
                 }
 
-                /* Wait for the heal to actually land. Healing Touch is a 1.5 s cast on top
-                 * of the retarget, and the previous version read my health once at 1.8 s and
+                /* Wait for the heal to actually land. Healing Touch takes 1.5 s to cast,
+                 * and the previous version read my health once at 1.8 s and
                  * reported "did not lift it (still 12/113)" for heals that were still being
                  * cast - four times in one fight. Poll instead. */
                 uint afterHealth = 0, afterMaxHealth = 0;
@@ -5239,19 +5212,8 @@ internal static class GrindRunner
                     }
                 }
 
-                /* Retarget the SAME mob. A single TAB is not enough: if F1 did move the
-                 * target to me, one TAB picks whatever the client considers nearest, which
-                 * is not necessarily the thing that is hitting us. Cycle until the guid
-                 * matches, and give up after four tries rather than churning the target. */
-                WowBGuid wanted = target.Guid;
-                bool recovered = TryRestoreHealTarget(hwnd, reader, fightMemory, wanted, expectedPull, defenceOnly, defenceFactionFilter);
-                if (!recovered)
-                {
-                    if (_stop || ClickAimAbort.Requested) return "stopped";
-                    const string reason = "could not recover the same target after healing; stopped rather than switching mobs";
-                    if (reader.IsExperimental70707) return YieldForTargetChange(reader, fightMemory, wanted);
-                    _stop = true; ClickAimAbort.Request(); return reason;
-                }
+                // The next iteration rechecks the selected target. Never TAB or
+                // toggle Attack merely because a heal was attempted.
                 continue;
             }
 
@@ -5661,8 +5623,8 @@ internal static class GrindRunner
                  * nothing - no swing has landed for twice MeleeSwingQuietMs - because after a
                  * heal or a spell the client keeps auto-attack ON and resumes swinging by
                  * itself, and every extra press is a chance to toggle it off. */
-                bool pressAttack = conservativeShockAttack
-                    ? ClickAimClassRotation.MayPressShockAttack(true, attackPressed, swinging, pressPending, d, AttackRangeYd)
+                bool pressAttack = conservativeShockAttack || preserveAttackAfterHeal
+                    ? ClickAimClassRotation.MayPressConservativeAttack(true, attackPressed, swinging, pressPending, d, AttackRangeYd)
                     : !swinging && !pressPending && sincePressMs >= MeleeClickMs
                       && sinceDamageMs >= (attackPressed ? MeleeSwingQuietMs * 2 : MeleeSwingQuietMs);
                 if (pressAttack)
@@ -5683,7 +5645,7 @@ internal static class GrindRunner
                                 + "something stops it; pressing it again would turn it off)");
                 }
             }
-            else if (!swinging && !pressPending
+            else if (!swinging && !pressPending && !preserveAttackAfterHeal
                      && !((!defenceOnly || defenceFactionFilter) && GrindFactionSettings.Rules.Enabled)
                      && unchecked(Environment.TickCount - lastMeleeClickMs) >= MeleeClickMs)
             {
@@ -5791,28 +5753,6 @@ internal static class GrindRunner
                + (auto == null ? "" : " and auto-attack did not start")
                + "; its health is still "
                + (lastHealth >= 0 ? lastHealth.ToString(CultureInfo.InvariantCulture) : "unreadable");
-    }
-
-    // TAB is used only to restore the original target; no attack is sent here.
-    // A changed target remains subject to the normal defence handoff checks.
-    private static bool TryRestoreHealTarget(IntPtr hwnd, WowBReader reader, GreenMagic.Memory memory, WowBGuid wanted,
-                                             WowBObservedUnit expectedPull, bool defenceOnly, bool defenceFactionFilter)
-    {
-        for (int tries = 0; tries < 4; tries++)
-        {
-            if (_stop || ClickAimAbort.Requested || ObjectManager.WowB != reader || ObjectManager.Wow != memory ||
-                (reader.IsExperimental70707 && !WowBGrindFactions.Experimental70707BarSafe(reader))) return false;
-            if (Capture(out WowBWorldSnapshot? back) && back != null && back.TryGetSelectedTarget(out WowBObservedUnit selected) &&
-                selected.Guid == wanted &&
-                (defenceOnly && !defenceFactionFilter || FactionPullStillAllowed(reader, expectedPull, selected))) return true;
-            ClickAimInput.TapKey(hwnd, TabVk, 40);
-            if (ClickAimAbort.Wait(TabSettleMs)) return false;
-        }
-        return !_stop && !ClickAimAbort.Requested && ObjectManager.WowB == reader && ObjectManager.Wow == memory &&
-            (!reader.IsExperimental70707 || WowBGrindFactions.Experimental70707BarSafe(reader)) &&
-            Capture(out WowBWorldSnapshot? last) && last != null && last.TryGetSelectedTarget(out WowBObservedUnit finalTarget) &&
-            finalTarget.Guid == wanted &&
-            (defenceOnly && !defenceFactionFilter || FactionPullStillAllowed(reader, expectedPull, finalTarget));
     }
 
     /// <summary>

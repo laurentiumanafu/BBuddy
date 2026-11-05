@@ -148,10 +148,10 @@ internal static class ClickAimClassRotation
     internal static bool PreferShockMelee(bool shockAutoPlan, bool shockReady)
         => shockAutoPlan && !shockReady;
 
-    // Attack is an unverified toggle: for this mixed rotation send it only once
-    // per fight, not again on each Shock cooldown or ambiguous health change.
-    internal static bool MayPressShockAttack(bool shockAutoPlan, bool attackPressed, bool swinging, bool pressPending, double distance, double meleeRange)
-        => shockAutoPlan && !attackPressed && !swinging && !pressPending &&
+    // Attack is an unverified toggle: use this conservative policy for the
+    // Shock rotation or after a heal, rather than toggling it on silence.
+    internal static bool MayPressConservativeAttack(bool conservative, bool attackPressed, bool swinging, bool pressPending, double distance, double meleeRange)
+        => conservative && !attackPressed && !swinging && !pressPending &&
            double.IsFinite(distance) && distance >= 0 && distance <= meleeRange;
 
     internal static bool ShouldApproachDotOnly(ClickAimAction? damage, ClickAimAction? dot, bool melee,

@@ -8,7 +8,7 @@ g = (root / 'Styx/Logic/Pathing/ClickAim/GrindRunner.cs').read_text(encoding='ut
 methods = g[g.index('    private static bool TryReadLocalFields('):g.index('    /// <summary>\n    /// One half of the "eating and drinking:" line')]
 fixture = (Path(__file__).parent / 'Fixture.cs.txt').read_text().replace('        // __METHODS__', methods)
 # Verify integration, not merely the helper policy.
-fight = g[g.index('    private static string Fight('):g.index('    // TAB is used only to restore the original target')]
+fight = g[g.index('    private static string Fight('):g.index('    /// <summary>\n    /// A unit\'s health straight out of its data block')]
 assert 'unmeasuredRage = reader.IsExperimental70707 && mine.PlayerPowerTypeCandidate == 1' in fight
 assert 'ClickAimSettings.UseDamageOverTime && !unmeasuredRage' in fight
 assert 'meleeHit != null && !unmeasuredRage' in fight

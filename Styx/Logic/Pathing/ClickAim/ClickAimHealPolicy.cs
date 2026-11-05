@@ -14,7 +14,7 @@ internal static class ClickAimHealPolicy
         return minimumPercent <= 0 || denominator == 0 || power * 100.0 / denominator >= minimumPercent;
     }
 
-    internal static bool ShouldSelectSelf(ClickAimAction? heal, bool blocked, uint health, uint maximumHealth,
+    internal static bool ShouldAttemptHeal(ClickAimAction? heal, bool blocked, uint health, uint maximumHealth,
                                           int healPercent, bool cooldownReady, bool powerAllowed)
         => heal != null && heal.KeyVk != 0 && heal.IsHeal && !blocked && maximumHealth > 0 && health > 0 &&
            healPercent > 0 && health * 100.0 / maximumHealth <= healPercent && cooldownReady && powerAllowed;

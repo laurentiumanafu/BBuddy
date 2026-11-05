@@ -13,14 +13,14 @@ internal static class HealPolicyTests
         try
         {
             ClickAimCombat.ClearRoleOverrides();
-            Check(!ClickAimHealPolicy.ShouldSelectSelf(null, false, 40, 100, 40, true, true), "no heal means no self selection");
-            Check(!ClickAimHealPolicy.ShouldSelectSelf(damage, false, 40, 100, 40, true, true), "damage is not a heal");
-            Check(ClickAimHealPolicy.ShouldSelectSelf(heal, false, 40, 100, 40, true, true), "eligible heal");
-            Check(!ClickAimHealPolicy.ShouldSelectSelf(heal, false, 0, 100, 40, true, true), "dead cannot heal");
-            Check(!ClickAimHealPolicy.ShouldSelectSelf(heal, false, 41, 100, 40, true, true), "above threshold");
-            Check(!ClickAimHealPolicy.ShouldSelectSelf(heal, true, 40, 100, 40, true, true), "blocked heal");
-            Check(!ClickAimHealPolicy.ShouldSelectSelf(heal, false, 40, 100, 40, false, true), "cooldown");
-            Check(!ClickAimHealPolicy.ShouldSelectSelf(heal, false, 40, 100, 40, true, false), "power gate prevents self selection");
+            Check(!ClickAimHealPolicy.ShouldAttemptHeal(null, false, 40, 100, 40, true, true), "no heal means no heal attempt");
+            Check(!ClickAimHealPolicy.ShouldAttemptHeal(damage, false, 40, 100, 40, true, true), "damage is not a heal");
+            Check(ClickAimHealPolicy.ShouldAttemptHeal(heal, false, 40, 100, 40, true, true), "eligible heal");
+            Check(!ClickAimHealPolicy.ShouldAttemptHeal(heal, false, 0, 100, 40, true, true), "dead cannot heal");
+            Check(!ClickAimHealPolicy.ShouldAttemptHeal(heal, false, 41, 100, 40, true, true), "above threshold");
+            Check(!ClickAimHealPolicy.ShouldAttemptHeal(heal, true, 40, 100, 40, true, true), "blocked heal");
+            Check(!ClickAimHealPolicy.ShouldAttemptHeal(heal, false, 40, 100, 40, false, true), "cooldown");
+            Check(!ClickAimHealPolicy.ShouldAttemptHeal(heal, false, 40, 100, 40, true, false), "power gate prevents heal attempt");
             Check(!ClickAimHealPolicy.PowerAllowed(0, 100, 0, 0, 0), "zero power even with percentage disabled");
             Check(!ClickAimHealPolicy.PowerAllowed(24, 100, 0, 25, 0), "below configured threshold");
             Check(!ClickAimHealPolicy.PowerAllowed(49, 100, 0, 25, 40), "below observed cost plus margin");
@@ -30,7 +30,7 @@ internal static class HealPolicyTests
             var changed = new ClickAimAction { Slot = 3, Id = 133, Raw = 133, KeyVk = heal.KeyVk, Kind = ClickAimActionKind.Spell };
             Check(!ClickAimHealPolicy.StillOnBar(heal, new List<ClickAimAction> { changed }), "slot changed");
             ClickAimCombat.SetRoleOverride(331, ClickAimSpellRole.Ignore);
-            Check(!ClickAimHealPolicy.ShouldSelectSelf(heal, false, 40, 100, 40, true, true) &&
+            Check(!ClickAimHealPolicy.ShouldAttemptHeal(heal, false, 40, 100, 40, true, true) &&
                   !ClickAimHealPolicy.StillOnBar(heal, new List<ClickAimAction> { heal }), "role revoked");
         }
         finally { ClickAimCombat.ClearRoleOverrides(); }

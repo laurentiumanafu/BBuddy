@@ -151,27 +151,29 @@ namespace Styx.Logic.Pathing
             var controller = new ClickAimBuffController(() => now);
             Reset();
             Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && stoppedMovement == 1 &&
-                  ClickAimInput.Keys.Count == 4 && ClickAimInput.Keys[0] == 0x70 && ClickAimInput.Keys[1] == 0x31 &&
-                  ClickAimInput.Keys[2] == 0x32 && ClickAimInput.Keys[3] == 0x33, "fresh session selects self and attempts all three buffs");
+                  ClickAimInput.Keys.Count == 3 && ClickAimInput.Keys[0] == 0x31 && ClickAimInput.Keys[1] == 0x32 &&
+                  ClickAimInput.Keys[2] == 0x33 && ObjectManager.WowB!.Selected == new WowBGuid(8), "fresh session attempts all buffs without changing enemy selection");
             ClickAimInput.Keys.Clear(); now = ClickAimBuffSchedule.RefreshMs - 5000;
             Check(!controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 0, "no early refresh");
             now = ClickAimBuffSchedule.RefreshMs;
-            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 3, "30-minute refresh, existing self-target preserved");
+            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 3, "30-minute refresh, existing target preserved");
             ClickAimInput.Keys.Clear(); now++;
             controller.Reset();
             Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 3, "confirmed resurrection resets timer immediately");
             Reset(); controller.Reset(); now = 0; GrindRunner.Combat = true;
             Check(!controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 0, "combat blocks targeting and buffs");
             GrindRunner.Combat = false; now = 5000;
-            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 4, "deferred start resumes out of combat");
+            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 3, "deferred start resumes out of combat");
             Reset(); controller.Reset(); now = 0;
             Check(!controller.TryApply(new IntPtr(7), stopped, () => throw new Exception("stop failed")) && ClickAimInput.Keys.Count == 0,
                   "movement-stop failure blocks buff input");
             Reset(); controller.Reset(); now = 0; ClickAimInput.F1Works = false;
-            Check(!controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 1 && ClickAimInput.Keys[0] == 0x70, "unconfirmed F1 blocks every buff");
-            ClickAimInput.Keys.Clear(); now = 5000;
-            Check(!controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 0, "failed F1 uses a longer retry backoff");
-            now = 30000; Check(!controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 1, "failed F1 can retry later");
+            ObjectManager.WowB!.Selected = new WowBGuid(0);
+            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 3 &&
+                  ObjectManager.WowB.Selected == new WowBGuid(0), "no selection and unavailable F1 still attempts buffs without retargeting");
+            Reset(); controller.Reset(); now = 0; ObjectManager.WowB!.Selected = ObjectManager.WowB.Player.Guid;
+            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 3 &&
+                  ObjectManager.WowB.Selected == ObjectManager.WowB.Player.Guid, "preexisting self selection is preserved without F1");
             Reset(); controller.Reset(); now = 0;
             ObjectManager.Wow!.AuraBytes = Candidate(); ObjectManager.Wow.StopDuringRead = true;
             ClickAimCombat.Bar = new List<ClickAimAction> { Action(168, 1), Action(1459, 2) };
@@ -181,7 +183,7 @@ namespace Styx.Logic.Pathing
             Reset(); controller.Reset(); now = 0;
             ObjectManager.Wow!.AuraBytes = Candidate();
             ClickAimCombat.Bar = new List<ClickAimAction> { Action(168, 1), Action(1459, 2) };
-            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 3, "fresh run attempts buffs even if candidate active");
+            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 2, "fresh run attempts buffs even if candidate active");
             ClickAimInput.Keys.Clear(); now = ClickAimBuffSchedule.RefreshMs;
             Check(!controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 0, "active candidate suppresses thirty-minute fallback");
             Write32(ObjectManager.Wow.AuraBytes!, 0xF18, 1000000 + 25000); now += 5000;
@@ -221,7 +223,7 @@ namespace Styx.Logic.Pathing
             Check(snapshot != null && snapshot.Remaining(324) == 599879 && snapshot.Remaining(8017) == null,
                   "observed eleven-slot Shaman layout decodes Lightning Shield but not Rockbiter");
             ClickAimCombat.Bar = new List<ClickAimAction> { Action(324, 1), Action(324, 2), Action(8017, 3) };
-            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 3,
+            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 2,
                   "Shaman fresh start deduplicates shield and attempts Rockbiter fallback");
             ClickAimInput.Keys.Clear(); now = 30000;
             Check(!controller.TryApply(new IntPtr(7), stopped, stopMovement), "active Lightning Shield is not refreshed early");
@@ -296,34 +298,34 @@ namespace Styx.Logic.Pathing
             ObjectManager.WowB.Power = 80;
             Check(controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe) && ClickAimInput.Keys.Count == 1 && ClickAimInput.Keys[0] == 0x32,
                   "missing Armor casts while an earlier Shield is active, without retargeting");
-            Reset(); controller.Reset(); now = 0; ClickAimInput.StopOnF1 = true;
-            Check(!controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 1, "STOP after self-target blocks buff key");
+            Reset(); controller.Reset(); now = 0;
+            Check(!controller.TryApply(new IntPtr(7), stopped, () => ClickAimAbort.Requested = true) && ClickAimInput.Keys.Count == 0, "STOP while stopping movement blocks buff key");
             Reset(); controller.Reset(); now = 0; ClickAimInput.CombatAfterFirst = true;
-            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 2, "combat after first buff blocks remaining buffs");
+            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 1, "combat after first buff blocks remaining buffs");
             GrindRunner.Combat = false; ClickAimInput.CombatAfterFirst = false; ClickAimInput.Keys.Clear(); now = 5000;
             Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 2 && ClickAimInput.Keys[0] == 0x32, "unattempted buffs remain due");
             Reset(); controller.Reset(); now = 0; ClickAimInput.StopAfterFirst = true;
-            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 2, "STOP after first buff blocks remaining keys");
+            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 1, "STOP after first buff blocks remaining keys");
             Reset(); controller.Reset(); now = 0; ClickAimInput.DisableAfterFirst = true;
-            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 2, "disabling buffs after first key blocks the remainder");
+            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 1, "disabling buffs after first key blocks the remainder");
             Reset(); controller.Reset(); now = 0; ClickAimInput.ChangeTargetAfterFirst = true;
-            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 2, "changed self target blocks next buff");
+            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 1, "changed target blocks next buff");
             Reset(); controller.Reset(); now = 0; ClickAimInput.ChangeMapAfterFirst = true;
-            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 2, "map change blocks next buff");
+            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 1, "map change blocks next buff");
             Reset(); controller.Reset(); now = 0; ClickAimInput.ChangeSecondAfterFirst = true;
-            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 2, "changed slot blocks stale key");
+            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 1, "changed slot blocks stale key");
             Reset(); controller.Reset(); now = 0; WowBGrindFactions.Ghost = true;
             Check(!controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 0, "ghost blocks buffs");
             Reset(); controller.Reset(); now = 0; ObjectManager.WowB!.Power = 0;
             Check(!controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 0, "zero 70707 mana defers buff attempts");
             ObjectManager.WowB.Power = 100; now = 5000;
-            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 4, "buffs remain due when mana recovers");
+            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 3, "buffs remain due when mana recovers");
             Reset(); controller.Reset(); now = 0; ObjectManager.WowB!.IsExperimental70707 = false; ObjectManager.WowB.Power = 0;
             Check(controller.TryApply(new IntPtr(7), stopped, stopMovement), "unknown 70291 power type is not treated as mana");
             Reset(); controller.Reset(); now = 0; WowBGrindFactions.GhostReadable = false;
             Check(!controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 0, "unreadable ghost flag blocks 70707 buffs");
             Reset(); controller.Reset(); now = 0; ObjectManager.WowB!.IsExperimental70707 = false; WowBGrindFactions.GhostReadable = false;
-            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 4, "70291 does not require the 70707 ghost flag");
+            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 3, "70291 does not require the 70707 ghost flag");
             Reset(); controller.Reset(); now = 0; WowBGrindFactions.BarSafe = false;
             Check(!controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 0, "unconfirmed action bar blocks buffs");
             Reset(); controller.Reset(); now = 0; ClickAimSettings.UseBuffs = false;
