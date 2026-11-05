@@ -7,7 +7,7 @@ root = Path(__file__).resolve().parents[2]
 src = root / 'Styx/Logic/Pathing/ClickAim'
 g = (src / 'GrindRunner.cs').read_text(encoding='utf-8-sig')
 loot = g[g.index('    private static void PollRecentLootAfterFight('):g.index('    // ------------------------------------------------------------------ selling')]
-approach = g[g.index('    private static bool RecentCorpseCurrent('):g.index('    // Skinning is separate')]
+approach = g[g.index('    private static bool RecentCorpseCurrent('):g.index('    // Selection-free nearby scan.')]
 click = g[g.index('    private static bool TryClickUnit(IntPtr hwnd, WowBObservedUnit unit, double px, double py,\n                                     bool mustSelect, out string how, out bool pixelConfirmed'):g.index('    /// <summary>\n    /// Finds the screen pixel')]
 fixture = (Path(__file__).parent / 'Fixture.cs.txt').read_text().replace('  // METHODS', loot + approach + click)
 # Verify integration paths as well as the executed production methods.

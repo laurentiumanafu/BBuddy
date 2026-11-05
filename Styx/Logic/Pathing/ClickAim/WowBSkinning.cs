@@ -8,7 +8,7 @@ using Styx.WoWInternals;
 namespace Styx.Logic.Pathing;
 
 /// <summary>
-/// Explicitly user-confirmed beast entry candidates, separate for each wowb build.
+/// Explicitly user-confirmed beast entry candidates, shared by the 70707 family.
 /// The GUID entry bits are a candidate on these clients, not a verified creature-type
 /// field. A confirmation applies to other spawns with the same candidate entry.
 /// No entry, skill, corpse lootability or skinning success is inferred here.
@@ -77,7 +77,7 @@ internal static class WowBSkinning
             }
         }
         message = "Saved beast entry candidate " + entry.ToString(CultureInfo.InvariantCulture)
-            + " for build " + (reader.IsExperimental70707 ? "70707" : "70291")
+            + " for " + (reader.IsExperimental70707 ? "70707/70755/70790" : "70291")
             + ". Other spawns with this entry will be treated as the same beast type.";
         return true;
     }
@@ -110,4 +110,26 @@ internal static class WowBSkinning
         }
         catch (Exception ex) { Logging.Write("[Skin] could not save confirmed beasts: " + ex.Message); return false; }
     }
+}
+
+// Per Grind session, do not repeatedly interact with the same body. Full identity
+// and addresses distinguish reuse; when full, refuse new nearby attempts rather
+// than clearing the set and re-clicking an old corpse.
+internal sealed class WowBSkinAttempts
+{
+    private const int Limit = 512;
+    private readonly HashSet<(WowBGuid Guid, ulong Record, ulong Unit, uint Map)> _seen = new();
+
+    private static (WowBGuid, ulong, ulong, uint) Key(WowBObservedUnit unit, uint map)
+        => (unit.Guid, unit.RecordAddress, unit.UnitAddress, map);
+    internal bool Full => _seen.Count >= Limit;
+    internal bool Contains(WowBObservedUnit unit, uint map) => _seen.Contains(Key(unit, map));
+    internal bool Remember(WowBObservedUnit unit, uint map)
+    {
+        if (unit.Guid.IsEmpty || unit.RecordAddress == 0 || unit.UnitAddress == 0 || map == uint.MaxValue ||
+            _seen.Count >= Limit || Contains(unit, map)) return false;
+        return _seen.Add(Key(unit, map));
+    }
+    internal void Forget(WowBObservedUnit unit, uint map) => _seen.Remove(Key(unit, map));
+    internal void Clear() => _seen.Clear();
 }

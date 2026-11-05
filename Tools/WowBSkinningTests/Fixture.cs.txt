@@ -27,6 +27,7 @@ namespace Styx.WoWInternals
     }
     internal class WowBWorldSnapshot
     {
+        internal List<WowBObservedUnit> Units => TestState.CorpsePresent ? new() { TestState.Player, TestState.Corpse } : new() { TestState.Player };
         internal bool TryGetLocalPlayer(out WowBObservedUnit p) { p=TestState.Player; return TestState.PlayerPresent; }
         internal bool TryGetUnit(WowBGuid guid, out WowBObservedUnit u) { u=TestState.Corpse; return TestState.CorpsePresent && u.Guid==guid; }
     }
@@ -47,16 +48,16 @@ namespace Styx.Logic.Pathing
     {
         internal static WowBObservedUnit Player, Corpse, Original;
         internal static WowBGuid Target, Hover;
-        internal static bool PlayerPresent, CorpsePresent, MapReadable, FieldsReadable, HoverReadable, Combat, CombatReadable, Faction, CaptureOk, Death, ConfirmPixel, StopDuringProbe, SelectOnProbe, MoveOk;
-        internal static uint Map, Health; internal static int Clicks, Waits, Dismissals; internal static Action? OnWait;
+        internal static bool PlayerPresent, CorpsePresent, MapReadable, FieldsReadable, HoverReadable, Combat, CombatReadable, Faction, CaptureOk, Death, ConfirmPixel, StopDuringProbe, SelectOnProbe, MoveOk, Recent, ChaseOk, SettleOk;
+        internal static uint Map, Health; internal static int Clicks, Waits, Dismissals, Paths, Releases; internal static Action? OnWait, OnChase;
         internal static void Reset()
         {
             Player=new WowBObservedUnit { Guid=new WowBGuid(999), RecordAddress=1, UnitAddress=2, IsLocalPlayer=true };
             Corpse=new WowBObservedUnit { Guid=new WowBGuid(123), RecordAddress=3, UnitAddress=4, Location=new Position { X=3 } }; Original=Corpse;
             Target=Player.Guid; Hover=Corpse.Guid; PlayerPresent=CorpsePresent=MapReadable=FieldsReadable=HoverReadable=CombatReadable=Faction=CaptureOk=ConfirmPixel=SelectOnProbe=MoveOk=true;
-            Combat=Death=StopDuringProbe=false; Map=1; Health=0; Clicks=Waits=Dismissals=0; OnWait=null;
+            Combat=Death=StopDuringProbe=Recent=false; ChaseOk=SettleOk=true; Map=1; Health=0; Clicks=Waits=Dismissals=Paths=Releases=0; OnWait=OnChase=null;
             ObjectManager.Wow=new GreenMagic.Memory(); ObjectManager.WowB=new WowBReader();
-            ClickAimAbort.Requested=false; RouteRunner.StopRequested=false; GatherSettings.Skinning=true; GrindRunner.Reset();
+            ClickAimAbort.Requested=false; RouteRunner.StopRequested=false; GatherSettings.Skinning=true; GatherSettings.SkinNearby=false; GrindRunner.Reset();
         }
     }
     internal static class ClickAimCalibration { internal static string DefaultPath = Path.Combine(Path.GetTempPath(), "bbuddy-skinning-tests-" + Guid.NewGuid(), "config"); }
@@ -72,6 +73,9 @@ namespace Styx.Logic.Pathing
         internal static bool Wait(int ms) { TestState.Waits++; TestState.OnWait?.Invoke(); return Requested; }
     }
     internal static class RouteRunner { internal static bool StopRequested; }
+    internal static class ClickAimMath { internal static double Len(double x, double y) => Math.Sqrt(x*x+y*y); }
+    internal static class ClickAimKeySteer { internal static void ReleaseHeld() => TestState.Releases++; }
+    internal sealed class RecentLootFixture { internal bool Matches(WowBObservedUnit u, uint map, int now) => TestState.Recent; }
     internal static class WowBGrindFactions { internal static bool AllowsPull(WowBReader r, WowBObservedUnit u, out bool unknown) { unknown=false; return TestState.Faction; } }
     internal static class ClickAimInput
     {
@@ -84,8 +88,21 @@ namespace Styx.Logic.Pathing
     {
         private static bool _stop, _vendorDue, vendorDue;
         private static int _clicks;
-        private const double LootReachYd = 4;
-        internal static void Reset() { _stop=false; _vendorDue=false; vendorDue=false; _clicks=0; }
+        private const double LootReachYd = 4, RecentLootApproachYd = 3, LootYd = 18;
+        private const int LootWalkMs = 1000;
+        private static readonly WowBSkinAttempts NearbySkinAttempts = new();
+        private static readonly RecentLootFixture RecentLoot = new();
+        private sealed class ChaseWatch { internal ChaseWatch(int now) {} }
+        private static bool StopForRest(IntPtr hwnd) => TestState.SettleOk;
+        private static bool ChaseStep(IntPtr hwnd, ChaseWatch watch, WowBObservedUnit unit, out string why, bool approachOnly)
+        {
+            TestState.Paths++; TestState.OnChase?.Invoke(); why="fixture";
+            if (!TestState.ChaseOk) return false;
+            TestState.Corpse.Location.X=3; return true;
+        }
+        internal static bool Nearby() => TrySkinNearby((IntPtr)1);
+        internal static bool HasNearby() => HasNearbySkin();
+        internal static void Reset() { _stop=false; _vendorDue=false; vendorDue=false; _clicks=0; NearbySkinAttempts.Clear(); }
         internal static void Vendor() { _vendorDue=true; }
         private static bool VendorDue() => vendorDue;
         private static bool CheckDeathCheckpoint() => TestState.Death;
@@ -110,10 +127,13 @@ namespace Styx.Logic.Pathing
         public static void Main()
         {
             TestState.Reset();
-            Check(GatherSettings.Save(), "save opt-in"); GatherSettings.Skinning=false; GatherSettings.Load();
-            Check(GatherSettings.Skinning, "persist opt-in");
+            GatherSettings.SkinNearby=true;
+            Check(GatherSettings.Save(), "save opt-ins"); GatherSettings.Skinning=false; GatherSettings.SkinNearby=false; GatherSettings.Load();
+            Check(GatherSettings.Skinning && GatherSettings.SkinNearby, "persist independent opt-ins");
             File.Delete(Path.Combine(Path.GetDirectoryName(ClickAimCalibration.DefaultPath)!, "clickaim-gather.txt"));
-            GatherSettings.Load(); Check(!GatherSettings.Skinning, "missing settings fail closed");
+            GatherSettings.Load(); Check(!GatherSettings.Skinning && !GatherSettings.SkinNearby, "missing settings fail closed");
+            File.WriteAllText(Path.Combine(Path.GetDirectoryName(ClickAimCalibration.DefaultPath)!, "clickaim-gather.txt"), "Skinning=True\nSkinNearby=bad\n");
+            GatherSettings.SkinNearby=true; GatherSettings.Load(); Check(GatherSettings.Skinning && !GatherSettings.SkinNearby, "legacy or malformed nearby setting disabled");
             WowBSkinning.Load(); Check(!WowBSkinning.IsConfirmed(true, TestState.Corpse.Guid), "unknown beast");
             Check(WowBSkinning.RememberSelected(out _), "remember selected");
             Check(WowBSkinning.IsConfirmed(true, TestState.Corpse.Guid) && !WowBSkinning.IsConfirmed(false, TestState.Corpse.Guid), "build isolation");
@@ -146,8 +166,41 @@ namespace Styx.Logic.Pathing
             TestState.Reset(); TestState.OnWait=()=>{if(TestState.Waits==2) ClickAimAbort.Requested=true;}; GrindRunner.Run(); Check(TestState.Clicks==1 && TestState.Waits==2 && TestState.Dismissals==0, "stop during cast");
             TestState.Reset(); TestState.OnWait=()=>{if(TestState.Waits==2) TestState.Combat=true;}; GrindRunner.Run(); Check(TestState.Clicks==1 && TestState.Waits==2 && TestState.Dismissals==0, "combat during cast");
             TestState.Reset(); TestState.Target=TestState.Corpse.Guid; GrindRunner.Run(); Check(TestState.Clicks==1 && TestState.Dismissals==2, "verified reselect and cleanup");
+            TestState.Reset(); Check(!GrindRunner.HasNearby() && !GrindRunner.Nearby(), "nearby option off");
+            TestState.Reset(); GatherSettings.Skinning=false; GatherSettings.SkinNearby=true; TestState.Faction=false;
+            TestState.Corpse.Location.X=12; TestState.Original=TestState.Corpse;
+            Check(GrindRunner.HasNearby() && GrindRunner.Nearby() && TestState.Paths==1 && TestState.Clicks==1 && TestState.Releases>0,
+                "independent nearby option uses mesh and skins confirmed unengaged beast without attack faction gate");
+            Check(!GrindRunner.HasNearby() && !GrindRunner.Nearby() && TestState.Clicks==1, "no repeated attempt on same corpse");
+            GatherSettings.Skinning=true; GrindRunner.Run(); Check(TestState.Clicks==1, "nearby attempt suppresses later post-loot skin click");
+            TestState.Reset(); GatherSettings.SkinNearby=true; GrindRunner.Run(); Check(TestState.Clicks==1 && !GrindRunner.Nearby(), "post-loot attempt suppresses nearby retry");
+            TestState.Reset(); GatherSettings.SkinNearby=true; TestState.Recent=true; Check(!GrindRunner.Nearby(), "pending own corpse loot takes precedence");
+            TestState.Reset(); GatherSettings.SkinNearby=true; TestState.Health=1; Check(!GrindRunner.Nearby(), "living body ignored");
+            TestState.Reset(); GatherSettings.SkinNearby=true; TestState.Corpse.Guid=new WowBGuid(124); Check(!GrindRunner.Nearby(), "unknown beast ignored");
+            TestState.Reset(); GatherSettings.SkinNearby=true; TestState.Corpse.HasPlayerVtable=true; Check(!GrindRunner.Nearby(), "player corpse ignored");
+            TestState.Reset(); GatherSettings.SkinNearby=true; TestState.Corpse.Location.X=19; Check(!GrindRunner.Nearby(), "outside nearby radius");
+            TestState.Reset(); GatherSettings.SkinNearby=true; TestState.Corpse.Location.Z=6; Check(!GrindRunner.Nearby(), "vertical distance rejected");
+            TestState.Reset(); GatherSettings.SkinNearby=true; TestState.Combat=true; Check(!GrindRunner.Nearby(), "combat wins");
+            TestState.Reset(); GatherSettings.SkinNearby=true; TestState.CombatReadable=false; Check(!GrindRunner.Nearby(), "unknown combat blocks nearby");
+            TestState.Reset(); GatherSettings.SkinNearby=true; GrindRunner.Vendor(); Check(!GrindRunner.Nearby(), "vendor wins");
+            TestState.Reset(); GatherSettings.SkinNearby=true; ClickAimAbort.Requested=true; Check(!GrindRunner.Nearby(), "stop wins");
+            TestState.Reset(); GatherSettings.SkinNearby=true; TestState.Corpse.Location.X=12; TestState.OnChase=()=>TestState.Combat=true;
+            Check(GrindRunner.Nearby() && TestState.Clicks==0, "combat interrupts nearby approach");
+            TestState.Combat=false; TestState.OnChase=null;
+            Check(GrindRunner.Nearby() && TestState.Clicks==1, "interrupted approach can be retried");
+            TestState.Reset(); GatherSettings.SkinNearby=true; TestState.Corpse.Location.X=12; TestState.OnChase=()=>ClickAimAbort.Requested=true;
+            Check(GrindRunner.Nearby() && TestState.Clicks==0 && TestState.Releases>0, "STOP interrupts mesh approach and releases movement");
+            TestState.Reset(); GatherSettings.SkinNearby=true; TestState.Corpse.Location.X=12; TestState.OnChase=()=>TestState.Map=2;
+            Check(GrindRunner.Nearby() && TestState.Clicks==0, "map change interrupts approach");
+            TestState.Reset(); GatherSettings.SkinNearby=true; TestState.Corpse.Location.X=12; TestState.OnChase=()=>TestState.Corpse.UnitAddress=99;
+            Check(GrindRunner.Nearby() && TestState.Clicks==0, "corpse identity change interrupts approach");
+            TestState.Reset(); GatherSettings.SkinNearby=true; TestState.SettleOk=false; Check(GrindRunner.Nearby() && TestState.Clicks==0, "movement must settle before interaction");
+            TestState.Reset(); GatherSettings.SkinNearby=true; TestState.HoverReadable=false; Check(GrindRunner.Nearby() && TestState.Clicks==0, "unconfirmed hover never clicks");
+            var attempts = new WowBSkinAttempts();
+            for (uint i=1; i<=512; i++) { var u=TestState.Corpse; u.Guid=new WowBGuid(i); Check(attempts.Remember(u,1), "bounded attempt insertion"); }
+            Check(attempts.Full && !attempts.Remember(TestState.Corpse,1), "full attempt cache refuses new work");
             Check(WowBSkinning.Clear() && !WowBSkinning.IsConfirmed(true, TestState.Corpse.Guid), "clear");
-            Console.WriteLine("35 synthetic skinning checks passed (stubbed client/input; no real game)");
+            Console.WriteLine("Skinning and nearby-corpse synthetic checks passed (stubbed client/input; no real game)");
         }
     }
 }

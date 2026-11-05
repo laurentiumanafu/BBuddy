@@ -6,8 +6,14 @@ import tempfile
 root = Path(__file__).resolve().parents[2]
 src = root / 'Styx/Logic/Pathing/ClickAim'
 gather = (src / 'GrindRunner.cs').read_text(encoding='utf-8-sig')
-methods = gather[gather.index('    private static bool SkinQuiet('):gather.index('    /// <summary>The click found no point on the body at all.')]
-fixture = (Path(__file__).parent / 'Fixture.cs.txt').read_text().replace('        // METHODS', methods)
+methods = gather[gather.index('    // Selection-free nearby scan.'):gather.index('    /// <summary>The click found no point on the body at all.')]
+reach = gather[gather.index('    private static bool RecentLootInReach('):gather.index('    private static bool ApproachRecentCorpse(')]
+fixture = (Path(__file__).parent / 'Fixture.cs.txt').read_text().replace('        // METHODS', reach + methods)
+loop = gather[gather.index('                // A dying NPC may clear selection'):gather.index('                RoutePoint next;')]
+assert loop.index('LootNearby(hwnd, 3, recentOnly: true)') < loop.index('TryEngage(hwnd, out combatReport)') < loop.index('TrySkinNearby(hwnd)')
+route = gather[gather.index('                bool resourceInterrupt = false, vendorInterrupt = false;'):gather.index('                if (ok)', gather.index('                bool resourceInterrupt = false, vendorInterrupt = false;'))]
+assert route.index('if (VendorDue())') < route.index('if (FightNeeded(hwnd, SearchYd))') < route.index('if (HasNearbySkin())')
+assert 'if (skinInterrupt)' in route and 'if (roam == null) index--;' in route
 loot = gather[gather.index('    private static string LootNearby('):gather.index('    // ------------------------------------------------------------------ selling')]
 assert loot.index('TryLootOne(hwnd, corpse, out uint lootMap, out bool lootPixelConfirmed, recentOnly)') < loot.index('_lootsSinceTrip++') < loot.index('TrySkinLootedBeast(hwnd, reader, corpse, lootMap)')
 assert 'result == 0 && _running && GatherSettings.Skinning' in loot

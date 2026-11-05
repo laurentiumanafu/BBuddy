@@ -17,6 +17,7 @@ namespace CopilotBuddy.UI
         private readonly CheckBox _mining = new CheckBox { Content = "Mining", Margin = new Thickness(0, 8, 0, 4) };
         private readonly CheckBox _herbalism = new CheckBox { Content = "Herbalism", Margin = new Thickness(0, 8, 0, 4) };
         private readonly CheckBox _skinning = new CheckBox { Content = "Skin confirmed beasts after looting (Grind)", Margin = new Thickness(0, 10, 0, 4) };
+        private readonly CheckBox _skinNearby = new CheckBox { Content = "Skin nearby confirmed dead beasts (Grind)", Margin = new Thickness(0, 4, 0, 4) };
         private readonly TextBlock _beastCount = new TextBlock { TextWrapping = TextWrapping.Wrap };
         private readonly CheckBox _roam = new CheckBox { Content = "Roam on the mesh when no profile is loaded", Margin = new Thickness(0, 10, 0, 4) };
         private readonly CheckBox _grind = new CheckBox { Content = "Gather nearby resources while grinding", Margin = new Thickness(0, 10, 0, 4) };
@@ -37,6 +38,7 @@ namespace CopilotBuddy.UI
             _mining.IsChecked = GatherSettings.Mining;
             _herbalism.IsChecked = GatherSettings.Herbalism;
             _skinning.IsChecked = GatherSettings.Skinning;
+            _skinNearby.IsChecked = GatherSettings.SkinNearby;
             _miningSkill.Text = GatherSettings.MiningSkill.ToString(CultureInfo.InvariantCulture);
             _herbSkill.Text = GatherSettings.HerbalismSkill.ToString(CultureInfo.InvariantCulture);
             var panel = new StackPanel { Margin = new Thickness(16) };
@@ -48,7 +50,8 @@ namespace CopilotBuddy.UI
             panel.Children.Add(new TextBlock { Text = "Herbalism skill" });
             panel.Children.Add(_herbSkill);
             panel.Children.Add(_skinning);
-            panel.Children.Add(new TextBlock { Text = "Skill and beast type are not readable on wowb. Stop the bot, select a living beast, then remember it. Only confirmed entry candidates are tried; this applies to other spawns of that entry. Ensure skinning is trained and you have the required skill/tool.", TextWrapping = TextWrapping.Wrap });
+            panel.Children.Add(_skinNearby);
+            panel.Children.Add(new TextBlock { Text = "Nearby includes beasts killed by others, up to 18 yd away. Skill, skinning readiness and beast type are not readable on wowb. Stop the bot, select a living beast, then remember it. Only confirmed entry candidates are tried; this applies to other spawns of that entry. Ensure skinning is trained and you have the required skill/tool.", TextWrapping = TextWrapping.Wrap });
             var remember = new Button { Content = "Remember selected beast", Margin = new Thickness(0, 4, 0, 4), HorizontalAlignment = HorizontalAlignment.Left };
             remember.Click += RememberBeastClick;
             panel.Children.Add(remember);
@@ -77,7 +80,7 @@ namespace CopilotBuddy.UI
         private void UpdateBeastCount()
         {
             _beastCount.Text = "Confirmed entry candidates: " + WowBSkinning.Count(false) + " for 70291, "
-                + WowBSkinning.Count(true) + " for 70707. The entry field is experimental.";
+                + WowBSkinning.Count(true) + " shared by 70707/70755/70790. The entry field is experimental.";
         }
 
         private void RememberBeastClick(object sender, RoutedEventArgs e)
@@ -116,6 +119,7 @@ namespace CopilotBuddy.UI
             GatherSettings.Mining = _mining.IsChecked == true;
             GatherSettings.Herbalism = _herbalism.IsChecked == true;
             GatherSettings.Skinning = _skinning.IsChecked == true;
+            GatherSettings.SkinNearby = _skinNearby.IsChecked == true;
             GatherSettings.MiningSkill = mining;
             GatherSettings.HerbalismSkill = herbs;
             if (!GatherSettings.Save()) { MessageBox.Show(this, "Could not save gather settings."); return; }

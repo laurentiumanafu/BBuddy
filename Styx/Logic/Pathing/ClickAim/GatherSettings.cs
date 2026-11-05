@@ -12,6 +12,8 @@ internal static class GatherSettings
     public static bool Herbalism;
     // Opt-in: player confirms they have skinning and a suitable skill/tool.
     public static bool Skinning;
+    // Separate opt-in: also try nearby confirmed beasts, regardless of who killed them.
+    public static bool SkinNearby;
     // Opt-in: legacy settings files do not enable gathering during Grind.
     public static bool GatherWhileGrinding;
     // Opt-in only when no profile is loaded; normal profiles always take precedence.
@@ -26,6 +28,7 @@ internal static class GatherSettings
     {
         // A missing or malformed setting must not retain a previous opt-in.
         Skinning = false;
+        SkinNearby = false;
         // Older files may contain AllowBackgroundCursorMovement. It is ignored:
         // mouse-assisted gathering is now always enabled.
         try
@@ -39,6 +42,7 @@ internal static class GatherSettings
                 if (key == "Mining" && bool.TryParse(value, out bool m)) Mining = m;
                 else if (key == "Herbalism" && bool.TryParse(value, out bool h)) Herbalism = h;
                 else if (key == "Skinning" && bool.TryParse(value, out bool skin)) Skinning = skin;
+                else if (key == "SkinNearby" && bool.TryParse(value, out bool nearby)) SkinNearby = nearby;
                 else if (key == "GatherWhileGrinding" && bool.TryParse(value, out bool g)) GatherWhileGrinding = g;
                 else if (key == "RoamWithoutProfile" && bool.TryParse(value, out bool r)) RoamWithoutProfile = r;
                 else if (key == "RoamRadiusYd" && int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int radius) && radius >= 100 && radius <= 3000) RoamRadiusYd = radius;
@@ -58,6 +62,7 @@ internal static class GatherSettings
             File.WriteAllLines(path, new[] { "Mining=" + Mining, "MiningSkill=" + MiningSkill.ToString(CultureInfo.InvariantCulture),
                 "Herbalism=" + Herbalism, "HerbalismSkill=" + HerbalismSkill.ToString(CultureInfo.InvariantCulture),
                 "Skinning=" + Skinning,
+                "SkinNearby=" + SkinNearby,
                 "GatherWhileGrinding=" + GatherWhileGrinding,
                 "RoamWithoutProfile=" + RoamWithoutProfile,
                 "RoamRadiusYd=" + RoamRadiusYd.ToString(CultureInfo.InvariantCulture) });

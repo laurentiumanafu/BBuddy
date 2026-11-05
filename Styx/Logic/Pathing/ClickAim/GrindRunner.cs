@@ -280,6 +280,7 @@ internal static class GrindRunner
     /// <summary>Corpses this run has already tried; a corpse that cannot be looted is not retried forever.</summary>
     private static readonly HashSet<WowBGuid> _looted = new HashSet<WowBGuid>();
     private static readonly WowBRecentLoot RecentLoot = new WowBRecentLoot();
+    private static readonly WowBSkinAttempts NearbySkinAttempts = new WowBSkinAttempts();
     // Retry only when no right-button down was posted, never on an unverified click.
     private static readonly Dictionary<WowBGuid, int> _recentLootRetryAt = new Dictionary<WowBGuid, int>();
     private static readonly HashSet<WowBGuid> _recentLootRetried = new HashSet<WowBGuid>();
@@ -779,6 +780,7 @@ internal static class GrindRunner
         _focusedDamageObserved = false;
         _looted.Clear();
         RecentLoot.Clear();
+        NearbySkinAttempts.Clear();
         _recentLootRetryAt.Clear();
         _recentLootRetried.Clear();
         _recentLootQuietAt = unchecked(Environment.TickCount - 15000);
@@ -795,6 +797,9 @@ internal static class GrindRunner
         _unreachableUntil.Clear();
         _realCombatQuietAt = 0;
         bool gatherDuringGrind = !_stop && !ClickAimAbort.Requested && GatherRunner.PrepareForGrind(profilePath);
+        if (GatherSettings.SkinNearby && ObjectManager.WowB is WowBReader skinReader)
+            Logging.Write("[Skin] nearby scanning enabled (18 yd); " + WowBSkinning.Count(skinReader.IsExperimental70707) +
+                " confirmed beast entry candidate(s). Ownership and skinning readiness are not readable.");
 
         /* What the client can be asked without Lua: level, health, the stored action bar
          * and what is standing around. It is printed once because it is the answer to
@@ -975,6 +980,8 @@ internal static class GrindRunner
                 if (_stop || ClickAimAbort.Requested) break;
                 if (trialReader != null && ObjectManager.WowB != trialReader) break;
                 if (_combatHold || _poolApproachHandled) continue;
+                // A nearby body is considered only after combat and vendoring.
+                if (TrySkinNearby(hwnd)) continue;
 
                 /* Between fights, with nothing on us: eat and drink if the user's percentages say
                  * so. This is the cheapest place in the loop to sit - the next thing it would do
@@ -1011,8 +1018,10 @@ internal static class GrindRunner
                  * circle a hotspot is cleared in, so "monsters between hotspots" are monsters
                  * this stops for. */
                 bool resourceInterrupt = false, vendorInterrupt = false;
+                bool skinInterrupt = false;
                 int lastFightCheck = unchecked(Environment.TickCount - 500);
                 int lastRoamMapCheck = unchecked(Environment.TickCount - 500);
+                int lastSkinCheck = unchecked(Environment.TickCount - 1000);
                 RouteRunner.ShouldInterrupt = () =>
                 {
                     if (roam != null && unchecked(Environment.TickCount - lastRoamMapCheck) >= 500)
@@ -1029,6 +1038,11 @@ internal static class GrindRunner
                     }
                     if (gatherDuringGrind && GatherRunner.HasGrindResource(GatherAreaSafe))
                     { resourceInterrupt = true; return true; }
+                    if (GatherSettings.SkinNearby && unchecked(Environment.TickCount - lastSkinCheck) >= 1000)
+                    {
+                        lastSkinCheck = Environment.TickCount;
+                        if (HasNearbySkin()) { skinInterrupt = true; return true; }
+                    }
                     return false;
                 };
                 RouteRunner.PollInterruptDuringWalk = true;
@@ -1051,6 +1065,12 @@ internal static class GrindRunner
                     {
                         if (roam == null) index--; // resume the same profile hotspot after the detour
                         Logging.Write("[Grind] resource in range; pausing the hotspot leg to reconsider combat and gathering");
+                        continue;
+                    }
+                    if (skinInterrupt)
+                    {
+                        if (roam == null) index--;
+                        Logging.Write("[Skin] nearby candidate; pausing the hotspot leg to reconsider combat and skinning");
                         continue;
                     }
                     Logging.Write("[Grind] the walk was cut short on purpose: something worth fighting "
@@ -2280,6 +2300,7 @@ internal static class GrindRunner
             }
             if (report.Length > 0) Logging.Write("[Grind] " + report);
             if (_combatHold || _poolApproachHandled) { clearScans = 0; continue; }
+            if (TrySkinNearby(hwnd)) { clearScans = 0; continue; }
             if (_lastEngageRejected && TryReadGatherCombat(out bool fighting) && !fighting)
             {
                 Logging.Write("[Grind] no acceptable target after TAB and pool checks; leaving this hotspot");
@@ -3431,12 +3452,114 @@ internal static class GrindRunner
         return result;
     }
 
+    // Selection-free nearby scan. The corpse need not be one we fought, but
+    // its beast entry must have been confirmed by the user. No loot click is
+    // sent first: one right-click may instead open loot if the body is not ready.
+    private static bool FindNearbySkin(WowBReader reader, GreenMagic.Memory memory, uint map,
+        out WowBObservedUnit original, out WowBGuid playerGuid)
+    {
+        original = default; playerGuid = default;
+        if (NearbySkinAttempts.Full || !SkinQuiet(reader, memory, map, true) || !Capture(out WowBWorldSnapshot? snapshot) || snapshot == null ||
+            !snapshot.TryGetLocalPlayer(out WowBObservedUnit player)) return false;
+        playerGuid = player.Guid;
+        double best = double.PositiveInfinity;
+        foreach (WowBObservedUnit unit in snapshot.Units)
+        {
+            if (unit.Guid.IsEmpty || unit.IsLocalPlayer || unit.HasPlayerVtable || unit.RecordAddress == 0 || unit.UnitAddress == 0 ||
+                NearbySkinAttempts.Contains(unit, map) || RecentLoot.Matches(unit, map, Environment.TickCount) ||
+                !WowBSkinning.IsConfirmed(reader.IsExperimental70707, unit.Guid) ||
+                !reader.TryGetUnitFields(unit.UnitAddress, out WowBReader.WowBUnitFields fields) || fields.Health != 0) continue;
+            double distance = ClickAimMath.Len(unit.Location.X - player.Location.X, unit.Location.Y - player.Location.Y);
+            double height = Math.Abs(unit.Location.Z - player.Location.Z);
+            if (!double.IsFinite(distance) || !double.IsFinite(height) || distance > LootYd || height > 5.0 || distance >= best) continue;
+            best = distance; original = unit;
+        }
+        return !original.Guid.IsEmpty && SkinQuiet(reader, memory, map, true);
+    }
+
+    private static bool NearbySkinCurrent(WowBReader reader, GreenMagic.Memory memory, uint map,
+        WowBObservedUnit original, WowBGuid playerGuid, out WowBObservedUnit corpse, out WowBObservedUnit player, out double distance)
+    {
+        corpse = default; player = default; distance = double.PositiveInfinity;
+        if (!SkinQuiet(reader, memory, map, true) || !WowBSkinning.IsConfirmed(reader.IsExperimental70707, original.Guid) ||
+            !Capture(out WowBWorldSnapshot? snapshot) || snapshot == null ||
+            !snapshot.TryGetLocalPlayer(out player) || player.Guid != playerGuid ||
+            !snapshot.TryGetUnit(original.Guid, out corpse) || corpse.IsLocalPlayer || corpse.HasPlayerVtable ||
+            corpse.RecordAddress != original.RecordAddress || corpse.UnitAddress != original.UnitAddress ||
+            !reader.TryGetUnitFields(corpse.UnitAddress, out WowBReader.WowBUnitFields fields) || fields.Health != 0) return false;
+        distance = ClickAimMath.Len(corpse.Location.X - player.Location.X, corpse.Location.Y - player.Location.Y);
+        double height = Math.Abs(corpse.Location.Z - player.Location.Z);
+        return double.IsFinite(distance) && double.IsFinite(height) && distance <= LootYd && height <= 5.0 &&
+            SkinQuiet(reader, memory, map, true);
+    }
+
+    private static bool HasNearbySkin()
+    {
+        if (!GatherSettings.SkinNearby) return false;
+        WowBReader? reader = ObjectManager.WowB; GreenMagic.Memory? memory = ObjectManager.Wow;
+        if (reader == null || memory == null || !reader.TryReadMapId(out uint map) || map == uint.MaxValue) return false;
+        using var uncached = memory.TemporaryCacheState(false);
+        return FindNearbySkin(reader, memory, map, out _, out _);
+    }
+
+    // A bounded, mesh-only approach; fight, STOP, death, vendor and identity
+    // changes all interrupt before the independently guarded click.
+    private static bool TrySkinNearby(IntPtr hwnd)
+    {
+        if (!GatherSettings.SkinNearby) return false;
+        WowBReader? reader = ObjectManager.WowB; GreenMagic.Memory? memory = ObjectManager.Wow;
+        if (reader == null || memory == null || memory.WindowHandle != hwnd ||
+            !reader.TryReadMapId(out uint map) || map == uint.MaxValue) return false;
+        using var uncached = memory.TemporaryCacheState(false);
+        if (!FindNearbySkin(reader, memory, map, out WowBObservedUnit original, out WowBGuid playerGuid) ||
+            !NearbySkinAttempts.Remember(original, map)) return false;
+        Logging.Write("[Skin] nearby confirmed beast " + original.Guid + "; ownership and skinning readiness unknown");
+        int started = Environment.TickCount;
+        var watch = new ChaseWatch(started);
+        try
+        {
+            while (unchecked(Environment.TickCount - started) < LootWalkMs)
+            {
+                if (!NearbySkinCurrent(reader, memory, map, original, playerGuid, out WowBObservedUnit corpse,
+                    out WowBObservedUnit player, out double distance))
+                {
+                    // An interruption before any interaction may be retried after combat.
+                    if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested || _vendorDue || VendorDue() ||
+                        !TryReadGatherCombat(out bool fighting) || fighting) NearbySkinAttempts.Forget(original, map);
+                    return true;
+                }
+                if (distance <= RecentLootApproachYd)
+                {
+                    // Do not start a skinning interaction while a mesh step still holds forward.
+                    if (!StopForRest(hwnd) || !SkinQuiet(reader, memory, map, true))
+                    {
+                        if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested || _vendorDue || VendorDue() ||
+                            !TryReadGatherCombat(out bool interrupted) || interrupted) NearbySkinAttempts.Forget(original, map);
+                        return true;
+                    }
+                    if (RecentLootInReach(corpse, player)) TrySkinLootedBeast(hwnd, reader, original, map, true);
+                    else Logging.Write("[Skin] nearby corpse too far vertically; no interaction sent");
+                    return true;
+                }
+                if (!ChaseStep(hwnd, watch, corpse, out string reason, true))
+                {
+                    if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested || _vendorDue || VendorDue() ||
+                        !TryReadGatherCombat(out bool fighting) || fighting) NearbySkinAttempts.Forget(original, map);
+                    Logging.Write("[Skin] nearby approach withheld: " + reason); return true;
+                }
+            }
+            Logging.Write("[Skin] nearby mesh approach timed out; no interaction sent");
+            return true;
+        }
+        finally { ClickAimKeySteer.ReleaseHeld(); }
+    }
+
     // Skinning is separate from the single loot click: only a user-confirmed beast
     // entry candidate is eligible, and neither the loot nor the skin is observable.
-    private static bool SkinQuiet(WowBReader reader, GreenMagic.Memory memory, uint map)
+    private static bool SkinQuiet(WowBReader reader, GreenMagic.Memory memory, uint map, bool nearby = false)
     {
         if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested || _vendorDue ||
-            !GatherSettings.Skinning || map == uint.MaxValue || ObjectManager.Wow != memory || ObjectManager.WowB != reader)
+            !(nearby ? GatherSettings.SkinNearby : GatherSettings.Skinning) || map == uint.MaxValue || ObjectManager.Wow != memory || ObjectManager.WowB != reader)
             return false;
         if (CheckDeathCheckpoint() || !reader.TryReadMapId(out uint now) || now != map ||
             !TryReadGatherCombat(out bool fighting) || fighting || VendorDue()) return false;
@@ -3446,40 +3569,44 @@ internal static class GrindRunner
 
     private static bool SkinCorpseCurrent(WowBReader reader, GreenMagic.Memory memory, uint map,
                                           WowBObservedUnit original, WowBGuid playerGuid,
-                                          out WowBObservedUnit current, out WowBObservedUnit player)
+                                          out WowBObservedUnit current, out WowBObservedUnit player, bool nearby = false)
     {
         current = default; player = default;
-        if (!SkinQuiet(reader, memory, map) || !WowBSkinning.IsConfirmed(reader.IsExperimental70707, original.Guid) ||
+        if (!SkinQuiet(reader, memory, map, nearby) || !WowBSkinning.IsConfirmed(reader.IsExperimental70707, original.Guid) ||
             !Capture(out WowBWorldSnapshot? snapshot) || snapshot == null ||
             !snapshot.TryGetLocalPlayer(out player) || player.Guid != playerGuid ||
             !snapshot.TryGetUnit(original.Guid, out current) || current.IsLocalPlayer || current.HasPlayerVtable ||
             current.RecordAddress != original.RecordAddress || current.UnitAddress != original.UnitAddress ||
             !reader.TryGetUnitFields(current.UnitAddress, out WowBReader.WowBUnitFields fields) || fields.Health != 0 ||
-            (reader.IsExperimental70707 && !WowBGrindFactions.AllowsPull(reader, current, out _))) return false;
+            (!nearby && reader.IsExperimental70707 && !WowBGrindFactions.AllowsPull(reader, current, out _))) return false;
         double dx = current.Location.X - player.Location.X, dy = current.Location.Y - player.Location.Y;
         double dz = current.Location.Z - player.Location.Z;
-        return Math.Sqrt(dx * dx + dy * dy + dz * dz) <= LootReachYd + 1.0 && SkinQuiet(reader, memory, map);
+        return Math.Sqrt(dx * dx + dy * dy + dz * dz) <= LootReachYd + 1.0 && SkinQuiet(reader, memory, map, nearby);
     }
 
-    private static void TrySkinLootedBeast(IntPtr hwnd, WowBReader reader, WowBObservedUnit original, uint map)
+    private static void TrySkinLootedBeast(IntPtr hwnd, WowBReader reader, WowBObservedUnit original, uint map, bool nearby = false)
     {
         GreenMagic.Memory? memory = ObjectManager.Wow;
         if (memory == null) return;
         using var uncached = memory.TemporaryCacheState(false);
-        if (!SkinQuiet(reader, memory, map) ||
+        if (!SkinQuiet(reader, memory, map, nearby) ||
             !Capture(out WowBWorldSnapshot? snap) || snap == null || !snap.TryGetLocalPlayer(out WowBObservedUnit player)) return;
         WowBGuid playerGuid = player.Guid;
-        if (!SkinCorpseCurrent(reader, memory, map, original, playerGuid, out WowBObservedUnit corpse, out player)) return;
+        if (!SkinCorpseCurrent(reader, memory, map, original, playerGuid, out WowBObservedUnit corpse, out player, nearby)) return;
+        // Both paths share a session cache, so neither can immediately issue a
+        // second skinning interaction on a body the other already attempted.
+        if (!nearby && NearbySkinAttempts.Contains(original, map)) return;
+        if (!nearby) NearbySkinAttempts.Remember(original, map);
 
         // First loot normally dismissed the corpse. If not, clear it with verified
         // F1; never use the unverified projected-point fallback for skinning.
         if (reader.ReadTargetGuid() == corpse.Guid)
             DismissRejectedSelection(hwnd, reader, playerGuid, corpse.Guid);
-        if (!SkinCorpseCurrent(reader, memory, map, original, playerGuid, out corpse, out player) ||
+        if (!SkinCorpseCurrent(reader, memory, map, original, playerGuid, out corpse, out player, nearby) ||
             reader.ReadTargetGuid() == corpse.Guid || memory.WindowHandle != hwnd ||
             !ClickAimInput.ClientSize(hwnd, out int width, out int height)) return;
         if (!FindUnitPixel(hwnd, corpse, player.Location.X, player.Location.Y, out int x, out int y, out string how,
-            () => !SkinCorpseCurrent(reader, memory, map, original, playerGuid, out _, out _)))
+            () => !SkinCorpseCurrent(reader, memory, map, original, playerGuid, out _, out _, nearby)))
         { Logging.Write("[Skin] no confirmed corpse pixel: " + how); return; }
         int pixelX = width / 2 + x, pixelY = height / 2 + y;
         if (pixelX <= 0 || pixelY <= 0 || pixelX >= width - 1 || pixelY >= height - 1 ||
@@ -3488,7 +3615,7 @@ internal static class GrindRunner
         if (ClickAimAbort.Wait(200) || _stop) return;
         bool hoverRead = reader.TryReadMouseoverGuidCandidate(out WowBGuid skinHover);
         bool sent = ClickAimInput.ConfirmedRightClick(hwnd, pixelX, pixelY, width, height, () =>
-            memory.WindowHandle == hwnd && SkinCorpseCurrent(reader, memory, map, original, playerGuid, out _, out _) &&
+            memory.WindowHandle == hwnd && SkinCorpseCurrent(reader, memory, map, original, playerGuid, out _, out _, nearby) &&
             reader.ReadTargetGuid() == original.Guid && reader.TryReadMouseoverGuidCandidate(out WowBGuid hover) && hover == original.Guid &&
             !_stop && !ClickAimAbort.Requested, out string reason);
         if (!sent)
@@ -3498,14 +3625,14 @@ internal static class GrindRunner
             return;
         }
         _clicks++;
-        Logging.Write("[Skin] requested one right-click on confirmed beast " + original.Guid
-            + "; loot state, skinning cast and items are not verified");
+        Logging.Write("[Skin] requested one right-click on " + (nearby ? "nearby " : "post-loot ") + "confirmed beast " + original.Guid
+            + "; ownership, loot state, skinning cast and items are not verified");
 
         // No turns or movement while a possible cast/auto-loot runs. Yield promptly
         // to combat, map changes, death, vendor requests and user STOP.
         for (int waited = 0; waited < 6000; waited += 200)
-            if (ClickAimAbort.Wait(200) || !SkinQuiet(reader, memory, map)) return;
-        if (SkinQuiet(reader, memory, map) && reader.ReadTargetGuid() == original.Guid)
+            if (ClickAimAbort.Wait(200) || !SkinQuiet(reader, memory, map, nearby)) return;
+        if (SkinQuiet(reader, memory, map, nearby) && reader.ReadTargetGuid() == original.Guid)
             DismissRejectedSelection(hwnd, reader, playerGuid, original.Guid);
     }
 
