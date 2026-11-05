@@ -135,6 +135,25 @@ internal static class ClickAimClassRotation
         return plan;
     }
 
+    // Earth Shock as the Shaman's only direct spell is an instant with an
+    // estimated shared cooldown, not a ranged filler. With Attack available,
+    // close in after the opener and use melee between shocks. Do not apply this
+    // policy to a Lightning Bolt filler, Hunter shots, or an ignored Attack.
+    internal static bool ShockAutoPlan(ClickAimRotationPlan plan, ClickAimAction? auto)
+        => plan.Class == ClickAimRotationClass.Shaman && plan.Damage != null && plan.Damage.IsDamage &&
+           string.Equals(ClickAimCombat.NameOf(plan.Damage.Id), "Earth Shock", StringComparison.OrdinalIgnoreCase) &&
+           plan.DamageGroup == "Shocks" && plan.DamageIntervalMs > 0 && plan.Supplemental == null &&
+           auto != null && auto.IsAutoAttack && auto.IsAttack && auto.KeyVk != 0;
+
+    internal static bool PreferShockMelee(bool shockAutoPlan, bool shockReady)
+        => shockAutoPlan && !shockReady;
+
+    // Attack is an unverified toggle: for this mixed rotation send it only once
+    // per fight, not again on each Shock cooldown or ambiguous health change.
+    internal static bool MayPressShockAttack(bool shockAutoPlan, bool attackPressed, bool swinging, bool pressPending, double distance, double meleeRange)
+        => shockAutoPlan && !attackPressed && !swinging && !pressPending &&
+           double.IsFinite(distance) && distance >= 0 && distance <= meleeRange;
+
     internal static bool ShouldApproachDotOnly(ClickAimAction? damage, ClickAimAction? dot, bool melee,
         bool enabled, bool due, bool ready, uint power, uint estimatedCost, double distance)
         => damage == null && dot != null && dot.IsDot && !dot.IsMelee && !melee && enabled && due && ready &&

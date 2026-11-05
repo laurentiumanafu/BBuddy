@@ -18,6 +18,43 @@ internal static class RotationTests
     private static void Check(bool condition, string name)
     { if (!condition) throw new Exception("Rotation: " + name); }
 
+    private static void ShockAutoFlowTests()
+    {
+        var bar = Bar(6603, 403, 331, 8042);
+        var attack = bar[0];
+        var normal = ClickAimClassRotation.Build(ClickAimRotationClass.Auto, bar);
+        Check(!ClickAimClassRotation.ShockAutoPlan(normal, attack), "Lightning Bolt rotation does not chase to melee");
+        ClickAimCombat.SetRoleOverride(403, ClickAimSpellRole.Ignore);
+        var plan = ClickAimClassRotation.Build(ClickAimRotationClass.Auto, bar);
+        bool hybrid = ClickAimClassRotation.ShockAutoPlan(plan, attack);
+        Check(hybrid && plan.Damage?.Id == 8042, "ignored Lightning Bolt enables Earth Shock and Attack");
+        Check(!ClickAimClassRotation.ShockAutoPlan(plan, null), "no Attack key keeps ranged fallback");
+        Check(!ClickAimClassRotation.ShockAutoPlan(ClickAimClassRotation.Build(ClickAimRotationClass.Hunter, Bar(3044)), attack), "Hunter does not chase on cooldown");
+        Check(!ClickAimClassRotation.ShockAutoPlan(ClickAimClassRotation.Build(ClickAimRotationClass.Mage, Bar(2136)), attack), "Mage does not chase on cooldown");
+        Check(!ClickAimClassRotation.ShockAutoPlan(ClickAimClassRotation.Build(ClickAimRotationClass.Generic, Bar(8042)), attack), "generic rotation unchanged");
+
+        // Drive the same production policy as Fight: opener, chase while the
+        // shared timer is pending, a single melee key, then Shock again when due.
+        var until = new Dictionary<string, int>();
+        bool ready = ClickAimClassRotation.Ready(until, plan.DamageGroup, 1000);
+        Check(ready && !ClickAimClassRotation.PreferShockMelee(hybrid, ready), "ready opener casts at ranged distance");
+        ClickAimClassRotation.Defer(until, plan.DamageGroup, plan.DamageIntervalMs, 1000);
+        ready = ClickAimClassRotation.Ready(until, plan.DamageGroup, 2000);
+        Check(!ready && ClickAimClassRotation.PreferShockMelee(hybrid, ready), "pending Shock chooses melee chase");
+        Check(!ClickAimClassRotation.MayPressShockAttack(hybrid, false, false, false, 12, 4), "no Attack at ranged distance");
+        Check(!ClickAimClassRotation.MayPressShockAttack(hybrid, false, false, false, 4.1, 4), "no Attack outside melee range");
+        Check(!ClickAimClassRotation.MayPressShockAttack(hybrid, false, false, false, double.NaN, 4), "unknown distance fails closed");
+        Check(ClickAimClassRotation.MayPressShockAttack(hybrid, false, false, false, 4, 4), "one Attack at melee range");
+        Check(!ClickAimClassRotation.MayPressShockAttack(hybrid, true, false, false, 3, 4), "never retry the toggle after silence or a heal");
+        ready = ClickAimClassRotation.Ready(until, plan.DamageGroup, 9000);
+        Check(ready && !ClickAimClassRotation.PreferShockMelee(hybrid, ready), "Shock resumes when ready even while approaching or swinging");
+        Check(!ClickAimClassRotation.MayPressShockAttack(hybrid, true, false, false, 3, 4), "no second Attack after Shock");
+        Check(!ClickAimClassRotation.PreferShockMelee(false, false), "ordinary casters retain cooldown waiting");
+        ClickAimCombat.SetRoleOverride(6603, ClickAimSpellRole.Ignore);
+        Check(!ClickAimClassRotation.ShockAutoPlan(plan, attack), "ignored Attack disables hybrid plan");
+        ClickAimCombat.ClearRoleOverrides();
+    }
+
     internal static void Run()
     {
         ClickAimCombat.ClearRoleOverrides();
@@ -48,6 +85,7 @@ internal static class RotationTests
             var shockOnly = ClickAimClassRotation.Build(ClickAimRotationClass.Shaman, Bar(8042));
             Check(shockOnly.Damage?.Id == 8042 && shockOnly.Supplemental == null && shockOnly.DamageIntervalMs >= 6000,
                 "short-range only fallback is timed");
+            ShockAutoFlowTests();
             Check(ClickAimClassRotation.Resolve(ClickAimRotationClass.Auto, Bar(403, 133)) == ClickAimRotationClass.Generic, "ambiguous class -> generic");
             Check(ClickAimClassRotation.Resolve(ClickAimRotationClass.Auto, Bar(6603)) == ClickAimRotationClass.Generic, "no signature -> generic");
             Check(ClickAimClassRotation.Build(ClickAimRotationClass.Generic, Bar(8042, 403)).Damage?.Id == 8042, "generic preserves bar order");

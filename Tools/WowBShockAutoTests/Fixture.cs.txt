@@ -1,0 +1,69 @@
+using System;
+
+namespace Styx.WoWInternals
+{
+    public readonly struct WowBGuid
+    {
+        public readonly int Value;
+        public WowBGuid(int value) { Value = value; }
+        public bool IsEmpty => Value == 0;
+        public static bool operator ==(WowBGuid a, WowBGuid b) => a.Value == b.Value;
+        public static bool operator !=(WowBGuid a, WowBGuid b) => !(a == b);
+        public override bool Equals(object? o) => o is WowBGuid other && this == other;
+        public override int GetHashCode() => Value;
+    }
+    public struct WowBObservedUnit { }
+    public class WowBReader
+    {
+        public bool IsExperimental70707;
+        public WowBGuid Selected;
+        public WowBGuid ReadTargetGuid() => Selected;
+    }
+}
+namespace GreenMagic
+{
+    public class Memory
+    {
+        private sealed class Cache : IDisposable { public void Dispose() { } }
+        public IDisposable TemporaryCacheState(bool enabled) => new Cache();
+    }
+}
+namespace Styx.Logic.Pathing
+{
+    using Styx.WoWInternals;
+    internal static class ObjectManager
+    {
+        public static WowBReader? WowB;
+        public static GreenMagic.Memory? Wow;
+    }
+    internal static class ClickAimAbort { public static bool Requested; }
+    internal static class WowBGrindFactions
+    {
+        public static bool BarSafe = true;
+        public static bool Experimental70707BarSafe(WowBReader r) => BarSafe;
+    }
+    internal static class GuardFixture
+    {
+        private static bool _stop;
+        private static bool FactionSafe = true;
+        private static bool FactionAttackInputAllowed(WowBReader r, WowBObservedUnit expected, bool enforce) => FactionSafe;
+        // __GUARD__
+        private static void Check(bool value, string message) { if (!value) throw new Exception(message); }
+        public static void Main()
+        {
+            var memory = new GreenMagic.Memory();
+            var reader = new WowBReader { IsExperimental70707 = true, Selected = new WowBGuid(1) };
+            ObjectManager.Wow = memory; ObjectManager.WowB = reader;
+            var target = new WowBGuid(1);
+            bool Allowed() => FightAttackInputAllowed(reader, memory, target, default, true);
+            Check(Allowed(), "valid target permitted");
+            _stop = true; Check(!Allowed(), "STOP withheld"); _stop = false;
+            ClickAimAbort.Requested = true; Check(!Allowed(), "abort withheld"); ClickAimAbort.Requested = false;
+            reader.Selected = new WowBGuid(2); Check(!Allowed(), "changed target withheld"); reader.Selected = target;
+            FactionSafe = false; Check(!Allowed(), "faction withheld"); FactionSafe = true;
+            WowBGrindFactions.BarSafe = false; Check(!Allowed(), "changed bar withheld"); WowBGrindFactions.BarSafe = true;
+            ObjectManager.WowB = new WowBReader(); Check(!Allowed(), "changed attachment withheld");
+            Console.WriteLine("Shock/Attack shared input guard fixtures passed (synthetic only).");
+        }
+    }
+}

@@ -4728,6 +4728,8 @@ internal static class GrindRunner
         int lastMeleeDamageMs = 0;
         int lastAttackPressMs = 0;
         bool attackPressed = false;     // the Attack key has been pressed this fight
+        bool shockMeleeLogged = false, conservativeShockAttack = false;
+        int lastShockDamageMs = 0;
         bool noSafeAutoLogged = false;
         int lastMeleeClickMs = 0;
         var worked = new List<string>();
@@ -5349,7 +5351,11 @@ internal static class GrindRunner
             // Classic Hunter shots have an estimated minimum range. If the target is
             // closer, the existing melee fallback takes over rather than spamming a shot.
             bool hunterTooClose = rotation.Class == ClickAimRotationClass.Hunter && d < 8.0;
-            bool canCast = !melee && castDamage != null && !castDamage.IsMelee && !hunterTooClose && myMana >= needForCast;
+            bool shockAutoPlan = ClickAimClassRotation.ShockAutoPlan(rotation, auto);
+            if (shockAutoPlan) conservativeShockAttack = true;
+            bool shockReady = ClickAimClassRotation.Ready(_rotationCooldowns, rotation.DamageGroup, Environment.TickCount);
+            bool shockMelee = !melee && ClickAimClassRotation.PreferShockMelee(shockAutoPlan, shockReady);
+            bool canCast = !melee && !shockMelee && castDamage != null && !castDamage.IsMelee && !hunterTooClose && myMana >= needForCast;
 
             if (!canCast && !melee && damage != null && !damage.IsMelee && myMana < PowerForCast(damage, 10)
                 && !powerShortLogged)
@@ -5422,7 +5428,8 @@ internal static class GrindRunner
                     return "damage role or DoT setting changed; attack withheld";
                 if (!ResourceInputStillAllowed(reader)) continue;
                 lastCastMs = Environment.TickCount;
-                meleeSwinging = false;          // a cast stops auto-attack; it must be restarted
+                // Instant Shock does not prove the auto-attack toggle stopped.
+                if (!shockAutoPlan) meleeSwinging = false;
                 uint manaBefore = myMana;
                 int mobBeforeHealth = lastHealth;
                 _pendingCastId = castDamage!.Id;
@@ -5474,6 +5481,7 @@ internal static class GrindRunner
                             "[Grind] {0} does damage: mob health {1} -> {2} (mana {3} -> {4})",
                             castDamage!.Name, lastHealth, mobAfter, manaBefore, manaAfter));
                         lastHealth = mobAfter;
+                        if (shockAutoPlan) { lastShockDamageMs = Environment.TickCount; quietRounds = 0; }
                     }
                     castFailures = 0;
                     continue;
@@ -5517,7 +5525,13 @@ internal static class GrindRunner
              * damage spell, not enough power for the one on the bar, or three casts that
              * landed nothing). Walking in is the only movement here; inside AttackRangeYd the
              * character stops, presses Attack, and lets the client's swing do the work. */
-            if (!meleeOnce)
+            bool temporaryShockMelee = shockAutoPlan && !melee;
+            if (temporaryShockMelee && !shockMeleeLogged)
+            {
+                shockMeleeLogged = true;
+                Logging.Write("[Grind] Earth Shock is the only direct spell: closing to start Attack and using Shock when ready; swing state remains unverified");
+            }
+            if (!temporaryShockMelee && !meleeOnce)
             {
                 meleeOnce = true;
                 string whyCasting = unmeasuredRage
@@ -5589,12 +5603,12 @@ internal static class GrindRunner
              * the last run. */
             ClickAimKeySteer.ReleaseHeld();
 
-            int sinceDamageMs = unchecked(Environment.TickCount - lastMeleeDamageMs);
+            int sinceDamageMs = lastMeleeDamageMs == 0 ? int.MaxValue : unchecked(Environment.TickCount - lastMeleeDamageMs);
 
-            /* Is the client's swing still running? It is only known from the result: a swing
-             * that has landed the mob's health in the last few seconds is running, and silence
-             * for MeleeSwingQuietMs means it has stopped. Everything below keys off this. */
-            bool swinging = meleeSwinging && sinceDamageMs < MeleeSwingQuietMs;
+            /* In the Shock/Attack rotation health changes cannot identify the source of
+             * damage. Treat recent activity as a reason to hold still, not proof of a swing. */
+            bool swinging = (meleeSwinging || (conservativeShockAttack && attackPressed && lastMeleeDamageMs != 0))
+                            && sinceDamageMs < MeleeSwingQuietMs;
 
             /* Nothing has landed for a few seconds and the mob is still a couple of yards off:
              * the character stopped a shade too early. One short step forward, aimed by the same
@@ -5604,7 +5618,8 @@ internal static class GrindRunner
             {
                 double nudged;
                 ClickAimKeySteer.Steer(target.Location.X, target.Location.Y, hwnd, true, out nudged);
-                ClickAimAbort.Wait(220);
+                if (ClickAimAbort.Wait(220) || _stop)
+                { ClickAimKeySteer.ReleaseHeld(); return "stopped"; }
                 ClickAimKeySteer.ReleaseHeld();
             }
 
@@ -5646,16 +5661,21 @@ internal static class GrindRunner
                  * nothing - no swing has landed for twice MeleeSwingQuietMs - because after a
                  * heal or a spell the client keeps auto-attack ON and resumes swinging by
                  * itself, and every extra press is a chance to toggle it off. */
-                if (!swinging && !pressPending && sincePressMs >= MeleeClickMs
-                    && sinceDamageMs >= (attackPressed ? MeleeSwingQuietMs * 2 : MeleeSwingQuietMs))
+                bool pressAttack = conservativeShockAttack
+                    ? ClickAimClassRotation.MayPressShockAttack(true, attackPressed, swinging, pressPending, d, AttackRangeYd)
+                    : !swinging && !pressPending && sincePressMs >= MeleeClickMs
+                      && sinceDamageMs >= (attackPressed ? MeleeSwingQuietMs * 2 : MeleeSwingQuietMs);
+                if (pressAttack)
                 {
-                    attackPressed = true;
                     if (!FightAttackInputAllowed(reader, fightMemory, defenceTarget, expectedPull, !defenceOnly || defenceFactionFilter))
                     { return YieldForTargetChange(reader, fightMemory, defenceTarget); }
                     if (!auto.IsAttack) return "Attack role changed; attack withheld";
                     ClickAimInput.TapKey(hwnd, auto.KeyVk, 40);
+                    attackPressed = true;
                     MarkFocusedAttack(target);
                     lastAttackPressMs = Environment.TickCount;
+                    // Allow time for a swing without claiming that one landed.
+                    if (conservativeShockAttack) lastMeleeDamageMs = lastAttackPressMs;
                     presses++;
                     _presses++;
                     attacked = true;
@@ -5718,6 +5738,19 @@ internal static class GrindRunner
             health = Health(target);
             if (health >= 0 && lastHealth >= 0 && health < lastHealth)
             {
+                if (conservativeShockAttack)
+                {
+                    // An instant Shock can land after the cast verification window.
+                    // Health alone cannot distinguish it from an auto swing.
+                    Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                        "[Grind] melee-phase target health {0} -> {1}; damage source and auto-attack state unverified", lastHealth, health));
+                    if (!worked.Contains("damage (source unconfirmed)")) worked.Add("damage (source unconfirmed)");
+                    lastHealth = health;
+                    lastShockDamageMs = Environment.TickCount;
+                    if (attackPressed) lastMeleeDamageMs = lastShockDamageMs;
+                    quietRounds = 0;
+                    continue;
+                }
                 if (!worked.Contains("auto-attack")) worked.Add("auto-attack");
                 if (!meleeSwinging)
                 {
@@ -5740,7 +5773,9 @@ internal static class GrindRunner
              * 25 health mid-swing, re-engaged it 0.3 s later and killed it, which is one wasted
              * decide. So a break also needs twice MeleeSwingQuietMs of real silence. */
             if (!unverified && ++quietRounds >= 12
-                && unchecked(Environment.TickCount - lastMeleeDamageMs) >= MeleeSwingQuietMs * 2)
+                && (lastMeleeDamageMs == 0 || unchecked(Environment.TickCount - lastMeleeDamageMs) >= MeleeSwingQuietMs * 2)
+                && (!conservativeShockAttack || lastShockDamageMs == 0 ||
+                    unchecked(Environment.TickCount - lastShockDamageMs) >= MeleeSwingQuietMs * 2))
                 break;
         }
 
