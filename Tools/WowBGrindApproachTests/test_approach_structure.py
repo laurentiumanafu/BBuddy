@@ -25,6 +25,17 @@ class ApproachIntegration(unittest.TestCase):
         self.assertIn('out nearest, out nearestYd', s)
         self.assertIn('TryReadGatherCombat(out bool tabCombat)', s)
 
+    def test_bar_retry_holds_movement_and_does_not_resume_without_baseline(self):
+        gather = (Path(__file__).resolve().parents[2] / 'Styx/Logic/Pathing/ClickAim/GatherRunner.cs').read_text(encoding='utf-8-sig')
+        for src in (SOURCE, gather):
+            retry = src[src.index('if (trialReader != null && !WowBGrindFactions.Experimental70707BarSafe(trialReader))'):] if src is SOURCE else src[src.index('if (reader.IsExperimental70707 && !WowBGrindFactions.Experimental70707BarSafe(reader))'):]
+            retry = retry[:retry.index('continue;') + len('continue;')]
+            self.assertLess(retry.index('ClickAimKeySteer.ReleaseHeld()'), retry.index('WaitForExperimentalBar('))
+            self.assertIn('ReleaseArrows(hwnd)', retry)
+            self.assertIn('break;', retry)
+            self.assertNotIn('TapKey', retry)
+            self.assertIn('rechecking combat before continuing', retry)
+
     def test_roam_does_not_press_tab(self):
         s = section('    private static bool FightNeeded(', '    private static string DwellAtHotspot(')
         self.assertNotIn('TryPullOnTheWay(hwnd', s)

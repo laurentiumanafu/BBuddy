@@ -837,7 +837,15 @@ internal static class GrindRunner
                 if (trialReader != null && (ObjectManager.WowB != trialReader || !trialReader.ExperimentalGrindActive))
                 { Logging.Write("[Grind] " + trialReader.ExperimentalBuildNumber + " attachment or session authorization changed; stopping"); break; }
                 if (trialReader != null && !WowBGrindFactions.Experimental70707BarSafe(trialReader))
-                { Logging.Write("[Grind] " + trialReader.ExperimentalBuildNumber + " action bar changed or became unreadable; stopping. Restart to rescan it."); break; }
+                {
+                    ClickAimKeySteer.ReleaseHeld();
+                    ClickAimKeySteer.ReleaseArrows(hwnd);
+                    Logging.Write("[Grind] action bar changed or was unreadable; holding movement and checking the original bar before any more inputs");
+                    if (!WowBGrindFactions.WaitForExperimentalBar(trialReader, () => _stop || RouteRunner.StopRequested, out string barReason))
+                    { Logging.Write("[Grind] " + trialReader.ExperimentalBuildNumber + " action bar not safely restored: " + barReason + "; stopping. Restart to rescan it."); break; }
+                    Logging.Write("[Grind] action bar matched the original snapshot again; rechecking combat before continuing");
+                    continue;
+                }
                 if (roam != null && !roam.MapCurrent())
                 { Logging.Write("[Roam] map changed or became unreadable; stopping"); break; }
                 if (startupBagWait)
@@ -1498,7 +1506,7 @@ internal static class GrindRunner
         double nearestYd;
         int live, unread;
         bool haveNearest = NearestKillable(snap, px, py, SearchYd, out nearest, out nearestYd,
-                                          out live, out unread);
+                                          out live, out unread, preferFullHealth: true);
         if (!haveNearest && unread == 0)
         {
             // Even a clear pool can leave an unsuitable live target selected by a
@@ -1530,7 +1538,7 @@ internal static class GrindRunner
          * is what turns a mob standing behind the character from a "nothing offered" into a
          * target. Nothing is walked yet: this is a facing change only. */
         if (!haveNearest)
-            NearestKillable(snap, px, py, SearchYd, out nearest, out nearestYd, out live, out unread);
+            NearestKillable(snap, px, py, SearchYd, out nearest, out nearestYd, out live, out unread, preferFullHealth: true);
         Styx.WoWInternals.WowBReader? selReader = ObjectManager.WowB;
 
         /* A mob may already be selected. Take it when it passes the same tests,
@@ -1542,7 +1550,8 @@ internal static class GrindRunner
             double selectedYd = ClickAimMath.Len(target.Location.X - px, target.Location.Y - py);
             // An incidental pool click is not a reason to ignore a much nearer
             // candidate. A client-confirmed selection remains usable as before.
-            have = !PreferNearerPoolCandidate(poolPick, haveNearest, target.Guid == nearest.Guid, selectedYd, nearestYd);
+            have = !(haveNearest && PreferFullPull(selReader, target, nearest)) &&
+                   !PreferNearerPoolCandidate(poolPick, haveNearest, target.Guid == nearest.Guid, selectedYd, nearestYd);
             if (have) Logging.Write(string.Format(CultureInfo.InvariantCulture,
                 "[Grind] going with the target already selected: {0} ({1:F1} yd)", target.Guid,
                 ClickAimMath.Len(target.Location.X - px, target.Location.Y - py)));
@@ -1601,7 +1610,7 @@ internal static class GrindRunner
             if (!Capture(out WowBWorldSnapshot? tabSnapshot) || tabSnapshot == null ||
                 !tabSnapshot.TryGetLocalPlayer(out WowBObservedUnit tabPlayer) ||
                 !NearestKillable(tabSnapshot, tabPlayer.Location.X, tabPlayer.Location.Y, tabRadius,
-                    out nearest, out nearestYd, out _, out _))
+                    out nearest, out nearestYd, out _, out _, preferFullHealth: true))
             {
                 _poolApproachHandled = true;
                 report = "no readable eligible candidate remains close enough for TAB; reconsidering the mesh approach";
@@ -1638,6 +1647,13 @@ internal static class GrindRunner
             poolPick = !_unverifiedGuid.IsEmpty && target.Guid == _unverifiedGuid
                        && (beforeTab.IsEmpty || beforeTab == target.Guid);
             double tabYd = ClickAimMath.Len(target.Location.X - px, target.Location.Y - py);
+            if (haveNearest && PreferFullPull(selReader, target, nearest))
+            {
+                // Keep cycling TAB; an eligible full-health candidate is nearby.
+                // Do not blacklist the wounded selection or infer who hurt it.
+                rejectedGuid = target.Guid;
+                continue;
+            }
             if (PreferNearerPoolCandidate(poolPick, haveNearest, target.Guid == nearest.Guid, tabYd, nearestYd))
             {
                 // TAB kept a much farther unverified click; try the nearer pool
@@ -1939,6 +1955,21 @@ internal static class GrindRunner
         if (_stop || ClickAimAbort.Requested || _vendorDue) return false;
         if (!TryReadGatherCombat(out bool beforeFightCombat) || beforeFightCombat)
         { _combatHold = true; ClickAimKeySteer.ReleaseHeld(); return false; }
+        // Selection and health may have changed during TAB/pixel search. Recheck
+        // the full search radius before a voluntary pull; defence never uses this preference.
+        if (!Capture(out WowBWorldSnapshot? preferenceSnap) || preferenceSnap == null ||
+            !preferenceSnap.TryGetLocalPlayer(out WowBObservedUnit preferencePlayer))
+        { _poolApproachHandled = true; report = "target preference snapshot unreadable; holding the pull"; return false; }
+        if (NearestKillable(preferenceSnap, preferencePlayer.Location.X, preferencePlayer.Location.Y, SearchYd,
+                out WowBObservedUnit preferred, out _, out _, out _, preferFullHealth: true) &&
+            PreferFullPull(esp, target, preferred))
+        {
+            _poolApproachHandled = true;
+            report = "a full-health eligible candidate is available; reconsidering the wounded selection";
+            return false;
+        }
+        if (_stop || ClickAimAbort.Requested || _vendorDue || !TryReadGatherCombat(out bool preferenceCombat) || preferenceCombat)
+        { _combatHold = true; ClickAimKeySteer.ReleaseHeld(); return false; }
         // A faction key and a TAB selection are not a live reaction verdict.
         // Keep the existing unverified-target / 10-second pool failsafe even
         // when filtered mode selected a candidate through TAB.
@@ -2112,6 +2143,17 @@ internal static class GrindRunner
     private static bool PreferNearerPoolCandidate(bool unverified, bool haveNearest, bool same,
                                                    double selectedYd, double nearestYd)
         => unverified && haveNearest && !same && selectedYd > nearestYd + 10.0;
+
+    // Only an explicitly full, otherwise eligible pool unit outranks the selected
+    // candidate. A health read is not a hostility or ownership verdict.
+    private static bool PreferFullPull(WowBReader? reader, WowBObservedUnit selected, WowBObservedUnit alternative)
+    {
+        if (reader == null || selected.Guid.IsEmpty || alternative.Guid.IsEmpty || selected.Guid == alternative.Guid ||
+            !reader.TryGetUnitFields(selected.UnitAddress, out WowBReader.WowBUnitFields picked) ||
+            !reader.TryGetUnitFields(alternative.UnitAddress, out WowBReader.WowBUnitFields other)) return false;
+        return WowBPullPreference.PreferAlternative(WowBPullPreference.Full(picked.Health, picked.MaxHealth),
+            WowBPullPreference.Full(other.Health, other.MaxHealth), false);
+    }
 
     private static bool SelectionFieldsValid(uint health, uint flags, uint mobLevel, int myLevel)
         => health > 0 && (flags & NotAFightFlag) == 0 && LevelViable(mobLevel, myLevel);
@@ -3774,12 +3816,14 @@ internal static class GrindRunner
     /// </summary>
     private static bool NearestKillable(WowBWorldSnapshot snap, double px, double py, double radius,
                                         out WowBObservedUnit unit, out double yards,
-                                        out int live, out int unread, int? playerLevel = null, bool applyFactionFilter = true)
+                                        out int live, out int unread, int? playerLevel = null, bool applyFactionFilter = true,
+                                        bool preferFullHealth = false)
     {
         unit = default(WowBObservedUnit);
         yards = double.MaxValue;
         live = 0;
         unread = 0;
+        bool bestFull = false;
 
         Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
         int myLevel = playerLevel ?? PlayerLevel();
@@ -3821,10 +3865,12 @@ internal static class GrindRunner
             if (!LevelViable(f.Level, myLevel)) continue;
 
             live++;
-            if (d > 0.4 && d < yards)
+            bool full = preferFullHealth && WowBPullPreference.Full(f.Health, f.MaxHealth);
+            if (d > 0.4 && double.IsFinite(d) && WowBPullPreference.Better(full, d, bestFull, yards))
             {
                 unit = candidate;
                 yards = d;
+                bestFull = full;
             }
         }
 
@@ -4639,8 +4685,12 @@ internal static class GrindRunner
                 if (distance <= stopRadius)
                     return "the pool candidate is within " + stopRadius.ToString("F0", CultureInfo.InvariantCulture) + " yd; stopping to retry TAB";
                 if (NearestKillable(current, me.Location.X, me.Location.Y, stopRadius,
-                                    out _, out _, out _, out int unreadNearby, approachLevel))
-                    return "an eligible pool candidate is within " + stopRadius.ToString("F0", CultureInfo.InvariantCulture) + " yd; stopping to retry TAB";
+                                    out WowBObservedUnit nearby, out _, out _, out int unreadNearby, approachLevel,
+                                    preferFullHealth: true) &&
+                    (!WowBPullPreference.Full(fields.Health, fields.MaxHealth) ||
+                     (reader.TryGetUnitFields(nearby.UnitAddress, out WowBReader.WowBUnitFields nearFields) &&
+                      WowBPullPreference.Full(nearFields.Health, nearFields.MaxHealth))))
+                    return "an eligible preferred pool candidate is within " + stopRadius.ToString("F0", CultureInfo.InvariantCulture) + " yd; stopping to retry TAB";
                 if (unreadNearby > 0)
                 {
                     _combatHold = true;

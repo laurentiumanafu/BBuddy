@@ -249,9 +249,31 @@ internal static class Experimental70790Tests
         Require(reader.TryReadMapId(out map) && map == 7 && reader.ReadActionBar().Count == 1 &&
             reader.TryGetUnitFields(units[0], out var fields) && fields.Health == 148 && fields.Power == 10,
             "70790 session reads candidate gameplay fields and its own action array");
-        memory.U64(image + Wow70790Offsets.StoredActionArrayCandidate, 1);
+        ulong actionAddress = image + Wow70790Offsets.StoredActionArrayCandidate;
+        memory.U64(actionAddress, 1);
         Require(!WowBGrindFactions.Experimental70707BarSafe(reader), "changed 70790 action bar invalidates the session guard");
-        memory.U64(image + Wow70790Offsets.StoredActionArrayCandidate, 6603);
+        Require(!WowBGrindFactions.WaitForExperimentalBar(reader, () => false, out string barReason) &&
+            barReason.Contains("slot 1") && barReason.Contains("00000000000019CB") && barReason.Contains("0000000000000001"),
+            "persistent changed bar stops and reports old and new raw values");
+        memory.Remove(actionAddress);
+        Require(!WowBGrindFactions.WaitForExperimentalBar(reader, () => false, out barReason) && barReason.Contains("unavailable"),
+            "unreadable bar fails closed with diagnostic");
+        memory.U64(actionAddress, 1);
+        int actionReads = 0;
+        memory.OnRead = (address, count) => {
+            if (address == actionAddress && count == 96 && ++actionReads == 3) memory.U64(actionAddress, 6603);
+        };
+        Require(WowBGrindFactions.WaitForExperimentalBar(reader, () => false, out barReason) && actionReads >= 4,
+            "transient mismatch resumes only after matching stable original bar");
+        memory.OnRead = null;
+        Require(!WowBGrindFactions.WaitForExperimentalBar(reader, () => true, out barReason), "STOP interrupts bar recovery even if bar matches");
+        bool stoppedDuringRead = false;
+        memory.OnRead = (address, count) => { if (address == actionAddress && count == 96) stoppedDuringRead = true; };
+        Require(!WowBGrindFactions.WaitForExperimentalBar(reader, () => stoppedDuringRead, out barReason), "STOP during matching reads prevents resume");
+        memory.OnRead = null;
+        ObjectManager.WowB = null;
+        Require(!WowBGrindFactions.WaitForExperimentalBar(reader, () => false, out barReason), "attachment change prevents bar recovery");
+        ObjectManager.WowB = reader;
         WowBGrindFactions.EndExperimental70707();
         Require(!reader.TryReadMapId(out _), "ending the session revokes gameplay reads");
         ObjectManager.Wow = null; ObjectManager.WowB = null;

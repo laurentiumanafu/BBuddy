@@ -110,13 +110,47 @@ internal static class WowBGrindFactions
     }
 
     internal static bool Experimental70707BarSafe(WowBReader reader)
+        => ExperimentalBarStatus(reader, out _);
+
+    // Stable raw changes are not classified as harmless: unsupported slots and
+    // high bits can matter. Report exact differences rather than guessing why.
+    internal static bool ExperimentalBarStatus(WowBReader reader, out string reason)
     {
+        reason = "session or baseline unavailable";
         ulong[]? expected = _experimentalBar;
-        if (!reader.IsExperimental70707 || !reader.ExperimentalGrindActive || expected == null || expected.Length != 12 ||
-            !reader.TryReadExperimentalActionSnapshot(out ulong[] bar) || bar.Length != expected.Length) return false;
-        for (int i = 0; i < bar.Length; i++)
-            if (bar[i] != expected[i]) return false;
-        return true;
+        if (!reader.IsExperimental70707 || !reader.ExperimentalGrindActive || expected == null || expected.Length != 12) return false;
+        try
+        {
+            if (!reader.TryReadExperimentalActionSnapshot(out ulong[] bar) || bar.Length != expected.Length)
+            { reason = "action-bar reads unavailable or not stable"; return false; }
+            var changes = new List<string>();
+            for (int i = 0; i < bar.Length; i++)
+                if (bar[i] != expected[i])
+                    changes.Add("slot " + (i + 1).ToString(CultureInfo.InvariantCulture) + " 0x" + expected[i].ToString("X16", CultureInfo.InvariantCulture) + " -> 0x" + bar[i].ToString("X16", CultureInfo.InvariantCulture));
+            if (changes.Count > 0) { reason = "stable raw difference: " + string.Join(", ", changes); return false; }
+            reason = "matched original action bar";
+            return true;
+        }
+        catch { reason = "action-bar read failed"; return false; }
+    }
+
+    // Called only after releasing movement. No game input is sent while waiting;
+    // a return to the exact original double-read baseline is required to resume.
+    internal static bool WaitForExperimentalBar(WowBReader reader, Func<bool> stopped, out string reason)
+    {
+        reason = "stopped or attachment changed";
+        for (int i = 0; i < 8; i++)
+        {
+            if (stopped() || ClickAimAbort.Requested || ObjectManager.WowB != reader || ObjectManager.Wow != _boundMemory ||
+                _boundReader != reader || !reader.ExperimentalGrindActive) return false;
+            bool matched = ExperimentalBarStatus(reader, out reason);
+            if (stopped() || ClickAimAbort.Requested || ObjectManager.WowB != reader || ObjectManager.Wow != _boundMemory ||
+                _boundReader != reader || !reader.ExperimentalGrindActive)
+            { reason = "stopped or attachment changed"; return false; }
+            if (matched) return true;
+            if (ClickAimAbort.Wait(150)) { reason = "stopped"; return false; }
+        }
+        return false;
     }
 
     private static bool CheckExperimentalBuild(Memory memory) => CheckExperimentalBuild(memory, out _);

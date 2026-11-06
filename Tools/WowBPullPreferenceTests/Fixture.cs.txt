@@ -1,0 +1,79 @@
+using System;
+using System.Collections.Generic;
+using Styx.WoWInternals;
+namespace Styx.WoWInternals
+{
+    public readonly struct WowBGuid
+    {
+        public readonly int Value;
+        public WowBGuid(int value) { Value = value; }
+        public bool IsEmpty => Value == 0;
+        public static bool operator ==(WowBGuid a, WowBGuid b) => a.Value == b.Value;
+        public static bool operator !=(WowBGuid a, WowBGuid b) => !(a == b);
+        public override bool Equals(object? obj) => obj is WowBGuid b && this == b;
+        public override int GetHashCode() => Value;
+    }
+    public struct Location { public double X, Y; }
+    public struct WowBObservedUnit
+    {
+        public WowBGuid Guid; public bool IsLocalPlayer, HasPlayerVtable;
+        public ulong UnitAddress; public Location Location;
+    }
+    public sealed class WowBWorldSnapshot { public List<WowBObservedUnit> Units = new(); }
+    public sealed class WowBReader
+    {
+        public struct WowBUnitFields { public uint Health, MaxHealth, Level, UnitFlags; }
+        public Dictionary<ulong, WowBUnitFields> Fields = new();
+        public bool TryGetUnitFields(ulong address, out WowBUnitFields fields) => Fields.TryGetValue(address, out fields);
+    }
+    public static class ObjectManager { public static WowBReader? WowB; }
+}
+namespace Styx.Logic.Pathing
+{
+    internal static class WowBGrindFactions
+    {
+        public static HashSet<int> Denied = new();
+        public static bool AllowsPull(WowBReader? reader, WowBObservedUnit unit, out bool unknown)
+        { unknown = false; return !Denied.Contains(unit.Guid.Value); }
+    }
+    internal static class ClickAimMath { public static double Len(double x, double y) => Math.Sqrt(x*x+y*y); }
+    internal static class Harness
+    {
+        private const uint NotAFightFlag = 0x400000;
+        private static readonly HashSet<WowBGuid> _notViable = new();
+        private static readonly Dictionary<WowBGuid,int> _tabRefusedUntil = new();
+        private static bool Refused(WowBGuid guid) => false;
+        private static bool Unreachable(WowBGuid guid) => false;
+        private static bool LevelViable(uint level, int mine) => level >= 1 && level <= 20;
+        private static int PlayerLevel() => 10;
+        // __PREFER__
+        // __NEAREST__
+        static void Check(bool result, string message) { if (!result) throw new Exception(message); }
+        static WowBObservedUnit Unit(int id, double x) => new() { Guid = new WowBGuid(id), UnitAddress = (ulong)id, Location = new Location { X = x } };
+        static void Main()
+        {
+            var reader = new WowBReader(); ObjectManager.WowB = reader;
+            var injured = Unit(1, 5); var full = Unit(2, 35); var unknown = Unit(3, 2);
+            var snapshot = new WowBWorldSnapshot(); snapshot.Units.AddRange(new[] { injured, full, unknown });
+            reader.Fields[1] = new() { Health = 50, MaxHealth = 100, Level = 10 };
+            reader.Fields[2] = new() { Health = 100, MaxHealth = 100, Level = 10 };
+            reader.Fields[3] = new() { Health = 30, MaxHealth = 0, Level = 10 };
+            bool Find(bool prefer, out WowBObservedUnit found) => NearestKillable(snapshot, 0, 0, 100, out found, out _, out _, out _, preferFullHealth: prefer);
+            Check(Find(true, out var found) && found.Guid == full.Guid, "full candidate beats closer injured and unknown");
+            Check(Find(false, out found) && found.Guid == unknown.Guid, "non-pull scans retain nearest behavior");
+            Check(PreferFullPull(reader, injured, full) && !PreferFullPull(reader, full, injured) && !PreferFullPull(reader, full, full), "selected wounded yields to different full target only");
+            WowBGrindFactions.Denied.Add(2);
+            Check(Find(true, out found) && found.Guid == unknown.Guid, "blocked full target excluded; fallback remains available");
+            WowBGrindFactions.Denied.Clear();
+            reader.Fields[2] = new() { Health = 0, MaxHealth = 100, Level = 10 };
+            Check(Find(true, out found) && found.Guid == unknown.Guid, "dead full candidate excluded");
+            reader.Fields[2] = new() { Health = 40, MaxHealth = 100, Level = 10 };
+            snapshot.Units.Remove(unknown);
+            Check(Find(true, out found) && found.Guid == injured.Guid, "only injured candidates fall back to nearest");
+            reader.Fields[2] = new() { Health = 100, MaxHealth = 100, Level = 10 };
+            reader.Fields[1] = new() { Health = 100, MaxHealth = 100, Level = 10 };
+            Check(Find(true, out found) && found.Guid == injured.Guid, "nearest full-health candidate wins");
+            Console.WriteLine("Full-health pull preference fixtures passed (synthetic only).");
+        }
+    }
+}

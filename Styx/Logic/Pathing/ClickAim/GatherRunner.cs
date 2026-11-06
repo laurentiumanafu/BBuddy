@@ -638,7 +638,15 @@ internal static class GatherRunner
             {
                 if (StopIfDeadOrGhost()) break;
                 if (reader.IsExperimental70707 && !WowBGrindFactions.Experimental70707BarSafe(reader))
-                { Logging.Write("[Gather] " + reader.ExperimentalBuildNumber + " action bar changed or became unreadable; stopping"); break; }
+                {
+                    ClickAimKeySteer.ReleaseHeld();
+                    ClickAimKeySteer.ReleaseArrows(hwnd);
+                    Logging.Write("[Gather] action bar changed or was unreadable; holding movement while checking the original bar");
+                    if (!WowBGrindFactions.WaitForExperimentalBar(reader, () => _stop || RouteRunner.StopRequested, out string barReason))
+                    { Logging.Write("[Gather] " + reader.ExperimentalBuildNumber + " action bar not safely restored: " + barReason + "; stopping"); break; }
+                    Logging.Write("[Gather] action bar matched the original snapshot again; rechecking combat before continuing");
+                    continue;
+                }
                 if (!MapStillCurrent() || (roam != null && !roam.MapCurrent())) break;
                 if (!GrindRunner.TryReadGatherCombat(out bool fighting))
                 {
