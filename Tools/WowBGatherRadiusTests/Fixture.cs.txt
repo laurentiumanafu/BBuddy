@@ -90,19 +90,20 @@ static class Program
     }
     static void Main()
     {
-        const double radius = __RADIUS__;
+        const double radius = __RADIUS__, grindRadius = __GRIND_RADIUS__;
         var mem=new Memory(); var reader=new WowBReader(); ObjectManager.Wow=mem; ObjectManager.WowB=reader;
         Node(mem,reader,1,99); Node(mem,reader,2,100); Node(mem,reader,3,101);
         Node(mem,reader,4,999); Node(mem,reader,5,1000); Node(mem,reader,6,1001);
         Node(mem,reader,7,0,1001); // radius is 3D, not horizontal only
+        Node(mem,reader,8,149); Node(mem,reader,9,150); Node(mem,reader,10,151);
         Check(GatherNodeScanner.TryCapture(radius,out var result,out var stats),"capture succeeds");
-        Check(result.Count==5 && result.Select(n=>n.Distance).SequenceEqual(new double[] {99,100,101,999,1000}),"1000 yd inclusive, sorted, farther excluded");
-        Check(stats.KnownGuidEntries==7 && stats.OutsideRadius==2,"outside-radius diagnostics");
+        Check(result.Count==8 && result.Select(n=>n.Distance).SequenceEqual(new double[] {99,100,101,149,150,151,999,1000}),"1000 yd inclusive, sorted, farther excluded");
+        Check(stats.KnownGuidEntries==10 && stats.OutsideRadius==2,"outside-radius diagnostics");
         Check(GatherNodeScanner.IsEligible(result[0],true,1,false,0) && !GatherNodeScanner.IsEligible(result[0],false,0,true,1),"profession gate unchanged");
-        Check(GatherNodeScanner.TryCapture(25,out result) && result.Count==0,"Grind discovery radius stays separate");
+        Check(GatherNodeScanner.TryCapture(grindRadius,out result) && result.Select(n=>n.Distance).SequenceEqual(new double[] {99,100,101,149,150}),"Grind 150 yd inclusive, 151 excluded");
         Check(!GatherNodeScanner.TryCapture(double.NaN,out _) && !GatherNodeScanner.TryCapture(0,out _),"invalid radii rejected");
         reader.Stale.Add(reader.Records[4].RecordPtr);
-        Check(GatherNodeScanner.TryCapture(radius,out result,out stats) && result.Count==4 && stats.Changed==1,"stale pool record rejected");
+        Check(GatherNodeScanner.TryCapture(radius,out result,out stats) && result.Count==7 && stats.Changed==1,"stale pool record rejected");
         reader.ExperimentalGrindActive=false;
         Check(!GatherNodeScanner.TryCapture(radius,out _),"experimental session guard retained");
         Console.WriteLine("Gather radius production scanner fixtures passed (synthetic loaded objects only).");

@@ -15,8 +15,8 @@ internal static class GatherRunner
     // This is a filter on the client's loaded object pool, not a guarantee
     // that nodes are streamed or mesh-reachable at this distance.
     private const double SearchYd = 1000.0;
-    // Optional Grind detours stay local; standalone GatherBuddy scans farther.
-    private const double GrindSearchYd = 25.0;
+    // Optional Grind gathering has a separate, shorter discovery radius.
+    private const double GrindSearchYd = 150.0;
     private const double InteractYd = 5.0;
     private const int RetryMs = 90000;
     private const int InteractionRetryMs = 20000;
@@ -502,7 +502,8 @@ internal static class GatherRunner
             _lastSafetySummary = unchecked(Environment.TickCount - 15000);
             Logging.Write("[Grind gather] enabled: Mining=" + GatherSettings.Mining + " skill=" + GatherSettings.MiningSkill +
                 ", Herbalism=" + GatherSettings.Herbalism + " skill=" + GatherSettings.HerbalismSkill +
-                "; resources within 25 yd, combat and nearby NPCs take priority. Hostility and 70707 node layout remain unverified.");
+                "; resources within " + GrindSearchYd.ToString("F0", CultureInfo.InvariantCulture) +
+                " yd in the client-loaded pool; combat and nearby NPCs take priority. Hostility and 70707 node layout remain unverified.");
             return true;
         }
         catch (Exception ex) { Logging.Write("[Grind gather] disabled: " + ex.Message); return false; }

@@ -365,7 +365,7 @@ currently run as a one-shot route by the existing UI, not as the Grind loop.
 
 The Grind thread and mover remain in control; no second GatherBuddy loop is
 started. Combat and vendor requests take priority. Eligible nodes are searched
-within 100 yd before and during hotspot legs, using the same profession, skill,
+within 150 yd before and during hotspot legs, using the same profession, skill,
 GUID, cooldown and profile-blackspot checks as GatherBuddy. A node detour uses
 the same mesh and exact-hover-confirmed interaction, and resumes the interrupted
 hotspot afterward. Before and during the detour, hover search, and cast wait,
@@ -447,4 +447,4 @@ This is **not exact zone confinement**: the 70291 zone/area offsets are unverifi
 
 ### GatherBuddy node search radius
 
-Standalone WowB GatherBuddy now filters the client-loaded object pool within **1000 yd** of the player instead of 100 yd, with nearer eligible resources still selected first. This applies to profile and profile-free runs, including route-interruption scans and fresh node rechecks. It cannot force the game to load or reveal resources at that distance; pool coverage is client-controlled and a 1000-yd scan is not a map-wide census. Long approaches still require a complete validated mesh path and retain combat, map, STOP, profession, cooldown and close-range interaction checks. Nodes can disappear or become unavailable before arrival. Optional gathering during Grind still discovers resources only within **25 yd**; the stopped Gather probe's separate diagnostic radius remains 100 yd. Windows and live validation remain necessary.
+Standalone WowB GatherBuddy now filters the client-loaded object pool within **1000 yd** of the player instead of 100 yd, with nearer eligible resources still selected first. This applies to profile and profile-free runs, including route-interruption scans and fresh node rechecks. It cannot force the game to load or reveal resources at that distance; pool coverage is client-controlled and a 1000-yd scan is not a map-wide census. Long approaches still require a complete validated mesh path and retain combat, map, STOP, profession, cooldown and close-range interaction checks. Nodes can disappear or become unavailable before arrival. Optional gathering during Grind discovers client-loaded resources within **150 yd**; Grind's separate monster search radius remains 100 yd, and the stopped Gather probe's separate diagnostic radius remains 100 yd. Windows and live validation remain necessary.
