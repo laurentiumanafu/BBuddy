@@ -36,7 +36,7 @@ assert '!melee && !shockMelee && castDamage != null' in fight
 assert 'bool temporaryShockMelee = shockAutoPlan && !melee;' in fight
 assert 'if (!temporaryShockMelee && !meleeOnce)' in fight
 assert fight.index('bool temporaryShockMelee =') < fight.index('if (d > MeleeEngageYd)')
-assert 'if (!ChaseStep(hwnd, watch, target, out blocked))' in fight
+assert 'if (!ChaseStep(hwnd, watch, target, out blocked, combatMoveAllowed: defensiveMovement))' in fight
 assert 'damage source and auto-attack state unverified' in fight
 assert 'lastShockDamageMs' in fight[fight.index('            /* Melee and ranged both reported nothing:'):]
 heal = fight[fight.index('if (ClickAimHealPolicy.ShouldAttemptHeal('):fight.index('// Optional observed-expired self-only buffs')]

@@ -31,7 +31,7 @@ assert fight.index('ClickAimInput.TapKey(hwnd, heal.KeyVk') < fight.index('Buffs
 quiet_method = controller[controller.index('    internal bool TryApply('):controller.index('// 70707 research candidate') ]
 assert '0x70' not in quiet_method and 'TabVk' not in quiet_method
 assert '() => FightAttackInputAllowed(reader, fightMemory, defenceTarget, expectedPull, !defenceOnly || defenceFactionFilter)' in fight
-assert 'report = Fight(hwnd, player.Location.X, player.Location.Y, false, true, target.Guid, target, grindMode)' in grind
+assert 'report = Fight(hwnd, player.Location.X, player.Location.Y, false, true, target.Guid, target, grindMode, remoteDefence)' in grind
 combat_method = controller[controller.index('    internal bool TryApplyInCombat('):controller.index('    // Returns true only if at least one buff key')]
 assert '0x70' not in combat_method and 'TabVk' not in combat_method
 assert 'CombatManaEstimate(action.Id)' in combat_method and 'reader.IsExperimental70707' in combat_method
