@@ -1,0 +1,110 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using GreenMagic;
+using Styx.WoWInternals;
+using Styx.Offsets;
+using Styx.Logic.Pathing;
+namespace Bots.Gatherbuddy
+{
+    public sealed class GatherableNode
+    {
+        public uint Entry, RequiredSkill; public string Name;
+        public GatherableNode(uint entry,string name,uint skill) { Entry=entry; Name=name; RequiredSkill=skill; }
+    }
+    public static class GatherableNodes
+    {
+        public static readonly GatherableNode[] Herbs = { new(1618,"Herb",1) };
+        public static readonly GatherableNode[] Minerals = { new(1731,"Copper",1) };
+        public static readonly HashSet<uint> DefaultBlacklistedEntries = new() { 1610 };
+    }
+}
+namespace GreenMagic
+{
+    public sealed class Memory
+    {
+        public bool Is64BitTarget = true; public ulong ImageBase64 = 0x100000000;
+        readonly Dictionary<ulong,byte> bytes = new();
+        public void Bytes(ulong address, byte[] data) { for (int i=0;i<data.Length;i++) bytes[address+(ulong)i]=data[i]; }
+        public byte[]? ReadBytes64(ulong address,int count)
+        { var b=new byte[count]; for (int i=0;i<count;i++) if (!bytes.TryGetValue(address+(ulong)i,out b[i])) return null; return b; }
+        public IDisposable TemporaryCacheState(bool ignored) => new Scope();
+        sealed class Scope : IDisposable { public void Dispose() { } }
+    }
+}
+namespace Styx.Offsets
+{
+    public static class WowBOffsets { public const ulong RecordDataBlockPtrOffset=0xD8, RecordGuidLoOffset=0x18, RecordPositionOffset=0x60; }
+    public static class Wow70707Offsets { public const ulong GameObjectVtableCandidate=0x4000; }
+    public static class Wow70755Offsets { public const ulong GameObjectVtableCandidate=0x5000; }
+    public static class Wow70790Offsets { public const ulong GameObjectVtableCandidate=0x6000; }
+}
+namespace Styx.WoWInternals
+{
+    public readonly struct WowBGuid
+    {
+        public readonly ulong Low,High;
+        public WowBGuid(ulong low,ulong high) { Low=low; High=high; }
+        public bool IsEmpty => Low==0 && High==0;
+        public static bool operator ==(WowBGuid a,WowBGuid b) => a.Low==b.Low && a.High==b.High;
+        public static bool operator !=(WowBGuid a,WowBGuid b) => !(a==b);
+        public override bool Equals(object? o) => o is WowBGuid g && this==g;
+        public override int GetHashCode() => HashCode.Combine(Low,High);
+    }
+    public struct WoWPoint { public float X,Y,Z; public WoWPoint(float x,float y,float z) { X=x; Y=y; Z=z; } }
+    public struct WowBObservedUnit { public WoWPoint Location; }
+    public sealed class WowBWorldSnapshot
+    { public bool TryGetLocalPlayer(out WowBObservedUnit player) { player = new WowBObservedUnit { Location = new WoWPoint(0,0,0) }; return true; } }
+    public sealed class WowBReader
+    {
+        public readonly struct WowBPoolObject
+        { public readonly WowBGuid Guid; public readonly ulong RecordPtr; public WowBPoolObject(WowBGuid guid,ulong ptr) { Guid=guid; RecordPtr=ptr; } }
+        public bool IsExperimental70707=true, ExperimentalGrindActive=true;
+        public ulong GameObjectVtableCandidateRva=Wow70790Offsets.GameObjectVtableCandidate;
+        public List<WowBPoolObject> Records=new(); public HashSet<ulong> Stale=new();
+        public bool TryCaptureWorldSnapshot(out WowBWorldSnapshot? snap) { snap=new WowBWorldSnapshot(); return true; }
+        public IEnumerable<WowBPoolObject> EnumeratePoolObjects() => Records;
+        public bool IsPoolRecordCurrent(WowBPoolObject record) => !Stale.Contains(record.RecordPtr);
+    }
+    public static class ObjectManager { public static Memory? Wow; public static WowBReader? WowB; }
+}
+static class Program
+{
+    static void Check(bool condition,string label) { if (!condition) throw new Exception(label); }
+    static void Write(Memory mem,ulong address,ulong value) => mem.Bytes(address,BitConverter.GetBytes(value));
+    static void Node(Memory mem,WowBReader reader,int id,float distance,float z=0)
+    {
+        ulong rec=0x300000UL+(ulong)id*0x1000UL, obj=0x500000UL+(ulong)id*0x1000UL;
+        var guid=new WowBGuid((ulong)id,(ulong)1731<<6);
+        reader.Records.Add(new WowBReader.WowBPoolObject(guid,rec));
+        Write(mem,rec+WowBOffsets.RecordDataBlockPtrOffset,obj);
+        Write(mem,rec+WowBOffsets.RecordGuidLoOffset,guid.Low); Write(mem,rec+WowBOffsets.RecordGuidLoOffset+8,guid.High);
+        mem.Bytes(rec+WowBOffsets.RecordPositionOffset,BitConverter.GetBytes(distance));
+        mem.Bytes(rec+WowBOffsets.RecordPositionOffset+4,BitConverter.GetBytes(0f));
+        mem.Bytes(rec+WowBOffsets.RecordPositionOffset+8,BitConverter.GetBytes(z));
+        var header=new byte[0x94];
+        BitConverter.GetBytes(mem.ImageBase64+reader.GameObjectVtableCandidateRva).CopyTo(header,0);
+        BitConverter.GetBytes(rec).CopyTo(header,8); BitConverter.GetBytes(guid.Low).CopyTo(header,16);
+        BitConverter.GetBytes(guid.High).CopyTo(header,24); BitConverter.GetBytes(1731u).CopyTo(header,0x90);
+        mem.Bytes(obj,header);
+    }
+    static void Main()
+    {
+        const double radius = __RADIUS__;
+        var mem=new Memory(); var reader=new WowBReader(); ObjectManager.Wow=mem; ObjectManager.WowB=reader;
+        Node(mem,reader,1,99); Node(mem,reader,2,100); Node(mem,reader,3,101);
+        Node(mem,reader,4,999); Node(mem,reader,5,1000); Node(mem,reader,6,1001);
+        Node(mem,reader,7,0,1001); // radius is 3D, not horizontal only
+        Check(GatherNodeScanner.TryCapture(radius,out var result,out var stats),"capture succeeds");
+        Check(result.Count==5 && result.Select(n=>n.Distance).SequenceEqual(new double[] {99,100,101,999,1000}),"1000 yd inclusive, sorted, farther excluded");
+        Check(stats.KnownGuidEntries==7 && stats.OutsideRadius==2,"outside-radius diagnostics");
+        Check(GatherNodeScanner.IsEligible(result[0],true,1,false,0) && !GatherNodeScanner.IsEligible(result[0],false,0,true,1),"profession gate unchanged");
+        Check(GatherNodeScanner.TryCapture(25,out result) && result.Count==0,"Grind discovery radius stays separate");
+        Check(!GatherNodeScanner.TryCapture(double.NaN,out _) && !GatherNodeScanner.TryCapture(0,out _),"invalid radii rejected");
+        reader.Stale.Add(reader.Records[4].RecordPtr);
+        Check(GatherNodeScanner.TryCapture(radius,out result,out stats) && result.Count==4 && stats.Changed==1,"stale pool record rejected");
+        reader.ExperimentalGrindActive=false;
+        Check(!GatherNodeScanner.TryCapture(radius,out _),"experimental session guard retained");
+        Console.WriteLine("Gather radius production scanner fixtures passed (synthetic loaded objects only).");
+    }
+}

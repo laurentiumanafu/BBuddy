@@ -12,8 +12,10 @@ namespace Styx.Logic.Pathing;
 /// <summary>Experimental ground gatherer for 70291. No Lua or process writes.</summary>
 internal static class GatherRunner
 {
-    private const double SearchYd = 100.0;
-    // Optional Grind detours stay local; standalone GatherBuddy keeps 100 yd.
+    // This is a filter on the client's loaded object pool, not a guarantee
+    // that nodes are streamed or mesh-reachable at this distance.
+    private const double SearchYd = 1000.0;
+    // Optional Grind detours stay local; standalone GatherBuddy scans farther.
     private const double GrindSearchYd = 25.0;
     private const double InteractYd = 5.0;
     private const int RetryMs = 90000;
@@ -619,6 +621,8 @@ internal static class GatherRunner
             if (reader == null || !reader.TryReadMapId(out _sessionMap) || ObjectManager.WowB != reader)
             { Logging.Write("[Gather] client map ID unreadable; refusing to guess a map"); return; }
             Logging.Write("[Gather] client map root reports map " + _sessionMap);
+            Logging.Write("[Gather] node scan radius " + SearchYd.ToString("F0", CultureInfo.InvariantCulture) +
+                " yd; only client-loaded pool objects can be seen, and distant routes require a validated mesh");
             if (roam != null && !roam.MapCurrent()) { Logging.Write("[Roam] map changed before start; stopping"); return; }
             Logging.Write("[Gather] experimental ground gatherer: " + (roam == null ? points.Count + " hotspots" : "profile-free local roaming") + "; Mining="
                 + GatherSettings.Mining + " skill=" + GatherSettings.MiningSkill + "; Herbalism="
