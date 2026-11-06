@@ -102,6 +102,28 @@ internal static class Experimental70790Tests
             exploratory.Contains("research subtotal unavailable") && WowBInventoryProbe.ObservedBags().Count == 0,
             "unreadable alternative reports raw research only, without subtotal or choices");
         Require(!WowBInventoryProbe.ClassifyBag(choices[0], WowBBagKind.Specialty, out _), "unresolved candidate cannot be classified");
+        // Reproduce the two pointer-like values observed in the 2026-11-06 log.
+        // The simulated OS query must affirm the entire 32-byte header is free;
+        // unconfirmed unreadable pages still block all choices and selling.
+        memory.U64(bagRecord + 0x40, 0);
+        memory.U64(bagRecord + 0x58, 0x1FFFE0D4); memory.U64(bagRecord + 0x118, 0x8FFFFDFC);
+        memory.FreeHeaders.Add(0x1FFFE0D4);
+        string partiallyFree = WowBInventoryProbe.Capture();
+        Require(partiallyFree.Contains("confirmed free headers=1") && partiallyFree.Contains("+0x118:0x8FFFFDFC") &&
+            partiallyFree.Contains("research subtotal unavailable"), "unknown second address still blocks subtotal");
+        memory.FreeHeaders.Add(0x8FFFFDFC);
+        string freeReport = WowBInventoryProbe.Capture();
+        Require(freeReport.Contains("confirmed free headers=2") && freeReport.Contains("70790 research subtotal: candidate sizes=18, zero-tags=18") &&
+            WowBInventoryProbe.ObservedBags().Count == 1, "stable OS-confirmed free ranges do not hide a matching bag");
+        int queries = 0;
+        memory.OnFreeQuery = address => {
+            if (address == 0x1FFFE0D4 && ++queries == 3) memory.FreeHeaders.Remove(address);
+        };
+        Require(WowBInventoryProbe.Capture().Contains("memory map, identity table") && WowBInventoryProbe.ObservedBags().Count == 0,
+            "mapping changed before snapshot completion fails closed");
+        memory.OnFreeQuery = null; memory.FreeHeaders.Clear();
+        memory.U64(bagRecord + 0x58, 0); memory.U64(bagRecord + 0x118, 0);
+        memory.U64(bagRecord + 0x40, 0x145D8);
         // A nearby separately occupied record can place its GUID inside the
         // broad scan window. Diagnose it without treating it as a resolved bag.
         memory.U32(0x21000000 + WowBOffsets.HandlePoolCapacityOffset, 4);
@@ -166,6 +188,13 @@ internal static class Experimental70790Tests
         ClickAimUi.Running = true;
         Require(WowBInventoryProbe.TryCaptureSellingSubtotal(out int tags, out WowBGuid owner) && tags == 16 && owner == player,
             "70790 active selling subtotal excludes specialty slots");
+        memory.U64(bagRecord + 0x58, 0x1FFFE0D4); memory.U64(bagRecord + 0x118, 0x8FFFFDFC);
+        memory.FreeHeaders.Add(0x1FFFE0D4); memory.FreeHeaders.Add(0x8FFFFDFC);
+        Require(WowBInventoryProbe.TryCaptureSellingSubtotal(out tags, out owner) && tags == 16 && owner == player,
+            "active subtotal permits OS-confirmed free alternatives while excluding specialty bag");
+        memory.FreeHeaders.Remove(0x8FFFFDFC);
+        Require(!WowBInventoryProbe.TryCaptureSellingSubtotal(out _, out _), "unknown alternative blocks active subtotal");
+        memory.FreeHeaders.Clear(); memory.U64(bagRecord + 0x58, 0); memory.U64(bagRecord + 0x118, 0);
         memory.U32(0x21000000 + WowBOffsets.HandlePoolCapacityOffset, 4);
         memory.U32(0x22000030, (uint)WowBOffsets.HandleOccupiedBit); memory.U64(0x22000038, bagRecord + 0xC0);
         memory.U64(bagRecord + 0x28, bagData);

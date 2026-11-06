@@ -527,6 +527,13 @@ namespace GreenMagic
         public IntPtr WindowHandle { get; set; } = new IntPtr(1);
         public ulong LastStringReadAddress { get; private set; }
         public Action<ulong, int>? OnRead { get; set; }
+        public HashSet<ulong> FreeHeaders { get; } = new();
+        public Action<ulong>? OnFreeQuery { get; set; }
+        public bool IsMemoryRangeFree64(ulong address, int length)
+        {
+            OnFreeQuery?.Invoke(address);
+            return length == 0x20 && FreeHeaders.Contains(address);
+        }
         public bool CacheEnabled { get; private set; }
         public void EnableCache() => CacheEnabled = true;
         public void DisableCache() => CacheEnabled = false;

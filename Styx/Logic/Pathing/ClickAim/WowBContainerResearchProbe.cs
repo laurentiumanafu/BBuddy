@@ -116,9 +116,11 @@ internal static class WowBContainerResearchProbe
     // identical pointers and fail closed on multiple distinct matches.
     private static bool FindCandidate(Memory memory, WowBReader reader, List<WowBReader.WowBPoolObject> records,
         WowBReader.WowBPoolObject record, WowBGuid guid, out ulong data, out ulong sourceOffset,
-        out byte[]? pointerBytes, out byte[]? header, out bool exploratory, out string detail)
+        out byte[]? pointerBytes, out byte[]? header, out bool exploratory, out string detail,
+        out List<ulong> freeHeaders)
     {
         data = 0; sourceOffset = 0; pointerBytes = null; header = null; exploratory = false;
+        freeHeaders = new List<ulong>();
         // The 70790 broad scan can overlap separately occupied records. Treat an
         // unreadable pointer-like qword as GUID data only when a stable neighboring
         // pool record proves that exact address is part of its full GUID. Readable
@@ -146,6 +148,7 @@ internal static class WowBContainerResearchProbe
         }
         var candidates = new HashSet<ulong>();
         var pointerLeads = new List<string>();
+        var unavailableLeads = new List<string>();
         string rawD8 = "unreadable", d8Header = "unavailable";
         int unreadableFields = 0, unavailableHeaders = 0, changedFields = 0, neighborGuidFields = 0;
         var fieldReads = new List<(ulong Offset, byte[] Value)>();
@@ -177,11 +180,19 @@ internal static class WowBContainerResearchProbe
                     if (BitConverter.ToUInt64(neighbor.Guid, guidOffset) == address)
                     { usedNeighbors.Add(neighbor); neighborGuidFields++; continue; }
                 }
-                unavailableHeaders++; continue;
+                // An address positively reported as entirely MEM_FREE cannot
+                // currently contain a header. Reserved, no-access, query failures,
+                // and partially covered ranges remain unknown and block resolution.
+                if (reader.IsExperimental70790 && memory.IsMemoryRangeFree64(address, 0x20))
+                { freeHeaders.Add(address); continue; }
+                unavailableHeaders++;
+                unavailableLeads.Add($"+0x{offset:X}:0x{address:X}");
+                continue;
             }
             if (BitConverter.ToUInt64(sampleHeader, 8) != record.RecordPtr || GuidAt(sampleHeader, 0x10) != guid) continue;
             if (!Same(sampleHeader, memory.ReadBytes64(address, 0x20)) ||
-                !Same(value, memory.ReadBytes64(record.RecordPtr + offset, 8))) { unavailableHeaders++; continue; }
+                !Same(value, memory.ReadBytes64(record.RecordPtr + offset, 8)))
+            { unavailableHeaders++; unavailableLeads.Add($"+0x{offset:X}:0x{address:X} (changed)"); continue; }
             if (!candidates.Add(address)) continue;
             data = address; sourceOffset = offset; pointerBytes = value; header = sampleHeader;
         }
@@ -191,7 +202,9 @@ internal static class WowBContainerResearchProbe
             if (!reader.IsPoolRecordCurrent(neighbor.Record) ||
                 !Same(neighbor.Guid, memory.ReadBytes64(neighbor.Record.RecordPtr + WowBOffsets.RecordGuidLoOffset, 16)) ||
                 !reader.IsPoolRecordCurrent(neighbor.Record)) changedFields++;
-        detail = $"record+0xD8={rawD8} raw32={d8Header}; pointer-like fields=[{string.Join(",", pointerLeads)}] (max 12); identity-matching headers={candidates.Count}; unreadable fields={unreadableFields}; unavailable headers={unavailableHeaders}; verified neighbor GUID fields={neighborGuidFields}; changed fields={changedFields}";
+        foreach (ulong address in freeHeaders)
+            if (!memory.IsMemoryRangeFree64(address, 0x20)) changedFields++;
+        detail = $"record+0xD8={rawD8} raw32={d8Header}; pointer-like fields=[{string.Join(",", pointerLeads)}] (max 12); identity-matching headers={candidates.Count}; unreadable fields={unreadableFields}; unavailable headers={unavailableHeaders}; unavailable fields=[{string.Join(",", unavailableLeads)}]; confirmed free headers={freeHeaders.Count}; verified neighbor GUID fields={neighborGuidFields}; changed fields={changedFields}";
         // A unique observed header is useful for stopped research even if other
         // pointer-like values were unreadable. It is NOT a resolved container.
         exploratory = candidates.Count == 1 && unreadableFields == 0 && changedFields == 0 && unavailableHeaders > 0;
@@ -271,6 +284,7 @@ internal static class WowBContainerResearchProbe
             text.AppendLine($"{reader.ExperimentalBuildNumber} container research: indexes 0..4 are static candidates, not user bag numbers; no bag/full verdict.");
             text.AppendLine("Container code markers before: " + markerBefore + "; unreadable is not confirmation of a match.");
             bool comparable = _previousMemory == memory && _previousReader == reader && _previousPlayer == player.Guid && _previous != null;
+            var allFreeHeaders = new List<ulong>();
             for (int i = 0; i < CandidateIdentities; i++)
             {
                 WowBGuid guid = GuidAt(identityBytes, i * SlotStride);
@@ -280,7 +294,7 @@ internal static class WowBContainerResearchProbe
                 foreach (var item in records) if (item.Guid == guid) { matches++; record = item; }
                 if (matches != 1 || !reader.IsPoolRecordCurrent(record))
                 { text.AppendFormat(CultureInfo.InvariantCulture, "container-candidate[{0}] identity={1} pool matches={2}; object unavailable/ambiguous.\n", i, guid, matches); continue; }
-                if (!FindCandidate(memory, reader, records, record, guid, out ulong data, out ulong sourceOffset, out byte[]? pointerBytes, out byte[]? header, out bool exploratory, out string detail))
+                if (!FindCandidate(memory, reader, records, record, guid, out ulong data, out ulong sourceOffset, out byte[]? pointerBytes, out byte[]? header, out bool exploratory, out string detail, out List<ulong> freeHeaders))
                 {
                     text.AppendFormat(CultureInfo.InvariantCulture, "container-candidate[{0}] no unique stable identity-matching header; {1}. Unknown.\n", i, detail);
                     if (!active && reader.IsExperimental70790 && exploratory && pointerBytes != null && header != null)
@@ -306,6 +320,7 @@ internal static class WowBContainerResearchProbe
                     !Same(pointerBytes, memory.ReadBytes64(record.RecordPtr + sourceOffset, 8)) ||
                     recordGuid == null || recordGuid.Length != 16 || GuidAt(recordGuid, 0) != guid || !reader.IsPoolRecordCurrent(record))
                 { text.AppendFormat(CultureInfo.InvariantCulture, "container-candidate[{0}] unstable or unreadable; discarded.\n", i); continue; }
+                allFreeHeaders.AddRange(freeHeaders);
                 var current = new Candidate { Guid = guid, Data = data, Count = count, Slots = slots! };
                 next[i] = current;
                 int zeroTags = 0;
@@ -329,11 +344,14 @@ internal static class WowBContainerResearchProbe
                 }
             }
             bool markersAfterValid = Signatures(memory, reader.ExperimentalBuildNumber, out string markerAfter);
-            if (!Same(identityBytes, memory.ReadBytes64(table, CandidateIdentities * SlotStride)) || !markersAfterValid ||
+            bool freeHeadersStillFree = true;
+            foreach (ulong address in allFreeHeaders)
+                if (!memory.IsMemoryRangeFree64(address, 0x20)) { freeHeadersStillFree = false; break; }
+            if (!freeHeadersStillFree || !Same(identityBytes, memory.ReadBytes64(table, CandidateIdentities * SlotStride)) || !markersAfterValid ||
                 !reader.TryCaptureWorldSnapshot(out WowBWorldSnapshot? after) || after == null ||
                 !after.TryGetLocalPlayer(out WowBObservedUnit final) || final.Guid != player.Guid ||
                 final.UnitAddress != player.UnitAddress || final.RecordAddress != player.RecordAddress || !SamePlayer(memory, reader, final, active))
-            { Forget(); return "Container research: identity table, player, attachment, code or bot state changed; discarded. Code markers after: " + markerAfter + ".\n"; }
+            { Forget(); return "Container research: memory map, identity table, player, attachment, code or bot state changed; discarded. Code markers after: " + markerAfter + ".\n"; }
             // Aggregate only nonzero identity-table entries that all resolved
             // uniquely and stably. Zero identities, unscanned indexes, category
             // overlap and specialty bags remain unknown, so this is not a total.

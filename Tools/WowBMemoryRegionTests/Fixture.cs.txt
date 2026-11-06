@@ -1,0 +1,42 @@
+using System;
+using System.Runtime.InteropServices;
+using GreenMagic.Native;
+namespace GreenMagic.Native
+{
+    public static class Imports
+    {
+        public static MEMORY_BASIC_INFORMATION64 Info;
+        public static int Returned = 48;
+        public static IntPtr VirtualQueryEx64(IntPtr process, IntPtr address, out MEMORY_BASIC_INFORMATION64 info, IntPtr size)
+        { info = Info; return (IntPtr)Returned; }
+    }
+}
+namespace GreenMagic
+{
+    public sealed class Memory
+    {
+        public IntPtr ProcessHandle = (IntPtr)1;
+        // __METHOD__
+    }
+}
+static class Program
+{
+    static void Check(bool ok,string label) { if (!ok) throw new Exception(label); }
+    static void Main()
+    {
+        var memory = new GreenMagic.Memory();
+        Imports.Info = new MEMORY_BASIC_INFORMATION64 { BaseAddress=0x1000, RegionSize=0x1000, State=0x10000 };
+        Check(memory.IsMemoryRangeFree64(0x1000,32),"start is free");
+        Check(memory.IsMemoryRangeFree64(0x1FE0,32),"whole header exactly inside free region");
+        Check(!memory.IsMemoryRangeFree64(0x1FE1,32),"crossing region is unknown");
+        Check(!memory.IsMemoryRangeFree64(0xFFF,32),"address below reported base is unknown");
+        Check(!memory.IsMemoryRangeFree64(0x1000,0),"zero length rejected");
+        Imports.Returned=0; Check(!memory.IsMemoryRangeFree64(0x1000,32),"failed query unknown");
+        Imports.Returned=40; Check(!memory.IsMemoryRangeFree64(0x1000,32),"partial query unknown");
+        Imports.Returned=48; Imports.Info.State=0x2000; Check(!memory.IsMemoryRangeFree64(0x1000,32),"reserved unknown");
+        Imports.Info.State=0x1000; Imports.Info.Protect=1; Check(!memory.IsMemoryRangeFree64(0x1000,32),"committed no-access unknown");
+        Imports.Info.State=0x10000; memory.ProcessHandle=IntPtr.Zero; Check(!memory.IsMemoryRangeFree64(0x1000,32),"missing process unknown");
+        memory.ProcessHandle=(IntPtr)1; Check(!memory.IsMemoryRangeFree64(0x8000000000000000,32),"unsupported address unknown");
+        Console.WriteLine("Memory-free region guard fixtures passed (mock VirtualQueryEx, not Windows validation).");
+    }
+}

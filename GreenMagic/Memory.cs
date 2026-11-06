@@ -1302,6 +1302,22 @@ namespace GreenMagic
         }
 
         /// <summary>
+        /// True only when VirtualQueryEx positively reports that the entire range
+        /// is MEM_FREE. Query failures, reserved/committed pages and mixed regions
+        /// are unknown, not evidence that a pointer is invalid.
+        /// </summary>
+        public bool IsMemoryRangeFree64(ulong address, int length)
+        {
+            if (ProcessHandle == IntPtr.Zero || length <= 0 || address > long.MaxValue) return false;
+            int infoSize = Marshal.SizeOf(typeof(MEMORY_BASIC_INFORMATION64));
+            IntPtr result = Imports.VirtualQueryEx64(ProcessHandle, new IntPtr((long)address),
+                out MEMORY_BASIC_INFORMATION64 info, (IntPtr)infoSize);
+            if (result.ToInt64() != infoSize || info.State != 0x10000 || info.BaseAddress > address ||
+                info.RegionSize < (ulong)length) return false; // MEM_FREE
+            return address - info.BaseAddress <= info.RegionSize - (ulong)length;
+        }
+
+        /// <summary>
         /// Retrieves the thread context of a 64-bit thread. The FltSave and
         /// VectorRegister arrays must be pre-allocated for the marshaller,
         /// which this method handles.
