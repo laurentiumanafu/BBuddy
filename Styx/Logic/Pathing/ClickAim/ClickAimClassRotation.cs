@@ -44,7 +44,7 @@ internal static class ClickAimClassRotation
         [ClickAimRotationClass.Paladin] = new(new[] { "Holy Light", "Flash of Light", "Judgement", "Seal of Righteousness", "Crusader Strike" }, Array.Empty<string>(), new[] { "Crusader Strike" }, Array.Empty<string>(), new[] { "Holy Light", "Flash of Light" }),
         [ClickAimRotationClass.Priest] = new(new[] { "Smite", "Shadow Word: Pain", "Lesser Heal", "Power Word: Fortitude", "Mind Blast" }, new[] { "Smite" }, Array.Empty<string>(), new[] { "Shadow Word: Pain" }, new[] { "Lesser Heal", "Heal", "Flash Heal", "Renew" }, "Mind Blast", 10000, "Mind Blast"),
         [ClickAimRotationClass.Rogue] = new(new[] { "Sinister Strike", "Eviscerate", "Backstab", "Stealth" }, Array.Empty<string>(), new[] { "Sinister Strike" }, Array.Empty<string>(), Array.Empty<string>()),
-        [ClickAimRotationClass.Shaman] = new(new[] { "Lightning Bolt", "Earth Shock", "Flame Shock", "Healing Wave", "Lightning Shield" }, new[] { "Lightning Bolt" }, Array.Empty<string>(), new[] { "Flame Shock" }, new[] { "Healing Wave", "Lesser Healing Wave" }, "Earth Shock", 8000, "Shocks"),
+        [ClickAimRotationClass.Shaman] = new(new[] { "Lightning Bolt", "Earth Shock", "Frost Shock", "Flame Shock", "Healing Wave", "Lesser Healing Wave", "Lightning Shield" }, new[] { "Lightning Bolt" }, Array.Empty<string>(), new[] { "Flame Shock" }, new[] { "Healing Wave", "Lesser Healing Wave" }, "Earth Shock", 8000, "Shocks"),
         [ClickAimRotationClass.Warlock] = new(new[] { "Shadow Bolt", "Corruption", "Immolate", "Demon Skin" }, new[] { "Shadow Bolt" }, Array.Empty<string>(), new[] { "Corruption", "Immolate", "Curse of Agony" }, Array.Empty<string>()),
         [ClickAimRotationClass.Warrior] = new(new[] { "Heroic Strike", "Rend", "Battle Shout", "Charge" }, Array.Empty<string>(), new[] { "Heroic Strike" }, new[] { "Rend" }, Array.Empty<string>()),
         [ClickAimRotationClass.DeathKnight] = new(Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>())
@@ -118,6 +118,11 @@ internal static class ClickAimClassRotation
             plan.DamageGroup = plan.SupplementalGroup;
             plan.Supplemental = null;
         }
+        // If Bolt and Earth Shock are unavailable, Frost Shock can be the
+        // Shaman's direct opener. Keep Earth Shock's existing priority.
+        if (plan.Class == ClickAimRotationClass.Shaman && plan.Damage == null)
+            plan.Damage = Find(bar, new[] { "Frost Shock" }, ClickAimSpellRole.Damage);
+
         // A user-specified damage or heal override is still respected even when
         // its spell name is not in the built-in priority list.
         foreach (ClickAimAction action in bar)
@@ -132,16 +137,27 @@ internal static class ClickAimClassRotation
             else if (role == ClickAimSpellRole.Dot && plan.Dot == null) plan.Dot = action;
             else if (role == ClickAimSpellRole.Heal && plan.Heal == null) plan.Heal = action;
         }
+        // Manual damage overrides previously erased the Shock cooldown metadata.
+        // Only known Shaman Shock direct spells use this shared estimate.
+        if (plan.Class == ClickAimRotationClass.Shaman && plan.Damage != null && IsDirectShock(plan.Damage))
+        {
+            plan.DamageGroup = "Shocks";
+            plan.DamageIntervalMs = 8000;
+        }
         return plan;
     }
 
-    // Earth Shock as the Shaman's only direct spell is an instant with an
+    internal static bool IsDirectShock(ClickAimAction action)
+        => string.Equals(ClickAimCombat.NameOf(action.Id), "Earth Shock", StringComparison.OrdinalIgnoreCase) ||
+           string.Equals(ClickAimCombat.NameOf(action.Id), "Frost Shock", StringComparison.OrdinalIgnoreCase);
+
+    // Earth or Frost Shock as the Shaman's only direct spell is an instant with an
     // estimated shared cooldown, not a ranged filler. With Attack available,
     // close in after the opener and use melee between shocks. Do not apply this
     // policy to a Lightning Bolt filler, Hunter shots, or an ignored Attack.
     internal static bool ShockAutoPlan(ClickAimRotationPlan plan, ClickAimAction? auto)
         => plan.Class == ClickAimRotationClass.Shaman && plan.Damage != null && plan.Damage.IsDamage &&
-           string.Equals(ClickAimCombat.NameOf(plan.Damage.Id), "Earth Shock", StringComparison.OrdinalIgnoreCase) &&
+           IsDirectShock(plan.Damage) &&
            plan.DamageGroup == "Shocks" && plan.DamageIntervalMs > 0 && plan.Supplemental == null &&
            auto != null && auto.IsAutoAttack && auto.IsAttack && auto.KeyVk != 0;
 

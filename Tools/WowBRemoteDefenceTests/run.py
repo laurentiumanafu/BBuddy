@@ -33,7 +33,7 @@ assert '(!TryReadGatherCombat(out bool fighting) || !fighting)' in fight
 assert 'grindMode && !reader.IsExperimental70862, remoteDefence' in g
 assert 'FactionPullStillAllowed(ObjectManager.WowB, expectedPull, target)' in fight
 assert 'FactionPullStillAllowed(reader, expectedPull, target)' in fight
-assert fight.count('!defenceOnly || defenceFactionFilter, defenceOnly') == 6
+assert fight.count('!defenceOnly || defenceFactionFilter, defenceOnly') == 8
 assert 'target.UnitAddress != expectedPull.UnitAddress || target.RecordAddress != expectedPull.RecordAddress' in fight
 assert 'FactionPullStillAllowed(reader, expected, expected)' in g
 assert 'requireCombat && (!TryReadGatherCombat(out bool activeCombat) || !activeCombat)' in g

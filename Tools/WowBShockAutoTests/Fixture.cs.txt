@@ -37,6 +37,7 @@ namespace Styx.Logic.Pathing
         public static GreenMagic.Memory? Wow;
     }
     internal static class ClickAimAbort { public static bool Requested; }
+    internal static class RouteRunner { public static bool StopRequested; }
     internal static class WowBGrindFactions
     {
         public static bool BarSafe = true;
@@ -46,6 +47,8 @@ namespace Styx.Logic.Pathing
     {
         private static bool _stop;
         private static bool FactionSafe = true;
+        private static bool CombatReadable = true, Fighting = true;
+        private static bool TryReadGatherCombat(out bool fighting) { fighting = Fighting; return CombatReadable; }
         private static bool FactionAttackInputAllowed(WowBReader r, WowBObservedUnit expected, bool enforce) => FactionSafe;
         // __GUARD__
         private static void Check(bool value, string message) { if (!value) throw new Exception(message); }
@@ -62,6 +65,11 @@ namespace Styx.Logic.Pathing
             reader.Selected = new WowBGuid(2); Check(!Allowed(), "changed target withheld"); reader.Selected = target;
             FactionSafe = false; Check(!Allowed(), "faction withheld"); FactionSafe = true;
             WowBGrindFactions.BarSafe = false; Check(!Allowed(), "changed bar withheld"); WowBGrindFactions.BarSafe = true;
+            RouteRunner.StopRequested = true; Check(!Allowed(), "route STOP withheld"); RouteRunner.StopRequested = false;
+            bool Defensive() => FightAttackInputAllowed(reader, memory, target, default, false, true);
+            Check(Defensive(), "defensive input while fighting");
+            Fighting = false; Check(!Defensive(), "combat ended"); Fighting = true;
+            CombatReadable = false; Check(!Defensive(), "unreadable combat"); CombatReadable = true;
             ObjectManager.WowB = new WowBReader(); Check(!Allowed(), "changed attachment withheld");
             Console.WriteLine("Shock/Attack shared input guard fixtures passed (synthetic only).");
         }

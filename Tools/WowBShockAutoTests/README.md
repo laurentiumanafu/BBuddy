@@ -1,0 +1,3 @@
+# Shock and Attack checks
+
+`python Tools/WowBShockAutoTests/test_shock_structure.py` checks source wiring only. With a .NET 10 SDK, `python Tools/WowBShockAutoTests/run.py` checks wiring and executes the extracted input guard with synthetic state. `Tools/WowBReaderTests/RotationTests.cs` tests the production rotation policies, including the logged 70862 Frost Shock/Attack bar and overrides. These do not execute a full fight or show the live client's swing state. Attack is an unverified toggle: a press is attempted once per Fight, and a later change in actual attack state cannot currently be detected or repaired safely.

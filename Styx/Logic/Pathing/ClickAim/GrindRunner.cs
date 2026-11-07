@@ -5473,6 +5473,43 @@ internal static class GrindRunner
                 }
             }
 
+            // For a Shock/Attack Shaman, start Attack as soon as this target is
+            // actually in melee range, even if Shock is ready. A health drop is
+            // not proof of a swing. Attack is a toggle, so attempt it only once
+            // per Fight and never retry merely because damage is quiet.
+            bool shockAutoPlan = ClickAimClassRotation.ShockAutoPlan(rotation, auto);
+            if (shockAutoPlan) conservativeShockAttack = true;
+            if (ClickAimClassRotation.MayPressConservativeAttack(shockAutoPlan, attackPressed, false, false, d, AttackRangeYd))
+            {
+                ClickAimKeySteer.ReleaseHeld();
+                if (!ClickAimKeySteer.Face(target.Location.X, target.Location.Y, hwnd, 45.0, 3))
+                { ClickAimAbort.Wait(150); continue; }
+                if (!FightAttackInputAllowed(reader, fightMemory, defenceTarget, expectedPull, !defenceOnly || defenceFactionFilter, defenceOnly))
+                    return YieldForTargetChange(reader, fightMemory, defenceTarget);
+                // Facing can take time: re-read identity, health and distance before the key.
+                if (!Capture(out WowBWorldSnapshot? attackSnap) || attackSnap == null ||
+                    !attackSnap.TryGetLocalPlayer(out WowBObservedUnit attackPlayer) ||
+                    !attackSnap.TryGetSelectedTarget(out WowBObservedUnit attackTarget) ||
+                    attackTarget.Guid != defenceTarget || attackTarget.UnitAddress != expectedPull.UnitAddress ||
+                    attackTarget.RecordAddress != expectedPull.RecordAddress || attackTarget.IsLocalPlayer || attackTarget.HasPlayerVtable ||
+                    !reader.TryGetUnitFields(attackTarget.UnitAddress, out WowBReader.WowBUnitFields attackFields) ||
+                    !DefenceFieldsValid(attackFields.Health, attackFields.UnitFlags, false)) continue;
+                double attackDistance = ClickAimMath.Len(attackTarget.Location.X - attackPlayer.Location.X, attackTarget.Location.Y - attackPlayer.Location.Y);
+                if (!ClickAimClassRotation.MayPressConservativeAttack(shockAutoPlan, attackPressed, false, false, attackDistance, AttackRangeYd)) continue;
+                if (!FightAttackInputAllowed(reader, fightMemory, defenceTarget, expectedPull, !defenceOnly || defenceFactionFilter, defenceOnly))
+                    return YieldForTargetChange(reader, fightMemory, defenceTarget);
+                if (auto == null || !auto.IsAutoAttack || !auto.IsAttack || auto.KeyVk == 0) continue;
+                ClickAimInput.TapKey(hwnd, auto.KeyVk, 40);
+                attackPressed = true;
+                MarkFocusedAttack(attackTarget);
+                lastAttackPressMs = Environment.TickCount;
+                lastMeleeDamageMs = lastAttackPressMs; // grace period, not proof of a swing
+                presses++;
+                _presses++;
+                Logging.Write("[Grind] pressed Attack once at melee range before Shock; actual swing state is unverified");
+                continue; // refresh combat, target and resources before any spell
+            }
+
             /* ---- 1b. the damage-over-time spell, ONCE per target ----
              *
              * This is what the 19:07 run never did: Moonfire sat on slot 5 for the whole
@@ -5555,8 +5592,6 @@ internal static class GrindRunner
             // Classic Hunter shots have an estimated minimum range. If the target is
             // closer, the existing melee fallback takes over rather than spamming a shot.
             bool hunterTooClose = rotation.Class == ClickAimRotationClass.Hunter && d < 8.0;
-            bool shockAutoPlan = ClickAimClassRotation.ShockAutoPlan(rotation, auto);
-            if (shockAutoPlan) conservativeShockAttack = true;
             bool shockReady = ClickAimClassRotation.Ready(_rotationCooldowns, rotation.DamageGroup, Environment.TickCount);
             bool shockMelee = !melee && ClickAimClassRotation.PreferShockMelee(shockAutoPlan, shockReady);
             bool canCast = !melee && !shockMelee && castDamage != null && !castDamage.IsMelee && !hunterTooClose && myMana >= needForCast;
@@ -5685,7 +5720,9 @@ internal static class GrindRunner
                     {
                         if (_focusedFightGuid == defenceTarget) _focusedDamageObserved = true;
                         Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                            "[Grind] {0} does damage: mob health {1} -> {2} (mana {3} -> {4})",
+                            shockAutoPlan
+                                ? "[Grind] after {0}, mob health {1} -> {2} (mana {3} -> {4}); damage source and swing state unverified"
+                                : "[Grind] {0} does damage: mob health {1} -> {2} (mana {3} -> {4})",
                             castDamage!.Name, lastHealth, mobAfter, manaBefore, manaAfter));
                         lastHealth = mobAfter;
                         if (shockAutoPlan) { lastShockDamageMs = Environment.TickCount; quietRounds = 0; }
@@ -5736,7 +5773,7 @@ internal static class GrindRunner
             if (temporaryShockMelee && !shockMeleeLogged)
             {
                 shockMeleeLogged = true;
-                Logging.Write("[Grind] Earth Shock is the only direct spell: closing to start Attack and using Shock when ready; swing state remains unverified");
+                Logging.Write("[Grind] " + (damage?.Name ?? "Shock") + " is the only direct spell: closing to start Attack and using Shock when ready; swing state remains unverified");
             }
             if (!temporaryShockMelee && !meleeOnce)
             {

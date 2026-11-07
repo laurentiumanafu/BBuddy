@@ -24,6 +24,19 @@ assert attack.index('FightAttackInputAllowed(') < attack.index('ClickAimInput.Ta
 assert attack.index('if (!auto.IsAttack)') < attack.index('ClickAimInput.TapKey(hwnd, auto.KeyVk')
 assert 'MayPressConservativeAttack(true, attackPressed, swinging, pressPending, d, AttackRangeYd)' in attack
 assert attack.index('ClickAimInput.TapKey(hwnd, auto.KeyVk') < attack.index('attackPressed = true;')
+early = fight[fight.index('            // For a Shock/Attack Shaman'):fight.index('            /* ---- 1b. the damage-over-time spell')]
+assert early.index('MayPressConservativeAttack(shockAutoPlan, attackPressed, false, false, d, AttackRangeYd)') < early.index('ClickAimInput.TapKey(hwnd, auto.KeyVk')
+for required in ('FightAttackInputAllowed(', 'TryGetSelectedTarget(out WowBObservedUnit attackTarget)',
+                 'attackTarget.Guid != defenceTarget', 'attackTarget.UnitAddress != expectedPull.UnitAddress',
+                 'attackTarget.RecordAddress != expectedPull.RecordAddress', 'DefenceFieldsValid(',
+                 'MayPressConservativeAttack(shockAutoPlan, attackPressed, false, false, attackDistance, AttackRangeYd)',
+                 'auto == null || !auto.IsAutoAttack || !auto.IsAttack'):
+    assert early.index(required) < early.index('ClickAimInput.TapKey(hwnd, auto.KeyVk')
+assert early.count('FightAttackInputAllowed(') == 2
+assert early.index('ClickAimInput.TapKey(hwnd, auto.KeyVk') < early.index('attackPressed = true;')
+assert fight.index('if (ClickAimHealPolicy.ShouldAttemptHeal(') < fight.index('            // For a Shock/Attack Shaman')
+assert fight.index('            // For a Shock/Attack Shaman') < fight.index('            if (canCast)')
+
 spell = fight[fight.index('            if (canCast)'):fight.index('            /* ---- 4. melee:')]
 assert spell.index('FightAttackInputAllowed(') < spell.index('ClickAimInput.TapKey(hwnd, castDamage!')
 assert 'if (!ResourceInputStillAllowed(reader)) continue;' in spell

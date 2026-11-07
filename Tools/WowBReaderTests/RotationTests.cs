@@ -53,6 +53,34 @@ internal static class RotationTests
         ClickAimCombat.SetRoleOverride(6603, ClickAimSpellRole.Ignore);
         Check(!ClickAimClassRotation.ShockAutoPlan(plan, attack), "ignored Attack disables hybrid plan");
         ClickAimCombat.ClearRoleOverrides();
+
+        // Model the 19:16 bar with overrides selecting Frost Shock as damage,
+        // Lightning Bolt and Earth Shock ignored, and Attack in slot 1.
+        var frostBar = Bar(6603, 915, 8004, 8056, 8045, 325, 8019);
+        ClickAimCombat.SetRoleOverride(915, ClickAimSpellRole.Ignore);
+        ClickAimCombat.SetRoleOverride(8045, ClickAimSpellRole.Ignore);
+        ClickAimCombat.SetRoleOverride(8056, ClickAimSpellRole.Damage);
+        var frost = ClickAimClassRotation.Build(ClickAimRotationClass.Auto, frostBar);
+        bool frostHybrid = ClickAimClassRotation.ShockAutoPlan(frost, frostBar[0]);
+        Check(frost.Class == ClickAimRotationClass.Shaman && frost.Damage?.Id == 8056 && frostHybrid,
+            "Frost Shock override selects the Shaman Attack hybrid");
+        Check(frost.DamageGroup == "Shocks" && frost.DamageIntervalMs == 8000, "Frost Shock override preserves shared cooldown");
+        var frostUntil = new Dictionary<string, int>();
+        ClickAimClassRotation.Defer(frostUntil, frost.DamageGroup, frost.DamageIntervalMs, 1000);
+        Check(ClickAimClassRotation.PreferShockMelee(frostHybrid, ClickAimClassRotation.Ready(frostUntil, frost.DamageGroup, 2000)),
+            "Frost Shock cooldown closes to melee rather than waiting");
+        Check(ClickAimClassRotation.MayPressConservativeAttack(frostHybrid, false, false, false, 3, 4), "Frost Attack starts in melee");
+        Check(!ClickAimClassRotation.MayPressConservativeAttack(frostHybrid, true, false, false, 3, 4), "Frost never toggles Attack twice in one fight");
+        Check(ClickAimClassRotation.Ready(frostUntil, frost.DamageGroup, 9000), "Frost Shock resumes after estimated cooldown");
+        ClickAimCombat.ClearRoleOverrides();
+        var frostDefault = ClickAimClassRotation.Build(ClickAimRotationClass.Auto, Bar(6603, 8056));
+        Check(frostDefault.Class == ClickAimRotationClass.Shaman && frostDefault.Damage?.Id == 8056 &&
+              frostDefault.DamageGroup == "Shocks" && frostDefault.DamageIntervalMs == 8000, "Frost alone resolves Shaman and cooldown");
+        var both = ClickAimClassRotation.Build(ClickAimRotationClass.Shaman, Bar(6603, 8056, 8045));
+        Check(both.Damage?.Id == 8045, "Earth Shock remains preferred over Frost when both available");
+        var boltAndFrost = ClickAimClassRotation.Build(ClickAimRotationClass.Shaman, Bar(6603, 915, 8056));
+        Check(boltAndFrost.Damage?.Id == 915 && !ClickAimClassRotation.ShockAutoPlan(boltAndFrost, A(6603)),
+            "Lightning Bolt filler retains ranged rotation");
     }
 
     internal static void Run()
