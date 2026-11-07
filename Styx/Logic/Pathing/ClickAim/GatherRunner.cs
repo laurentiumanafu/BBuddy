@@ -123,7 +123,9 @@ internal static class GatherRunner
                 { Logging.Write("[Gather] experimental preparation failed: " + reason); return false; }
                 experimentalReader = WowBGrindFactions.ExperimentalBoundReader;
                 if (experimentalReader == null) return false;
-                Logging.Write("[Gather] EXPERIMENTAL " + experimentalReader.ExperimentalBuildNumber + ": static node vtable candidate, faction-filtered defence only; monitor closely and use STOP.");
+                Logging.Write("[Gather] EXPERIMENTAL " + experimentalReader.ExperimentalBuildNumber + ": static node vtable candidate; " +
+                    (experimentalReader.IsExperimental70862 ? "defence bypasses faction and may attack the wrong NPC, including a friendly" : "faction-filtered defence") +
+                    "; monitor closely and use STOP.");
             }
             started = StartPrepared(profile, generation, experimentalReader);
             return started;

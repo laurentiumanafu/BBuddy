@@ -30,6 +30,14 @@ assert 'remoteDefence = false; // changed selections' in g
 assert chase.count('combatMoveAllowed != null && !combatMoveAllowed()') >= 2
 assert 'RouteRunner.TryCombatMeshPath' in chase and 'no complete validated mesh path' in chase
 assert '(!TryReadGatherCombat(out bool fighting) || !fighting)' in fight
+assert 'grindMode && !reader.IsExperimental70862, remoteDefence' in g
+assert 'FactionPullStillAllowed(ObjectManager.WowB, expectedPull, target)' in fight
+assert 'FactionPullStillAllowed(reader, expectedPull, target)' in fight
+assert fight.count('!defenceOnly || defenceFactionFilter, defenceOnly') == 6
+assert 'target.UnitAddress != expectedPull.UnitAddress || target.RecordAddress != expectedPull.RecordAddress' in fight
+assert 'FactionPullStillAllowed(reader, expected, expected)' in g
+assert 'requireCombat && (!TryReadGatherCombat(out bool activeCombat) || !activeCombat)' in g
+assert '(!requireCombat || (TryReadGatherCombat(out bool stillFighting) && stillFighting))' in g
 fixture = (Path(__file__).parent / 'Fixture.cs.txt').read_text(encoding='utf-8')
 for marker, content in [('__HAS_NEARBY__', near), ('__DEFENCE_FIELDS__', fields), ('__DEFEND_NEARBY__', defend), ('__DEFEND_REMOTE__', remote), ('__MOVE_GUARD__', movement)]:
     fixture = fixture.replace('        // ' + marker, content)

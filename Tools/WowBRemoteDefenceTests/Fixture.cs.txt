@@ -78,8 +78,8 @@ namespace Styx.Logic.Pathing
         const double GatherDefenceRadius = 12, RemoteDefenceRadius = 40;
         const int RemoteDefenceRetryMs = 3000, TabVk = 9, TabSettleMs = 1;
         const uint NotAFightFlag = 0x302;
-        static bool _stop, _focusedDamageObserved, _remoteDefenceAttempted, _attackerResearchAttempted;
-        static int _remoteDefenceLast, _attackerResearchLast, FightCalls; static bool LastRemote, Fighting = true, CombatReadable = true;
+        static bool _stop, _focusedDamageObserved, _remoteDefenceAttempted;
+        static int _remoteDefenceLast, FightCalls; static bool LastRemote, Fighting = true, CombatReadable = true;
         static WowBGuid _focusedFightGuid, _defenceHandoffGuid;
         static HashSet<WowBGuid> _notViable = new();
         static WowBWorldSnapshot snapshot = null!;
@@ -91,7 +91,7 @@ namespace Styx.Logic.Pathing
         static string FightDefenceWithHandoffs(IntPtr hwnd, WowBReader reader, bool mode, WowBObservedUnit player, WowBObservedUnit target, bool remoteDefence = false)
         { FightCalls++; LastRemote = remoteDefence; return "fight"; }
         static bool FightAttackInputAllowed(WowBReader r, GreenMagic.Memory m, WowBGuid guid, WowBObservedUnit unit, bool enforce)
-            => !_stop && !ClickAimAbort.Requested && ObjectManager.WowB == r && ObjectManager.Wow == m && r.Selected == guid && WowBGrindFactions.Allowed && WowBGrindFactions.BarSafe;
+            => !_stop && !ClickAimAbort.Requested && ObjectManager.WowB == r && ObjectManager.Wow == m && r.Selected == guid && (!enforce || WowBGrindFactions.Allowed) && WowBGrindFactions.BarSafe;
         // __HAS_NEARBY__
         // __DEFENCE_FIELDS__
         // __DEFEND_NEARBY__
@@ -108,7 +108,7 @@ namespace Styx.Logic.Pathing
             r.Fields[1] = new() { Health=100 }; r.Fields[2] = new() { Health=100 };
             r.Selected = default; ClickAimInput.TabTarget = npc.Guid; ClickAimInput.Tabs = 0; ClickAimInput.OnTab = null; ClickAimKeySteer.OnFace = null;
             Fighting = CombatReadable = WowBGrindFactions.Allowed = WowBGrindFactions.BarSafe = GrindFactionSettings.Rules.Enabled = true;
-            _stop = ClickAimAbort.Requested = RouteRunner.StopRequested = _focusedDamageObserved = _remoteDefenceAttempted = _attackerResearchAttempted = false;
+            _stop = ClickAimAbort.Requested = RouteRunner.StopRequested = _focusedDamageObserved = _remoteDefenceAttempted = false;
             WowBAttackerResearch.Calls = 0;
             _focusedFightGuid = _defenceHandoffGuid = default; _notViable.Clear(); FightCalls = 0; LastRemote = false;
         }
@@ -147,8 +147,26 @@ namespace Styx.Logic.Pathing
             WowBGrindFactions.Allowed = true; ClickAimAbort.Requested = true; Require(!RemoteDefenceMovementAllowed(reader, mem, expected), "STOP cancels movement");
             Setup(8); Require(Defend(out engaged) == "fight" && engaged && !LastRemote, "nearby defence still takes priority");
             Setup(8); ObjectManager.WowB!.IsExperimental70862=true; WowBGrindFactions.Allowed=false;
-            Defend(out engaged); Require(!engaged && FightCalls==0 && ClickAimInput.Tabs==0 && WowBAttackerResearch.Calls==1, "blocked NPC is researched without selecting or fighting");
-            Defend(out engaged); Require(WowBAttackerResearch.Calls==1 && FightCalls==0, "research throttled and never authorizes attack");
+            Require(Defend(out engaged) == "fight" && engaged && FightCalls==1 && ClickAimInput.Tabs==1, "70862 nearby excluded NPC can be selected during combat");
+            Setup(8); ObjectManager.WowB!.IsExperimental70862=true; WowBGrindFactions.Allowed=false; Fighting=false;
+            Defend(out engaged); Require(!engaged && FightCalls==0 && ClickAimInput.Tabs==0, "70862 excluded NPC not selected outside combat");
+            Setup(8); ObjectManager.WowB!.IsExperimental70862=true; WowBGrindFactions.Allowed=false; CombatReadable=false;
+            Defend(out engaged); Require(!engaged && FightCalls==0 && ClickAimInput.Tabs==0, "70862 unreadable combat blocks defence");
+            Setup(8); ObjectManager.WowB!.IsExperimental70862=true; WowBGrindFactions.Allowed=false; ClickAimInput.OnTab = () => Fighting=false;
+            Defend(out engaged); Require(!engaged && FightCalls==0, "70862 combat end after TAB blocks fight");
+            Setup(8); ObjectManager.WowB!.IsExperimental70862=true; WowBGrindFactions.Allowed=false; ClickAimInput.OnTab = () => ClickAimAbort.Requested=true;
+            Defend(out engaged); Require(!engaged && FightCalls==0, "70862 STOP after TAB blocks fight");
+            Setup(8); ObjectManager.WowB!.IsExperimental70862=true; WowBGrindFactions.Allowed=false; ClickAimInput.TabTarget=new WowBGuid(99);
+            Defend(out engaged); Require(!engaged && FightCalls==0, "70862 wrong selection does not fight");
+            Setup(8); WowBGrindFactions.Allowed=false; Defend(out engaged);
+            Require(!engaged && FightCalls==0, "older build retains nearby faction restriction");
+            Setup(36); ObjectManager.WowB!.IsExperimental70862=true; WowBGrindFactions.Allowed=false;
+            Require(Defend(out engaged) == "fight" && engaged && LastRemote, "70862 excluded remote candidate can enter defence");
+            Setup(36); ObjectManager.WowB!.IsExperimental70862=true; WowBGrindFactions.Allowed=false; AddNearby(readable:false);
+            Defend(out engaged); Require(!engaged && FightCalls==0, "70862 unreadable nearby NPC blocks remote chase");
+            Setup(36); ObjectManager.WowB!.IsExperimental70862=true; WowBGrindFactions.Allowed=false; ObjectManager.WowB.Selected=new WowBGuid(2);
+            Require(RemoteDefenceMovementAllowed(ObjectManager.WowB, ObjectManager.Wow!, snapshot.Units[1]), "70862 faction bypass permits guarded remote movement");
+            Fighting=false; Require(!RemoteDefenceMovementAllowed(ObjectManager.WowB, ObjectManager.Wow!, snapshot.Units[1]), "70862 combat end blocks remote movement");
             Console.WriteLine("Remote defence production-extracted fixtures passed (synthetic only).");
         }
     }

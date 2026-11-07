@@ -172,7 +172,10 @@ internal static class ClickAimUi
 
     private static string FactionStatus()
         => GrindFactionSettings.Rules.Enabled
-            ? "Faction attack filter " + GrindFactionSettings.Rules.Mode + ": " + GrindFactionSettings.Rules.KeyText + "; blocked and unknown attackers are withheld."
+            ? "Faction pull filter " + GrindFactionSettings.Rules.Mode + ": " + GrindFactionSettings.Rules.KeyText +
+              (ObjectManager.WowB?.IsExperimental70862 == true
+                  ? "; combat defence bypasses factions and may attack the wrong NPC, including a friendly."
+                  : "; blocked and unknown attackers are withheld.")
             : "Faction attack filter OFF.";
 
     public static string ClearProfile()

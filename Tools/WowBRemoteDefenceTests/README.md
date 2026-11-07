@@ -1,0 +1,3 @@
+# Remote and nearby defence fixtures
+
+Run `python Tools/WowBRemoteDefenceTests/run.py` with a .NET 10 SDK. The fixture extracts the production nearby/remote defence and movement guards, with synthetic memory, input and combat state. It checks that 70862 bypasses faction restrictions for nearby and ranged defence while older builds retain them; combat end, STOP, selection changes, dead/player candidates and the remote nearby-unit veto still prevent the corresponding action. Static assertions check the production fight path's faction/identity and combat guards. The fixture stubs the actual rotation and game; it cannot establish attacker identity, hostility, input results, live timing or Windows build success. The bypass may attack a different NPC, including a friendly.
