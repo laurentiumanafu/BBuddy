@@ -1,0 +1,89 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using Styx.WoWInternals;
+using Styx.Logic.Pathing;
+namespace GreenMagic
+{
+    public sealed class Memory
+    {
+        public IDisposable TemporaryCacheState(bool value) => new Scope();
+        sealed class Scope : IDisposable { public void Dispose() {} }
+    }
+}
+namespace Styx.Helpers { public static class Logging { public static List<string> Lines=new(); public static void Write(string s) => Lines.Add(s); } }
+namespace Styx.WoWInternals
+{
+    public readonly struct WowBGuid
+    {
+        public readonly ulong Low,High; public WowBGuid(ulong low,ulong high){Low=low;High=high;}
+        public bool IsEmpty => Low==0 && High==0;
+        public static bool operator==(WowBGuid a,WowBGuid b)=>a.Low==b.Low&&a.High==b.High;
+        public static bool operator!=(WowBGuid a,WowBGuid b)=>!(a==b);
+        public override bool Equals(object? x)=>x is WowBGuid g && this==g; public override int GetHashCode()=>HashCode.Combine(Low,High);
+    }
+    public struct Point { public double X,Y; }
+    public struct WowBObservedUnit { public WowBGuid Guid; public bool IsLocalPlayer,HasPlayerVtable; public ulong UnitAddress,RecordAddress; public Point Location; }
+    public sealed class WowBWorldSnapshot
+    {
+        public WowBObservedUnit Player, Unit; public bool PlayerPresent=true, UnitPresent=true;
+        public bool TryGetLocalPlayer(out WowBObservedUnit p) { p=Player; return PlayerPresent; }
+        public bool TryGetUnit(WowBGuid g,out WowBObservedUnit u) { u=Unit; return UnitPresent && u.Guid==g; }
+    }
+    public sealed class WowBReader
+    {
+        public struct WowBUnitFields { public uint Health; }
+        public bool IsExperimental70862=true, MapReadable=true, SnapshotReadable=true, FailChunks; public uint Map=1; public int Reads;
+        public WowBWorldSnapshot Snapshot=new(); public Dictionary<ulong,uint> Words=new(); public Action? OnRead;
+        public bool TryReadMapId(out uint map){map=Map;return MapReadable;}
+        public bool TryCaptureWorldSnapshot(out WowBWorldSnapshot? snap){snap=SnapshotReadable?Snapshot:null;return snap!=null;}
+        public bool TryGetUnitFields(ulong address,out WowBUnitFields fields){fields=new WowBUnitFields{Health=42};return true;}
+        public bool TryReadFactionTemplateId(ulong address,out uint key){key=14;return true;}
+        public bool TryReadWords(ulong address,int count,out uint[] words)
+        {
+            Reads++; OnRead?.Invoke(); words=new uint[count]; if(FailChunks)return false;
+            for(int i=0;i<count;i++) if(Words.TryGetValue(address+(ulong)i*4,out uint word))words[i]=word; return true;
+        }
+    }
+    public static class ObjectManager { public static GreenMagic.Memory? Wow; public static WowBReader? WowB; }
+}
+namespace Styx.Logic.Pathing
+{
+    static class ClickAimMath { public static double Len(double x,double y)=>Math.Sqrt(x*x+y*y); }
+    static class Program
+    {
+        static WowBGuid guid=new WowBGuid(0x123456789abcdef0,0x123498765432abcd);
+        static WowBObservedUnit player,unit; static WowBReader reader=null!; static GreenMagic.Memory memory=null!;
+        static bool stop,combat;
+        static void Reset()
+        {
+            player=new WowBObservedUnit { Guid=guid,RecordAddress=0x100000,UnitAddress=0x110000,IsLocalPlayer=true };
+            unit=new WowBObservedUnit { Guid=new WowBGuid(5,6),RecordAddress=0x200000,UnitAddress=0x300000,Location=new Point{X=5} };
+            reader=new WowBReader(); memory=new GreenMagic.Memory(); ObjectManager.Wow=memory;ObjectManager.WowB=reader;
+            reader.Snapshot.Player=player; reader.Snapshot.Unit=unit; Styx.Helpers.Logging.Lines.Clear();stop=false;combat=true;
+        }
+        static void Put(ulong address,WowBGuid g)
+        {
+            reader.Words[address]=(uint)g.Low;reader.Words[address+4]=(uint)(g.Low>>32);
+            reader.Words[address+8]=(uint)g.High;reader.Words[address+12]=(uint)(g.High>>32);
+        }
+        static void Observe() => WowBAttackerResearch.Observe(reader,memory,player,new List<WowBObservedUnit>{unit},()=>stop,()=>combat);
+        static void Check(bool b,string label){if(!b)throw new Exception(label);}
+        static void Main()
+        {
+            Reset(); Put(unit.UnitAddress+500,guid); Put(unit.RecordAddress+0x20,guid); Observe();
+            Check(Styx.Helpers.Logging.Lines.Count==1 && Styx.Helpers.Logging.Lines[0].Contains("unit +0x1F4") && Styx.Helpers.Logging.Lines[0].Contains("record +0x20"),"full GUID and cross-chunk match");
+            Check(Styx.Helpers.Logging.Lines[0].Contains("NOT attacker/target proof"),"observation warning");
+            Reset(); Put(unit.UnitAddress+8,new WowBGuid(guid.Low,guid.High+1)); Observe(); Check(Styx.Helpers.Logging.Lines.Single().Contains("unit none observed"),"both GUID halves required");
+            Reset(); reader.FailChunks=true; Observe(); Check(Styx.Helpers.Logging.Lines.Single().Contains("unreadable="),"unreadable chunks reported");
+            Reset(); reader.IsExperimental70862=false; Observe(); Check(reader.Reads==0 && Styx.Helpers.Logging.Lines.Count==0,"other builds not probed");
+            Reset(); stop=true; Observe(); Check(reader.Reads==0 && Styx.Helpers.Logging.Lines.Count==0,"STOP before scan");
+            Reset(); reader.OnRead=()=>stop=true; Observe(); Check(reader.Reads==1 && Styx.Helpers.Logging.Lines.Count==0,"STOP during scan");
+            Reset(); combat=false; Observe(); Check(Styx.Helpers.Logging.Lines.Count==0,"combat ends before observation");
+            Reset(); reader.OnRead=()=>reader.Map=2; Observe(); Check(Styx.Helpers.Logging.Lines.Count==0,"map change discards observation");
+            Reset(); reader.Snapshot.Unit.UnitAddress++; Observe(); Check(Styx.Helpers.Logging.Lines.Count==0,"changed object discarded");
+            Reset(); reader.OnRead=()=>ObjectManager.Wow=null; Observe(); Check(Styx.Helpers.Logging.Lines.Count==0,"attachment change discarded");
+            Console.WriteLine("Attacker research fixtures passed (read-only synthetic snapshots).");
+        }
+    }
+}

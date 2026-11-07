@@ -386,6 +386,7 @@ internal static class GrindRunner
         _recentLootRetried.Clear();
         _focusedFightGuid = default; _defenceHandoffGuid = default; _focusedDamageObserved = false; _unverifiedGuid = default;
         _remoteDefenceAttempted = false;
+        _attackerResearchAttempted = false;
         _combatHold = false; _poolApproachHandled = false;
         Buffs.Reset(); // confirmed revival; reapply at the next quiet opportunity
         return !_stop && !ClickAimAbort.Requested;
@@ -782,6 +783,7 @@ internal static class GrindRunner
         _focusedFightGuid = default(WowBGuid);
         _focusedDamageObserved = false;
         _remoteDefenceAttempted = false;
+        _attackerResearchAttempted = false;
         _looted.Clear();
         RecentLoot.Clear();
         NearbySkinAttempts.Clear();
@@ -3995,6 +3997,7 @@ internal static class GrindRunner
         _focusedFightGuid = default(WowBGuid);
         _focusedDamageObserved = false;
         _remoteDefenceAttempted = false;
+        _attackerResearchAttempted = false;
         _gaveUpAt = 0;
         ClickAimSettings.Load();
         Buffs.Reset();
@@ -4017,6 +4020,7 @@ internal static class GrindRunner
         // Do not touch _stop here: STOP may have arrived during recovery.
         _focusedFightGuid = default; _defenceHandoffGuid = default; _focusedDamageObserved = false; _unverifiedGuid = default;
         _remoteDefenceAttempted = false;
+        _attackerResearchAttempted = false;
         _combatHold = false; _poolApproachHandled = false;
         Buffs.Reset(); // Gather calls this only after confirmed revival.
     }
@@ -4051,6 +4055,8 @@ internal static class GrindRunner
     private const int RemoteDefenceRetryMs = 3000;
     private static int _remoteDefenceLast;
     private static bool _remoteDefenceAttempted;
+    private static int _attackerResearchLast;
+    private static bool _attackerResearchAttempted;
 
     internal static string DefendGatherer(IntPtr hwnd)
         => DefendNearby(hwnd, ObjectManager.WowB?.IsExperimental70707 == true, out _);
@@ -4123,6 +4129,7 @@ internal static class GrindRunner
         if (!Capture(out WowBWorldSnapshot? snap) || snap == null
             || !snap.TryGetLocalPlayer(out WowBObservedUnit player)) return "cannot read nearby units";
         var nearby = new List<WowBObservedUnit>();
+        var blockedForResearch = new List<WowBObservedUnit>();
         int inRange = 0, unreadable = 0, dead = 0, flagged = 0, refused = 0, factionBlocked = 0;
         foreach (WowBObservedUnit unit in snap.Units)
         {
@@ -4143,7 +4150,7 @@ internal static class GrindRunner
             // The attacker is not known. With the Grind faction filter enabled, a
             // nearby TAB pick is not enough to override the user's hard limit.
             if (grindMode && !WowBGrindFactions.AllowsPull(reader, unit, out _))
-            { factionBlocked++; continue; }
+            { factionBlocked++; blockedForResearch.Add(unit); continue; }
             nearby.Add(unit);
         }
         nearby.Sort((a, b) => ClickAimMath.Len(a.Location.X - player.Location.X, a.Location.Y - player.Location.Y)
@@ -4164,6 +4171,20 @@ internal static class GrindRunner
         }
         if (nearby.Count == 0)
         {
+            // Research only: even an exact player GUID reference cannot prove an
+            // NPC is targeting or attacking us. Never bypass the faction gate.
+            int researchNow = Environment.TickCount;
+            GreenMagic.Memory? researchMemory = ObjectManager.Wow;
+            if (reader.IsExperimental70862 && blockedForResearch.Count > 0 && researchMemory != null &&
+                (!_attackerResearchAttempted || unchecked(researchNow - _attackerResearchLast) >= 10000))
+            {
+                _attackerResearchAttempted = true; _attackerResearchLast = researchNow;
+                blockedForResearch.Sort((a, b) => ClickAimMath.Len(a.Location.X - player.Location.X, a.Location.Y - player.Location.Y)
+                    .CompareTo(ClickAimMath.Len(b.Location.X - player.Location.X, b.Location.Y - player.Location.Y)));
+                WowBAttackerResearch.Observe(reader, researchMemory, player, blockedForResearch,
+                    () => _stop || ClickAimAbort.Requested || RouteRunner.StopRequested || ObjectManager.Wow != researchMemory || ObjectManager.WowB != reader,
+                    () => TryReadGatherCombat(out bool stillFighting) && stillFighting);
+            }
             // The client does not expose a verified attacker GUID. Only attempt
             // the bounded remote heuristic when no live or unreadable NPC is
             // nearby, and keep the same faction/selection checks as defence.

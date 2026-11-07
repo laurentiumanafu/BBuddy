@@ -36,7 +36,7 @@ namespace Styx.WoWInternals
     {
         public struct WowBUnitFields { public uint Health, UnitFlags; }
         public Dictionary<ulong,WowBUnitFields> Fields = new();
-        public WowBGuid Selected; public bool IsExperimental70707 = true;
+        public WowBGuid Selected; public bool IsExperimental70707 = true, IsExperimental70862 = false;
         public WowBGuid ReadTargetGuid() => Selected;
         public bool TryGetUnitFields(ulong p, out WowBUnitFields f) => Fields.TryGetValue(p, out f);
     }
@@ -45,6 +45,12 @@ namespace Styx.WoWInternals
 namespace Styx.Helpers { public static class Logging { public static void Write(string message) { } } }
 namespace Styx.Logic.Pathing
 {
+    static class WowBAttackerResearch
+    {
+        public static int Calls;
+        public static void Observe(WowBReader reader, GreenMagic.Memory memory, WowBObservedUnit player,
+            List<WowBObservedUnit> blocked, Func<bool> stop, Func<bool> combatStillActive) { Calls++; }
+    }
     static class ClickAimMath { public static double Len(double x,double y) => Math.Sqrt(x*x+y*y); }
     static class ClickAimCombat { public const double CasterRangeYd = 28; }
     static class RouteRunner { public static bool StopRequested; }
@@ -72,8 +78,8 @@ namespace Styx.Logic.Pathing
         const double GatherDefenceRadius = 12, RemoteDefenceRadius = 40;
         const int RemoteDefenceRetryMs = 3000, TabVk = 9, TabSettleMs = 1;
         const uint NotAFightFlag = 0x302;
-        static bool _stop, _focusedDamageObserved, _remoteDefenceAttempted;
-        static int _remoteDefenceLast, FightCalls; static bool LastRemote, Fighting = true, CombatReadable = true;
+        static bool _stop, _focusedDamageObserved, _remoteDefenceAttempted, _attackerResearchAttempted;
+        static int _remoteDefenceLast, _attackerResearchLast, FightCalls; static bool LastRemote, Fighting = true, CombatReadable = true;
         static WowBGuid _focusedFightGuid, _defenceHandoffGuid;
         static HashSet<WowBGuid> _notViable = new();
         static WowBWorldSnapshot snapshot = null!;
@@ -102,7 +108,8 @@ namespace Styx.Logic.Pathing
             r.Fields[1] = new() { Health=100 }; r.Fields[2] = new() { Health=100 };
             r.Selected = default; ClickAimInput.TabTarget = npc.Guid; ClickAimInput.Tabs = 0; ClickAimInput.OnTab = null; ClickAimKeySteer.OnFace = null;
             Fighting = CombatReadable = WowBGrindFactions.Allowed = WowBGrindFactions.BarSafe = GrindFactionSettings.Rules.Enabled = true;
-            _stop = ClickAimAbort.Requested = RouteRunner.StopRequested = _focusedDamageObserved = _remoteDefenceAttempted = false;
+            _stop = ClickAimAbort.Requested = RouteRunner.StopRequested = _focusedDamageObserved = _remoteDefenceAttempted = _attackerResearchAttempted = false;
+            WowBAttackerResearch.Calls = 0;
             _focusedFightGuid = _defenceHandoffGuid = default; _notViable.Clear(); FightCalls = 0; LastRemote = false;
         }
         static string Defend(out bool engaged) => DefendNearby(new IntPtr(1), true, out engaged);
@@ -139,6 +146,9 @@ namespace Styx.Logic.Pathing
             Fighting = true; WowBGrindFactions.Allowed = false; Require(!RemoteDefenceMovementAllowed(reader, mem, expected), "changed faction cancels movement");
             WowBGrindFactions.Allowed = true; ClickAimAbort.Requested = true; Require(!RemoteDefenceMovementAllowed(reader, mem, expected), "STOP cancels movement");
             Setup(8); Require(Defend(out engaged) == "fight" && engaged && !LastRemote, "nearby defence still takes priority");
+            Setup(8); ObjectManager.WowB!.IsExperimental70862=true; WowBGrindFactions.Allowed=false;
+            Defend(out engaged); Require(!engaged && FightCalls==0 && ClickAimInput.Tabs==0 && WowBAttackerResearch.Calls==1, "blocked NPC is researched without selecting or fighting");
+            Defend(out engaged); Require(WowBAttackerResearch.Calls==1 && FightCalls==0, "research throttled and never authorizes attack");
             Console.WriteLine("Remote defence production-extracted fixtures passed (synthetic only).");
         }
     }
