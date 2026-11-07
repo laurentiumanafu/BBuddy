@@ -38,6 +38,7 @@ namespace Styx.Offsets
     public static class Wow70707Offsets { public const ulong GameObjectVtableCandidate=0x4000; }
     public static class Wow70755Offsets { public const ulong GameObjectVtableCandidate=0x5000; }
     public static class Wow70790Offsets { public const ulong GameObjectVtableCandidate=0x6000; }
+    public static class Wow70862Offsets { public const ulong GameObjectVtableCandidate=0x7000; }
 }
 namespace Styx.WoWInternals
 {

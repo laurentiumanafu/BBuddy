@@ -46,9 +46,10 @@ namespace Styx.WoWInternals
         private readonly bool _experimental70707;
         public bool IsExperimental70755 { get; }
         public bool IsExperimental70790 { get; }
-        public bool UsesOrdinaryBagPolicy => IsExperimental70755 || IsExperimental70790;
+        public bool IsExperimental70862 { get; }
+        public bool UsesOrdinaryBagPolicy => IsExperimental70755 || IsExperimental70790 || IsExperimental70862;
         public bool IsExperimental70707 => _experimental70707;
-        public int ExperimentalBuildNumber => IsExperimental70790 ? 70790 : IsExperimental70755 ? 70755 : _experimental70707 ? 70707 : 0;
+        public int ExperimentalBuildNumber => IsExperimental70862 ? 70862 : IsExperimental70790 ? 70790 : IsExperimental70755 ? 70755 : _experimental70707 ? 70707 : 0;
         private volatile bool _experimentalGrindActive;
         private volatile int _experimentalGrindThread;
         internal bool HasExperimentalGrindSession => _experimental70707 && _experimentalGrindActive;
@@ -65,34 +66,35 @@ namespace Styx.WoWInternals
                 _experimentalGrindThread = System.Threading.Thread.CurrentThread.ManagedThreadId;
         }
 
-        public WowBReader(Memory memory, bool experimental70707 = false, bool experimental70755 = false, bool experimental70790 = false)
+        public WowBReader(Memory memory, bool experimental70707 = false, bool experimental70755 = false, bool experimental70790 = false, bool experimental70862 = false)
         {
             _memory = memory ?? throw new ArgumentNullException(nameof(memory));
-            if ((experimental70707 ? 1 : 0) + (experimental70755 ? 1 : 0) + (experimental70790 ? 1 : 0) > 1)
+            if ((experimental70707 ? 1 : 0) + (experimental70755 ? 1 : 0) + (experimental70790 ? 1 : 0) + (experimental70862 ? 1 : 0) > 1)
                 throw new ArgumentException("Select only one experimental build.");
             IsExperimental70755 = experimental70755;
             IsExperimental70790 = experimental70790;
-            _experimental70707 = experimental70707 || experimental70755 || experimental70790;
+            IsExperimental70862 = experimental70862;
+            _experimental70707 = experimental70707 || experimental70755 || experimental70790 || experimental70862;
 
             if (!memory.Is64BitTarget)
                 throw new InvalidOperationException("WowBReader requires a native 64-bit target process.");
         }
 
         // Build-specific read-only candidate. A value alone never authorizes a click.
-        internal ulong MouseoverGuidCandidateRva => IsExperimental70790 ? Wow70790Offsets.MouseoverGuidCandidate : IsExperimental70755 ? Wow70755Offsets.MouseoverGuidCandidate : _experimental70707 ? Wow70707Offsets.MouseoverGuidCandidate : WowBOffsets.MouseoverGuidCandidate;
+        internal ulong MouseoverGuidCandidateRva => IsExperimental70862 ? Wow70862Offsets.MouseoverGuidCandidate : IsExperimental70790 ? Wow70790Offsets.MouseoverGuidCandidate : IsExperimental70755 ? Wow70755Offsets.MouseoverGuidCandidate : _experimental70707 ? Wow70707Offsets.MouseoverGuidCandidate : WowBOffsets.MouseoverGuidCandidate;
         internal bool TryReadMouseoverGuidCandidate(out WowBGuid guid) => TryReadGuid(Abs(MouseoverGuidCandidateRva), out guid);
-        private ulong PlayerGuidRva => IsExperimental70790 ? Wow70790Offsets.PlayerGuid : IsExperimental70755 ? Wow70755Offsets.PlayerGuid : _experimental70707 ? Wow70707Offsets.PlayerGuid : WowBOffsets.PlayerGuid;
-        private ulong PlayerNameRva => IsExperimental70790 ? Wow70790Offsets.PlayerNamePrimary : IsExperimental70755 ? Wow70755Offsets.PlayerNamePrimary : _experimental70707 ? Wow70707Offsets.PlayerNamePrimary : WowBOffsets.PlayerNamePrimary;
-        private ulong TargetGuidRva => IsExperimental70790 ? Wow70790Offsets.PlayerTargetGuid : IsExperimental70755 ? Wow70755Offsets.PlayerTargetGuid : _experimental70707 ? Wow70707Offsets.PlayerTargetGuid : WowBOffsets.PlayerTargetGuid;
+        private ulong PlayerGuidRva => IsExperimental70862 ? Wow70862Offsets.PlayerGuid : IsExperimental70790 ? Wow70790Offsets.PlayerGuid : IsExperimental70755 ? Wow70755Offsets.PlayerGuid : _experimental70707 ? Wow70707Offsets.PlayerGuid : WowBOffsets.PlayerGuid;
+        private ulong PlayerNameRva => IsExperimental70862 ? Wow70862Offsets.PlayerNamePrimary : IsExperimental70790 ? Wow70790Offsets.PlayerNamePrimary : IsExperimental70755 ? Wow70755Offsets.PlayerNamePrimary : _experimental70707 ? Wow70707Offsets.PlayerNamePrimary : WowBOffsets.PlayerNamePrimary;
+        private ulong TargetGuidRva => IsExperimental70862 ? Wow70862Offsets.PlayerTargetGuid : IsExperimental70790 ? Wow70790Offsets.PlayerTargetGuid : IsExperimental70755 ? Wow70755Offsets.PlayerTargetGuid : _experimental70707 ? Wow70707Offsets.PlayerTargetGuid : WowBOffsets.PlayerTargetGuid;
         private ulong LastTargetGuidRva => _experimental70707 ? 0UL : WowBOffsets.LastTargetGuid;
-        private ulong ObjectManagerRva => IsExperimental70790 ? Wow70790Offsets.ObjectManager : IsExperimental70755 ? Wow70755Offsets.ObjectManager : _experimental70707 ? Wow70707Offsets.ObjectManager : WowBOffsets.ObjectManager;
-        private ulong HandlePoolsRva => IsExperimental70790 ? Wow70790Offsets.HandlePools : IsExperimental70755 ? Wow70755Offsets.HandlePools : _experimental70707 ? Wow70707Offsets.HandlePools : WowBOffsets.HandlePools;
-        internal ulong PlayerVtableRva => IsExperimental70790 ? Wow70790Offsets.PlayerVtable : IsExperimental70755 ? Wow70755Offsets.PlayerVtable : _experimental70707 ? Wow70707Offsets.PlayerVtable : WowBOffsets.PlayerObjectVtable;
-        internal ulong UnitVtableRva => IsExperimental70790 ? Wow70790Offsets.UnitVtable : IsExperimental70755 ? Wow70755Offsets.UnitVtable : _experimental70707 ? Wow70707Offsets.UnitVtable : WowBOffsets.CGUnitFnTable;
-        internal ulong GameObjectVtableCandidateRva => IsExperimental70790 ? Wow70790Offsets.GameObjectVtableCandidate : IsExperimental70755 ? Wow70755Offsets.GameObjectVtableCandidate : Wow70707Offsets.GameObjectVtableCandidate;
-        private ulong ExperimentalMapRootRva => IsExperimental70790 ? Wow70790Offsets.MapRoot : IsExperimental70755 ? Wow70755Offsets.MapRoot : Wow70707Offsets.MapRoot;
-        private ulong ExperimentalCameraRootRva => IsExperimental70790 ? Wow70790Offsets.CameraWorldFrameGlobal : IsExperimental70755 ? Wow70755Offsets.CameraWorldFrameGlobal : Wow70707Offsets.CameraWorldFrameGlobal;
-        private ulong ExperimentalActionArrayRva => IsExperimental70790 ? Wow70790Offsets.StoredActionArrayCandidate : IsExperimental70755 ? Wow70755Offsets.StoredActionArrayCandidate : Wow70707Offsets.StoredActionArrayCandidate;
+        private ulong ObjectManagerRva => IsExperimental70862 ? Wow70862Offsets.ObjectManager : IsExperimental70790 ? Wow70790Offsets.ObjectManager : IsExperimental70755 ? Wow70755Offsets.ObjectManager : _experimental70707 ? Wow70707Offsets.ObjectManager : WowBOffsets.ObjectManager;
+        private ulong HandlePoolsRva => IsExperimental70862 ? Wow70862Offsets.HandlePools : IsExperimental70790 ? Wow70790Offsets.HandlePools : IsExperimental70755 ? Wow70755Offsets.HandlePools : _experimental70707 ? Wow70707Offsets.HandlePools : WowBOffsets.HandlePools;
+        internal ulong PlayerVtableRva => IsExperimental70862 ? Wow70862Offsets.PlayerVtable : IsExperimental70790 ? Wow70790Offsets.PlayerVtable : IsExperimental70755 ? Wow70755Offsets.PlayerVtable : _experimental70707 ? Wow70707Offsets.PlayerVtable : WowBOffsets.PlayerObjectVtable;
+        internal ulong UnitVtableRva => IsExperimental70862 ? Wow70862Offsets.UnitVtable : IsExperimental70790 ? Wow70790Offsets.UnitVtable : IsExperimental70755 ? Wow70755Offsets.UnitVtable : _experimental70707 ? Wow70707Offsets.UnitVtable : WowBOffsets.CGUnitFnTable;
+        internal ulong GameObjectVtableCandidateRva => IsExperimental70862 ? Wow70862Offsets.GameObjectVtableCandidate : IsExperimental70790 ? Wow70790Offsets.GameObjectVtableCandidate : IsExperimental70755 ? Wow70755Offsets.GameObjectVtableCandidate : Wow70707Offsets.GameObjectVtableCandidate;
+        private ulong ExperimentalMapRootRva => IsExperimental70862 ? Wow70862Offsets.MapRoot : IsExperimental70790 ? Wow70790Offsets.MapRoot : IsExperimental70755 ? Wow70755Offsets.MapRoot : Wow70707Offsets.MapRoot;
+        private ulong ExperimentalCameraRootRva => IsExperimental70862 ? Wow70862Offsets.CameraWorldFrameGlobal : IsExperimental70790 ? Wow70790Offsets.CameraWorldFrameGlobal : IsExperimental70755 ? Wow70755Offsets.CameraWorldFrameGlobal : Wow70707Offsets.CameraWorldFrameGlobal;
+        private ulong ExperimentalActionArrayRva => IsExperimental70862 ? Wow70862Offsets.StoredActionArrayCandidate : IsExperimental70790 ? Wow70790Offsets.StoredActionArrayCandidate : IsExperimental70755 ? Wow70755Offsets.StoredActionArrayCandidate : Wow70707Offsets.StoredActionArrayCandidate;
         public bool IsKnownUnitVtable(ulong vtableRva) => vtableRva == PlayerVtableRva || vtableRva == UnitVtableRva;
         private ulong Abs(ulong imageRelative) => _memory.GetAbsolute64(imageRelative);
 

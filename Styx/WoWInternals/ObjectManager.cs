@@ -331,7 +331,8 @@ namespace Styx.WoWInternals
                 // (X64_PORT_PLAN.md §6). The reader validates the 64-bit
                 // read path and logs a full state snapshot on attach.
                 WowB = new WowBReader(memory, initialBuild == ClientAttachPolicy.ExperimentalBuild,
-                    initialBuild == ClientAttachPolicy.ExperimentalBuild70755, initialBuild == ClientAttachPolicy.ExperimentalBuild70790);
+                    initialBuild == ClientAttachPolicy.ExperimentalBuild70755, initialBuild == ClientAttachPolicy.ExperimentalBuild70790,
+                    initialBuild == ClientAttachPolicy.ExperimentalBuild70862);
                 if (ClientAttachPolicy.IsExperimentalBuild(initialBuild))
                 {
                     try { Logging.Write(WowB.DescribeExperimental70707()); }

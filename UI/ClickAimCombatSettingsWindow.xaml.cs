@@ -130,7 +130,7 @@ namespace CopilotBuddy.UI
             {
                 string report = await Task.Run(() => WowBGrindFactions.ScanNearby());
                 txtFactionReport.Text = report;
-                if (report.StartsWith("70707 RESEARCH ONLY", StringComparison.Ordinal) || report.StartsWith("70755 RESEARCH ONLY", StringComparison.Ordinal) || report.StartsWith("70790 RESEARCH ONLY", StringComparison.Ordinal))
+                if (report.StartsWith("70707 RESEARCH ONLY", StringComparison.Ordinal) || report.StartsWith("70755 RESEARCH ONLY", StringComparison.Ordinal) || report.StartsWith("70790 RESEARCH ONLY", StringComparison.Ordinal) || report.StartsWith("70862 RESEARCH ONLY", StringComparison.Ordinal))
                     foreach (string line in report.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
                         Logging.Write("[Faction research] " + line);
             }
@@ -195,7 +195,7 @@ namespace CopilotBuddy.UI
                 foreach (string line in report.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
                     Logging.Write("[Bag research] " + line);
                 RefreshObservedBags();
-                lblVendorNote.Text = report.StartsWith("70291 read-only", StringComparison.Ordinal) || report.StartsWith("70707 read-only", StringComparison.Ordinal) || report.StartsWith("70755 read-only", StringComparison.Ordinal) || report.StartsWith("70790 read-only", StringComparison.Ordinal)
+                lblVendorNote.Text = report.StartsWith("70291 read-only", StringComparison.Ordinal) || report.StartsWith("70707 read-only", StringComparison.Ordinal) || report.StartsWith("70755 read-only", StringComparison.Ordinal) || report.StartsWith("70790 read-only", StringComparison.Ordinal) || report.StartsWith("70862 read-only", StringComparison.Ordinal)
                     ? "Bag research snapshot written to the bot log. Candidate data, GUID and addresses may be sensitive."
                     : report;
             }

@@ -80,7 +80,7 @@ namespace CopilotBuddy.UI
         private void UpdateBeastCount()
         {
             _beastCount.Text = "Confirmed entry candidates: " + WowBSkinning.Count(false) + " for 70291, "
-                + WowBSkinning.Count(true) + " shared by 70707/70755/70790. The entry field is experimental.";
+                + WowBSkinning.Count(true) + " shared by 70707/70755/70790/70862. The entry field is experimental.";
         }
 
         private void RememberBeastClick(object sender, RoutedEventArgs e)

@@ -251,6 +251,10 @@ internal static class GatherNodeScanner
         checkFixture(MatchingHeader(data, image, rec, copper, out uint latestEntry, true, Wow70790Offsets.GameObjectVtableCandidate) && latestEntry == 1731);
         checkFixture(!MatchingHeader(data, image, rec + 8, copper, out _, true, Wow70790Offsets.GameObjectVtableCandidate));
         checkFixture(!MatchingHeader(data, image, rec, copper, out _, true, Wow70755Offsets.GameObjectVtableCandidate));
+        Array.Copy(BitConverter.GetBytes(image + Wow70862Offsets.GameObjectVtableCandidate), 0, data, 0, 8);
+        checkFixture(MatchingHeader(data, image, rec, copper, out uint currentEntry, true, Wow70862Offsets.GameObjectVtableCandidate) && currentEntry == 1731);
+        checkFixture(!MatchingHeader(data, image, rec + 8, copper, out _, true, Wow70862Offsets.GameObjectVtableCandidate));
+        checkFixture(!MatchingHeader(data, image, rec, copper, out _, true, Wow70790Offsets.GameObjectVtableCandidate));
         Array.Copy(BitConverter.GetBytes(image + NodeVtableCandidate), 0, data, 0, 8);
         Array.Copy(BitConverter.GetBytes(1618u), 0, data, 0x90, 4);
         checkFixture(!MatchingHeader(data, image, rec, copper, out _));

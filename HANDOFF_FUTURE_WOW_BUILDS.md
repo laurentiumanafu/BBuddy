@@ -2,7 +2,7 @@
 
 **Handoff date:** 2026-11-04. Intended for a new agent or developer if the chat is lost. Read the repository and `git status` first; this document is a snapshot, not a substitute for checking later changes.
 
-> **Newer 70790 port:** `hunt/WOW_70790_PORT.md` supersedes the default-build statements below. 70790 is the requested default and future target; 70755 is the last user-tested baseline. The 70790 port is experimental and has not yet been tested in a live client or full Windows build.
+> **Newer 70862 port:** `hunt/WOW_70862_PORT.md` supersedes default-build statements below. 70862 is the requested default and future target. The 70862 offsets and shared gameplay are experimental and have not yet been tested in a live client or full Windows build. The user ran 70790 Grind and confirmed a classified 11-slot ordinary subtotal on a second character; that is not full validation of every feature or selling.
 
 ## Start here
 

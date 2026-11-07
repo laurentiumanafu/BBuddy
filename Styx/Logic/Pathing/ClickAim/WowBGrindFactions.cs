@@ -162,12 +162,16 @@ internal static class WowBGrindFactions
     private static bool CheckExperimentalBuild(Memory memory, out string report)
     {
         if (!memory.Is64BitTarget) { report = "target is not x64"; return false; }
+        bool latest = ObjectManager.Wow == memory && ObjectManager.WowB?.IsExperimental70862 == true;
         bool newest = ObjectManager.Wow == memory && ObjectManager.WowB?.IsExperimental70790 == true;
         bool newer = ObjectManager.Wow == memory && ObjectManager.WowB?.IsExperimental70755 == true;
-        ulong[] rvas = newest ? new ulong[] { 0x211826C, 0x2142757, 0x2931DA5, 0xA6B06D }
+        ulong[] rvas = latest ? new ulong[] { 0x1F9298C, 0x1FBCA47, 0x27997E5, 0xA2B9FD }
+                     : newest ? new ulong[] { 0x211826C, 0x2142757, 0x2931DA5, 0xA6B06D }
                      : newer ? new ulong[] { 0x1F9163C, 0x1FBB6F7, 0x2797405, 0xA2BA4D }
                              : new ulong[] { 0x2080D2C, 0x20AAF97, 0x2890305, 0xA538FD };
-        string[] expected = newest
+        string[] expected = latest
+            ? new[] { "488D0D2D29A004E8288552FE8B93541E0000", "F2480F2A83281E0000", "448B8C86C01B0000", "488D0D3C772206488D34C1488B04C1" }
+            : newest
             ? new[] { "488D0DCD3FA104E878303AFE8B93541E0000", "F2480F2A83281E0000", "448B8C86C01B0000", "488D0D4CB83706488D34C1488B04C1" }
             : newer ? new[] { "488D0DBDEB9F04E8189852FE8B93541E0000", "F2480F2A83281E0000", "448B8C86C01B0000", "488D0D2CEE2106488D34C1488B04C1" }
             : new[] { "488D0DCD38A004E808A843FE8B93541E0000", "F2480F2A83281E0000", "448B8C86C01B0000", "488D0D5CB32E06488D34C1488B04C1" };
