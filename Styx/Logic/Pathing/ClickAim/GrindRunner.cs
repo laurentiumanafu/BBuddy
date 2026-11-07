@@ -454,6 +454,32 @@ internal static class GrindRunner
     /// <summary>Set when a trip cannot work at all (no point, no plan); selling stops for the run.</summary>
     private static bool _vendorImpossible;
     private static bool _vendorManualPending;
+    // A confirmed automatic request must survive a long route or combat; the
+    // underlying bag sample may expire while the character is away from town.
+    private static bool _vendorAutoPending;
+    private static WowBGuid _vendorAutoPlayer;
+    private static WowBReader? _vendorAutoReader;
+    private static GreenMagic.Memory? _vendorAutoMemory;
+
+    private static bool AutoVendorPending() => _vendorAutoPending && ClickAimSettings.AutoSell && !_vendorImpossible;
+    private static void ClearAutoVendorPending()
+    {
+        _vendorAutoPending = false; _vendorAutoPlayer = default;
+        _vendorAutoReader = null; _vendorAutoMemory = null;
+    }
+
+    private static bool AutoVendorIdentityMatches(WowBReader reader, GreenMagic.Memory memory, WowBGuid expected)
+    {
+        if (expected.IsEmpty || ObjectManager.WowB != reader || ObjectManager.Wow != memory) return false;
+        try
+        {
+            using var uncached = memory.TemporaryCacheState(false);
+            return reader.TryReadTraceLocalGuid(out WowBGuid first) && first == expected &&
+                reader.TryReadTraceLocalGuid(out WowBGuid second) && second == expected &&
+                ObjectManager.WowB == reader && ObjectManager.Wow == memory;
+        }
+        catch { return false; }
+    }
 
     /// <summary>TickCount before which no trip is attempted again.</summary>
     private static int _vendorRetryAt;
@@ -798,6 +824,7 @@ internal static class GrindRunner
         _lootProbed = false;
         _vendorDue = false;
         _vendorManualPending = false;
+        ClearAutoVendorPending();
         _vendorImpossible = false;
         _vendorRetryAt = 0;
         _lootsSinceTrip = 0;
@@ -913,7 +940,7 @@ internal static class GrindRunner
                 // A manual or automatic vendor trip still has priority; resting
                 // before that trip is handled below as before.
                 if (trialReader != null && RecentLoot.Any(Environment.TickCount) &&
-                    !_vendorDue && !VendorDue() && !_stop && !ClickAimAbort.Requested && !RouteRunner.StopRequested &&
+                    !_vendorDue && !AutoVendorPending() && !VendorDue() && !_stop && !ClickAimAbort.Requested && !RouteRunner.StopRequested &&
                     TryReadGatherCombat(out bool preRestLootCombat) && !preRestLootCombat)
                 {
                     string earlyLoot = LootNearby(hwnd, 3, recentOnly: true);
@@ -937,7 +964,7 @@ internal static class GrindRunner
                  *
                  * Not when the window asked, though. "Sell now" is a button somebody is watching;
                  * a trip the counters asked for can afford to eat first. */
-                if (!_vendorDue)
+                if (!_vendorDue && !AutoVendorPending())
                 {
                     string restedFirst = RestIfNeeded(hwnd);
                     if (restedFirst.Length > 0) Logging.Write("[Grind] " + restedFirst);
@@ -952,6 +979,15 @@ internal static class GrindRunner
                 if (VendorDue())
                 {
                     if (VendorTrip(hwnd, mover)) vendorTrips++;
+                    continue;
+                }
+                // During retry delays or an unreadable identity, do not resume
+                // looting/voluntary pulls while a confirmed auto trip is pending.
+                // Live combat still reaches the normal defence path below.
+                if (AutoVendorPending() && (!TryReadGatherCombat(out bool pendingCombat) || !pendingCombat))
+                {
+                    ClickAimKeySteer.ReleaseHeld();
+                    ClickAimAbort.Wait(250);
                     continue;
                 }
 
@@ -1435,7 +1471,7 @@ internal static class GrindRunner
          * waiting. (The loop asks VendorDue first, so this is the second line of defence - the
          * case it really covers is a request that arrives while this function is already
          * running.) */
-        if (_vendorDue && !InRealCombat())
+        if ((_vendorDue || AutoVendorPending()) && !InRealCombat())
         {
             report = "a vendor trip is waiting - not picking up a new fight before it";
             return false;
@@ -3004,6 +3040,12 @@ internal static class GrindRunner
     private static bool VendorDue()
     {
         if (!_running || _stop) return false;
+        if (_vendorAutoPending && !ClickAimSettings.AutoSell)
+        {
+            ClearAutoVendorPending();
+            BagSellMonitor.Reset(); // re-enabling must reconfirm the subtotal
+            Logging.Write("[Grind] automatic vendor request cancelled because auto-selling was disabled");
+        }
         if (UnderAttack()) return false;
 
         /* Asked for, before anything else: a point recorded in the window during a run has to be
@@ -3012,20 +3054,65 @@ internal static class GrindRunner
         if (_vendorDue) return true;
 
         if (_vendorImpossible) return false;
-        if (unchecked(Environment.TickCount - _vendorRetryAt) < 0) return false;
+        bool retryBlocked = unchecked(Environment.TickCount - _vendorRetryAt) < 0;
 
-        if (_vendorManualPending) return true;
+        if (_vendorManualPending) return !retryBlocked;
         if (!ClickAimSettings.AutoSell) return false;
         WowBReader? reader = ObjectManager.WowB;
         GreenMagic.Memory? memory = ObjectManager.Wow;
         if (reader == null || memory == null) return false;
         if (reader.IsExperimental70707)
         {
+            if (_vendorAutoPending)
+            {
+                if (_vendorAutoReader != reader || _vendorAutoMemory != memory)
+                {
+                    ClearAutoVendorPending(); BagSellMonitor.Reset();
+                    Logging.Write("[Grind] attachment changed; automatic vendor request discarded");
+                    return false;
+                }
+                WowBGuid current;
+                try
+                {
+                    using var uncached = memory.TemporaryCacheState(false);
+                    if (!reader.TryReadTraceLocalGuid(out current) || current.IsEmpty ||
+                        !reader.TryReadTraceLocalGuid(out WowBGuid second) || second != current) return false;
+                }
+                catch { return false; }
+                if (current != _vendorAutoPlayer)
+                {
+                    // Only a stable, nonempty new character cancels the request.
+                    ClearAutoVendorPending(); BagSellMonitor.Reset();
+                    Logging.Write("[Grind] character changed; automatic vendor request discarded");
+                    return false;
+                }
+                // A new positive, identity-matched sample can cancel an old
+                // full-bag request (e.g. the user freed a slot manually).
+                BagSellMonitor.Poll(memory, reader, out string? pendingReport);
+                if (pendingReport != null) Logging.Write(pendingReport);
+                if (BagSellMonitor.HasFreshSpace && BagSellMonitor.ObservedPlayer == _vendorAutoPlayer &&
+                    AutoVendorIdentityMatches(reader, memory, _vendorAutoPlayer))
+                {
+                    ClearAutoVendorPending();
+                    Logging.Write("[Grind] fresh candidate bag space observed; automatic vendor request cancelled");
+                    return false;
+                }
+                return !retryBlocked && !_stop && !ClickAimAbort.Requested && !RouteRunner.StopRequested &&
+                    AutoVendorIdentityMatches(reader, memory, _vendorAutoPlayer);
+            }
+            if (retryBlocked) return false;
             bool due = BagSellMonitor.Poll(memory, reader, out string? report);
             if (report != null) Logging.Write(report);
-            return due && !_stop && !ClickAimAbort.Requested && !RouteRunner.StopRequested &&
-                ObjectManager.WowB == reader && ObjectManager.Wow == memory;
+            if (!due || _stop || ClickAimAbort.Requested || RouteRunner.StopRequested ||
+                ObjectManager.WowB != reader || ObjectManager.Wow != memory) return false;
+            WowBGuid observed = BagSellMonitor.ObservedPlayer;
+            if (!AutoVendorIdentityMatches(reader, memory, observed)) return false;
+            _vendorAutoPending = true; _vendorAutoPlayer = observed;
+            _vendorAutoReader = reader; _vendorAutoMemory = memory;
+            Logging.Write("[Grind] automatic vendor trip is pending for this character until replay, fresh candidate space or auto-selling is disabled; bag fullness remains experimental");
+            return !_stop && !ClickAimAbort.Requested && !RouteRunner.StopRequested;
         }
+        if (retryBlocked) return false;
         int after = ClickAimSettings.SellAfterLoots;
         if (after <= 0) return false;
 
@@ -3121,8 +3208,13 @@ internal static class GrindRunner
         var previousInterrupt = RouteRunner.ShouldInterrupt;
         bool previousPoll = RouteRunner.PollInterruptDuringWalk;
         bool previousRequireMesh = RouteRunner.RequireMeshDuringSession;
+        bool automaticTrip = _vendorAutoPending && !_vendorManualPending;
+        WowBGuid routePlayer = _vendorAutoPlayer;
+        GreenMagic.Memory? routeMemory = _vendorAutoMemory;
         RouteRunner.ShouldInterrupt = () => !TryReadGatherCombat(out bool fighting) || fighting ||
-            ObjectManager.WowB != vendorReader || !vendorReader.TryReadMapId(out uint routeMap) || routeMap != currentMap;
+            ObjectManager.WowB != vendorReader || !vendorReader.TryReadMapId(out uint routeMap) || routeMap != currentMap ||
+            (automaticTrip && (!ClickAimSettings.AutoSell || routeMemory == null ||
+                !AutoVendorIdentityMatches(vendorReader, routeMemory, routePlayer)));
         RouteRunner.PollInterruptDuringWalk = true;
         RouteRunner.RequireMeshDuringSession = true;
         bool arrived = false;
@@ -3140,12 +3232,12 @@ internal static class GrindRunner
                  * character in place - the same brake a hotspot leg uses. */
                 _interruptQuietUntil = Environment.TickCount + InterruptRetryMs;
                 _vendorRetryAt = 0;
-                Logging.Write("[Grind] the town walk was interrupted by STOP, combat, an unreadable state or a map change. The trip remains pending.");
+                Logging.Write("[Grind] the town walk was interrupted by STOP, combat, an unreadable/changed state, map change or auto-selling being disabled. The trip remains pending unless cancelled.");
             }
             else
             {
                 _vendorRetryAt = Environment.TickCount + VendorRetryMs;
-                Logging.Write("[Grind] could not walk to the vendor point - the trip is dropped and retried in "
+                Logging.Write("[Grind] could not walk to the vendor point - the trip remains pending and is retried in "
                               + (VendorRetryMs / 1000) + " s");
             }
             return false;
@@ -3217,6 +3309,7 @@ internal static class GrindRunner
         _lootsSinceTrip = 0;
         _killsSinceTrip = 0;
         _vendorManualPending = false;
+        ClearAutoVendorPending();
         _vendorRetryAt = 0;
         if (vendorReader.IsExperimental70707)
         {
@@ -3335,6 +3428,11 @@ internal static class GrindRunner
             !Capture(out WowBWorldSnapshot? snap) || snap == null || !snap.TryGetLocalPlayer(out player) ||
             !snap.TryGetUnit(original.Guid, out npc) || npc.RecordAddress != original.RecordAddress || npc.UnitAddress != original.UnitAddress ||
             !WowBKnownMerchants.IsRecordedLive(point, npc, memory, reader)) return false;
+        // An automatic trip cannot interact after the character/attachment or
+        // auto-sell setting changes, including after reaching the town point.
+        if (_vendorAutoPending && !_vendorManualPending &&
+            (!ClickAimSettings.AutoSell || reader != _vendorAutoReader || memory != _vendorAutoMemory ||
+             player.Guid != _vendorAutoPlayer || !AutoVendorIdentityMatches(reader, memory, _vendorAutoPlayer))) return false;
         distance = ClickAimMath.Len(npc.Location.X - player.Location.X, npc.Location.Y - player.Location.Y);
         return double.IsFinite(distance) && !_stop && !ClickAimAbort.Requested && !_vendorDue && ObjectManager.Wow == memory && ObjectManager.WowB == reader;
     }

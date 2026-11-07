@@ -63,6 +63,10 @@ internal sealed class WowBBagSellMonitor
     private int? _latest;
     private int _lastReport = int.MinValue;
 
+    // Player associated with the latest successful observations. The runner
+    // binds a confirmed automatic trip to this character, not merely a process.
+    internal WowBGuid ObservedPlayer => _player;
+
     // The startup hold may release early only for a fresh, readable positive
     // sample. Unknown or a single zero is not evidence of free space.
     internal bool HasFreshSpace => _latest.HasValue && _latest.Value > 0 && _observedAt != 0 &&
@@ -111,7 +115,7 @@ internal sealed class WowBBagSellMonitor
                 _lastReport = status;
                 report = value.HasValue
                     ? "[Grind] experimental " + reader.ExperimentalBuildNumber + " bag candidate zero-tag subtotal=" + value.Value + "; auto-sell requires two consecutive zero observations."
-                    : "[Grind] experimental " + reader.ExperimentalBuildNumber + " bag subtotal unavailable; automatic selling waits (Sell now remains available).";
+                    : "[Grind] experimental " + reader.ExperimentalBuildNumber + " bag subtotal unavailable; this sample cannot trigger automatic selling (Sell now remains available).";
             }
         }
         if (_task == null && now >= _next)

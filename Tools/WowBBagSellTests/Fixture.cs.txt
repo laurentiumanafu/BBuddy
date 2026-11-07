@@ -1,8 +1,30 @@
 using System;
-namespace GreenMagic { sealed class Memory { } }
+namespace GreenMagic
+{
+    sealed class Memory
+    {
+        private sealed class Cache : IDisposable { public void Dispose() { } }
+        public IDisposable TemporaryCacheState(bool enabled) => new Cache();
+    }
+}
 namespace Styx.WoWInternals
 {
-    sealed class WowBReader { public bool IsExperimental70707; }
+    readonly struct WowBGuid
+    {
+        private readonly int _value;
+        public WowBGuid(int value) { _value = value; }
+        public bool IsEmpty => _value == 0;
+        public static bool operator ==(WowBGuid a, WowBGuid b) => a._value == b._value;
+        public static bool operator !=(WowBGuid a, WowBGuid b) => !(a == b);
+        public override bool Equals(object? obj) => obj is WowBGuid other && this == other;
+        public override int GetHashCode() => _value;
+    }
+    sealed class WowBReader
+    {
+        public bool IsExperimental70707;
+        public WowBGuid Local = new WowBGuid(1);
+        public bool TryReadTraceLocalGuid(out WowBGuid guid) { guid = Local; return !Local.IsEmpty; }
+    }
     static class ObjectManager { public static WowBReader? WowB; public static GreenMagic.Memory? Wow; }
 }
 namespace Styx.Helpers { static class Logging { public static void Write(string message) { } } }
@@ -15,7 +37,9 @@ namespace Styx.Logic.Pathing
     static class RouteRunner { public static bool StopRequested; }
     sealed class WowBBagSellMonitor
     {
-        public bool Due; public int Polls;
+        public bool Due, HasFreshSpace; public int Polls, Resets;
+        public WowBGuid ObservedPlayer = new WowBGuid(1);
+        public void Reset() { Resets++; Due = false; HasFreshSpace = false; }
         public bool Poll(GreenMagic.Memory memory, WowBReader reader, out string? report)
         { Polls++; report = null; return Due; }
     }
@@ -23,6 +47,11 @@ namespace Styx.Logic.Pathing
     {
         private static bool _running = true, _stop, _vendorDue, _vendorImpossible, _vendorManualPending, combat;
         private static int _vendorRetryAt, _lootsSinceTrip;
+        private static bool _vendorAutoPending;
+        private static WowBGuid _vendorAutoPlayer;
+        private static WowBReader? _vendorAutoReader;
+        private static GreenMagic.Memory? _vendorAutoMemory;
+        // __PRODUCTION_PENDING_HELPERS__
         private static readonly WowBBagSellMonitor BagSellMonitor = new WowBBagSellMonitor();
         private static bool UnderAttack() => combat;
         // __PRODUCTION_VENDOR_DUE__
@@ -30,14 +59,33 @@ namespace Styx.Logic.Pathing
         public static void Main()
         {
             ObjectManager.Wow = new GreenMagic.Memory(); ObjectManager.WowB = new WowBReader();
+            _vendorRetryAt = unchecked(Environment.TickCount - 1);
             _lootsSinceTrip = 39; Check(!VendorDue(), "70291 below threshold");
             _lootsSinceTrip = 40; Check(VendorDue(), "70291 threshold remains");
             ObjectManager.WowB.IsExperimental70707 = true;
             Check(!VendorDue() && BagSellMonitor.Polls == 1, "70707 ignores loot threshold when unknown");
-            BagSellMonitor.Due = true; Check(VendorDue(), "70707 confirmed zero requests trip");
-            combat = true; Check(!VendorDue(), "combat blocks trip"); combat = false;
-            ClickAimAbort.Requested = true; Check(!VendorDue(), "STOP blocks automatic trip"); ClickAimAbort.Requested = false;
-            ClickAimSettings.AutoSell = false; Check(!VendorDue(), "auto-sell switch blocks automatic trip");
+            BagSellMonitor.Due = true; Check(VendorDue() && AutoVendorPending(), "confirmed zero latches automatic trip");
+            BagSellMonitor.Due = false; int polls = BagSellMonitor.Polls;
+            Check(VendorDue() && BagSellMonitor.Polls == polls + 1, "pending survives expired or unknown bag scan");
+            combat = true; Check(!VendorDue() && AutoVendorPending(), "combat blocks trip without losing request"); combat = false;
+            Check(VendorDue(), "interrupted auto trip resumes after combat without reconfirming");
+            ClickAimAbort.Requested = true; Check(!VendorDue() && AutoVendorPending(), "STOP blocks automatic trip"); ClickAimAbort.Requested = false;
+            _vendorRetryAt = unchecked(Environment.TickCount + 10000); Check(!VendorDue() && AutoVendorPending(), "retry delay retains pending priority"); _vendorRetryAt = unchecked(Environment.TickCount - 1);
+            ObjectManager.WowB.Local = default; Check(!VendorDue() && AutoVendorPending(), "unreadable player holds pending request");
+            ObjectManager.WowB.Local = new WowBGuid(1); Check(VendorDue(), "matching player resumes pending trip");
+            ObjectManager.WowB.Local = new WowBGuid(2); Check(!VendorDue() && !AutoVendorPending(), "changed player clears pending trip");
+            ObjectManager.WowB.Local = new WowBGuid(1); BagSellMonitor.Due = true; Check(VendorDue(), "new confirmation relatches request");
+            BagSellMonitor.HasFreshSpace = true; BagSellMonitor.ObservedPlayer = new WowBGuid(2);
+            Check(VendorDue() && AutoVendorPending(), "another player's positive sample cannot cancel request");
+            BagSellMonitor.ObservedPlayer = new WowBGuid(1);
+            Check(!VendorDue() && !AutoVendorPending(), "fresh matching candidate space cancels auto request");
+            BagSellMonitor.HasFreshSpace = false; BagSellMonitor.Due = true; Check(VendorDue(), "confirmed full bags relatch");
+            var oldMemory = ObjectManager.Wow; ObjectManager.Wow = new GreenMagic.Memory();
+            Check(!VendorDue() && !AutoVendorPending(), "changed attachment clears pending trip"); ObjectManager.Wow = oldMemory;
+            BagSellMonitor.Due = true; Check(VendorDue(), "confirmation relatches after attachment change");
+            ClickAimSettings.AutoSell = false; Check(!VendorDue() && !AutoVendorPending(), "disabling auto-sell cancels pending trip");
+            ClickAimSettings.AutoSell = true; Check(!VendorDue(), "re-enabling requires new confirmed observations");
+            ClickAimSettings.AutoSell = false;
             _vendorDue = true; Check(VendorDue(), "manual request is independent of auto-sell");
             _vendorDue = false; _vendorManualPending = true; Check(VendorDue(), "interrupted manual trip remains pending");
             Console.WriteLine("70707 and legacy vendor-due wiring synthetic fixtures passed");
