@@ -1,0 +1,51 @@
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+namespace Styx.Logic.Pathing
+{
+    static class Logging { public static void Write(string line) {} }
+    static class Harness
+    {
+        const int TurnRightVk=39, TurnLeftVk=37, CalibrateTapMs=200;
+        static bool _turnKeysReady, safe; static IntPtr _turnKeysWindow,_lastHwnd;
+        static int _turnPosVk,_turnNegVk, tapCount, stopAtTap;
+        static double _turnPosRate,_turnNegRate;
+        static Queue<double> deltas=new(); static List<int> taps=new();
+        static void ReleaseHeld() {} static void BeginMeshPoint() {}
+        static double TurnFor(IntPtr hwnd,int vk,int ms,out string report)
+        {
+            report=""; taps.Add(vk); tapCount++;
+            if(tapCount==stopAtTap) safe=false;
+            return deltas.Count>0 ? deltas.Dequeue() : double.NaN;
+        }
+        // __METHODS__
+        static void Reset(params double[] values)
+        {
+            _turnKeysReady=false; _turnKeysWindow=_lastHwnd=IntPtr.Zero; safe=true; tapCount=0; stopAtTap=0;
+            _turnPosVk=_turnNegVk=0; _turnPosRate=_turnNegRate=0; deltas=new Queue<double>(values); taps.Clear();
+        }
+        static void Check(bool condition,string label) { if(!condition) throw new Exception(label); }
+        static bool Run(IntPtr h,bool quick,out string report) => EnsureChaseTurnKeys(h,()=>safe,out report,quick);
+        public static void Main()
+        {
+            IntPtr h=(IntPtr)1;
+            Reset(-36,36); Check(Run(h,true,out var report) && tapCount==2 && report.Contains("quick loot pair"),"clear quick pair");
+            Check(_turnPosVk==TurnLeftVk && _turnNegVk==TurnRightVk && Math.Abs(_turnPosRate-0.18)<0.001,"measured direction and rate");
+            Check(Run(h,true,out _) && tapCount==2,"reuse for same window");
+            deltas=new Queue<double>(new double[] {-36,36}); Check(Run((IntPtr)2,true,out _) && tapCount==4,"new window remeasured");
+            Reset(30,-30); Check(Run(h,true,out _) && _turnPosVk==TurnRightVk && _turnNegVk==TurnLeftVk,"reverse mapping measured");
+            Reset(-18,36,-36,36); Check(Run(h,true,out report) && tapCount==4 && !report.Contains("quick loot pair") && Math.Abs(_turnNegRate-0.18)<0.001,"half first sample falls back to stronger samples");
+            Reset(0,36,-36,36); Check(Run(h,true,out _) && tapCount==4,"swallowed first tap falls back");
+            Reset(-18,18,-36,36); Check(Run(h,true,out _) && tapCount==4,"two weak samples fall back even if symmetric");
+            Reset(-36,-36,-36,-36); Check(!Run(h,true,out _) && !_turnKeysReady && tapCount==4,"same-sign taps rejected");
+            Reset(-36,36); stopAtTap=1; Check(!Run(h,true,out _) && tapCount==1 && !_turnKeysReady,"stop after first tap");
+            Reset(-36,36); stopAtTap=2; Check(!Run(h,true,out _) && tapCount==2 && !_turnKeysReady,"stop after second tap");
+            Reset(-18,36,-36,36); stopAtTap=3; Check(!Run(h,true,out _) && tapCount==3 && !_turnKeysReady,"stop in fallback");
+            Reset(-36,-36,36,36); Check(Run(h,false,out _) && tapCount==4 && taps[0]==TurnRightVk && taps[1]==TurnRightVk && taps[2]==TurnLeftVk && taps[3]==TurnLeftVk,"normal calibration unchanged");
+            Reset(-36,36); safe=false; Check(!Run(h,true,out _) && tapCount==0,"unsafe before calibration");
+            Reset(-36,36); Check(!Run(IntPtr.Zero,true,out _) && tapCount==0,"invalid window");
+            Reset(double.NaN,36); Check(!Run(h,true,out _) && tapCount==1 && !_turnKeysReady,"unreadable facing");
+            Console.WriteLine("Loot turn calibration fixtures passed (synthetic facing and input).");
+        }
+    }
+}

@@ -3391,7 +3391,7 @@ internal static class GrindRunner
                     { reason = "corpse is too far vertically for a guarded loot click"; return false; }
                     return true;
                 }
-                if (!ChaseStep(hwnd, watch, corpse, out reason, true)) return false;
+                if (!ChaseStep(hwnd, watch, corpse, out reason, true, quickLootTurnCalibration: true)) return false;
             }
             reason = "mesh approach timed out";
             return false;
@@ -4701,7 +4701,7 @@ internal static class GrindRunner
     // ticks keep checking combat/STOP between steps. Re-plan for moving targets.
     // Count stalled replans for the whole chase, not position changes from walking
     // backwards: the old watchdog repeatedly reset "attempt 1" at the same wall.
-    private static bool ChaseStep(IntPtr hwnd, ChaseWatch watch, WowBObservedUnit target, out string why, bool approachOnly = false, Func<bool>? combatMoveAllowed = null)
+    private static bool ChaseStep(IntPtr hwnd, ChaseWatch watch, WowBObservedUnit target, out string why, bool approachOnly = false, Func<bool>? combatMoveAllowed = null, bool quickLootTurnCalibration = false)
     {
         why = "";
         if (_stop || ClickAimAbort.Requested) { why = "stopped"; return false; }
@@ -4710,7 +4710,7 @@ internal static class GrindRunner
         if (ObjectManager.WowB?.IsExperimental70707 == true &&
             !ClickAimKeySteer.EnsureChaseTurnKeys(hwnd,
                 () => !_stop && !ClickAimAbort.Requested && (combatMoveAllowed == null || combatMoveAllowed()) &&
-                      (!approachOnly || (TryReadGatherCombat(out bool combat) && !combat)), out string calibration))
+                      (!approachOnly || (TryReadGatherCombat(out bool combat) && !combat)), out string calibration, quickLootTurnCalibration))
         { ClickAimKeySteer.ReleaseHeld(); why = "turn-only calibration failed or was interrupted: " + calibration; return false; }
         if (!ClickAimPositions.TryRead(out double px, out double py))
         { ClickAimKeySteer.ReleaseHeld(); why = "player position unreadable"; return false; }

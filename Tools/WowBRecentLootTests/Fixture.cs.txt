@@ -90,7 +90,7 @@ namespace Styx.Logic.Pathing {
   private static bool UnderAttack()=>Test.Combat;
   private static bool TryReadGatherCombat(out bool fighting){fighting=Test.Combat;return Test.CombatReadable;}
   private sealed class ChaseWatch { internal ChaseWatch(int x){} }
-  private static bool ChaseStep(IntPtr h,ChaseWatch w,WowBObservedUnit u,out string why,bool approachOnly=false){Test.Paths++;why="mesh rejected";if(Test.InterruptDuringPath){Test.Combat=true;return false;}if(!Test.PathOk)return false;Test.Player.Location.X=u.Location.X-3;return true;}
+  private static bool ChaseStep(IntPtr h,ChaseWatch w,WowBObservedUnit u,out string why,bool approachOnly=false,Func<bool>? combatMoveAllowed=null,bool quickLootTurnCalibration=false){Test.Paths++;why="mesh rejected";if(!quickLootTurnCalibration)throw new Exception("recent loot must request quick calibration");if(Test.InterruptDuringPath){Test.Combat=true;return false;}if(!Test.PathOk)return false;Test.Player.Location.X=u.Location.X-3;return true;}
   private static void StopAndSettle(IntPtr h){}
   private static bool TryProject(IntPtr h,double px,double py,double x,double y,double z,out int dx,out int dy){dx=dy=0;return true;}
   private static void DismissRejectedSelection(IntPtr h,WowBReader? r,WowBGuid p,WowBGuid c){if(Test.Target==c)Test.Target=p;}

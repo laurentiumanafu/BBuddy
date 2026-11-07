@@ -473,7 +473,7 @@ internal static class ClickAimKeySteer
     // Pool chases can start before RouteRunner has performed its full walking
     // calibration. Measure the arrow directions in place rather than relying on
     // defaults that may be backwards on the attached client.
-    internal static bool EnsureChaseTurnKeys(IntPtr hwnd, Func<bool> safe, out string report)
+    internal static bool EnsureChaseTurnKeys(IntPtr hwnd, Func<bool> safe, out string report, bool quickLoot = false)
     {
         report = "";
         if (_turnKeysReady && _turnKeysWindow == hwnd) return true;
@@ -482,23 +482,52 @@ internal static class ClickAimKeySteer
         if (hwnd == IntPtr.Zero || !safe()) { report = "turn calibration interrupted"; return false; }
         double r1 = TurnFor(hwnd, TurnRightVk, CalibrateTapMs, out report);
         if (double.IsNaN(r1) || !safe()) return false;
-        double r2 = TurnFor(hwnd, TurnRightVk, CalibrateTapMs, out report);
-        if (double.IsNaN(r2) || !safe()) return false;
-        double l1 = TurnFor(hwnd, TurnLeftVk, CalibrateTapMs, out report);
-        if (double.IsNaN(l1) || !safe()) return false;
-        double l2 = TurnFor(hwnd, TurnLeftVk, CalibrateTapMs, out report);
-        if (double.IsNaN(l2) || !safe()) return false;
-        double right = Math.Abs(r2) >= Math.Abs(r1) ? r2 : r1;
-        double left = Math.Abs(l2) >= Math.Abs(l1) ? l2 : l1;
+        double right, left;
+        bool quickAccepted = false;
+        if (quickLoot)
+        {
+            // Both directions must still be measured. Accept only a strong,
+            // mutually consistent pair; a swallowed first tap or asymmetry
+            // falls back to the original two-samples-per-key calibration.
+            double l1 = TurnFor(hwnd, TurnLeftVk, CalibrateTapMs, out report);
+            if (double.IsNaN(l1) || !safe()) return false;
+            quickAccepted = ReliableFirstTurnPair(r1, l1);
+            if (quickAccepted) { right = r1; left = l1; }
+            else
+            {
+                double r2 = TurnFor(hwnd, TurnRightVk, CalibrateTapMs, out report);
+                if (double.IsNaN(r2) || !safe()) return false;
+                double l2 = TurnFor(hwnd, TurnLeftVk, CalibrateTapMs, out report);
+                if (double.IsNaN(l2) || !safe()) return false;
+                right = Math.Abs(r2) >= Math.Abs(r1) ? r2 : r1;
+                left = Math.Abs(l2) >= Math.Abs(l1) ? l2 : l1;
+            }
+        }
+        else
+        {
+            double r2 = TurnFor(hwnd, TurnRightVk, CalibrateTapMs, out report);
+            if (double.IsNaN(r2) || !safe()) return false;
+            double l1 = TurnFor(hwnd, TurnLeftVk, CalibrateTapMs, out report);
+            if (double.IsNaN(l1) || !safe()) return false;
+            double l2 = TurnFor(hwnd, TurnLeftVk, CalibrateTapMs, out report);
+            if (double.IsNaN(l2) || !safe()) return false;
+            right = Math.Abs(r2) >= Math.Abs(r1) ? r2 : r1;
+            left = Math.Abs(l2) >= Math.Abs(l1) ? l2 : l1;
+        }
         if (!TryTurnDirections(right, left, out int pos, out int neg, out double posRate, out double negRate))
         { report = "turn keys did not produce reliable opposite directions"; return false; }
         _turnPosVk = pos; _turnNegVk = neg; _turnPosRate = posRate; _turnNegRate = negRate;
         _turnKeysWindow = hwnd; _turnKeysReady = true;
         BeginMeshPoint();
-        report = string.Format(CultureInfo.InvariantCulture, "turn-only calibration: right {0:+0.0;-0.0}, left {1:+0.0;-0.0} degrees per 200 ms", right, left);
+        report = string.Format(CultureInfo.InvariantCulture, "turn-only calibration{2}: right {0:+0.0;-0.0}, left {1:+0.0;-0.0} degrees per 200 ms", right, left, quickAccepted ? " (quick loot pair)" : "");
         Logging.Write("[Keys] " + report);
         return true;
     }
+
+    private static bool ReliableFirstTurnPair(double right, double left)
+        => TryTurnDirections(right, left, out _, out _, out _, out _) &&
+           Math.Abs(right) >= 25.0 && Math.Abs(left) >= 25.0 &&
+           Math.Max(Math.Abs(right), Math.Abs(left)) <= 1.5 * Math.Min(Math.Abs(right), Math.Abs(left));
 
     private static bool TryTurnDirections(double right, double left, out int pos, out int neg, out double posRate, out double negRate)
     {
