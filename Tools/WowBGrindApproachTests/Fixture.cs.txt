@@ -1,0 +1,58 @@
+using System;
+using System.Globalization;
+namespace Styx.Logic.Pathing
+{
+    sealed class WowBWorldSnapshot { public bool TryGetLocalPlayer(out WowBObservedUnit unit) { unit=new WowBObservedUnit(); return true; } }
+    readonly struct Point { public readonly float X,Y; }
+    readonly struct WowBObservedUnit { public readonly Point Location; public int Guid => 123; }
+    static class GrindFactionSettings { public static RulesType Rules = new RulesType(); public sealed class RulesType { public bool Enabled=true; } }
+    static class ClickAimCombat { public const double CasterRangeYd=28; }
+    static class Logging { public static void Write(string message) {} }
+    static class ClickAimKeySteer { public static void ReleaseHeld() {} }
+    static class ClickAimAbort { public static bool Requested; public static bool Wait(int ms) => Requested; }
+    static class Harness
+    {
+        const double SearchYd=100, PoolApproachYd=40, FactionApproachYd=PoolApproachYd, FactionTabFallbackYd=ClickAimCombat.CasterRangeYd-2;
+        const int FactionTabRetryMs=30000, InterruptRetryMs=4000;
+        static bool _stop,_vendorDue,_combatHold,_poolApproachHandled;
+        static int _interruptQuietUntil;
+        static System.Collections.Generic.Dictionary<int,int> _tabRefusedUntil=new();
+        static bool snapshotAvailable, candidateAvailable, combatReadable, combat, approached;
+        static double candidateDistance, approachedRadius;
+        static bool Capture(out WowBWorldSnapshot? snapshot) { snapshot=snapshotAvailable ? new WowBWorldSnapshot() : null; return snapshot != null; }
+        static bool TryReadGatherCombat(out bool fighting) { fighting=combat; return combatReadable; }
+        static bool NearestKillable(WowBWorldSnapshot snapshot, float x, float y, double radius, out WowBObservedUnit unit, out double d, out int live, out int unread, bool preferFullHealth)
+        { unit=new WowBObservedUnit(); d=candidateDistance; live=1; unread=0; return candidateAvailable && candidateDistance <= radius; }
+        static string ApproachPoolCandidate(IntPtr hwnd, WowBObservedUnit candidate, double radius) { approached=true; approachedRadius=radius; return "approach"; }
+        // __PREDICATE__
+        static bool Run(bool have, out string report)
+        {
+            report=""; var hwnd=IntPtr.Zero; WowBObservedUnit nearest=default; double nearestYd=0;
+            // __BRANCH__
+            return true;
+        }
+        static void Reset(double d)
+        {
+            _stop=_vendorDue=_combatHold=_poolApproachHandled=ClickAimAbort.Requested=combat=approached=false;
+            snapshotAvailable=candidateAvailable=combatReadable=true; candidateDistance=d; approachedRadius=0; _tabRefusedUntil.Clear();
+        }
+        static void Check(bool ok,string test) { if(!ok) throw new Exception(test); }
+        public static void Main()
+        {
+            Check(!ShouldApproachPoolCandidate(false,true,19.9,FactionApproachYd),"19.9 yards already in TAB radius");
+            Check(!ShouldApproachPoolCandidate(false,true,40,FactionApproachYd) && ShouldApproachPoolCandidate(false,true,40.1,FactionApproachYd),"40 yard first TAB boundary");
+            Check(!ShouldApproachPoolCandidate(false,true,26,FactionTabFallbackYd) && ShouldApproachPoolCandidate(false,true,26.1,FactionTabFallbackYd),"26 yard fallback boundary");
+            Check(!ShouldApproachPoolCandidate(false,true,double.NaN,FactionTabFallbackYd),"unknown distance is not a movement request");
+            Reset(35); Check(!Run(false,out _) && approached && approachedRadius==26 && _tabRefusedUntil.Count==0,"miss at 35 gets one casting-range approach");
+            Reset(26); Check(!Run(false,out _) && !approached && _tabRefusedUntil.ContainsKey(123),"miss at 26 defers without moving closer");
+            Reset(19.9); Check(!Run(false,out _) && !approached && _tabRefusedUntil.ContainsKey(123),"miss at 19.9 does not move closer");
+            Reset(35); Check(Run(true,out _) && !approached && _tabRefusedUntil.Count==0,"selected target bypasses miss handling");
+            Reset(35); snapshotAvailable=false; Check(!Run(false,out _) && !approached && _combatHold,"unreadable snapshot holds");
+            Reset(35); combat=true; Check(!Run(false,out _) && !approached && _combatHold,"combat interrupts");
+            Reset(35); combatReadable=false; Check(!Run(false,out _) && !approached && _combatHold,"unknown combat interrupts");
+            Reset(35); _stop=true; Check(!Run(false,out _) && !approached,"STOP interrupts");
+            Reset(35); candidateAvailable=false; Check(!Run(false,out _) && !approached && _tabRefusedUntil.Count==0,"missing candidate never approached or deferred");
+            Console.WriteLine("Faction targeting approach fixtures passed (synthetic candidates and movement).");
+        }
+    }
+}

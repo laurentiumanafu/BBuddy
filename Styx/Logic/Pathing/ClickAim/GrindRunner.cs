@@ -46,9 +46,11 @@ internal static class GrindRunner
     private const int TabVk = 0x09;
     private const int TabTries = 3;
     private const int TabSettleMs = 250;
-    // With a manual faction filter, move close to a permitted candidate on mesh
-    // rather than using indiscriminate pixel probes to search around it.
-    private const double FactionApproachYd = 15.0;
+    // With a manual faction filter, approach an allowed candidate on mesh and
+    // try TAB at the same distance as unfiltered targeting. If TAB misses at
+    // long range, retry nearer (but still inside the usual 28-yard cast range).
+    private const double FactionApproachYd = PoolApproachYd;
+    private const double FactionTabFallbackYd = ClickAimCombat.CasterRangeYd - 2.0;
     // A repeated TAB miss is inconclusive, but a five-second pause made the
     // same friendly/occluded candidate interrupt roaming again immediately.
     private const int FactionTabRetryMs = 30000;
@@ -1672,10 +1674,31 @@ internal static class GrindRunner
 
         if (GrindFactionSettings.Rules.Enabled && !have)
         {
+            // TAB reach and line of sight are client-dependent. If it missed
+            // from far away, refresh the candidate and make one guarded mesh
+            // approach to the edge of ordinary casting range before deferring it.
+            // Never close to melee solely because TAB missed.
+            if (!Capture(out WowBWorldSnapshot? retrySnapshot) || retrySnapshot == null ||
+                !retrySnapshot.TryGetLocalPlayer(out WowBObservedUnit retryPlayer))
+            {
+                _combatHold = true; _poolApproachHandled = true;
+                report = "TAB retry snapshot unreadable; holding rather than approaching blindly";
+                ClickAimKeySteer.ReleaseHeld(); ClickAimAbort.Wait(300); return false;
+            }
+            bool retryCandidate = NearestKillable(retrySnapshot, retryPlayer.Location.X, retryPlayer.Location.Y,
+                FactionApproachYd, out nearest, out nearestYd, out _, out _, preferFullHealth: true);
+            if (ShouldApproachPoolCandidate(false, retryCandidate, nearestYd, FactionTabFallbackYd))
+            {
+                Logging.Write("[Grind] TAB missed at longer range; making a mesh approach to " +
+                    FactionTabFallbackYd.ToString("F0", CultureInfo.InvariantCulture) + " yd before another selection attempt");
+                _poolApproachHandled = true;
+                report = ApproachPoolCandidate(hwnd, nearest, FactionTabFallbackYd);
+                return false;
+            }
             // Do not search by indiscriminate left clicks: they can select a
             // nearby NPC of a different faction. TAB can still select another
             // unit, which is rejected above and never treated as attackable.
-            if (haveNearest)
+            if (retryCandidate)
             {
                 if (_tabRefusedUntil.Count > 256) _tabRefusedUntil.Clear();
                 _tabRefusedUntil[nearest.Guid] = unchecked(Environment.TickCount + FactionTabRetryMs);
@@ -5537,8 +5560,8 @@ internal static class GrindRunner
                 continue;
             }
 
-            if (canCast && d > selectedRange - 2.0)
-                ClickAimKeySteer.ReleaseHeld();      // arrived: stop walking before casting
+            if (canCast)
+                ClickAimKeySteer.ReleaseHeld();      // in range: never keep walking during cast/cooldown
 
             /* ---- 3. Wrath, on the global cooldown timer ----
              *

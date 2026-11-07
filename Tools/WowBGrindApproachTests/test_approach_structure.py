@@ -15,8 +15,23 @@ class ApproachIntegration(unittest.TestCase):
         tab = s.index('ClickAimInput.TapKey(hwnd, TabVk, 40)')
         self.assertLess(s.index('ApproachPoolCandidate(hwnd, nearest, FactionApproachYd)'), tab)
         self.assertLess(s.index('ApproachPoolCandidate(hwnd, nearest);'), tab)
-        self.assertRegex(SOURCE, r'FactionApproachYd\s*=\s*15\.0')
+        self.assertRegex(SOURCE, r'FactionApproachYd\s*=\s*PoolApproachYd')
         self.assertRegex(SOURCE, r'PoolApproachYd\s*=\s*40\.0')
+        self.assertRegex(SOURCE, r'FactionTabFallbackYd\s*=\s*ClickAimCombat\.CasterRangeYd\s*-\s*2\.0')
+
+    def test_faction_tab_miss_closes_only_to_casting_margin(self):
+        s = section('        if (GrindFactionSettings.Rules.Enabled && !have)\n        {\n            // TAB reach',
+                    '        // Do not waste dozens of pixel clicks')
+        self.assertIn('NearestKillable(retrySnapshot', s)
+        self.assertIn('ShouldApproachPoolCandidate(false, retryCandidate, nearestYd, FactionTabFallbackYd)', s)
+        self.assertIn('ApproachPoolCandidate(hwnd, nearest, FactionTabFallbackYd)', s)
+        self.assertLess(s.index('ApproachPoolCandidate(hwnd, nearest, FactionTabFallbackYd)'), s.index('_tabRefusedUntil[nearest.Guid]'))
+        self.assertNotIn('FindUnitPixel', s)
+
+    def test_cast_range_releases_forward_even_when_well_inside(self):
+        s = section('            if (canCast && d > selectedRange)', '            /* ---- 3. Wrath')
+        self.assertIn('if (canCast)\n                ClickAimKeySteer.ReleaseHeld()', s)
+        self.assertNotIn('d > selectedRange - 2.0', s)
 
     def test_fresh_candidate_rechecked_each_tab_attempt(self):
         s = section('        for (int i = 0; i < TabTries', '        if (_stop || ClickAimAbort.Requested || _vendorDue) return false;')
