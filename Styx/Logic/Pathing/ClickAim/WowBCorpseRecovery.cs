@@ -144,6 +144,54 @@ internal static class WowBCorpseRecovery
                ReadState(memory, reader, hwnd, checkpoint, running, out _) == State.Ghost;
     }
 
+    // The five-location recovery was previously used only by Gather hotspots.
+    // After a failed corpse leg, try bounded, mesh-validated positions around
+    // the current ghost and re-plan toward the corpse from each one. A failed
+    // route is not proof of a physical obstacle; no ground is blacklisted here.
+    private static bool WalkGhostWithRelocation(Memory memory, WowBReader reader, IntPtr hwnd,
+        WowBDeathCheckpoint.Candidate checkpoint, Func<bool> running, ClickAimMover mover, RoutePoint goal, int started)
+    {
+        if (WalkGhostTo(memory, reader, hwnd, checkpoint, running, mover, goal, started, true)) return true;
+
+        bool Interrupted() => !Allowed(memory, reader, hwnd, running) ||
+            unchecked(Environment.TickCount - started) >= RouteLimitMs ||
+            ReadState(memory, reader, hwnd, checkpoint, running, out _) != State.Ghost;
+        if (Interrupted() || ReadState(memory, reader, hwnd, checkpoint, running, out WoWPoint origin) != State.Ghost) return false;
+        if (WowBCorpseSpotPolicy.InRange(origin, checkpoint.Position, WowBCorpseSpotPolicy.ArrivalRadius)) return true;
+
+        var tried = new List<RoutePoint>();
+        Logging.Write("[Corpse] corpse leg did not complete; trying up to " + MeshRelocate.Attempts +
+            " alternate mesh locations before retrying the route (no obstacle is assumed)");
+        for (int attempt = 1; attempt <= MeshRelocate.Attempts; attempt++)
+        {
+            if (Interrupted()) return false;
+            if (!MeshRelocate.TryPick(checkpoint.Map, origin.X, origin.Y, tried, (_, _) => false, Interrupted, out RoutePoint alternate))
+            {
+                if (!Interrupted()) Logging.Write("[Corpse] no additional alternate location could be validated on the mesh");
+                return false;
+            }
+            if (Interrupted()) return false;
+            tried.Add(alternate);
+            Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                "[Corpse] relocation {0}/{1}: walking to ({2:F1}, {3:F1}) on the mesh",
+                attempt, MeshRelocate.Attempts, alternate.X, alternate.Y));
+            bool arrived = WalkGhostTo(memory, reader, hwnd, checkpoint, running, mover, alternate, started, true);
+            if (Interrupted() || ReadState(memory, reader, hwnd, checkpoint, running, out WoWPoint position) != State.Ghost) return false;
+            // The alternate walk is interrupted as soon as the ghost enters the
+            // corpse arrival range, just like the original leg.
+            if (WowBCorpseSpotPolicy.InRange(position, checkpoint.Position, WowBCorpseSpotPolicy.ArrivalRadius)) return true;
+            if (!arrived)
+            {
+                Logging.Write("[Corpse] relocation " + attempt + "/" + MeshRelocate.Attempts + ": did not arrive; trying another location");
+                continue;
+            }
+            Logging.Write("[Corpse] relocation " + attempt + "/" + MeshRelocate.Attempts + ": arrived; retrying the corpse route");
+            if (WalkGhostTo(memory, reader, hwnd, checkpoint, running, mover, goal, started, true)) return true;
+        }
+        if (!Interrupted()) Logging.Write("[Corpse] alternate mesh locations did not complete the corpse route");
+        return false;
+    }
+
     // Mesh-only movement to a candidate; never use a partial/long path as a shortcut.
     private static bool TryWalkToSpot(Memory memory, WowBReader reader, IntPtr hwnd,
         WowBDeathCheckpoint.Candidate checkpoint, Func<bool> running, ClickAimMover mover,
@@ -424,7 +472,7 @@ internal static class WowBCorpseRecovery
             Logging.Write("[Corpse] ghost candidate confirmed; following the mesh toward the checkpoint, stopping short to scout");
             var goal = new RoutePoint { X = checkpoint.Position.X, Y = checkpoint.Position.Y, Z = checkpoint.Position.Z, Kind = "Corpse" };
             int routeStarted = Environment.TickCount;
-            if (!WalkGhostTo(memory, reader, hwnd, checkpoint, running, mover, goal, routeStarted, true) ||
+            if (!WalkGhostWithRelocation(memory, reader, hwnd, checkpoint, running, mover, goal, routeStarted) ||
                 ReadState(memory, reader, hwnd, checkpoint, running, out ghostPos) != State.Ghost ||
                 !WowBCorpseSpotPolicy.InRange(ghostPos, checkpoint.Position, WowBCorpseSpotPolicy.MaxClickRadius))
             { Logging.Write("[Corpse] mesh route or proximity was not confirmed; stopping"); return false; }

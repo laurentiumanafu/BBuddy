@@ -34,7 +34,10 @@ assert 'aliveReads >= 2 && WowBGrindFactions.Experimental70707BarSafe(reader)' i
 assert 'new bool[WowBCorpseSpotPolicy.DirectionCount]' in recover and 'out fallback' in recover
 assert 'TryDialogClick(memory, reader, hwnd, checkpoint, running, true, true' in recover
 assert recover.index('!RouteRunner.MeshReady()') < recover.index('TryDialogClick(memory, reader, hwnd, checkpoint, running, true, true')
-assert recover.index('state == State.Ghost') < recover.index('TryEnableRecoveryKeySteering(hwnd, SafeGhost') < recover.index('WalkGhostTo(memory, reader, hwnd, checkpoint')
+assert recover.index('state == State.Ghost') < recover.index('TryEnableRecoveryKeySteering(hwnd, SafeGhost') < recover.index('WalkGhostWithRelocation(memory, reader, hwnd, checkpoint')
+relocation = source[source.index('    private static bool WalkGhostWithRelocation('):source.index('    // Mesh-only movement')]
+assert 'WalkGhostTo(memory, reader, hwnd, checkpoint, running, mover, goal, started, true)' in relocation
+assert 'MeshRelocate.TryPick(checkpoint.Map' in relocation and 'ReadState(memory, reader, hwnd, checkpoint, running' in relocation
 assert 'RequireFacingForKeyMode = true' in recover and 'mover.EndRecoveryKeySteering()' in recover
 assert 'out rem, RequireFacingForKeyMode' in mover
 assert 'EnsureChaseTurnKeys(hwnd, safe, out report)' in mover_methods

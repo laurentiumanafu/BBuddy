@@ -1,0 +1,79 @@
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using GreenMagic;
+using Styx.WoWInternals;
+namespace GreenMagic { sealed class Memory { } }
+namespace Styx.WoWInternals { sealed class WowBReader { } }
+namespace Styx.Logic.Pathing
+{
+    readonly struct WoWPoint { public readonly float X,Y,Z; public WoWPoint(float x,float y,float z) { X=x; Y=y; Z=z; } }
+    sealed class RoutePoint { public float X,Y,Z; public string Kind=""; }
+    sealed class ClickAimMover { }
+    static class WowBDeathCheckpoint { internal sealed class Candidate { public uint Map; public WoWPoint Position; } }
+    static class WowBCorpseSpotPolicy
+    {
+        public const double ArrivalRadius=35;
+        public static bool InRange(WoWPoint a,WoWPoint b,double radius) => Math.Sqrt((a.X-b.X)*(a.X-b.X)+(a.Y-b.Y)*(a.Y-b.Y)) <= radius;
+    }
+    static class Logging { public static void Write(string line) { } }
+    static class MeshRelocate
+    {
+        public const int Attempts=5; public static int Picks; public static bool NoPick; public static Action? DuringPick;
+        public static bool TryPick(uint map,double x,double y,IList<RoutePoint> tried,Func<double,double,bool> excluded,Func<bool> interrupted,out RoutePoint point)
+        {
+            Picks++; point=new RoutePoint { X=(float)(x+10*Picks), Y=(float)y, Kind="Relocate" };
+            if (interrupted()) return false;
+            DuringPick?.Invoke();
+            return !NoPick && !interrupted();
+        }
+    }
+    static class Harness
+    {
+        enum State { Unknown, Dead, Alive, Ghost }
+        const int RouteLimitMs=15*60*1000;
+        static bool active,ghost,mapValid,attached;
+        static WoWPoint position;
+        static int walkCount;
+        static Queue<bool> results=new();
+        static Action<int,RoutePoint>? DuringWalk;
+        static bool Allowed(Memory m,WowBReader r,IntPtr h,Func<bool> running) => active && attached && running();
+        static State ReadState(Memory m,WowBReader r,IntPtr h,WowBDeathCheckpoint.Candidate c,Func<bool> running,out WoWPoint p)
+        { p=position; return !Allowed(m,r,h,running) || !mapValid ? State.Unknown : ghost ? State.Ghost : State.Alive; }
+        static bool WalkGhostTo(Memory m,WowBReader r,IntPtr h,WowBDeathCheckpoint.Candidate c,Func<bool> running,ClickAimMover mover,RoutePoint goal,int started,bool stopNearCorpse)
+        {
+            walkCount++; if (!stopNearCorpse) throw new Exception("stop-near-corpse must remain enabled");
+            DuringWalk?.Invoke(walkCount,goal);
+            return results.Count>0 && results.Dequeue();
+        }
+        // __METHOD__
+        static void Check(bool condition,string label) { if (!condition) throw new Exception(label); }
+        static void Reset(params bool[] next)
+        {
+            active=ghost=mapValid=attached=true; position=new WoWPoint(0,0,0); walkCount=0;
+            results=new Queue<bool>(next); DuringWalk=null; MeshRelocate.Picks=0; MeshRelocate.NoPick=false; MeshRelocate.DuringPick=null;
+        }
+        public static void Main()
+        {
+            var mem=new Memory(); var reader=new WowBReader(); var mover=new ClickAimMover();
+            var checkpoint=new WowBDeathCheckpoint.Candidate { Map=0, Position=new WoWPoint(500,0,0) };
+            var goal=new RoutePoint { X=500,Kind="Corpse" }; Func<bool> running=()=>true;
+            bool Run(int started) => WalkGhostWithRelocation(mem,reader,IntPtr.Zero,checkpoint,running,mover,goal,started);
+            Reset(true); Check(Run(Environment.TickCount) && MeshRelocate.Picks==0,"no relocation after success");
+            Reset(false,true,true); Check(Run(Environment.TickCount) && MeshRelocate.Picks==1 && walkCount==3,"retry original after alternate");
+            Reset(false,true,false,true,true); Check(Run(Environment.TickCount) && MeshRelocate.Picks==2 && walkCount==5,"retry another alternate after failed original retry");
+            Reset(false,false,false,false,false,false); Check(!Run(Environment.TickCount) && MeshRelocate.Picks==5 && walkCount==6,"five alternate limit");
+            Reset(false,true,false,true,false,true,false,true,false,true,false); Check(!Run(Environment.TickCount) && MeshRelocate.Picks==5 && walkCount==11,"five alternate and corpse retry pairs at most");
+            Reset(false); MeshRelocate.NoPick=true; Check(!Run(Environment.TickCount) && walkCount==1,"no validated mesh candidate fails closed");
+            Reset(false); MeshRelocate.DuringPick=()=>active=false; Check(!Run(Environment.TickCount) && walkCount==1,"STOP while sampling");
+            Reset(false,true); DuringWalk=(n,g)=> { if(n==2) active=false; }; Check(!Run(Environment.TickCount) && walkCount==2,"STOP during relocation");
+            Reset(false,true); DuringWalk=(n,g)=> { if(n==2) ghost=false; }; Check(!Run(Environment.TickCount) && walkCount==2,"ghost state change blocks retry");
+            Reset(false,true); DuringWalk=(n,g)=> { if(n==2) mapValid=false; }; Check(!Run(Environment.TickCount) && walkCount==2,"map change blocks retry");
+            Reset(false,true); DuringWalk=(n,g)=> { if(n==2) attached=false; }; Check(!Run(Environment.TickCount) && walkCount==2,"attachment change blocks retry");
+            Reset(false,true); DuringWalk=(n,g)=> { if(n==2) position=new WoWPoint(470,0,0); };
+            Check(Run(Environment.TickCount) && walkCount==2,"arrival range during alternate ends route");
+            Reset(false); Check(!Run(unchecked(Environment.TickCount-RouteLimitMs-1)) && MeshRelocate.Picks==0,"overall route timeout blocks relocation");
+            Console.WriteLine("Ghost relocation fixtures passed (synthetic movement/state only; no live mesh).");
+        }
+    }
+}

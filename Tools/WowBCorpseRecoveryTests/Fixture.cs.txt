@@ -91,6 +91,8 @@ namespace Styx.Logic.Pathing
             position = walks[walks.Count - 1];
             return true;
         }
+        private static bool WalkGhostWithRelocation(Memory m, WowBReader r, IntPtr h, WowBDeathCheckpoint.Candidate c, Func<bool> active, ClickAimMover mover, RoutePoint goal, int started)
+            => WalkGhostTo(m, r, h, c, active, mover, goal, started, true);
         private static bool TryDialogClick(Memory m, WowBReader r, IntPtr h, WowBDeathCheckpoint.Candidate c, Func<bool> active, bool release, bool requireClearance, out string problem)
         {
             problem = "fixture";
