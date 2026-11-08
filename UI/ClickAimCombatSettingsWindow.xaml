@@ -112,10 +112,12 @@
                     <TextBlock TextWrapping="Wrap" FontSize="11" Opacity="0.7" Margin="0,5,0,0"
                                Text="Generic retains the older first-spell behavior, including its limitations. Class profiles omit rune abilities, feral forms, finishers and pet actions unless manually overridden. On 70707/70755/70790/70862 the experimental gate supports mana-type and candidate rage-type characters; rage-dependent actions remain withheld."/>
                     <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
-                        <TextBlock Text="70862 Start Attack key after heal:" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                        <ComboBox x:Name="cmbPostHealStartAttack" Width="95" SelectedIndex="0"
-                                  ToolTip="Optional. First bind this key to WoW's Start Attack (not Attack Target or the toggling Attack action), and test manually that repeating it does not stop attacks. The bot cannot verify your key binding or swing state.">
-                            <ComboBoxItem Content="Disabled"/>
+                        <CheckBox x:Name="chkPostHealStartAttack" IsChecked="False" VerticalAlignment="Center" Margin="0,0,8,0"
+                                  Content="Restart auto-attack after heal (70862)"
+                                  ToolTip="Optional. First bind the chosen key to WoW's Start Attack (not Attack Target or the toggling Attack action), and test manually that repeating it does not stop attacks. The bot cannot verify your key binding or swing state."/>
+                        <ComboBox x:Name="cmbPostHealStartAttack" Width="75" SelectedIndex="0"
+                                  IsEnabled="{Binding IsChecked, ElementName=chkPostHealStartAttack}"
+                                  ToolTip="Select the same key bound to Start Attack in WoW.">
                             <ComboBoxItem Content="F6"/><ComboBoxItem Content="F7"/><ComboBoxItem Content="F8"/>
                             <ComboBoxItem Content="F9"/><ComboBoxItem Content="F10"/>
                         </ComboBox>

@@ -23,11 +23,22 @@ class PostHealStartAttack(unittest.TestCase):
         self.assertIn('vk >= 0x75 && vk <= 0x79', S)
         self.assertIn('hasNumber && ValidStartAttackVk(number) ? number : 0', S)
         self.assertIn('PostHealStartAttackVk = ', S)
-        ET.fromstring(UI)
-        for name in ('Disabled', 'F6', 'F7', 'F8', 'F9', 'F10', 'not Attack Target'):
+        root = ET.fromstring(UI)
+        ns = {'p': 'http://schemas.microsoft.com/winfx/2006/xaml/presentation',
+              'x': 'http://schemas.microsoft.com/winfx/2006/xaml'}
+        checkbox = next(c for c in root.findall('.//p:CheckBox', ns)
+                        if c.get('{http://schemas.microsoft.com/winfx/2006/xaml}Name') == 'chkPostHealStartAttack')
+        self.assertEqual('False', checkbox.get('IsChecked'))
+        self.assertIn('ElementName=chkPostHealStartAttack', UI)
+        for name in ('F6', 'F7', 'F8', 'F9', 'F10', 'not Attack Target'):
             self.assertIn(name, UI)
         self.assertIn('ClickAimUi.Running || ClickAimUi.Paused', UI_CODE)
         self.assertIn('selectedStartAttack != ClickAimSettings.PostHealStartAttackVk', UI_CODE)
+        self.assertIn('chkPostHealStartAttack.IsChecked == true ? preferredStartAttack : 0', UI_CODE)
+        self.assertIn('chkPostHealStartAttack.IsChecked = savedStartAttack != 0', UI_CODE)
+        self.assertIn('PostHealStartAttackPreferredVk', S)
+        self.assertIn('postHealPreferenceDoesNotEnable', S)
+        self.assertIn('preferredStartAttack = savedStartAttack != 0', UI_CODE)
 
     def test_only_post_heal_with_net_effect_and_prior_attack(self):
         queue = section(P, '    internal static bool QueuePostHealStartAttack(', '    internal static bool ReadyPostHealStartAttack(')

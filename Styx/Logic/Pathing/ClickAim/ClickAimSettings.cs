@@ -49,6 +49,9 @@ internal static class ClickAimSettings
     // the toggling Attack Target/action-bar Attack. 0 means disabled. The bot
     // cannot read or verify the game's key bindings or actual swing state.
     public static int PostHealStartAttackVk;
+    // Remember the key selection while the optional checkbox is off. This is
+    // never itself authorization to send input.
+    public static int PostHealStartAttackPreferredVk = 0x75; // F6
     internal static bool ValidStartAttackVk(int vk) => vk == 0 || (vk >= 0x75 && vk <= 0x79); // F6..F10
 
     /// <summary>
@@ -154,6 +157,7 @@ internal static class ClickAimSettings
         HealBelowPercent = 60;
         HealMinManaPercent = 25;
         PostHealStartAttackVk = 0;
+        PostHealStartAttackPreferredVk = 0x75;
         UseDamageOverTime = true;
         UseBuffs = true;
         UseBuffsInCombat = false;
@@ -258,6 +262,11 @@ internal static class ClickAimSettings
             PostHealStartAttackVk = hasNumber && ValidStartAttackVk(number) ? number : 0;
             return true;
         }
+        if (string.Equals(key, "PostHealStartAttackPreferredVk", StringComparison.OrdinalIgnoreCase))
+        {
+            PostHealStartAttackPreferredVk = hasNumber && number != 0 && ValidStartAttackVk(number) ? number : 0x75;
+            return true;
+        }
         if (string.Equals(key, "UseDamageOverTime", StringComparison.OrdinalIgnoreCase))
         {
             UseDamageOverTime = flag;
@@ -329,6 +338,7 @@ internal static class ClickAimSettings
         HealBelowPercent = ClampPercent(HealBelowPercent);
         HealMinManaPercent = ClampPercent(HealMinManaPercent);
         if (!ValidStartAttackVk(PostHealStartAttackVk)) PostHealStartAttackVk = 0;
+        if (PostHealStartAttackPreferredVk == 0 || !ValidStartAttackVk(PostHealStartAttackPreferredVk)) PostHealStartAttackPreferredVk = 0x75;
         FoodSlot = Math.Max(0, Math.Min(12, FoodSlot));
         DrinkSlot = Math.Max(0, Math.Min(12, DrinkSlot));
         DotRefreshSeconds = Math.Max(4, Math.Min(60, DotRefreshSeconds));
@@ -367,6 +377,8 @@ internal static class ClickAimSettings
         text.AppendLine("HealMinManaPercent = " + HealMinManaPercent.ToString(CultureInfo.InvariantCulture));
         text.AppendLine("# Optional 70862 non-toggle Start Attack key: 0 = off, 117..121 = F6..F10. Bind it in WoW first.");
         text.AppendLine("PostHealStartAttackVk = " + PostHealStartAttackVk.ToString(CultureInfo.InvariantCulture));
+        text.AppendLine("# Remembered selection only; it does not enable the checkbox.");
+        text.AppendLine("PostHealStartAttackPreferredVk = " + PostHealStartAttackPreferredVk.ToString(CultureInfo.InvariantCulture));
         text.AppendLine("UseDamageOverTime = " + (UseDamageOverTime ? "true" : "false"));
         text.AppendLine("UseBuffs = " + (UseBuffs ? "true" : "false"));
         text.AppendLine("UseBuffsInCombat = " + (UseBuffsInCombat ? "true" : "false"));
@@ -431,7 +443,9 @@ internal static class ClickAimSettings
               "defaults");
         check(HealMinManaPercent == 25, "defaultHealMana");
         check(!UseBuffsInCombat, "combatBuffDefaultOff");
-        check(PostHealStartAttackVk == 0, "postHealStartAttackDefaultOff");
+        check(PostHealStartAttackVk == 0 && PostHealStartAttackPreferredVk == 0x75, "postHealStartAttackDefaultOff");
+        check(Apply("PostHealStartAttackPreferredVk", "119") && PostHealStartAttackPreferredVk == 119 && PostHealStartAttackVk == 0, "postHealPreferenceDoesNotEnable");
+        check(Apply("PostHealStartAttackPreferredVk", "1") && PostHealStartAttackPreferredVk == 0x75, "postHealPreferenceInvalidDefaults");
         check(Apply("PostHealStartAttackVk", "117") && PostHealStartAttackVk == 117, "postHealBindingF6");
         check(Apply("PostHealStartAttackVk", "1") && PostHealStartAttackVk == 0, "postHealBindingInvalidOff");
         check(Apply("PostHealStartAttackVk", "nonsense") && PostHealStartAttackVk == 0, "postHealBindingMalformedOff");

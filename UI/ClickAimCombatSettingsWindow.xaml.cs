@@ -231,8 +231,12 @@ namespace CopilotBuddy.UI
         {
             cmbRotation.ItemsSource = Enum.GetValues(typeof(ClickAimRotationClass));
             cmbRotation.SelectedItem = ClickAimSettings.RotationClass;
-            cmbPostHealStartAttack.SelectedIndex = ClickAimSettings.PostHealStartAttackVk >= 0x75 && ClickAimSettings.PostHealStartAttackVk <= 0x79
-                ? ClickAimSettings.PostHealStartAttackVk - 0x75 + 1 : 0;
+            int savedStartAttack = ClickAimSettings.PostHealStartAttackVk;
+            chkPostHealStartAttack.IsChecked = savedStartAttack != 0 && ClickAimSettings.ValidStartAttackVk(savedStartAttack);
+            int preferredStartAttack = savedStartAttack != 0 && ClickAimSettings.ValidStartAttackVk(savedStartAttack)
+                ? savedStartAttack : ClickAimSettings.PostHealStartAttackPreferredVk;
+            cmbPostHealStartAttack.SelectedIndex = preferredStartAttack >= 0x75 && preferredStartAttack <= 0x79
+                ? preferredStartAttack - 0x75 : 0;
             txtHeal.Text = Text(ClickAimSettings.HealBelowPercent);
             txtHealMana.Text = Text(ClickAimSettings.HealMinManaPercent);
             txtEat.Text = Text(ClickAimSettings.EatBelowPercent);
@@ -280,8 +284,14 @@ namespace CopilotBuddy.UI
             if (!TryRead(txtVendorWait, "Merchant window wait", out vendorWait)) return false;
             if (!TryRead(txtVendorSearch, "Vendor search radius", out vendorSearch)) return false;
 
-            int selectedStartAttack = cmbPostHealStartAttack.SelectedIndex >= 1 && cmbPostHealStartAttack.SelectedIndex <= 5
-                ? 0x75 + cmbPostHealStartAttack.SelectedIndex - 1 : 0;
+            int preferredStartAttack = cmbPostHealStartAttack.SelectedIndex >= 0 && cmbPostHealStartAttack.SelectedIndex < 5
+                ? 0x75 + cmbPostHealStartAttack.SelectedIndex : 0;
+            if (chkPostHealStartAttack.IsChecked == true && preferredStartAttack == 0)
+            {
+                System.Windows.MessageBox.Show("Choose the key bound to Start Attack in WoW.", "Combat settings", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return false;
+            }
+            int selectedStartAttack = chkPostHealStartAttack.IsChecked == true ? preferredStartAttack : 0;
             if (selectedStartAttack != ClickAimSettings.PostHealStartAttackVk && (ClickAimUi.Running || ClickAimUi.Paused))
             {
                 System.Windows.MessageBox.Show("Stop the bot before changing the Start Attack binding.", "Combat settings", MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -290,6 +300,7 @@ namespace CopilotBuddy.UI
             if (cmbRotation.SelectedItem is ClickAimRotationClass selectedRotation)
                 ClickAimSettings.RotationClass = selectedRotation;
             ClickAimSettings.PostHealStartAttackVk = selectedStartAttack;
+            if (preferredStartAttack != 0) ClickAimSettings.PostHealStartAttackPreferredVk = preferredStartAttack;
             ClickAimSettings.HealBelowPercent = heal;
             ClickAimSettings.HealMinManaPercent = healMana;
             ClickAimSettings.EatBelowPercent = eat;
