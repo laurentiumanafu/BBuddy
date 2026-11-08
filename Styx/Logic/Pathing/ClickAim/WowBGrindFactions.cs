@@ -18,6 +18,7 @@ internal static class WowBGrindFactions
     private static Memory? _boundMemory;
     private static WowBReader? _boundReader;
     private static ulong[]? _experimentalBar;
+    private static WowBGuid _boundPlayer;
     private static int _preparing;
 
     private static bool CheckBuild(Memory memory)
@@ -44,7 +45,7 @@ internal static class WowBGrindFactions
 
     private static bool PrepareCore(out string reason)
     {
-        _boundMemory = null; _boundReader = null; _experimentalBar = null; reason = "";
+        _boundMemory = null; _boundReader = null; _experimentalBar = null; _boundPlayer = default; reason = "";
         if (!GrindFactionSettings.TryLoad(out GrindFactionRules rules, out reason)) return false;
         if (ObjectManager.WowB?.IsExperimental70707 == true)
             return PrepareExperimental70707(rules, out reason);
@@ -100,7 +101,7 @@ internal static class WowBGrindFactions
             { reason = reader.ExperimentalBuildNumber + " ghost flag candidate unavailable or changed; refusing to start"; return false; }
             if (ghostFlag)
             { reason = reader.ExperimentalBuildNumber + " ghost flag candidate is set; manually recover before starting"; return false; }
-            _boundMemory = memory; _boundReader = reader;
+            _boundMemory = memory; _boundReader = reader; _boundPlayer = player.Guid;
             GrindFactionSettings.Activate(rules);
             armed = true;
             return true;
@@ -134,23 +135,50 @@ internal static class WowBGrindFactions
         catch { reason = "action-bar read failed"; return false; }
     }
 
-    // Called only after releasing movement. No game input is sent while waiting;
-    // a return to the exact original double-read baseline is required to resume.
-    internal static bool WaitForExperimentalBar(WowBReader reader, Func<bool> stopped, out string reason)
+    // Called only after releasing movement. No gameplay input is sent while
+    // waiting. 70862 gets a longer recovery window for transient all-zero or
+    // unreadable snapshots, but never accepts a different bar or character.
+    // A test may supply a shorter deadline without changing the live default.
+    internal static bool WaitForExperimentalBar(WowBReader reader, Func<bool> stopped, out string reason, int maxWaitMs = -1)
     {
+        int timeout = maxWaitMs >= 0 ? maxWaitMs : reader.IsExperimental70862 ? 60000 : 1200;
+        long deadline = Environment.TickCount64 + timeout;
+        long nextReport = Environment.TickCount64;
         reason = "stopped or attachment changed";
-        for (int i = 0; i < 8; i++)
+        while (true)
         {
             if (stopped() || ClickAimAbort.Requested || ObjectManager.WowB != reader || ObjectManager.Wow != _boundMemory ||
-                _boundReader != reader || !reader.ExperimentalGrindActive) return false;
+                _boundReader != reader || !reader.ExperimentalGrindActive)
+            { reason = "stopped, safety checkpoint or attachment changed"; return false; }
             bool matched = ExperimentalBarStatus(reader, out reason);
+            if (matched && reader.IsExperimental70862)
+            {
+                Memory? memory = _boundMemory;
+                try
+                {
+                    if (memory == null) { reason = "attachment unavailable"; return false; }
+                    using var uncached = memory.TemporaryCacheState(false);
+                    if (!reader.TryReadTraceLocalGuid(out WowBGuid first) || first.IsEmpty ||
+                        !reader.TryReadTraceLocalGuid(out WowBGuid second) || first != second)
+                    { matched = false; reason = "player identity unavailable or unstable"; }
+                    else if (first != _boundPlayer)
+                    { reason = "character changed since the session began"; return false; }
+                }
+                catch { matched = false; reason = "player identity read failed"; }
+            }
             if (stopped() || ClickAimAbort.Requested || ObjectManager.WowB != reader || ObjectManager.Wow != _boundMemory ||
                 _boundReader != reader || !reader.ExperimentalGrindActive)
-            { reason = "stopped or attachment changed"; return false; }
+            { reason = "stopped, safety checkpoint or attachment changed"; return false; }
             if (matched) return true;
-            if (ClickAimAbort.Wait(150)) { reason = "stopped"; return false; }
+            long now = Environment.TickCount64;
+            if (now >= deadline) { reason = "timed out waiting for original bar: " + reason; return false; }
+            if (reader.IsExperimental70862 && now >= nextReport)
+            {
+                Logging.Write("[" + reader.ExperimentalBuildNumber + "] still holding for the original action bar; " + reason + "; STOP remains available");
+                nextReport = now + 15000;
+            }
+            if (ClickAimAbort.Wait((int)Math.Min(150L, deadline - now))) { reason = "stopped"; return false; }
         }
-        return false;
     }
 
     private static bool CheckExperimentalBuild(Memory memory) => CheckExperimentalBuild(memory, out _);
@@ -203,7 +231,7 @@ internal static class WowBGrindFactions
     {
         WowBReader? reader = _boundReader;
         if (reader?.IsExperimental70707 == true) reader.SetExperimentalGrindActive(false);
-        _experimentalBar = null;
+        _experimentalBar = null; _boundPlayer = default;
     }
 
     // Recheck full GUID, object back-pointer and pool record pointer. Even this

@@ -260,6 +260,8 @@ internal static class GatherRunner
         {
             _lastCombatCheck = Environment.TickCount;
             if (StopIfDeadOrGhost() || !MapStillCurrent()) return true;
+            WowBReader? barReader = WowBGrindFactions.ExperimentalBoundReader;
+            if (barReader?.IsExperimental70862 == true && !WowBGrindFactions.Experimental70707BarSafe(barReader)) return true;
             if (!GrindRunner.TryReadGatherCombat(out bool fighting) || fighting) return true;
         }
         if (!checkNodes || unchecked(Environment.TickCount - _lastScan) < 1500) return false;
@@ -648,8 +650,17 @@ internal static class GatherRunner
                 {
                     ClickAimKeySteer.ReleaseHeld();
                     ClickAimKeySteer.ReleaseArrows(hwnd);
-                    Logging.Write("[Gather] action bar changed or was unreadable; holding movement while checking the original bar");
-                    if (!WowBGrindFactions.WaitForExperimentalBar(reader, () => _stop || RouteRunner.StopRequested, out string barReason))
+                    Logging.Write("[Gather] action bar changed or was unreadable; holding movement while checking the original bar" +
+                        (reader.IsExperimental70862 ? " (up to 60 seconds)" : ""));
+                    int nextBarDeathCheck = Environment.TickCount;
+                    bool BarRecoveryStopped()
+                    {
+                        if (_stop || RouteRunner.StopRequested || ClickAimAbort.Requested) return true;
+                        if (reader.IsExperimental70862 && unchecked(Environment.TickCount - nextBarDeathCheck) >= 0)
+                        { nextBarDeathCheck = unchecked(Environment.TickCount + 1000); return StopIfDeadOrGhost(); }
+                        return false;
+                    }
+                    if (!WowBGrindFactions.WaitForExperimentalBar(reader, BarRecoveryStopped, out string barReason))
                     { Logging.Write("[Gather] " + reader.ExperimentalBuildNumber + " action bar not safely restored: " + barReason + "; stopping"); break; }
                     Logging.Write("[Gather] action bar matched the original snapshot again; rechecking combat before continuing");
                     continue;

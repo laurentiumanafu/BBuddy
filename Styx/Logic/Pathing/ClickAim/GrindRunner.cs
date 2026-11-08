@@ -877,8 +877,17 @@ internal static class GrindRunner
                 {
                     ClickAimKeySteer.ReleaseHeld();
                     ClickAimKeySteer.ReleaseArrows(hwnd);
-                    Logging.Write("[Grind] action bar changed or was unreadable; holding movement and checking the original bar before any more inputs");
-                    if (!WowBGrindFactions.WaitForExperimentalBar(trialReader, () => _stop || RouteRunner.StopRequested, out string barReason))
+                    Logging.Write("[Grind] action bar changed or was unreadable; holding movement and checking the original bar before any more inputs" +
+                        (trialReader.IsExperimental70862 ? " (up to 60 seconds)" : ""));
+                    int nextBarDeathCheck = Environment.TickCount;
+                    bool BarRecoveryStopped()
+                    {
+                        if (_stop || RouteRunner.StopRequested || ClickAimAbort.Requested || unchecked(Environment.TickCount - started) >= budgetMs) return true;
+                        if (trialReader.IsExperimental70862 && unchecked(Environment.TickCount - nextBarDeathCheck) >= 0)
+                        { nextBarDeathCheck = unchecked(Environment.TickCount + 1000); return CheckDeathCheckpoint(trackerOnly: true); }
+                        return false;
+                    }
+                    if (!WowBGrindFactions.WaitForExperimentalBar(trialReader, BarRecoveryStopped, out string barReason))
                     { Logging.Write("[Grind] " + trialReader.ExperimentalBuildNumber + " action bar not safely restored: " + barReason + "; stopping. Restart to rescan it."); break; }
                     Logging.Write("[Grind] action bar matched the original snapshot again; rechecking combat before continuing");
                     continue;
@@ -1072,7 +1081,7 @@ internal static class GrindRunner
                  * circle a hotspot is cleared in, so "monsters between hotspots" are monsters
                  * this stops for. */
                 bool resourceInterrupt = false, vendorInterrupt = false;
-                bool skinInterrupt = false;
+                bool skinInterrupt = false, barInterrupt = false;
                 int lastFightCheck = unchecked(Environment.TickCount - 500);
                 int lastRoamMapCheck = unchecked(Environment.TickCount - 500);
                 int lastSkinCheck = unchecked(Environment.TickCount - 1000);
@@ -1087,6 +1096,8 @@ internal static class GrindRunner
                     {
                         lastFightCheck = Environment.TickCount;
                         if (CheckDeathCheckpoint()) return true;
+                        if (trialReader?.IsExperimental70862 == true && !WowBGrindFactions.Experimental70707BarSafe(trialReader))
+                        { barInterrupt = true; return true; }
                         if (VendorDue()) { vendorInterrupt = true; return true; }
                         if (FightNeeded(hwnd, SearchYd)) return true;
                     }
@@ -1109,6 +1120,12 @@ internal static class GrindRunner
                 {
                     if (roam != null && !roam.MapCurrent())
                     { Logging.Write("[Roam] map changed or became unreadable; stopping"); break; }
+                    if (barInterrupt)
+                    {
+                        if (roam == null) index--;
+                        Logging.Write("[Grind] action bar changed or became unreadable; pausing the hotspot leg");
+                        continue;
+                    }
                     if (vendorInterrupt)
                     {
                         if (roam == null) index--;
@@ -1436,6 +1453,13 @@ internal static class GrindRunner
         /* Cleared on entry, not only on the scan below: a failed read must not leave a stale
          * "the area is clear" behind for the hotspot loop to act on. */
         _scanWasClear = false;
+        if (trialReader?.IsExperimental70862 == true && !WowBGrindFactions.Experimental70707BarSafe(trialReader))
+        {
+            ClickAimKeySteer.ReleaseHeld();
+            _combatHold = true;
+            report = "action bar changed or unreadable; returning to the recovery check";
+            return false;
+        }
 
         // Combat outranks every new pull, roam leg and vendor trip. The bit does
         // not identify an attacker: defence only tries nearby changed TAB picks.
@@ -2400,6 +2424,8 @@ internal static class GrindRunner
          * character stand in a field, and a dwell is thirty seconds of exactly that. */
         while (!_stop && !_vendorDue && unchecked(Environment.TickCount - dwellStart) < HotspotDwellMs)
         {
+            WowBReader? barReader = WowBGrindFactions.ExperimentalBoundReader;
+            if (barReader?.IsExperimental70862 == true && !WowBGrindFactions.Experimental70707BarSafe(barReader)) break;
             if (VendorDue()) break;
             string report;
             if (TryEngage(hwnd, out report))
@@ -2826,6 +2852,7 @@ internal static class GrindRunner
         {
             if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested || _vendorDue ||
                 ObjectManager.WowB != reader || !reader.ExperimentalGrindActive ||
+                (reader.IsExperimental70862 && !WowBGrindFactions.Experimental70707BarSafe(reader)) ||
                 !RecentLoot.Any(Environment.TickCount) || CheckDeathCheckpoint() ||
                 !TryReadGatherCombat(out bool fighting) || fighting || VendorDue()) return;
             string loot = LootNearby(hwnd, 3, recentOnly: true);
@@ -3212,6 +3239,7 @@ internal static class GrindRunner
         WowBGuid routePlayer = _vendorAutoPlayer;
         GreenMagic.Memory? routeMemory = _vendorAutoMemory;
         RouteRunner.ShouldInterrupt = () => !TryReadGatherCombat(out bool fighting) || fighting ||
+            (vendorReader.IsExperimental70862 && !WowBGrindFactions.Experimental70707BarSafe(vendorReader)) ||
             ObjectManager.WowB != vendorReader || !vendorReader.TryReadMapId(out uint routeMap) || routeMap != currentMap ||
             (automaticTrip && (!ClickAimSettings.AutoSell || routeMemory == null ||
                 !AutoVendorIdentityMatches(vendorReader, routeMemory, routePlayer)));
@@ -3232,7 +3260,7 @@ internal static class GrindRunner
                  * character in place - the same brake a hotspot leg uses. */
                 _interruptQuietUntil = Environment.TickCount + InterruptRetryMs;
                 _vendorRetryAt = 0;
-                Logging.Write("[Grind] the town walk was interrupted by STOP, combat, an unreadable/changed state, map change or auto-selling being disabled. The trip remains pending unless cancelled.");
+                Logging.Write("[Grind] the town walk was interrupted by STOP, combat, an unreadable/changed state or action bar, map change or auto-selling being disabled. The trip remains pending unless cancelled.");
             }
             else
             {
@@ -3424,7 +3452,9 @@ internal static class GrindRunner
         npc = default; player = default; distance = double.MaxValue;
         if (_stop || ClickAimAbort.Requested || _vendorDue || !TryReadGatherCombat(out bool fighting) || fighting) return false;
         var memory = ObjectManager.Wow; var reader = ObjectManager.WowB;
-        if (memory == null || reader == null || !reader.TryReadMapId(out uint map) || point.TownMap != map ||
+        if (memory == null || reader == null ||
+            (reader.IsExperimental70862 && !WowBGrindFactions.Experimental70707BarSafe(reader)) ||
+            !reader.TryReadMapId(out uint map) || point.TownMap != map ||
             !Capture(out WowBWorldSnapshot? snap) || snap == null || !snap.TryGetLocalPlayer(out player) ||
             !snap.TryGetUnit(original.Guid, out npc) || npc.RecordAddress != original.RecordAddress || npc.UnitAddress != original.UnitAddress ||
             !WowBKnownMerchants.IsRecordedLive(point, npc, memory, reader)) return false;
@@ -4063,7 +4093,8 @@ internal static class GrindRunner
         if (_stop || ClickAimAbort.Requested || _vendorDue || VendorDue()) return false;
         WowBReader? reader = ObjectManager.WowB;
         GreenMagic.Memory? memory = ObjectManager.Wow;
-        if (reader == null || memory == null) return false;
+        if (reader == null || memory == null ||
+            (reader.IsExperimental70862 && !WowBGrindFactions.Experimental70707BarSafe(reader))) return false;
         try
         {
             using var uncached = memory.TemporaryCacheState(false);
@@ -5153,6 +5184,11 @@ internal static class GrindRunner
         int lastDeathCheck = unchecked(Environment.TickCount - 500);
         while (!_stop && !ClickAimAbort.Requested && unchecked(Environment.TickCount - started) < EngageTimeoutMs)
         {
+            if (reader.IsExperimental70862 && !WowBGrindFactions.Experimental70707BarSafe(reader))
+            {
+                ClickAimKeySteer.ReleaseHeld();
+                return "action bar changed or became unreadable during fight; holding for the original bar";
+            }
             if (unchecked(Environment.TickCount - lastDeathCheck) >= 500)
             {
                 lastDeathCheck = Environment.TickCount;

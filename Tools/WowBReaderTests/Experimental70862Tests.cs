@@ -283,11 +283,11 @@ internal static class Experimental70862Tests
         ulong actionAddress = image + Wow70862Offsets.StoredActionArrayCandidate;
         memory.U64(actionAddress, 1);
         Require(!WowBGrindFactions.Experimental70707BarSafe(reader), "changed 70862 action bar invalidates the session guard");
-        Require(!WowBGrindFactions.WaitForExperimentalBar(reader, () => false, out string barReason) &&
+        Require(!WowBGrindFactions.WaitForExperimentalBar(reader, () => false, out string barReason, 300) &&
             barReason.Contains("slot 1") && barReason.Contains("00000000000019CB") && barReason.Contains("0000000000000001"),
             "persistent changed bar stops and reports old and new raw values");
         memory.Remove(actionAddress);
-        Require(!WowBGrindFactions.WaitForExperimentalBar(reader, () => false, out barReason) && barReason.Contains("unavailable"),
+        Require(!WowBGrindFactions.WaitForExperimentalBar(reader, () => false, out barReason, 300) && barReason.Contains("unavailable"),
             "unreadable bar fails closed with diagnostic");
         memory.U64(actionAddress, 1);
         int actionReads = 0;
@@ -297,6 +297,28 @@ internal static class Experimental70862Tests
         Require(WowBGrindFactions.WaitForExperimentalBar(reader, () => false, out barReason) && actionReads >= 4,
             "transient mismatch resumes only after matching stable original bar");
         memory.OnRead = null;
+        // The previous 1.2-second retry would have stopped before this recovery.
+        memory.U64(actionAddress, 0); actionReads = 0;
+        memory.OnRead = (address, count) => {
+            if (address == actionAddress && count == 96 && ++actionReads == 19) memory.U64(actionAddress, 6603);
+        };
+        Require(WowBGrindFactions.WaitForExperimentalBar(reader, () => false, out barReason, 2500) && actionReads >= 20,
+            "all-zero bar restored after more than 1.2 seconds resumes only on original values");
+        memory.OnRead = null;
+        memory.U64(actionAddress, 0);
+        Require(!WowBGrindFactions.WaitForExperimentalBar(reader, () => false, out barReason, 300) &&
+            barReason.Contains("timed out") && barReason.Contains("0000000000000000"), "persistent zero bar times out without rebaselining");
+        int stopPolls = 0;
+        Require(!WowBGrindFactions.WaitForExperimentalBar(reader, () => ++stopPolls >= 3, out barReason, 2500) &&
+            barReason.Contains("stopped"), "STOP during a mismatched bar wait aborts promptly");
+        memory.U64(actionAddress, 6603);
+        memory.Guid(image + Wow70862Offsets.PlayerGuid, default);
+        Require(!WowBGrindFactions.WaitForExperimentalBar(reader, () => false, out barReason, 300) && barReason.Contains("identity"),
+            "matching bar with unknown player cannot resume");
+        memory.Guid(image + Wow70862Offsets.PlayerGuid, new WowBGuid(555, 666));
+        Require(!WowBGrindFactions.WaitForExperimentalBar(reader, () => false, out barReason, 300) && barReason.Contains("character changed"),
+            "matching bar with a different character cannot resume");
+        memory.Guid(image + Wow70862Offsets.PlayerGuid, player);
         Require(!WowBGrindFactions.WaitForExperimentalBar(reader, () => true, out barReason), "STOP interrupts bar recovery even if bar matches");
         bool stoppedDuringRead = false;
         memory.OnRead = (address, count) => { if (address == actionAddress && count == 96) stoppedDuringRead = true; };
