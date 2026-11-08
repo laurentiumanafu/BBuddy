@@ -79,32 +79,37 @@ internal static class Program
         Require(!Try(out moved) && ClickAimInput.DownCount == 0, "combat prevents click");
 
         Reset(true); GrindRunner.Fighting = true;
-        Require(GatherInteraction.TryInteract(Window, Node, _ => true, null, out _, out _, out _, out _, true, () => true) &&
-                ClickAimInput.DownCount == 1, "standalone opt-in permits known combat with guard");
-        Reset(true); GrindRunner.Fighting = true; GrindRunner.CombatReadable = false;
-        Require(!GatherInteraction.TryInteract(Window, Node, _ => true, null, out _, out _, out _, out _, true, () => true) &&
-                ClickAimInput.DownCount == 0, "opt-in never permits unreadable combat");
-        Reset(true); GrindRunner.Fighting = true;
-        Require(!GatherInteraction.TryInteract(Window, Node, _ => true, null, out _, out _, out _, out _, true) &&
-                ClickAimInput.DownCount == 0, "ignore mode requires standalone safety guard");
-        Reset(true); GrindRunner.Fighting = true;
-        Require(!GatherInteraction.TryInteract(Window, Node, _ => true, () => true, out _, out _, out _, out _, true, () => true) &&
-                ClickAimInput.DownCount == 0, "Grind callback cannot bypass known combat");
-        Reset(true); GrindRunner.Fighting = true;
-        Require(!GatherInteraction.TryInteract(Window, Node, _ => true, null, out _, out _, out _, out _, true, () => false) &&
+        Require(!GatherInteraction.TryInteract(Window, Node, _ => true, null, out _, out _, out _, out _, () => true) &&
+                ClickAimInput.DownCount == 0, "standalone guard cannot bypass combat at a node");
+        Reset(true); GrindRunner.CombatReadable = false;
+        Require(!GatherInteraction.TryInteract(Window, Node, _ => true, null, out _, out _, out _, out _, () => true) &&
+                ClickAimInput.DownCount == 0, "unreadable combat prevents a click");
+        Reset(true);
+        Require(!GatherInteraction.TryInteract(Window, Node, _ => true, null, out _, out _, out _, out _, () => false) &&
                 ClickAimInput.DownCount == 0, "standalone safety veto prevents click");
-        Reset(true); GrindRunner.Fighting = true;
+        Reset(true);
         bool liveGuard = true;
         ClickAimAbort.OnWait = n => { if (n == 3) liveGuard = false; };
-        Require(!GatherInteraction.TryInteract(Window, Node, _ => true, null, out _, out _, out _, out _, true, () => liveGuard) &&
+        Require(!GatherInteraction.TryInteract(Window, Node, _ => true, null, out _, out _, out _, out _, () => liveGuard) &&
                 ClickAimInput.DownCount == 0, "standalone safety rechecked before button-down");
-        Reset(true); GrindRunner.Fighting = true;
+        Reset(true);
+        ClickAimAbort.OnWait = n => { if (n == 2) GrindRunner.Fighting = true; };
+        Require(!GatherInteraction.TryInteract(Window, Node, _ => true, null, out _, out _, out _, out _, () => true) &&
+                ClickAimInput.DownCount == 0, "combat starting during hover prevents click");
+        Reset(true);
         ClickAimAbort.OnWait = n => { if (n == 2) ClickAimAbort.Requested = true; };
-        Require(!GatherInteraction.TryInteract(Window, Node, _ => true, null, out _, out _, out _, out _, true, () => true) &&
-                ClickAimInput.DownCount == 0, "STOP still prevents ignore-mode click");
-        Reset(true); GrindRunner.Fighting = true; GatherNodeScanner.Available = false;
-        Require(!GatherInteraction.TryInteract(Window, Node, _ => true, null, out _, out _, out _, out _, true, () => true) &&
-                ClickAimInput.DownCount == 0, "ignore mode still requires a fresh node");
+        Require(!GatherInteraction.TryInteract(Window, Node, _ => true, null, out _, out _, out _, out _, () => true) &&
+                ClickAimInput.DownCount == 0, "STOP still prevents standalone click");
+        Reset(true); GatherNodeScanner.Available = false;
+        Require(!GatherInteraction.TryInteract(Window, Node, _ => true, null, out _, out _, out _, out _, () => true) &&
+                ClickAimInput.DownCount == 0, "standalone mode still requires a fresh node");
+
+        Require(!GatherNodeDefence.ShouldDefend(true, true, false), "ignore fighting while travelling");
+        Require(GatherNodeDefence.ShouldDefend(true, true, true), "node defence continues while combat lasts");
+        Require(!GatherNodeDefence.ShouldDefend(false, true, true), "no defence when combat ended");
+        Require(GatherNodeDefence.ShouldDefend(true, false, false), "normal Gather defends anywhere");
+        Require(GatherNodeDefence.InRange(3, 4, 0, 5) && !GatherNodeDefence.InRange(3, 4, 0.1, 5), "three-dimensional node interaction range");
+        Require(!GatherNodeDefence.InRange(double.NaN, 0, 0, 5) && !GatherNodeDefence.InRange(0, 0, 0, -1), "unreadable or invalid position cannot establish range");
 
         Reset(true); GatherNodeScanner.Available = false;
         Require(!Try(out moved) && ClickAimInput.DownCount == 0, "missing fresh node prevents click");

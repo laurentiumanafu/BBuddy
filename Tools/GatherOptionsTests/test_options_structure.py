@@ -10,6 +10,7 @@ interaction = (ROOT / 'Styx/Logic/Pathing/ClickAim/GatherInteraction.cs').read_t
 settings = (ROOT / 'Styx/Logic/Pathing/ClickAim/GatherSettings.cs').read_text()
 ui = (ROOT / 'UI/GatherSettingsWindow.cs').read_text()
 policy = (ROOT / 'Styx/Logic/Pathing/ClickAim/GatherMovementSkill.cs').read_text()
+node_defence = (ROOT / 'Styx/Logic/Pathing/ClickAim/GatherNodeDefence.cs').read_text()
 
 class GatherOptionsTests(unittest.TestCase):
     def test_disabled_and_persisted(self):
@@ -23,19 +24,29 @@ class GatherOptionsTests(unittest.TestCase):
 
     def test_combat_and_grind_guards(self):
         self.assertIn('_ignoreMonsters = GatherSettings.IgnoreMonsters;', runner)
-        self.assertIn('if (fighting && !_ignoreMonsters)', runner)
-        self.assertIn('if (!fighting)', runner)
-        self.assertIn('!GrindRunner.TryReadGatherCombat(out fighting) || (fighting && !_ignoreMonsters)', runner)
-        self.assertIn('ignoreMonsters = ignoreMonsters && extraSafety == null;', runner)
-        self.assertIn('ignoreMonsters = ignoreMonsters && extraSafety == null && ignoreSafety != null;', interaction)
+        self.assertIn('!GrindRunner.TryReadGatherCombat(out bool fighting) || (fighting && !_ignoreMonsters)', runner)
+        self.assertIn('GatherNodeDefence.ShouldDefend(fighting, _ignoreMonsters, _nodeDefence)', runner)
+        self.assertIn('fighting && (!ignoreMonsters || nodeDefence)', node_defence)
+        self.assertIn('if (!fighting && _nodeDefence)', runner)
         self.assertIn('GatherAtNode(hwnd, node, safe)', runner)
-        self.assertIn('GatherAtNode(hwnd, node, ignoreMonsters: _ignoreMonsters)', runner)
-        self.assertIn('(combat && !ignoreMonsters)', interaction)
-        self.assertIn('(fighting && !ignoreMonsters)', interaction)
-        self.assertIn('if (ignoreMonsters && !ignoreSafety!())', interaction)
+        self.assertIn('GatherAtNode(hwnd, node);', runner)
+        self.assertIn('standaloneGuard = _ignoreMonsters && extraSafety == null', runner)
+        self.assertIn('!GrindRunner.TryReadGatherCombat(out bool combat) || combat', interaction)
+        self.assertIn('if (fighting) { validation = "combat detected"', interaction)
+        self.assertIn('if (standaloneSafety != null && !standaloneSafety())', interaction)
         self.assertIn('ReadHover(memory, reader, out WowBGuid final)', interaction)
         self.assertIn('GatherNodeScanner.TryCapture(5.0', interaction)
-        self.assertIn('if (ignoreMonsters && !IgnoreSafety()) return;', runner)
+        self.assertIn('if (standaloneGuard && !StandaloneSafety()) return;', runner)
+        # A fresh eligible nearby node is required to start defence on arrival.
+        scan = runner.index('GatherNodeScanner.TryCapture(InteractYd, out List<GatherNodeScanner.Node> nearby)')
+        confirmed = runner.index('if (!stillHere)', scan)
+        combat = runner.index('if (combatBeforeFace)', confirmed)
+        latch = runner.index('_nodeDefence = true;', combat)
+        self.assertLess(scan, confirmed); self.assertLess(confirmed, combat); self.assertLess(combat, latch)
+        self.assertIn('GatherNodeDefence.InRange(dx, dy, dz, InteractYd)', runner)
+        self.assertIn('if (fighting) { DeferForCombat(true); return; }', runner)
+        self.assertIn('DeferForCombat(true);\n                    return;', runner)
+        self.assertIn('_nodeDefence = false;\n        GrindRunner.ClearGatherFightAfterRecovery();', runner)
 
     def test_movement_restricted_and_bounded(self):
         self.assertIn('_movementEnabled = GatherSettings.UseMovementSkill;', runner)

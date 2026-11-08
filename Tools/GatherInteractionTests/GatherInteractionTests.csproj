@@ -9,5 +9,6 @@
   <ItemGroup>
     <Compile Include="../../Styx/Logic/Pathing/ClickAim/GatherInteraction.cs" Link="GatherInteraction.cs" />
     <Compile Include="../../Styx/Logic/Pathing/ClickAim/GatherMovementSkill.cs" Link="GatherMovementSkill.cs" />
+    <Compile Include="../../Styx/Logic/Pathing/ClickAim/GatherNodeDefence.cs" Link="GatherNodeDefence.cs" />
   </ItemGroup>
 </Project>

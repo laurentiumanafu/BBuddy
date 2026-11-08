@@ -24,7 +24,8 @@ assert 'FindNode(out _, GrindSearchYd)' in runner and 'FindNode(out GatherNodeSc
 assert 'GatherNodeScanner.TryCapture(SearchYd, out List<GatherNodeScanner.Node> current)' in runner
 assert 'GatherNodeScanner.TryCapture(InteractYd, out List<GatherNodeScanner.Node> nearby)' in runner
 assert 'if (!RouteRunner.MeshReady())' in runner and 'RouteRunner.RequireMeshDuringSession = true' in runner
-assert 'if (!GrindRunner.TryReadGatherCombat(out bool combatBeforeFace) || (combatBeforeFace && !_ignoreMonsters))' in runner
+assert 'if (!GrindRunner.TryReadGatherCombat(out bool combatBeforeFace))' in runner
+assert 'if (combatBeforeFace)' in runner
 assert 'GatherNodeScanner.TryCapture(5.0' in gather_interaction
 assert 'reader.EnumeratePoolObjects()' in scanner and 'nodes.Sort((a, b) => a.Distance.CompareTo(b.Distance))' in scanner
 fixture = (Path(__file__).parent / 'Fixture.cs.txt').read_text(encoding='utf-8')

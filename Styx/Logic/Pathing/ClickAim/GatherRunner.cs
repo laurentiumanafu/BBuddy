@@ -53,7 +53,7 @@ internal static class GatherRunner
     private static GatherNodeScanner.Node? _pending;
     private static uint _sessionMap;
     // Frozen when standalone GatherBuddy starts; Grind's gathering never reads these.
-    private static bool _ignoreMonsters, _movementEnabled, _movementAttempted;
+    private static bool _ignoreMonsters, _movementEnabled, _movementAttempted, _nodeDefence;
     private static int _movementSlot;
     private static WowBDeathCheckpoint? _deathCheckpoint;
     private static bool _recoveryReady;
@@ -95,6 +95,7 @@ internal static class GatherRunner
         _deathCheckpoint = new WowBDeathCheckpoint();
         _pending = null;
         _movementAttempted = false;
+        _nodeDefence = false;
         GrindRunner.ClearGatherFightAfterRecovery();
         return !_stop && !ClickAimAbort.Requested;
     }
@@ -183,6 +184,7 @@ internal static class GatherRunner
             _movementEnabled = GatherSettings.UseMovementSkill;
             _movementSlot = GatherSettings.MovementSkillSlot;
             _movementAttempted = false;
+            _nodeDefence = false;
             Retry.Clear();
             GatherInteraction.ResetHoverHint();
             _pending = null;
@@ -452,35 +454,48 @@ internal static class GatherRunner
     // No movement, turns, stop-key taps or extra clicks while a cast may be running.
     // A resource remaining in the pool can need another hit, or the attempt can have
     // failed; neither proves success. Bound attempts and revisit rather than spin forever.
-    private static void GatherAtNode(IntPtr hwnd, GatherNodeScanner.Node node, Func<bool>? extraSafety = null, bool ignoreMonsters = false)
+    private static void GatherAtNode(IntPtr hwnd, GatherNodeScanner.Node node, Func<bool>? extraSafety = null)
     {
-        // Grind passes extraSafety and must always retain its original combat priority.
-        ignoreMonsters = ignoreMonsters && extraSafety == null;
+        // Standalone ignore mode still enforces session, death and map checks.
+        bool standaloneGuard = _ignoreMonsters && extraSafety == null;
         WowBReader? initialReader = ObjectManager.WowB;
         GreenMagic.Memory? initialMemory = ObjectManager.Wow;
-        bool IgnoreSafety()
+        bool StandaloneSafety()
         {
             if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested || initialReader == null || initialMemory == null ||
                 ObjectManager.WowB != initialReader || ObjectManager.Wow != initialMemory || initialMemory.WindowHandle != hwnd ||
                 (initialReader.IsExperimental70707 && !WowBGrindFactions.Experimental70707BarSafe(initialReader))) return false;
             return !StopIfDeadOrGhost() && MapStillCurrent() && ObjectManager.WowB == initialReader && ObjectManager.Wow == initialMemory;
         }
+        // The node was confirmed in range before interaction. It can disappear
+        // after a click, so use its recorded position to recognize combat during
+        // the stationary interaction without requiring it to remain in the pool.
+        void DeferForCombat(bool fighting)
+        {
+            _pending = node;
+            if (!standaloneGuard || !fighting || !StandaloneSafety() ||
+                !ClickAimPositions.TryRead(out double x, out double y)) return;
+            double z = ClickAimPositions.Z();
+            double dx = x - node.Position.X, dy = y - node.Position.Y, dz = z - node.Position.Z;
+            if (GatherNodeDefence.InRange(dx, dy, dz, InteractYd))
+            {
+                _nodeDefence = true;
+                Logging.Write("[Gather] combat at the node; defending before gathering resumes");
+            }
+        }
         int cursorRecoveries = 0;
         for (int attempt = 1; attempt <= MaxGatherAttempts && !_stop && !ClickAimAbort.Requested; attempt++)
         {
             bool fighting;
-            if ((extraSafety != null && !extraSafety()) || (ignoreMonsters && !IgnoreSafety()) ||
-                !GrindRunner.TryReadGatherCombat(out fighting) || (fighting && !ignoreMonsters))
-            {
-                _pending = node;
-                return;
-            }
+            if ((extraSafety != null && !extraSafety()) || (standaloneGuard && !StandaloneSafety())) { _pending = node; return; }
+            if (!GrindRunner.TryReadGatherCombat(out fighting)) { _pending = node; return; }
+            if (fighting) { DeferForCombat(true); return; }
             Logging.Write("[Gather] hover search attempt " + attempt + "/" + MaxGatherAttempts
                           + "; background mouse movement allowed, foreground interruptions retry automatically");
             if (!MapStillCurrent()) return;
             bool clicked = GatherInteraction.TryInteract(hwnd, node, candidate => MapStillCurrent() && Ready(candidate), extraSafety, out GatherNodeScanner.Node clickedNode,
-                                                          out string reason, out bool hoverMiss, out bool cursorMoved, ignoreMonsters,
-                                                          ignoreMonsters ? IgnoreSafety : null);
+                                                          out string reason, out bool hoverMiss, out bool cursorMoved,
+                                                          standaloneGuard ? StandaloneSafety : null);
             // A node interaction may have broken a movement form; one new
             // attempt is allowed before later travel, not on every route tick.
             if (clicked && extraSafety == null && _movementEnabled) _movementAttempted = false;
@@ -501,7 +516,8 @@ internal static class GatherRunner
                 // the six-second post-click wait and long node cooldown.
                 if (ClickAimAbort.Wait(150) || _stop || (extraSafety != null && !extraSafety())) return;
                 if (!MapStillCurrent()) return;
-                if (!GrindRunner.TryReadGatherCombat(out fighting) || (fighting && !ignoreMonsters)) { _pending = node; return; }
+                if (!GrindRunner.TryReadGatherCombat(out fighting)) { _pending = node; return; }
+                if (fighting) { DeferForCombat(true); return; }
                 if (!GatherNodeScanner.TryCapture(SearchYd, out List<GatherNodeScanner.Node> refreshed)) return;
                 bool found = false;
                 foreach (var fresh in refreshed)
@@ -529,17 +545,17 @@ internal static class GatherRunner
             {
                 if (ClickAimAbort.Wait(250) || _stop) return;
                 if (extraSafety != null && !extraSafety()) { Logging.Write("[Gather] Grind safety check interrupted the cast wait"); return; }
-                if (ignoreMonsters && !IgnoreSafety()) return;
+                if (standaloneGuard && !StandaloneSafety()) return;
                 if (!GrindRunner.TryReadGatherCombat(out fighting))
                 {
                     if (!unknownLogged) Logging.Write("[Gather] combat state unreadable; continuing to hold still");
                     unknownLogged = true;
                     continue;
                 }
-                if (fighting && !ignoreMonsters)
+                if (fighting)
                 {
                     Logging.Write("[Gather] combat detected during cast wait; interrupting wait for defence");
-                    _pending = node;
+                    DeferForCombat(true);
                     return;
                 }
                 if (unchecked(Environment.TickCount - started) >= GatherHoldMs) break;
@@ -736,7 +752,7 @@ internal static class GatherRunner
             Logging.Write("[Gather] node scan radius " + SearchYd.ToString("F0", CultureInfo.InvariantCulture) +
                 " yd; only client-loaded pool objects can be seen, and distant routes require a validated mesh");
             if (roam != null && !roam.MapCurrent()) { Logging.Write("[Roam] map changed before start; stopping"); return; }
-            if (_ignoreMonsters) Logging.Write("[Gather] ignore-monsters enabled: no combat defence; route and node attempts continue while attacked. Death and STOP still apply; gathering may fail.");
+            if (_ignoreMonsters) Logging.Write("[Gather] ignore-monsters enabled: ignore combat while travelling, but defend at a node before gathering. Death and STOP still apply.");
             Logging.Write("[Gather] experimental ground gatherer: " + (roam == null ? points.Count + " hotspots" : "profile-free local roaming") + "; Mining="
                 + GatherSettings.Mining + " skill=" + GatherSettings.MiningSkill + "; Herbalism="
                 + GatherSettings.Herbalism + " skill=" + GatherSettings.HerbalismSkill
@@ -779,7 +795,12 @@ internal static class GatherRunner
                     Logging.Write("[Gather] combat state unreadable; holding position");
                     ClickAimAbort.Wait(1500); continue;
                 }
-                if (fighting && !_ignoreMonsters)
+                if (!fighting && _nodeDefence)
+                {
+                    _nodeDefence = false;
+                    Logging.Write("[Gather] node defence combat ended; rechecking the resource before gathering");
+                }
+                if (GatherNodeDefence.ShouldDefend(fighting, _ignoreMonsters, _nodeDefence))
                 {
                     fastHotspots = 0;
                     ClickAimKeySteer.ReleaseHeld();
@@ -889,14 +910,20 @@ internal static class GatherRunner
                 bool stillHere = false;
                 foreach (var fresh in nearby) if (fresh.Guid == node.Guid && Ready(fresh)) { node = fresh; stillHere = true; break; }
                 if (!stillHere) { Logging.Write("[Gather] node not observed in reach; no click sent"); Retry[node.Guid] = unchecked(Environment.TickCount + RetryMs); continue; }
-                if (!GrindRunner.TryReadGatherCombat(out bool combatBeforeFace) || (combatBeforeFace && !_ignoreMonsters))
-                {
-                    _pending = node;
-                    continue;
-                }
                 if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested) break;
                 if (_ignoreMonsters && (StopIfDeadOrGhost() || !MapStillCurrent() || ObjectManager.WowB != reader ||
                     (reader.IsExperimental70707 && !WowBGrindFactions.Experimental70707BarSafe(reader)))) continue;
+                if (!GrindRunner.TryReadGatherCombat(out bool combatBeforeFace)) { _pending = node; continue; }
+                if (combatBeforeFace)
+                {
+                    _pending = node;
+                    if (_ignoreMonsters)
+                    {
+                        _nodeDefence = true;
+                        Logging.Write("[Gather] combat at the confirmed in-range node; defending before gathering resumes");
+                    }
+                    continue;
+                }
                 if (!ClickAimKeySteer.Face(node.Position.X, node.Position.Y, hwnd, 20.0, 6))
                 {
                     Logging.Write("[Gather] could not face node; will retry it later");
@@ -904,7 +931,7 @@ internal static class GatherRunner
                     continue;
                 }
                 if (_stop || ClickAimAbort.Requested) break;
-                GatherAtNode(hwnd, node, ignoreMonsters: _ignoreMonsters);
+                GatherAtNode(hwnd, node);
 
             }
             recovered = _recoveryReady && !ClickAimAbort.Requested && RecoverIfPending(mover);
