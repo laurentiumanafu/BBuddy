@@ -1105,7 +1105,7 @@ internal static class GrindRunner
                  * circle a hotspot is cleared in, so "monsters between hotspots" are monsters
                  * this stops for. */
                 bool resourceInterrupt = false, vendorInterrupt = false;
-                bool skinInterrupt = false, barInterrupt = false;
+                bool skinInterrupt = false, barInterrupt = false, buffInterrupt = false;
                 int lastFightCheck = unchecked(Environment.TickCount - 500);
                 int lastRoamMapCheck = unchecked(Environment.TickCount - 500);
                 int lastSkinCheck = unchecked(Environment.TickCount - 1000);
@@ -1125,6 +1125,8 @@ internal static class GrindRunner
                         if (VendorDue()) { vendorInterrupt = true; return true; }
                         if (FightNeeded(hwnd, SearchYd)) return true;
                     }
+                    if (Buffs.TotemNeedsAttention(hwnd, () => _stop))
+                    { buffInterrupt = true; return true; }
                     if (gatherDuringGrind && GatherRunner.HasGrindResource(GatherAreaSafe))
                     { resourceInterrupt = true; return true; }
                     if (GatherSettings.SkinNearby && unchecked(Environment.TickCount - lastSkinCheck) >= 1000)
@@ -1156,6 +1158,12 @@ internal static class GrindRunner
                     {
                         if (roam == null) index--;
                         Logging.Write("[Grind] vendor trip due; pausing the hotspot leg before the next pull");
+                        continue;
+                    }
+                    if (buffInterrupt)
+                    {
+                        if (roam == null) index--;
+                        Logging.Write("[Buff] missing totem effect; pausing the hotspot leg for a guarded recheck");
                         continue;
                     }
                     if (resourceInterrupt)
@@ -2558,6 +2566,9 @@ internal static class GrindRunner
 
     internal static bool BuffForGather(IntPtr hwnd, ClickAimMover mover, Func<bool> stopped)
         => Buffs.TryApply(hwnd, stopped, () => StopForBuff(hwnd, mover));
+
+    internal static bool TotemNeedsAttention(IntPtr hwnd, Func<bool> stopped)
+        => Buffs.TotemNeedsAttention(hwnd, stopped);
 
     // ------------------------------------------------------------------ the heal's price
 
@@ -5844,8 +5855,9 @@ internal static class GrindRunner
                 continue;
             }
 
-            // Optional observed-expired self-only buffs. The shared controller
-            // retains the enemy selection, checks the experimental 70707 aura,
+            // Optional observed-expired self-only buffs. The 70862 path also
+            // checks observed missing totem effects. The shared controller
+            // retains the enemy selection, checks the experimental aura,
             // identity, mana estimate, combat and STOP, and revalidates before input.
             if (ClickAimSettings.UseBuffsInCombat && unchecked(Environment.TickCount - lastCombatBuffCheckMs) >= 1000 &&
                 (lastCastMs == 0 || unchecked(Environment.TickCount - lastCastMs) >= ClickAimCombat.CastSettleMs))

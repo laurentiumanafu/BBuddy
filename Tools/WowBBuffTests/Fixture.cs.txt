@@ -8,10 +8,14 @@ namespace GreenMagic
     {
         public IntPtr WindowHandle = new IntPtr(7);
         public byte[]? AuraBytes;
-        public bool ChangeSecondRead, StopDuringRead;
+        public bool ChangeSecondRead, StopDuringRead, ChangeTotemCount;
+        public uint TotemCount;
+        private int _countReads;
         private int _readCount;
         public byte[]? ReadBytes64(ulong address, int length)
         {
+            if (address == 0x20000 + 0x1A60 && length == 4)
+                return BitConverter.GetBytes(ChangeTotemCount && ++_countReads % 2 == 0 ? TotemCount + 1 : TotemCount);
             if (AuraBytes == null || address != 0x20000 + 0x5F0 || length != AuraBytes.Length) return null;
             var result = (byte[])AuraBytes.Clone();
             if (StopDuringRead) Styx.Logic.Pathing.ClickAimAbort.Requested = true;
@@ -44,8 +48,8 @@ namespace Styx.WoWInternals
     }
     sealed class WowBReader
     {
-        public struct WowBUnitFields { public uint Health, MaxHealth, Power; }
-        public bool IsExperimental70707 = true, Readable = true;
+        public struct WowBUnitFields { public uint Health, MaxHealth, Power; public int PlayerPowerTypeCandidate; }
+        public bool IsExperimental70707 = true, IsExperimental70862, Readable = true;
         public uint Map = 0, Health = 100, MaxHealth = 100, Power = 100;
         public WowBGuid Selected;
         public WowBObservedUnit Player = new WowBObservedUnit { Guid = new WowBGuid(1), UnitAddress = 0x20000, RecordAddress = 0x30000 };
@@ -76,6 +80,15 @@ namespace Styx.Logic.Pathing
         public static string NameOf(int id) => id switch { 1 => "Arcane Intellect", 2 => "Frost Armor", 3 => "Thorns", 4 => "Cat Form", 20550 => "Endurance", _ => "spell" };
         public static ClickAimSpellRole RoleOverrideOf(int id) => Overrides.TryGetValue(id, out var role) ? role : ClickAimSpellRole.Unknown;
         public static ClickAimSpellRole RoleOf(int id) => Overrides.TryGetValue(id, out var role) ? role : ClickAimSpellRole.Buff;
+    }
+    static class WowBCombatResearch
+    {
+        internal const int ExternalCandidateStride = 0x128, ExternalMaxSlots = 24;
+        internal static byte[]? Data;
+        internal static bool StopDuringRead;
+        internal sealed class ExternalCandidateSample { internal readonly byte[] Bytes; internal ExternalCandidateSample(byte[] b) { Bytes = b; } }
+        internal static ExternalCandidateSample? ReadExternalCandidate(Memory memory, ulong unit, out string reason)
+        { reason = "fixture"; if (StopDuringRead) ClickAimAbort.Requested = true; return Data == null ? null : new ExternalCandidateSample((byte[])Data.Clone()); }
     }
     static class WowBGrindFactions
     {
@@ -138,10 +151,18 @@ namespace Styx.Logic.Pathing
             ObjectManager.Wow = new Memory(); ObjectManager.WowB = new WowBReader { Selected = new WowBGuid(8) };
             ClickAimCombat.Bar = new List<ClickAimAction> { Action(1, 1), Action(2, 2), Action(3, 3) };
             ClickAimCombat.Overrides.Clear(); ClickAimInput.Keys.Clear();
+            WowBCombatResearch.Data = null; WowBCombatResearch.StopDuringRead = false;
             ClickAimSettings.UseBuffs = true; ClickAimSettings.UseBuffsInCombat = false; ClickAimSettings.RotationClass = ClickAimRotationClass.Auto;
             GrindRunner.Combat = ClickAimAbort.Requested = RouteRunner.StopRequested = false;
             GrindRunner.CombatReadable = WowBGrindFactions.BarSafe = WowBGrindFactions.GhostReadable = ClickAimInput.F1Works = true;
             WowBGrindFactions.Ghost = ClickAimInput.StopOnF1 = ClickAimInput.StopAfterFirst = ClickAimInput.DisableAfterFirst = ClickAimInput.CombatAfterFirst = ClickAimInput.ChangeSecondAfterFirst = ClickAimInput.ChangeTargetAfterFirst = ClickAimInput.ChangeMapAfterFirst = false;
+        }
+        private static void TotemBytes(params uint[] ids)
+        {
+            var raw = new byte[18 * 0x128];
+            for (int i = 0; i < ids.Length; i++) BitConverter.GetBytes(ids[i]).CopyTo(raw, i * 0x128 + 0xE8);
+            WowBCombatResearch.Data = raw;
+            ObjectManager.Wow!.TotemCount = (uint)ids.Length;
         }
         public static void Main()
         {
@@ -337,6 +358,45 @@ namespace Styx.Logic.Pathing
             Check(!controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 0, "implicit druid forms and passive racial excluded");
             controller.Reset(); now = 0; ClickAimSettings.RotationClass = ClickAimRotationClass.Generic;
             Check(!controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 0, "forms excluded even if class is Generic");
+            // 70862 totems: exact cast/effect pairs, zero-duration presence,
+            // unknown != absent, ten-second attempt backoff, shared combat/quiet schedule.
+            Reset(); controller.Reset(); now = 0; ObjectManager.WowB!.IsExperimental70862 = true;
+            ClickAimCombat.Bar = new List<ClickAimAction> { Action(8160, 2), Action(5394, 3) };
+            TotemBytes(777, 8162, 5672);
+            Check(!controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 0, "active totem effects are never cast at fresh start");
+            TotemBytes(777, 5672); now = 5000;
+            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 1 && ClickAimInput.Keys[0] == 0x32, "missing Earth effect attempts Earth totem");
+            now = 10000;
+            Check(!controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 1, "attempts are at least ten seconds apart");
+            now = 15000;
+            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 2, "missing Earth effect retries at ten seconds");
+            TotemBytes(777, 8162, 5672); now = 25000;
+            Check(!controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 2, "observed effect suppresses later retries");
+            TotemBytes(777, 8162); now = 30000;
+            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 3 && ClickAimInput.Keys[2] == 0x33, "missing Healing Stream effect attempts water totem independently");
+            TotemBytes(777, 777); now = 40000;
+            Check(!controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 3, "duplicate candidates are unknown not absent");
+            TotemBytes(777); ObjectManager.Wow!.ChangeTotemCount = true; now = 45000;
+            Check(!controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 3, "unstable count is unknown not absent");
+            ObjectManager.Wow.ChangeTotemCount = false; ObjectManager.Wow.TotemCount = 2; now = 50000;
+            Check(!controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 3, "count mismatch withholds cast");
+            TotemBytes(777); ObjectManager.WowB.Power = 39; now = 55000;
+            Check(!controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 3, "low mana withholds both totems");
+            ObjectManager.WowB.Power = 100; WowBCombatResearch.StopDuringRead = true; now = 60000;
+            Check(!controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 3, "STOP during external read withholds input");
+            Reset(); controller.Reset(); now = 0; ObjectManager.WowB!.IsExperimental70862 = true;
+            ClickAimCombat.Bar = new List<ClickAimAction> { Action(8160, 2) }; TotemBytes(777); GrindRunner.Combat = true;
+            combatPlayer = ObjectManager.WowB.Player; ClickAimSettings.UseBuffsInCombat = true;
+            Check(controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe) && ClickAimInput.Keys.Count == 1, "combat checkbox permits guarded missing totem");
+            GrindRunner.Combat = false; now = 5000;
+            Check(!controller.TryApply(new IntPtr(7), stopped, stopMovement), "combat and quiet share backoff");
+            now = 10000;
+            Check(controller.TotemNeedsAttention(new IntPtr(7), stopped), "long route yields for missing effect after backoff");
+            TotemBytes(777, 8162); now = 15000;
+            Check(!controller.TotemNeedsAttention(new IntPtr(7), stopped), "long route does not yield for active effect");
+            Reset(); controller.Reset(); now = 0; ObjectManager.WowB!.IsExperimental70862 = false;
+            ClickAimCombat.Bar = new List<ClickAimAction> { Action(8160, 2) }; TotemBytes(777);
+            Check(!controller.TryApply(new IntPtr(7), stopped, stopMovement), "older builds do not use 70862 totem layout");
             Console.WriteLine("Buff scheduling and safety fixtures passed (synthetic only; no real cast or aura validation).");
         }
     }

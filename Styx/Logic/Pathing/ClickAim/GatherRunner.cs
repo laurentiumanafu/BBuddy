@@ -274,6 +274,9 @@ internal static class GatherRunner
             if (barReader?.IsExperimental70862 == true && !WowBGrindFactions.Experimental70707BarSafe(barReader)) return true;
             if (!GrindRunner.TryReadGatherCombat(out bool fighting) || (fighting && !_ignoreMonsters)) return true;
         }
+        // Yield to the outer loop for a guarded totem recheck; never cast from
+        // this movement callback, and never interrupt ignore-mode combat for it.
+        if (GrindRunner.TotemNeedsAttention(ObjectManager.Wow?.WindowHandle ?? IntPtr.Zero, () => _stop)) return true;
         if (!checkNodes || unchecked(Environment.TickCount - _lastScan) < 1500) return false;
         _lastScan = Environment.TickCount;
         if (!FindNode(out GatherNodeScanner.Node node)) return false;

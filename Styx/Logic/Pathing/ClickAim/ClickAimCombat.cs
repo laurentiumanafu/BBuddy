@@ -267,6 +267,8 @@ internal static class ClickAimCombat
         { 324, "Lightning Shield" }, { 325, "Lightning Shield" }, { 905, "Lightning Shield" },
         { 945, "Lightning Shield" }, { 8134, "Lightning Shield" },
         { 8017, "Rockbiter Weapon" }, { 8018, "Rockbiter Weapon" }, { 8019, "Rockbiter Weapon" },
+        // Only the ranks whose player effects were observed on 70862.
+        { 8160, "Strength of Earth Totem" }, { 5394, "Healing Stream Totem" },
         { 17364, "Stormstrike" },
 
         /* --- Paladin --- */
@@ -384,6 +386,7 @@ internal static class ClickAimCombat
         { "Power Word: Shield", ClickAimSpellRole.Buff },
         { "Demon Skin", ClickAimSpellRole.Buff }, { "Lightning Shield", ClickAimSpellRole.Buff },
         { "Rockbiter Weapon", ClickAimSpellRole.Buff }, { "Battle Shout", ClickAimSpellRole.Buff },
+        { "Strength of Earth Totem", ClickAimSpellRole.Buff }, { "Healing Stream Totem", ClickAimSpellRole.Buff },
         { "Devotion Aura", ClickAimSpellRole.Buff }, { "Seal of Righteousness", ClickAimSpellRole.Buff },
         { "Aspect of the Hawk", ClickAimSpellRole.Buff }, { "Endurance", ClickAimSpellRole.Buff },
         { "Nature Resistance", ClickAimSpellRole.Buff },

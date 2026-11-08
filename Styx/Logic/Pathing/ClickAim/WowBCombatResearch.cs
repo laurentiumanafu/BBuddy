@@ -133,7 +133,7 @@ internal static class WowBCombatResearch
     }
 
     // Candidate header observed on one 70862 player. Its meanings and the
-    // 0x128 stride are hypotheses, not a verified aura container. Research only.
+    // 0x128 stride are hypotheses, not a verified general aura container.
     private const int ExternalHeaderOffset = 0x5F0, ExternalHeaderSize = 24;
     internal const int ExternalCandidateStride = 0x128, ExternalMaxSlots = 24;
     private const ulong ExternalMaxCapacity = 32;
@@ -153,8 +153,8 @@ internal static class WowBCombatResearch
         return true;
     }
 
-    // Called only from the opt-in stopped 70862 research trace. Reads one
-    // candidate pointer, not a pointer graph. A readable region and identical
+    // Shared by the opt-in research trace and experimental 70862 totem-effect
+    // checks. Reads one candidate pointer, not a pointer graph. A readable region and identical
     // pre/post headers and data reduce risk, but cannot exclude ABA/reuse.
     internal static ExternalCandidateSample? ReadExternalCandidate(Memory memory, ulong playerUnit, out string reason)
     {
