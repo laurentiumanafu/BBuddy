@@ -111,6 +111,17 @@
                     </StackPanel>
                     <TextBlock TextWrapping="Wrap" FontSize="11" Opacity="0.7" Margin="0,5,0,0"
                                Text="Generic retains the older first-spell behavior, including its limitations. Class profiles omit rune abilities, feral forms, finishers and pet actions unless manually overridden. On 70707/70755/70790/70862 the experimental gate supports mana-type and candidate rage-type characters; rage-dependent actions remain withheld."/>
+                    <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                        <TextBlock Text="70862 Start Attack key after heal:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <ComboBox x:Name="cmbPostHealStartAttack" Width="95" SelectedIndex="0"
+                                  ToolTip="Optional. First bind this key to WoW's Start Attack (not Attack Target or the toggling Attack action), and test manually that repeating it does not stop attacks. The bot cannot verify your key binding or swing state.">
+                            <ComboBoxItem Content="Disabled"/>
+                            <ComboBoxItem Content="F6"/><ComboBoxItem Content="F7"/><ComboBoxItem Content="F8"/>
+                            <ComboBoxItem Content="F9"/><ComboBoxItem Content="F10"/>
+                        </ComboBox>
+                    </StackPanel>
+                    <TextBlock TextWrapping="Wrap" FontSize="11" Opacity="0.7" Margin="0,4,0,0"
+                               Text="Optional: bind the same key to WoW's Start Attack first; do not use Attack Target (toggle). Test the binding manually. Bot cannot verify it or the swing state."/>
                     <CheckBox x:Name="chkBuffsInCombat" Margin="0,8,0,0"
                               Content="Re-cast supported buffs when they run out during combat"
                               ToolTip="Requires Apply self-buffs. Experimental 70707/70755/70790/70862 Lightning Shield and Frost Armor, observed ranks only. Uses mana estimates; exact cost and cast success are not verified. Other buffs remain out-of-combat only."/>

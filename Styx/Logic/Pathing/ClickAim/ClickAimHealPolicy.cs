@@ -19,6 +19,18 @@ internal static class ClickAimHealPolicy
         => heal != null && heal.KeyVk != 0 && heal.IsHeal && !blocked && maximumHealth > 0 && health > 0 &&
            healPercent > 0 && health * 100.0 / maximumHealth <= healPercent && cooldownReady && powerAllowed;
 
+    // A net health gain or power drop is only evidence, not proof, that the
+    // attempted heal landed. The separate binding is user-configured and its
+    // claimed non-toggle semantics cannot be verified by the bot.
+    internal static bool QueuePostHealStartAttack(bool is70862, int binding, bool priorAttackAttempt,
+        uint beforeHealth, uint afterHealth, uint beforePower, uint afterPower)
+        => is70862 && binding != 0 && ClickAimSettings.ValidStartAttackVk(binding) && priorAttackAttempt &&
+           (afterHealth > beforeHealth || afterPower < beforePower);
+
+    internal static bool ReadyPostHealStartAttack(bool pending, int elapsedMs, int settleMs, double distance, double range)
+        => pending && elapsedMs >= settleMs && double.IsFinite(distance) && distance >= 0 &&
+           double.IsFinite(range) && range >= 0 && distance <= range;
+
     internal static bool StillOnBar(ClickAimAction? heal, List<ClickAimAction> bar)
     {
         if (heal == null || heal.KeyVk == 0 || !heal.IsHeal) return false;

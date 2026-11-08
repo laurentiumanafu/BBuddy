@@ -775,6 +775,9 @@ internal static class GrindRunner
         int budgetMs = minutes <= 0 ? int.MaxValue : minutes * 60000;
         if (trialReader != null)
             Logging.Write("[Grind] EXPERIMENTAL " + trialReader.ExperimentalBuildNumber + ": continuous faction-filtered Grind. Candidate stats, reaction, flags, hotkeys and movement remain unverified. Monitor closely; use STOP if anything is wrong.");
+        if (trialReader?.IsExperimental70862 == true && ClickAimSettings.PostHealStartAttackVk != 0)
+            Logging.Write("[Grind] post-heal Start Attack binding F" + (ClickAimSettings.PostHealStartAttackVk - 0x70 + 1).ToString(CultureInfo.InvariantCulture) +
+                " enabled; its non-toggle behavior and the swing state cannot be verified");
 
         IntPtr hwnd = Handle();
         if (hwnd == IntPtr.Zero) { Logging.Write("[Grind] no game window"); return; }
@@ -5087,6 +5090,9 @@ internal static class GrindRunner
         int lastAttackPressMs = 0;
         bool attackPressed = false;     // the Attack key has been pressed this fight
         bool preserveAttackAfterHeal = false; // casting doesn't reveal whether Attack is still on
+        bool postHealStartPending = false;
+        WowBGuid postHealPlayer = default;
+        int postHealStartKey = ClickAimSettings.PostHealStartAttackVk;
         bool shockMeleeLogged = false, conservativeShockAttack = false;
         int lastShockDamageMs = 0;
         bool noSafeAutoLogged = false;
@@ -5584,8 +5590,58 @@ internal static class GrindRunner
                     }
                 }
 
-                // The next iteration rechecks the selected target. Never TAB or
-                // toggle Attack merely because a heal was attempted.
+                // Healing and the actual swing state are not observable. If the
+                // user configured a separate Start Attack binding, allow one
+                // guarded attempt after a heal with observed net effect; never
+                // re-press the normal toggling Attack key on that assumption.
+                if (ClickAimHealPolicy.QueuePostHealStartAttack(reader.IsExperimental70862, postHealStartKey,
+                    attackPressed || lastMeleeClickMs != 0, myHealth, afterHealth, powerBeforeHeal, powerAfterHeal))
+                {
+                    postHealStartPending = true;
+                    postHealPlayer = me.Guid;
+                }
+                continue;
+            }
+
+            // A user-supplied non-toggle Start Attack binding can restore melee
+            // after a heal. Wait for the existing full heal verification window
+            // before sending it, but let the normal rotation run meanwhile.
+            // This does not prove the binding or swing state is correct.
+            if (postHealStartPending && (postHealStartKey == 0 ||
+                ClickAimSettings.PostHealStartAttackVk != postHealStartKey || !ClickAimSettings.ValidStartAttackVk(postHealStartKey)))
+                postHealStartPending = false;
+            if (ClickAimHealPolicy.ReadyPostHealStartAttack(postHealStartPending,
+                unchecked(Environment.TickCount - lastHealMs), ClickAimCombat.HealVerifyMs, d, AttackRangeYd))
+            {
+                ClickAimKeySteer.ReleaseHeld();
+                if (!FightAttackInputAllowed(reader, fightMemory, defenceTarget, expectedPull, !defenceOnly || defenceFactionFilter, defenceOnly))
+                    return YieldForTargetChange(reader, fightMemory, defenceTarget);
+                if (!Capture(out WowBWorldSnapshot? resumeSnap) || resumeSnap == null ||
+                    !resumeSnap.TryGetLocalPlayer(out WowBObservedUnit resumePlayer) ||
+                    postHealPlayer.IsEmpty || resumePlayer.Guid != postHealPlayer || resumePlayer.Guid != me.Guid ||
+                    resumePlayer.UnitAddress != me.UnitAddress || resumePlayer.RecordAddress != me.RecordAddress ||
+                    !reader.TryGetUnitFields(resumePlayer.UnitAddress, out WowBReader.WowBUnitFields resumeSelf) ||
+                    resumeSelf.MaxHealth == 0 || resumeSelf.Health == 0 || resumeSelf.Health > resumeSelf.MaxHealth ||
+                    !resumeSnap.TryGetSelectedTarget(out WowBObservedUnit resumeTarget) ||
+                    resumeTarget.Guid != defenceTarget || resumeTarget.UnitAddress != expectedPull.UnitAddress ||
+                    resumeTarget.RecordAddress != expectedPull.RecordAddress || resumeTarget.IsLocalPlayer || resumeTarget.HasPlayerVtable ||
+                    !reader.TryGetUnitFields(resumeTarget.UnitAddress, out WowBReader.WowBUnitFields resumeFields) ||
+                    !DefenceFieldsValid(resumeFields.Health, resumeFields.UnitFlags, false))
+                { ClickAimAbort.Wait(150); continue; }
+                double resumeDistance = ClickAimMath.Len(resumeTarget.Location.X - resumePlayer.Location.X,
+                    resumeTarget.Location.Y - resumePlayer.Location.Y);
+                if (!ClickAimHealPolicy.ReadyPostHealStartAttack(postHealStartPending,
+                    unchecked(Environment.TickCount - lastHealMs), ClickAimCombat.HealVerifyMs, resumeDistance, AttackRangeYd)) continue;
+                if (!FightAttackInputAllowed(reader, fightMemory, defenceTarget, expectedPull, !defenceOnly || defenceFactionFilter, defenceOnly))
+                    return YieldForTargetChange(reader, fightMemory, defenceTarget);
+                if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested ||
+                    ClickAimSettings.PostHealStartAttackVk != postHealStartKey || !ClickAimSettings.ValidStartAttackVk(postHealStartKey))
+                    return "stopped or Start Attack binding changed; attack withheld";
+                ClickAimInput.TapKey(hwnd, postHealStartKey, 40);
+                postHealStartPending = false;
+                lastMeleeDamageMs = Environment.TickCount; // a grace period, not evidence of a swing
+                presses++; _presses++;
+                Logging.Write("[Grind] sent configured Start Attack binding once after heal; key binding and swing state are unverified");
                 continue;
             }
 

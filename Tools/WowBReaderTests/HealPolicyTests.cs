@@ -26,6 +26,18 @@ internal static class HealPolicyTests
             Check(!ClickAimHealPolicy.PowerAllowed(49, 100, 0, 25, 40), "below observed cost plus margin");
             Check(ClickAimHealPolicy.PowerAllowed(50, 100, 0, 25, 40), "at estimated cost plus margin");
             Check(!ClickAimHealPolicy.PowerAllowed(uint.MaxValue, uint.MaxValue, 0, 0, uint.MaxValue), "cost margin cannot overflow");
+            Check(!ClickAimHealPolicy.QueuePostHealStartAttack(false, 0x75, true, 50, 70, 100, 80), "post-heal binding only on 70862");
+            Check(!ClickAimHealPolicy.QueuePostHealStartAttack(true, 0, true, 50, 70, 100, 80), "binding is opt-in");
+            Check(!ClickAimHealPolicy.QueuePostHealStartAttack(true, 0x31, true, 50, 70, 100, 80), "normal Attack key cannot be the binding");
+            Check(!ClickAimHealPolicy.QueuePostHealStartAttack(true, 0x75, false, 50, 70, 100, 80), "no recovery before an attack attempt");
+            Check(!ClickAimHealPolicy.QueuePostHealStartAttack(true, 0x75, true, 50, 45, 100, 100), "heal without observed effect does not queue");
+            Check(ClickAimHealPolicy.QueuePostHealStartAttack(true, 0x75, true, 50, 70, 100, 100), "health gain queues one recovery");
+            Check(ClickAimHealPolicy.QueuePostHealStartAttack(true, 0x79, true, 50, 45, 100, 80), "power drop may represent heal masked by damage");
+            Check(!ClickAimHealPolicy.ReadyPostHealStartAttack(true, 3599, 3600, 3, 4), "no key while heal may still be casting");
+            Check(!ClickAimHealPolicy.ReadyPostHealStartAttack(true, 3600, 3600, 4.1, 4), "no key outside melee range");
+            Check(!ClickAimHealPolicy.ReadyPostHealStartAttack(true, 3600, 3600, double.NaN, 4), "unknown range withheld");
+            Check(!ClickAimHealPolicy.ReadyPostHealStartAttack(false, 3600, 3600, 3, 4), "consumed request is not repeated");
+            Check(ClickAimHealPolicy.ReadyPostHealStartAttack(true, 3600, 3600, 4, 4), "one binding press after settle in melee");
             Check(ClickAimHealPolicy.StillOnBar(heal, new List<ClickAimAction> { heal }), "same heal on same slot");
             var changed = new ClickAimAction { Slot = 3, Id = 133, Raw = 133, KeyVk = heal.KeyVk, Kind = ClickAimActionKind.Spell };
             Check(!ClickAimHealPolicy.StillOnBar(heal, new List<ClickAimAction> { changed }), "slot changed");
