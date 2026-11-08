@@ -86,7 +86,8 @@ internal static class ClickAimUi
             for (int i = 0; i < areas.Count; i++) hotspots += areas[i].Hotspots.Count;
             string first = areas[0].Name.Length > 0 ? areas[0].Name : "(unnamed)";
             return "loaded " + name + ": " + areas.Count + " grind area(s), " + hotspots
-                   + " hotspot(s), first \"" + first + "\". Press Start to grind.";
+                   + " hotspot(s), first \"" + first + "\". Press Start to grind. "
+                   + "Profile blackspots and vendor/mail/trainer directives are not applied; use recorded selling separately.";
         }
 
         return "loaded " + name + ": " + waypoints + " waypoint(s) and no <GrindArea>. "

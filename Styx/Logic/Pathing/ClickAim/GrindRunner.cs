@@ -33,12 +33,9 @@ namespace Styx.Logic.Pathing;
 /// 15:34 within a second of Start. A bot that walks and auto-attacks is worth more than one
 /// that crashes the client.
 ///
-/// Hostility is the client's judgement, not ours: TAB only selects things the client
-/// considers enemies, which is the faction filter every grind profile carries
-/// (&lt;Factions&gt;) without us being able to read a faction id on this build. The
-/// profile's TargetMinLevel/TargetMaxLevel are read and logged, and are not enforced -
-/// deliberately, because a wrong level filter that silently refuses everything is worse
-/// than fighting one mob that was two levels too low.
+/// Profile pulls require the active area's candidate faction keys, target levels
+/// and hotspot radius. Candidate keys and TAB do not prove hostility. Combat
+/// defence retains its separately guarded behavior, including the 70862 heuristic.
 /// </summary>
 internal static class GrindRunner
 {
@@ -317,7 +314,7 @@ internal static class GrindRunner
     private const int MaxDeadHotspots = 4;
 
     /// <summary>How often to re-read the player's level and consider another grind area.</summary>
-    private const int LevelCheckMs = 120000;
+    private const int LevelCheckMs = 10000;
 
     private static volatile bool _stop;
     private static bool _running;
@@ -497,6 +494,9 @@ internal static class GrindRunner
     /// corpse line, printed once per engage attempt - the 13:24 run printed it eight times in
     /// eight seconds while the character stood over a body it had already looted.
     /// </summary>
+    // Non-null only on the Grind worker while using a validated profile.
+    private static ProfileGrindArea? _activeProfileArea;
+    private static uint _profileSessionMap;
     private static int _clearQuietAt;
 
     /// <summary>Last time the pool said something was there and TAB disagreed.</summary>
@@ -649,27 +649,33 @@ internal static class GrindRunner
             return false;
         }
 
-        if (!WowBGrindFactions.PrepareForGrind(out string factionError))
-        { Logging.Write("[Grind] faction filter could not start: " + factionError); return false; }
-        Logging.Write(GrindFactionSettings.Rules.Enabled
-            ? "[Grind] faction pull " + GrindFactionSettings.Rules.Mode + " filter ON: " + GrindFactionSettings.Rules.KeyText +
-              (ObjectManager.WowB?.IsExperimental70862 == true
-                  ? "; combat defence bypasses faction; it may attack the wrong NPC, including a friendly"
-                  : "; blocked/unknown NPCs are withheld even in defence; faction is not proof of hostility")
-            : "[Grind] faction attack filter OFF; normal targeting remains active");
-
-        WowBReader? trialReader = WowBGrindFactions.ExperimentalBoundReader;
-        List<ProfileGrindArea> areas;
-        try { areas = ProfileRoute.LoadGrindAreas(profilePath); }
-        catch { WowBGrindFactions.EndExperimental70707(); throw; }
+        List<ProfileGrindArea> areas = ProfileRoute.LoadGrindAreas(profilePath);
         if (areas.Count == 0)
         {
             Logging.Write("[Grind] " + profilePath + " has no <GrindArea> hotspots. A quest "
                           + "profile is walked with profile:<path>; a grind profile has the hotspots "
                           + "inside <GrindArea>.");
-            WowBGrindFactions.EndExperimental70707();
             return false;
         }
+
+        // Never fall back to the user's roaming filter for an incomplete profile.
+        // Every area is validated up front, before the experimental session is armed.
+        foreach (ProfileGrindArea profileArea in areas)
+        {
+            if (!GrindProfilePolicy.ValidLevels(profileArea) ||
+                !GrindFactionRules.TryCreate(GrindFactionMode.Allow, profileArea.Factions, "", out _, out _))
+            {
+                Logging.Write("[Grind] profile area '" + profileArea.Name + "' needs valid player/target level bands and nonempty numeric factions; refusing profile pulls");
+                return false;
+            }
+        }
+        GrindFactionRules.TryCreate(GrindFactionMode.Allow, areas[0].Factions, "", out GrindFactionRules initialRules, out _);
+        if (!WowBGrindFactions.PrepareForGrind(out string factionError, initialRules))
+        { Logging.Write("[Grind] profile faction filter could not start: " + factionError); return false; }
+        Logging.Write("[Grind] profile Blackspots, vendor/trainer/mail and other directives are not executed; recorded selling remains separate.");
+        Logging.Write("[Grind] profile factions override the manual roaming filter for voluntary pulls; faction IDs and hostility remain unverified. " +
+            (ObjectManager.WowB?.IsExperimental70862 == true ? "70862 combat defence can select the wrong NPC, including a friendly." : "Combat defence retains its existing safeguards."));
+        WowBReader? trialReader = WowBGrindFactions.ExperimentalBoundReader;
 
         double px, py;
         if (!ClickAimPositions.TryRead(out px, out py))
@@ -764,7 +770,7 @@ internal static class GrindRunner
             Run(areas, minutes, profilePath, roam, trialReader);
         }
         catch (Exception ex) { Logging.Write("[Grind] worker stopped on error: " + ex.Message); }
-        finally { _deathCheckpoint = null; WowBGrindFactions.EndExperimental70707(); _running = false; }
+        finally { _activeProfileArea = null; _deathCheckpoint = null; WowBGrindFactions.EndExperimental70707(); _running = false; }
     }
 
     private static void Run(List<ProfileGrindArea> areas, int minutes, string profilePath, MeshRoam? roam, WowBReader? trialReader)
@@ -855,10 +861,20 @@ internal static class GrindRunner
         if (roam == null)
         {
             chosen = SelectArea(areas, level, out string choice);
+            if (level <= 0 || !InBand(areas[chosen], level))
+            { Logging.Write("[Grind] no profile area matches the readable player level; stopping without pulling. " + choice); return; }
             Logging.Write("[Grind] " + choice);
         }
         else Logging.Write("[Grind] profile-free mesh roaming; no profile level bands or blackspots, existing combat safety filters still apply");
         ProfileGrindArea area = areas[chosen];
+        if (roam == null)
+        {
+            WowBReader? mapReader = ObjectManager.WowB;
+            if (mapReader == null || !mapReader.TryReadMapId(out _profileSessionMap) || _profileSessionMap == uint.MaxValue ||
+                ObjectManager.WowB != mapReader || !mapReader.TryReadMapId(out uint mapAgain) || mapAgain != _profileSessionMap)
+            { Logging.Write("[Grind] profile map unreadable or changed; refusing to authorize profile pulls"); return; }
+            ActivateProfileArea(area);
+        }
         // On 70755/70790, avoid a fresh pull or roam leg while initial full-bag
         // observations are being confirmed. A bounded wait never treats an
         // unknown observation as full, and combat/STOP still take priority.
@@ -897,6 +913,8 @@ internal static class GrindRunner
                 }
                 if (roam != null && !roam.MapCurrent())
                 { Logging.Write("[Roam] map changed or became unreadable; stopping"); break; }
+                if (roam == null && !ProfileMapCurrent())
+                { Logging.Write("[Grind] profile session map changed or became unreadable; stopping"); break; }
                 if (startupBagWait)
                 {
                     bool enabled = ClickAimSettings.AutoSell;
@@ -935,12 +953,15 @@ internal static class GrindRunner
                     {
                         string climbed;
                         int nextArea = SelectArea(areas, now, out climbed);
+                        if (!InBand(areas[nextArea], now))
+                        { Logging.Write("[Grind] no profile area matches player level " + now + "; stopping rather than selecting another level band"); break; }
                         if (nextArea != chosen)
                         {
                             switches++;
                             Logging.Write("[Grind] level " + level + " -> " + now + ". " + climbed);
                             chosen = nextArea;
                             area = areas[chosen];
+                            ActivateProfileArea(area);
                             index = 0;
                             dead = 0;
                         }
@@ -1090,10 +1111,10 @@ internal static class GrindRunner
                 int lastSkinCheck = unchecked(Environment.TickCount - 1000);
                 RouteRunner.ShouldInterrupt = () =>
                 {
-                    if (roam != null && unchecked(Environment.TickCount - lastRoamMapCheck) >= 500)
+                    if (unchecked(Environment.TickCount - lastRoamMapCheck) >= 500)
                     {
                         lastRoamMapCheck = Environment.TickCount;
-                        if (!roam.MapCurrent()) return true;
+                        if (roam != null ? !roam.MapCurrent() : !ProfileMapCurrent()) return true;
                     }
                     if (unchecked(Environment.TickCount - lastFightCheck) >= 500)
                     {
@@ -1123,6 +1144,8 @@ internal static class GrindRunner
                 {
                     if (roam != null && !roam.MapCurrent())
                     { Logging.Write("[Roam] map changed or became unreadable; stopping"); break; }
+                    if (roam == null && !ProfileMapCurrent())
+                    { Logging.Write("[Grind] profile session map changed or became unreadable; stopping"); break; }
                     if (barInterrupt)
                     {
                         if (roam == null) index--;
@@ -1363,8 +1386,9 @@ internal static class GrindRunner
     }
 
     /// <summary>
-    /// The nearest area whose TargetMinLevel/TargetMaxLevel contains the player's level.
-    /// With no level, or no band that matches, it falls back to the nearest area and says so.
+    /// The nearest area whose player-level band contains the player's level.
+    /// For diagnostics only this returns the nearest when none matches; the
+    /// profile runner rejects that fallback before moving or pulling.
     /// </summary>
     private static int SelectArea(List<ProfileGrindArea> areas, int level, out string why)
     {
@@ -1390,15 +1414,14 @@ internal static class GrindRunner
 
         string because;
         if (level <= 0)
-            because = "The player level is unknown (no Lua), so this is the NEAREST area, not "
-                      + "necessarily the right one.";
+            because = "The player level is unknown (no Lua); the nearest area is shown for diagnostics only.";
         else if (inBand >= 0)
             because = "Chosen because level " + level.ToString(CultureInfo.InvariantCulture)
                       + " is inside its band (" + CountInBand(areas, level).ToString(CultureInfo.InvariantCulture)
                       + " of " + areas.Count.ToString(CultureInfo.InvariantCulture) + " areas match).";
         else
             because = "No area's band contains level " + level.ToString(CultureInfo.InvariantCulture)
-                      + "; using the nearest. Bands in this file: " + LevelSpan(areas) + ".";
+                      + "; nearest shown for diagnostics only. Bands in this file: " + LevelSpan(areas) + ".";
 
         why = string.Format(CultureInfo.InvariantCulture,
             "using \"{0}\" - {1} hotspot(s), {2:F0} yd away, target level {3}-{4}, factions "
@@ -1408,9 +1431,39 @@ internal static class GrindRunner
     }
 
     private static bool InBand(ProfileGrindArea area, int level)
+        => GrindProfilePolicy.PlayerInBand(area, level);
+
+    private static void ActivateProfileArea(ProfileGrindArea area)
     {
-        if (area.TargetMinLevel <= 0 || level < area.TargetMinLevel) return false;
-        return area.TargetMaxLevel <= 0 || level <= area.TargetMaxLevel;
+        if (!GrindFactionRules.TryCreate(GrindFactionMode.Allow, area.Factions, "", out GrindFactionRules rules, out string error))
+            throw new InvalidOperationException("Invalid profile factions: " + error);
+        GrindFactionSettings.Activate(rules);
+        _activeProfileArea = area;
+        Logging.Write("[Grind] profile area '" + area.Name + "': factions " + rules.KeyText +
+            ", target level " + area.TargetMinLevel + "-" + area.TargetMaxLevel +
+            "; voluntary targets must be within 100 horizontal yd of an area hotspot and 100 yd of the player");
+    }
+
+    private static bool ProfileMapCurrent()
+    {
+        WowBReader? reader = ObjectManager.WowB;
+        return _activeProfileArea != null && reader != null && reader.TryReadMapId(out uint map) &&
+               map == _profileSessionMap && ObjectManager.WowB == reader;
+    }
+
+    private static bool ProfileTargetAllowed(WowBReader? reader, WowBObservedUnit target, int? playerLevel = null)
+    {
+        ProfileGrindArea? area = _activeProfileArea;
+        if (area == null) return true; // profile-free Grind remains unchanged
+        // A level-up or an unreadable player level cannot authorize pulls from
+        // an outdated subprofile while waiting for the next area switch.
+        if (reader == null || ObjectManager.WowB != reader || !reader.TryReadMapId(out uint map) || map != _profileSessionMap ||
+            !GrindProfilePolicy.PlayerInBand(area, playerLevel ?? PlayerLevel())) return false;
+        uint entry = WowBSkinning.EntryCandidate(target.Guid);
+        return (area.AvoidEntries.Count == 0 || (entry != 0 && !area.AvoidEntries.Contains(entry))) &&
+               reader.TryGetUnitFields(target.UnitAddress, out WowBReader.WowBUnitFields fields) &&
+               GrindProfilePolicy.AllowsTarget(area, target.Location.X, target.Location.Y, fields.Level) &&
+               ObjectManager.WowB == reader && reader.TryReadMapId(out uint mapAfter) && mapAfter == map;
     }
 
     private static int CountInBand(List<ProfileGrindArea> areas, int level)
@@ -1420,18 +1473,20 @@ internal static class GrindRunner
         return count;
     }
 
-    /// <summary>The distinct level bands a profile wrote, e.g. "1-6, 7-12, 13-18".</summary>
+    /// <summary>The distinct player level bands, falling back to target bands if unstated.</summary>
     private static string LevelSpan(List<ProfileGrindArea> areas)
     {
         var parts = new List<string>();
         for (int i = 0; i < areas.Count && parts.Count < 24; i++)
         {
             ProfileGrindArea area = areas[i];
-            string band = area.TargetMinLevel <= 0
+            int playerMin = area.PlayerMinLevel > 0 ? area.PlayerMinLevel : area.TargetMinLevel;
+            int playerMax = area.PlayerMaxLevel > 0 ? area.PlayerMaxLevel : area.TargetMaxLevel;
+            string band = playerMin <= 0
                 ? "unstated"
-                : area.TargetMinLevel.ToString(CultureInfo.InvariantCulture) + "-"
-                  + (area.TargetMaxLevel > 0
-                        ? area.TargetMaxLevel.ToString(CultureInfo.InvariantCulture)
+                : playerMin.ToString(CultureInfo.InvariantCulture) + "-"
+                  + (playerMax > 0
+                        ? playerMax.ToString(CultureInfo.InvariantCulture)
                         : "?");
             if (parts.IndexOf(band) < 0) parts.Add(band);
         }
@@ -2137,7 +2192,7 @@ internal static class GrindRunner
         if (!WowBGrindFactions.AllowsPull(reader, target, out _)) return false;
         Styx.WoWInternals.WowBReader.WowBUnitFields f;
         if (!reader.TryGetUnitFields(target.UnitAddress, out f)) return false;
-        if (!SelectionFieldsValid(f.Health, f.UnitFlags, f.Level, PlayerLevel())) return false;
+        if (!SelectionFieldsValid(f.Health, f.UnitFlags, f.Level, PlayerLevel()) || !ProfileTargetAllowed(reader, target)) return false;
 
         /* A unit this run has already given up on must not come back through the selection.
          * The 14:23 run is that bug: the fight refused the friendly peon four times in a row -
@@ -2185,7 +2240,7 @@ internal static class GrindRunner
 
     // Even unfiltered defence must not send a spell after STOP, attachment or
     // target changes. The 70707 session/bar check is independent of faction mode.
-    private static bool FightAttackInputAllowed(WowBReader? reader, GreenMagic.Memory? memory, WowBGuid target, WowBObservedUnit expected, bool enforceFaction, bool requireCombat = false)
+    private static bool FightAttackInputAllowed(WowBReader? reader, GreenMagic.Memory? memory, WowBGuid target, WowBObservedUnit expected, bool enforceFaction, bool requireCombat = false, bool enforceProfile = false)
     {
         if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested || reader == null || memory == null || target.IsEmpty ||
             (requireCombat && (!TryReadGatherCombat(out bool activeCombat) || !activeCombat))) return false;
@@ -2196,6 +2251,11 @@ internal static class GrindRunner
                 if (ObjectManager.WowB != reader || ObjectManager.Wow != memory || reader.ReadTargetGuid() != target ||
                     (reader.IsExperimental70707 && !WowBGrindFactions.Experimental70707BarSafe(reader))) return false;
             }
+            if (enforceProfile && _activeProfileArea != null &&
+                (!Capture(out WowBWorldSnapshot? freshProfile) || freshProfile == null ||
+                 !freshProfile.TryGetSelectedTarget(out WowBObservedUnit freshTarget) ||
+                 freshTarget.Guid != expected.Guid || freshTarget.UnitAddress != expected.UnitAddress ||
+                 freshTarget.RecordAddress != expected.RecordAddress || !ProfileTargetAllowed(reader, freshTarget))) return false;
             return !_stop && !ClickAimAbort.Requested && !RouteRunner.StopRequested &&
                 FactionAttackInputAllowed(reader, expected, enforceFaction) &&
                 (!requireCombat || (TryReadGatherCombat(out bool stillFighting) && stillFighting)) &&
@@ -2267,7 +2327,7 @@ internal static class GrindRunner
             || !reader.TryGetUnitFields(target.UnitAddress, out WowBReader.WowBUnitFields fields)
             || fields.Health == 0) return false;
         if (target.HasPlayerVtable || !SelectionFieldsValid(fields.Health, fields.UnitFlags, fields.Level, PlayerLevel())) return true;
-        if (!WowBGrindFactions.AllowsPull(reader, target, out _)) return true;
+        if (!WowBGrindFactions.AllowsPull(reader, target, out _) || !ProfileTargetAllowed(reader, target)) return true;
         if (_notViable.Contains(target.Guid) || Unreachable(target.Guid)) return true;
         if (Refused(target.Guid) && !InRealCombat()) return true;
         return _tabRefusedUntil.TryGetValue(target.Guid, out int until)
@@ -4017,6 +4077,8 @@ internal static class GrindRunner
 
             double d = ClickAimMath.Len(candidate.Location.X - px, candidate.Location.Y - py);
             if (d > radius) continue;
+            // Unfiltered safety scans still see nearby threats everywhere.
+            if (applyFactionFilter && !ProfileTargetAllowed(reader, candidate, myLevel)) continue;
 
             if (applyFactionFilter && reader != null && !WowBGrindFactions.AllowsPull(reader, candidate, out bool factionUnknown))
             { if (factionUnknown) unread++; continue; }
@@ -4984,6 +5046,7 @@ internal static class GrindRunner
                     !WowBGrindFactions.AllowsPull(reader, candidate, out _) ||
                     !reader.TryGetUnitFields(candidate.UnitAddress, out WowBReader.WowBUnitFields fields) ||
                     !SelectionFieldsValid(fields.Health, fields.UnitFlags, fields.Level, approachLevel) ||
+                    !ProfileTargetAllowed(reader, candidate, approachLevel) ||
                     _notViable.Contains(candidate.Guid) || Refused(candidate.Guid) || Unreachable(candidate.Guid))
                 {
                     ClickAimAbort.Wait(150);
@@ -5123,6 +5186,8 @@ internal static class GrindRunner
             return "target identity changed before defence began; not attacking";
         if ((!defenceOnly || defenceFactionFilter) && !FactionPullStillAllowed(ObjectManager.WowB, expectedPull, target))
             return "target or faction key changed before the pull; not attacking";
+        if (!defenceOnly && !ProfileTargetAllowed(ObjectManager.WowB, target))
+            return "target no longer matches the profile's level or hotspot radius; not attacking";
         WowBGuid defenceTarget = target.Guid;
         lastHealth = Health(target);
         int initialTargetHealth = lastHealth;
@@ -5236,6 +5301,8 @@ internal static class GrindRunner
             { MarkFocusedAttack(target); _focusedDamageObserved = true; }
             if ((!defenceOnly || defenceFactionFilter) && !FactionPullStillAllowed(reader, expectedPull, target))
             { ClickAimKeySteer.ReleaseHeld(); return "faction key or unit identity became unavailable during pull; stopping"; }
+            if (!defenceOnly && !ProfileTargetAllowed(reader, target))
+            { ClickAimKeySteer.ReleaseHeld(); return "target no longer matches the profile's level or hotspot radius; yielding for defence if in combat"; }
 
             WowBObservedUnit me;
             if (!snap.TryGetLocalPlayer(out me)) break;
@@ -5508,7 +5575,7 @@ internal static class GrindRunner
                     if (!ClickAimHealPolicy.ShouldAttemptHeal(heal, healBlocked, freshHeal.Health, freshHeal.MaxHealth,
                         ClickAimSettings.HealBelowPercent, true, HealPowerOk(freshHeal.Power, freshHeal.MaxPower)))
                         continue;
-                    if (!FightAttackInputAllowed(reader, fightMemory, defenceTarget, expectedPull, !defenceOnly || defenceFactionFilter, defenceOnly))
+                    if (!FightAttackInputAllowed(reader, fightMemory, defenceTarget, expectedPull, !defenceOnly || defenceFactionFilter, defenceOnly, !defenceOnly))
                         return YieldForTargetChange(reader, fightMemory, defenceTarget);
                     if (!ClickAimHealPolicy.StillOnBar(heal, ClickAimCombat.ReadBar(reader)))
                     { heal = null; continue; }
@@ -5614,7 +5681,7 @@ internal static class GrindRunner
                 unchecked(Environment.TickCount - lastHealMs), ClickAimCombat.HealVerifyMs, d, AttackRangeYd))
             {
                 ClickAimKeySteer.ReleaseHeld();
-                if (!FightAttackInputAllowed(reader, fightMemory, defenceTarget, expectedPull, !defenceOnly || defenceFactionFilter, defenceOnly))
+                if (!FightAttackInputAllowed(reader, fightMemory, defenceTarget, expectedPull, !defenceOnly || defenceFactionFilter, defenceOnly, !defenceOnly))
                     return YieldForTargetChange(reader, fightMemory, defenceTarget);
                 if (!Capture(out WowBWorldSnapshot? resumeSnap) || resumeSnap == null ||
                     !resumeSnap.TryGetLocalPlayer(out WowBObservedUnit resumePlayer) ||
@@ -5632,7 +5699,7 @@ internal static class GrindRunner
                     resumeTarget.Location.Y - resumePlayer.Location.Y);
                 if (!ClickAimHealPolicy.ReadyPostHealStartAttack(postHealStartPending,
                     unchecked(Environment.TickCount - lastHealMs), ClickAimCombat.HealVerifyMs, resumeDistance, AttackRangeYd)) continue;
-                if (!FightAttackInputAllowed(reader, fightMemory, defenceTarget, expectedPull, !defenceOnly || defenceFactionFilter, defenceOnly))
+                if (!FightAttackInputAllowed(reader, fightMemory, defenceTarget, expectedPull, !defenceOnly || defenceFactionFilter, defenceOnly, !defenceOnly))
                     return YieldForTargetChange(reader, fightMemory, defenceTarget);
                 if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested ||
                     ClickAimSettings.PostHealStartAttackVk != postHealStartKey || !ClickAimSettings.ValidStartAttackVk(postHealStartKey))
@@ -5653,7 +5720,7 @@ internal static class GrindRunner
             {
                 lastCombatBuffCheckMs = Environment.TickCount;
                 if (Buffs.TryApplyInCombat(hwnd, () => _stop, me,
-                    () => FightAttackInputAllowed(reader, fightMemory, defenceTarget, expectedPull, !defenceOnly || defenceFactionFilter, defenceOnly),
+                    () => FightAttackInputAllowed(reader, fightMemory, defenceTarget, expectedPull, !defenceOnly || defenceFactionFilter, defenceOnly, !defenceOnly),
                     () => _presses++))
                 {
                     presses++;
@@ -5674,7 +5741,7 @@ internal static class GrindRunner
                 ClickAimKeySteer.ReleaseHeld();
                 if (!ClickAimKeySteer.Face(target.Location.X, target.Location.Y, hwnd, 45.0, 3))
                 { ClickAimAbort.Wait(150); continue; }
-                if (!FightAttackInputAllowed(reader, fightMemory, defenceTarget, expectedPull, !defenceOnly || defenceFactionFilter, defenceOnly))
+                if (!FightAttackInputAllowed(reader, fightMemory, defenceTarget, expectedPull, !defenceOnly || defenceFactionFilter, defenceOnly, !defenceOnly))
                     return YieldForTargetChange(reader, fightMemory, defenceTarget);
                 // Facing can take time: re-read identity, health and distance before the key.
                 if (!Capture(out WowBWorldSnapshot? attackSnap) || attackSnap == null ||
@@ -5686,7 +5753,7 @@ internal static class GrindRunner
                     !DefenceFieldsValid(attackFields.Health, attackFields.UnitFlags, false)) continue;
                 double attackDistance = ClickAimMath.Len(attackTarget.Location.X - attackPlayer.Location.X, attackTarget.Location.Y - attackPlayer.Location.Y);
                 if (!ClickAimClassRotation.MayPressConservativeAttack(shockAutoPlan, attackPressed, false, false, attackDistance, AttackRangeYd)) continue;
-                if (!FightAttackInputAllowed(reader, fightMemory, defenceTarget, expectedPull, !defenceOnly || defenceFactionFilter, defenceOnly))
+                if (!FightAttackInputAllowed(reader, fightMemory, defenceTarget, expectedPull, !defenceOnly || defenceFactionFilter, defenceOnly, !defenceOnly))
                     return YieldForTargetChange(reader, fightMemory, defenceTarget);
                 if (auto == null || !auto.IsAutoAttack || !auto.IsAttack || auto.KeyVk == 0) continue;
                 ClickAimInput.TapKey(hwnd, auto.KeyVk, 40);
@@ -5723,7 +5790,7 @@ internal static class GrindRunner
                     continue;
                 }
 
-                if (!FightAttackInputAllowed(reader, fightMemory, defenceTarget, expectedPull, !defenceOnly || defenceFactionFilter, defenceOnly))
+                if (!FightAttackInputAllowed(reader, fightMemory, defenceTarget, expectedPull, !defenceOnly || defenceFactionFilter, defenceOnly, !defenceOnly))
                 { return YieldForTargetChange(reader, fightMemory, defenceTarget); }
                 if (!dot.IsDot || !ClickAimSettings.UseDamageOverTime) return "DoT role or setting changed; attack withheld";
                 if (!ResourceInputStillAllowed(reader)) continue;
@@ -5854,7 +5921,7 @@ internal static class GrindRunner
                     continue;
                 }
 
-                if (!FightAttackInputAllowed(reader, fightMemory, defenceTarget, expectedPull, !defenceOnly || defenceFactionFilter, defenceOnly))
+                if (!FightAttackInputAllowed(reader, fightMemory, defenceTarget, expectedPull, !defenceOnly || defenceFactionFilter, defenceOnly, !defenceOnly))
                 { return YieldForTargetChange(reader, fightMemory, defenceTarget); }
                 if (supplemental ? !castDamage!.IsDamage : (damageWasDot ? !castDamage!.IsDot || !ClickAimSettings.UseDamageOverTime : !castDamage!.IsDamage))
                     return "damage role or DoT setting changed; attack withheld";
@@ -6104,7 +6171,7 @@ internal static class GrindRunner
                       && sinceDamageMs >= (attackPressed ? MeleeSwingQuietMs * 2 : MeleeSwingQuietMs);
                 if (pressAttack)
                 {
-                    if (!FightAttackInputAllowed(reader, fightMemory, defenceTarget, expectedPull, !defenceOnly || defenceFactionFilter, defenceOnly))
+                    if (!FightAttackInputAllowed(reader, fightMemory, defenceTarget, expectedPull, !defenceOnly || defenceFactionFilter, defenceOnly, !defenceOnly))
                     { return YieldForTargetChange(reader, fightMemory, defenceTarget); }
                     if (!auto.IsAttack) return "Attack role changed; attack withheld";
                     ClickAimInput.TapKey(hwnd, auto.KeyVk, 40);
@@ -6147,7 +6214,7 @@ internal static class GrindRunner
                 && ClickAimClassRotation.Ready(_rotationCooldowns, rotation.MeleeGroup, Environment.TickCount)
                 && (rotation.MeleeIntervalMs == 0 || myMana >= PowerForCast(meleeHit, 10)))
             {
-                if (!FightAttackInputAllowed(reader, fightMemory, defenceTarget, expectedPull, !defenceOnly || defenceFactionFilter, defenceOnly))
+                if (!FightAttackInputAllowed(reader, fightMemory, defenceTarget, expectedPull, !defenceOnly || defenceFactionFilter, defenceOnly, !defenceOnly))
                 { return YieldForTargetChange(reader, fightMemory, defenceTarget); }
                 if (!meleeHit.IsDamage) return "melee ability role changed; attack withheld";
                 if (!ResourceInputStillAllowed(reader)) continue;

@@ -36,15 +36,18 @@ public sealed class RoutePoint
 /// One <c>&lt;GrindArea&gt;</c> from a levelling profile: the hotspots to circle and the
 /// level band the profile wants killed there.
 ///
-/// A grind profile is not a route: the hotspots are a LOOP you walk around forever,
-/// killing whatever you meet. That is why the level band matters - the profile's own
-/// author encoded "these mobs are worth killing at level 14" as TargetMinLevel /
-/// TargetMaxLevel, and the factions as the mobs' faction ids.
+/// A grind profile is a loop: the enclosing SubProfile's MinLevel / MaxLevel
+/// select an area for the player, while TargetMinLevel / TargetMaxLevel and
+/// Factions restrict voluntary targets within its hotspot radius.
 /// </summary>
 public sealed class ProfileGrindArea
 {
     /// <summary>The SubProfile's name, which is how these appear in the profile.</summary>
     public string Name { get; set; } = "";
+
+    /// <summary>Player level band selecting this SubProfile (0 = unstated).</summary>
+    public int PlayerMinLevel { get; set; }
+    public int PlayerMaxLevel { get; set; }
 
     /// <summary>Kill things at least this level (0 = unstated).</summary>
     public int TargetMinLevel { get; set; }
@@ -54,6 +57,10 @@ public sealed class ProfileGrindArea
 
     /// <summary>The profile's faction ids, space separated, as written.</summary>
     public string Factions { get; set; } = "";
+
+    // Extra safety from profile AvoidMobs; GUID entry extraction is a candidate.
+    public HashSet<uint> AvoidEntries { get; } = new HashSet<uint>();
+    public bool InvalidProfileData { get; set; }
 
     public List<RoutePoint> Hotspots { get; set; } = new List<RoutePoint>();
 
@@ -141,10 +148,21 @@ public static class ProfileRoute
              * selection off and the loop grinds whatever is nearest - the exact failure the
              * bands exist to prevent - so all four are read. */
             int level;
+            if (sub != null)
+            {
+                if (TryReadLevel(sub.Element("MinLevel"), out level) || TryReadAttributeInt(sub, "MinLevel", out level)) area.PlayerMinLevel = level;
+                if (TryReadLevel(sub.Element("MaxLevel"), out level) || TryReadAttributeInt(sub, "MaxLevel", out level)) area.PlayerMaxLevel = level;
+            }
             if (TryReadBand(grind, sub, "TargetMinLevel", out level)) area.TargetMinLevel = level;
             if (TryReadBand(grind, sub, "TargetMaxLevel", out level)) area.TargetMaxLevel = level;
             if (area.TargetMinLevel == 0 && TryReadBand(grind, sub, "MinLevel", out level)) area.TargetMinLevel = level;
             if (area.TargetMaxLevel == 0 && TryReadBand(grind, sub, "MaxLevel", out level)) area.TargetMaxLevel = level;
+
+            area.InvalidProfileData = InvalidLevelData(grind, "TargetMinLevel", "TargetMaxLevel", "MinLevel", "MaxLevel") ||
+                                      InvalidLevelData(sub, "TargetMinLevel", "TargetMaxLevel", "MinLevel", "MaxLevel");
+            ReadAvoidEntries(doc.Root, area);
+            ReadAvoidEntries(sub, area);
+            ReadAvoidEntries(grind, area);
 
             area.Factions = ((string?)grind.Element("Factions") ?? "").Trim();
             if (area.Factions.Length == 0 && sub != null)
@@ -232,10 +250,33 @@ public static class ProfileRoute
     /// as element text, not as an attribute, so this is a different reader from
     /// <see cref="TryReadAttribute(XElement, string, out double)"/>.
     /// </summary>
-    /// <summary>
-    /// One level of a band: an element or an attribute on the grind area, else on the
-    /// enclosing SubProfile, in either the long or the short spelling.
-    /// </summary>
+    // Malformed explicit bands must not silently fall back to another value.
+    private static bool InvalidLevelData(XElement? owner, params string[] names)
+    {
+        if (owner == null) return false;
+        foreach (string name in names)
+        {
+            XElement? element = owner.Element(name);
+            XAttribute? attribute = owner.Attribute(name);
+            if (element != null && (!TryReadLevel(element, out int value) || value < 1 || value > 255)) return true;
+            if (attribute != null && (!TryReadAttributeInt(owner, name, out int attrValue) || attrValue < 1 || attrValue > 255)) return true;
+        }
+        return false;
+    }
+
+    private static void ReadAvoidEntries(XElement? owner, ProfileGrindArea area)
+    {
+        if (owner == null) return;
+        foreach (XElement list in owner.Elements("AvoidMobs"))
+        foreach (XElement mob in list.Elements("Mob"))
+        {
+            if (!uint.TryParse((string?)mob.Attribute("Entry"), NumberStyles.None, CultureInfo.InvariantCulture, out uint entry) || entry == 0)
+                area.InvalidProfileData = true;
+            else area.AvoidEntries.Add(entry);
+        }
+    }
+
+    // One level of a band: element or attribute on the grind area, then SubProfile.
     private static bool TryReadBand(XElement grind, XElement? sub, string name, out int value)
     {
         value = 0;

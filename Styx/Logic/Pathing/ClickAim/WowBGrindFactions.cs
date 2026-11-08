@@ -30,7 +30,7 @@ internal static class WowBGrindFactions
                Convert.ToHexString(lookup) == LookupSignature;
     }
 
-    public static bool PrepareForGrind(out string reason)
+    public static bool PrepareForGrind(out string reason, GrindFactionRules? profileRules = null)
     {
         reason = "another session is starting";
         if (System.Threading.Interlocked.CompareExchange(ref _preparing, 1, 0) != 0) return false;
@@ -38,15 +38,17 @@ internal static class WowBGrindFactions
         {
             if (_boundReader?.HasExperimentalGrindSession == true)
             { reason = "another " + _boundReader.ExperimentalBuildNumber + " session is active"; return false; }
-            return PrepareCore(out reason);
+            return PrepareCore(out reason, profileRules);
         }
         finally { System.Threading.Volatile.Write(ref _preparing, 0); }
     }
 
-    private static bool PrepareCore(out string reason)
+    private static bool PrepareCore(out string reason, GrindFactionRules? profileRules)
     {
         _boundMemory = null; _boundReader = null; _experimentalBar = null; _boundPlayer = default; reason = "";
-        if (!GrindFactionSettings.TryLoad(out GrindFactionRules rules, out reason)) return false;
+        GrindFactionRules rules;
+        if (profileRules != null) rules = profileRules;
+        else if (!GrindFactionSettings.TryLoad(out rules, out reason)) return false;
         if (ObjectManager.WowB?.IsExperimental70707 == true)
             return PrepareExperimental70707(rules, out reason);
         if (!rules.Enabled) { GrindFactionSettings.Activate(rules); return true; }

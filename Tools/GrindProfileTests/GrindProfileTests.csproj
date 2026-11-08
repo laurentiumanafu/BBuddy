@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../Styx/Logic/Pathing/ClickAim/ProfileRoute.cs" Link="ProfileRoute.cs" />
+    <Compile Include="../../Styx/Logic/Pathing/ClickAim/GrindProfilePolicy.cs" Link="GrindProfilePolicy.cs" />
+    <Compile Include="../../Styx/Logic/Pathing/ClickAim/GrindFactionSettings.cs" Link="GrindFactionSettings.cs" />
+  </ItemGroup>
+</Project>
