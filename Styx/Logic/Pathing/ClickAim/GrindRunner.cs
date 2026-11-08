@@ -5195,36 +5195,41 @@ internal static class GrindRunner
             ObjectManager.WowB == reader && TryReadGatherCombat(out fighting) && fighting && targetSafe();
     }
 
-    // Explicitly approved heuristic: two nearby live NPC candidates, NOT two
-    // confirmed attackers. Never change selection or run during travel.
+    // Two nearby live NPC candidates matching the active Grind profile factions,
+    // NOT confirmed attackers. Never change selection or run during travel.
     private static bool TryStoneclaw(IntPtr hwnd, WowBReader reader, GreenMagic.Memory memory,
         WowBObservedUnit expectedPlayer, WowBObservedUnit expectedTarget, Func<bool> targetSafe)
     {
         if (!reader.IsExperimental70862 || _stop || ClickAimAbort.Requested || RouteRunner.StopRequested ||
             Environment.TickCount64 < _stoneclawNextAttempt) return false;
+        ProfileGrindArea? area = _activeProfileArea;
+        if (area == null || !GrindFactionRules.TryCreate(GrindFactionMode.Allow, area.Factions, "",
+                out GrindFactionRules factions, out _)) return false;
+        string factionText = area.Factions;
         try
         {
             using var uncached = memory.TemporaryCacheState(false);
             ClickAimAction? action = null;
             foreach (ClickAimAction candidate in ClickAimCombat.ReadBar(reader))
                 if (WowBStoneclawPolicy.Eligible(candidate)) { action = candidate; break; }
-            if (action == null || !reader.TryReadMapId(out uint map) || map == uint.MaxValue ||
+            if (action == null || !reader.TryReadMapId(out uint map) || map == uint.MaxValue || map != _profileSessionMap ||
                 !StoneclawSnapshot(reader, memory, hwnd, expectedPlayer, expectedTarget, map,
                     WowBStoneclawPolicy.ManaEstimate(action.Id), targetSafe, out WowBWorldSnapshot? first, out WowBObservedUnit player) ||
-                first == null || !WowBStoneclawPolicy.FindPair(reader, first, player, out WowBObservedUnit a, out WowBObservedUnit b)) return false;
+                first == null || !WowBStoneclawPolicy.FindPair(reader, first, player, factions, out WowBObservedUnit a, out WowBObservedUnit b)) return false;
             if (!StoneclawSnapshot(reader, memory, hwnd, expectedPlayer, expectedTarget, map,
                     WowBStoneclawPolicy.ManaEstimate(action.Id), targetSafe, out WowBWorldSnapshot? second, out player) ||
-                second == null || !WowBStoneclawPolicy.SamePairStillNear(reader, second, player, a, b) ||
+                second == null || !WowBStoneclawPolicy.SamePairStillNear(reader, second, player, a, b, factions) ||
                 !StoneclawSlotCurrent(reader, action) || !targetSafe() || !TryReadGatherCombat(out bool fighting) || !fighting ||
                 _stop || ClickAimAbort.Requested || RouteRunner.StopRequested || ObjectManager.Wow != memory || ObjectManager.WowB != reader ||
-                !reader.TryReadMapId(out uint finalMap) || finalMap != map || Environment.TickCount64 < _stoneclawNextAttempt) return false;
+                !reader.TryReadMapId(out uint finalMap) || finalMap != map || _profileSessionMap != map ||
+                _activeProfileArea != area || area.Factions != factionText || Environment.TickCount64 < _stoneclawNextAttempt) return false;
             // Reserve before sending: TapKey cannot prove delivery and might
             // fail after key-down. Avoid rapid retries and Earth-slot replacement.
             _stoneclawNextAttempt = Environment.TickCount64 + WowBStoneclawPolicy.RetryMs;
             Buffs.ReserveEarthAfterStoneclaw();
             ClickAimInput.TapKey(hwnd, action.KeyVk, 40);
             Logging.Write("[Grind] attempted " + action.Name + " (slot " + action.Slot +
-                ") because two nearby NPC candidates were observed; attacker identity, hostility and cast success are unverified; Earth buff held briefly");
+                ") because two NPC candidates less than 10 yd away matched active Grind profile faction keys; attacker identity, hostility and cast success are unverified; Earth buff held briefly");
             return true;
         }
         catch { return false; }
@@ -5917,7 +5922,7 @@ internal static class GrindRunner
             }
 
             // Defensive Stoneclaw has priority over ordinary Earth buffs. The
-            // 70862-only nearby-NPC heuristic is explicitly user-approved.
+            // 70862-only proximity heuristic counts active Grind profile factions.
             if (reader.IsExperimental70862 && unchecked(Environment.TickCount - lastStoneclawCheckMs) >= 1000 &&
                 (lastCastMs == 0 || unchecked(Environment.TickCount - lastCastMs) >= ClickAimCombat.CastSettleMs) &&
                 (lastHealMs == 0 || unchecked(Environment.TickCount - lastHealMs) >= ClickAimCombat.CastSettleMs))

@@ -25,7 +25,7 @@ namespace Styx.WoWInternals {
   public struct WowBUnitFields {public uint Health,MaxHealth,Power,UnitFlags;public int? PlayerPowerTypeCandidate;}
   public bool IsExperimental70862=true, Combat=true, BarSafe=true, Ghost, MapValid=true;
   public int Captures; public Action<int>? OnCapture; public uint Map=1;
-  public WowBWorldSnapshot Snapshot=new(); public Dictionary<ulong,WowBUnitFields> Fields=new();
+  public WowBWorldSnapshot Snapshot=new(); public Dictionary<ulong,WowBUnitFields> Fields=new(); public Dictionary<ulong,uint> Factions=new();
   public bool TryReadMapId(out uint m){m=Map;return MapValid;}
   public bool TryCaptureWorldSnapshot(out WowBWorldSnapshot? s){Captures++;OnCapture?.Invoke(Captures);s=Snapshot;return true;}
   public bool TryGetUnitFields(ulong address,out WowBUnitFields f)=>Fields.TryGetValue(address,out f);
@@ -33,6 +33,17 @@ namespace Styx.WoWInternals {
  static class ObjectManager{public static WowBReader? WowB;public static Memory? Wow;}
 }
 namespace Styx.Logic.Pathing {
+ enum GrindFactionMode { Off, Allow, Blacklist }
+ sealed class ProfileGrindArea { public string Factions="31 44"; }
+ sealed class GrindFactionRules {
+  public GrindFactionMode Mode; readonly HashSet<uint> ids = new();
+  public bool Allows(bool readable,uint key)=>readable&&ids.Contains(key);
+  public static bool TryCreate(GrindFactionMode mode,string text,string blacklist,out GrindFactionRules rules,out string error) {
+   rules=new(){Mode=mode};error="";
+   foreach(var item in text.Split(' ',StringSplitOptions.RemoveEmptyEntries)){if(!uint.TryParse(item,out uint n)||n==0)return false;rules.ids.Add(n);}
+   return mode==GrindFactionMode.Allow&&rules.ids.Count>0;
+  }
+ }
  enum ClickAimActionKind{Spell,Item}
  enum ClickAimSpellRole{Unknown,Utility,Buff,Ignore,Damage}
  sealed class ClickAimAction{public int Id,KeyVk,Slot;public ulong Raw;public string Name="Stoneclaw";public ClickAimActionKind Kind;}
@@ -45,12 +56,13 @@ namespace Styx.Logic.Pathing {
  static class RouteRunner {public static bool StopRequested;}
  static class WowBGrindFactions {
   public static bool Experimental70707BarSafe(WowBReader r)=>r.BarSafe;
+  public static bool TryReadBoundKey(WowBReader r,WowBObservedUnit u,out uint key)=>r.Factions.TryGetValue(u.UnitAddress,out key)&&key!=0;
   public static bool TryReadGhostFlagCandidate(Memory m,WowBReader r,WowBObservedUnit p,out bool ghost){ghost=r.Ghost;return true;}
  }
  static class ClickAimInput {public static int Keys;public static void TapKey(IntPtr h,int key,int ms){Keys++;}}
  sealed class BuffControl {public int Holds; public void ReserveEarthAfterStoneclaw(){Holds++;}}
  static class GrindRunner {
-  static bool _stop;static readonly BuffControl Buffs=new();
+  static bool _stop;static readonly BuffControl Buffs=new(); internal static ProfileGrindArea? _activeProfileArea = new(); internal static uint _profileSessionMap=1;
   static bool CheckDeathCheckpoint(bool trackerOnly=false)=>false;
   static bool TryReadGatherCombat(out bool f){f=ObjectManager.WowB!.Combat;return true;}
   static bool DefenceFieldsValid(uint hp,uint flags,bool refused)=>hp>0&&(flags&(0x2|0x100|0x200))==0&&!refused;
@@ -68,18 +80,29 @@ namespace Styx.Logic.Pathing {
    r.Snapshot.Player=me;r.Snapshot.Target=target;r.Snapshot.Units.AddRange(new[]{me,target,other});
    r.Fields[me.UnitAddress]=new(){Health=100,MaxHealth=100,Power=100,PlayerPowerTypeCandidate=0};
    r.Fields[target.UnitAddress]=new(){Health=80,MaxHealth=100};r.Fields[other.UnitAddress]=new(){Health=80,MaxHealth=100};
+   r.Factions[target.UnitAddress]=31;r.Factions[other.UnitAddress]=44;
    ClickAimCombat.Bar.Add(new(){Id=6390,Slot=2,KeyVk=0x32,Raw=6390});Func<bool> safe=()=>true;
-   GrindRunner.Reset();r.Combat=false;Check(!GrindRunner.Run(r,m,me,target,safe),"out of combat");r.Combat=true;
+   GrindRunner.Reset();
+   GrindRunner._activeProfileArea=null;Check(!GrindRunner.Run(r,m,me,target,safe),"no active Grind profile");
+   GrindRunner._activeProfileArea=new(){Factions=""};Check(!GrindRunner.Run(r,m,me,target,safe),"empty profile list");
+   GrindRunner._activeProfileArea=new();GrindRunner._profileSessionMap=2;Check(!GrindRunner.Run(r,m,me,target,safe),"wrong profile map");GrindRunner._profileSessionMap=1;
+   r.Factions[other.UnitAddress]=66;Check(!GrindRunner.Run(r,m,me,target,safe),"non-profile faction");
+   r.Factions.Remove(other.UnitAddress);Check(!GrindRunner.Run(r,m,me,target,safe),"unreadable faction");r.Factions[other.UnitAddress]=44;
+   r.Combat=false;Check(!GrindRunner.Run(r,m,me,target,safe),"out of combat");r.Combat=true;
    r.Snapshot.Units.Remove(other);Check(!GrindRunner.Run(r,m,me,target,safe),"one candidate");r.Snapshot.Units.Add(other);
    var corpse=r.Fields[other.UnitAddress];corpse.Health=0;r.Fields[other.UnitAddress]=corpse;Check(!GrindRunner.Run(r,m,me,target,safe),"dead other");
-   corpse.Health=5;corpse.MaxHealth=5;r.Fields[other.UnitAddress]=corpse;Check(!GrindRunner.Run(r,m,me,target,safe),"small-health totem-like candidate");
    corpse.Health=80;corpse.MaxHealth=100;r.Fields[other.UnitAddress]=corpse;
-   var far=other;far.Location.Z=9;r.Snapshot.Units[2]=far;Check(!GrindRunner.Run(r,m,me,target,safe),"3D range");r.Snapshot.Units[2]=other;
+   var far=other;far.Location.X=0;far.Location.Z=10;r.Snapshot.Units[2]=far;Check(!GrindRunner.Run(r,m,me,target,safe),"exactly ten yards is excluded");far.Location.Z=10.01;r.Snapshot.Units[2]=far;Check(!GrindRunner.Run(r,m,me,target,safe),"over ten yards excluded");r.Snapshot.Units[2]=other;
    var friend=other;friend.HasPlayerVtable=true;r.Snapshot.Units[2]=friend;Check(!GrindRunner.Run(r,m,me,target,safe),"player excluded");r.Snapshot.Units[2]=other;
    ClickAimCombat.Override=ClickAimSpellRole.Ignore;Check(!GrindRunner.Run(r,m,me,target,safe),"ignore override");ClickAimCombat.Override=ClickAimSpellRole.Unknown;
    var self=r.Fields[me.UnitAddress];self.Power=29;r.Fields[me.UnitAddress]=self;Check(!GrindRunner.Run(r,m,me,target,safe),"low mana");self.Power=100;r.Fields[me.UnitAddress]=self;
    r.Captures=0;r.OnCapture=i=>{if(i==2){var u=r.Snapshot.Units[2];u.RecordAddress++;r.Snapshot.Units[2]=u;}};
    Check(!GrindRunner.Run(r,m,me,target,safe),"changed NPC identity");r.OnCapture=null;r.Snapshot.Units[2]=other;
+   r.Captures=0;r.OnCapture=i=>{if(i==2)r.Factions[other.UnitAddress]=66;};
+   Check(!GrindRunner.Run(r,m,me,target,safe),"faction changed before input");r.OnCapture=null;r.Factions[other.UnitAddress]=44;
+   r.Captures=0;r.OnCapture=i=>{if(i==2)GrindRunner._activeProfileArea=new();};
+   Check(!GrindRunner.Run(r,m,me,target,safe),"profile changed before input");r.OnCapture=null;
+   other.Location.X=9.99;r.Snapshot.Units[2]=other;
    Check(!GrindRunner.Run(r,m,me,target,()=>false),"target guard");
    r.Captures=0;r.OnCapture=i=>{if(i==2)r.Combat=false;};Check(!GrindRunner.Run(r,m,me,target,safe),"combat ends before input");r.OnCapture=null;r.Combat=true;
    Check(GrindRunner.Run(r,m,me,target,safe)&&ClickAimInput.Keys==1&&GrindRunner.Holds==1,"two candidates cause one attempt and reserve Earth");

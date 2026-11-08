@@ -17,19 +17,19 @@ class Stoneclaw(unittest.TestCase):
   self.assertIn('WowBStoneclawPolicy.ManaEstimate(action.Id) != 0',B)
   self.assertIn('role == ClickAimSpellRole.Unknown || role == ClickAimSpellRole.Utility || role == ClickAimSpellRole.Buff',P)
  def test_pair_is_bounded_not_claimed_as_attackers(self):
-  for t in ('RadiusYd = 8.0', 'Math.Sqrt(dx * dx + dy * dy + dz * dz)', 'unit.HasPlayerVtable',
-            'fields.Health > 0', 'fields.MaxHealth > 10', '!seen.Add(unit.Guid)', 'SamePairStillNear',
+  for t in ('RadiusYd = 10.0', 'd >= RadiusYd', 'Math.Sqrt(dx * dx + dy * dy + dz * dz)', 'unit.HasPlayerVtable',
+            'fields.Health > 0', 'fields.MaxHealth > 0', 'WowBGrindFactions.TryReadBoundKey', 'factions.Allows(true, key)', 'factions.Mode != GrindFactionMode.Allow', '!seen.Add(unit.Guid)', 'SamePairStillNear',
             'SameIdentity(first, a)', 'SameIdentity(second, b)', 'attacks the player'):
    self.assertIn(t,P)
  def test_guarded_combat_cast_and_backoff(self):
   cast=section(G,'private static bool TryStoneclaw(', '    // Key 1 is an explicit')
-  safe=section(G,'private static bool StoneclawSnapshot(', '    // Explicitly approved heuristic')
+  safe=section(G,'private static bool StoneclawSnapshot(', '    // Two nearby live NPC candidates')
   for t in ('TryReadGatherCombat(out bool fighting) || !fighting','!targetSafe()',
             'CheckDeathCheckpoint(trackerOnly: true)','!WowBGrindFactions.Experimental70707BarSafe(reader)',
             'me.PlayerPowerTypeCandidate != 0','me.Power < mana','SameIdentity(player, expectedPlayer)',
             'SameIdentity(target, expectedTarget)','currentMap != map'):
    self.assertIn(t,safe)
-  for t in ('!reader.IsExperimental70862','StoneclawSnapshot(', 'WowBStoneclawPolicy.FindPair(',
+  for t in ('!reader.IsExperimental70862', 'area == null', 'GrindFactionRules.TryCreate(GrindFactionMode.Allow, area.Factions', 'map != _profileSessionMap', '_activeProfileArea != area', 'area.Factions != factionText', 'StoneclawSnapshot(', 'WowBStoneclawPolicy.FindPair(',
             'WowBStoneclawPolicy.SamePairStillNear(', 'StoneclawSlotCurrent(', '!targetSafe()',
             'WowBStoneclawPolicy.RetryMs', 'Buffs.ReserveEarthAfterStoneclaw()',
             'ClickAimInput.TapKey(hwnd, action.KeyVk, 40)'):
@@ -48,7 +48,7 @@ class Stoneclaw(unittest.TestCase):
   self.assertIn('defenceTarget, expectedPull,\n                        !defenceOnly || defenceFactionFilter, true, !defenceOnly',fight)
  def test_clear_disclosure(self):
   text=read('STONECLAW_70862.md')
-  for t in ('not attacker detection','friendly, neutral, idle or summoned','once per 30 seconds',
+  for t in ('not attacker detection','friendly, neutral, idle or summoned', 'less than 10 yards', 'no active Grind profile','once per 30 seconds',
             'for 20 seconds','Ignore','normal first-action-bar'):
    self.assertIn(t,text)
 if __name__=='__main__':unittest.main()
