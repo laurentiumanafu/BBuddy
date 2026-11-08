@@ -1105,7 +1105,7 @@ internal static class GrindRunner
                  * circle a hotspot is cleared in, so "monsters between hotspots" are monsters
                  * this stops for. */
                 bool resourceInterrupt = false, vendorInterrupt = false;
-                bool skinInterrupt = false, barInterrupt = false, buffInterrupt = false;
+                bool skinInterrupt = false, barInterrupt = false;
                 int lastFightCheck = unchecked(Environment.TickCount - 500);
                 int lastRoamMapCheck = unchecked(Environment.TickCount - 500);
                 int lastSkinCheck = unchecked(Environment.TickCount - 1000);
@@ -1125,8 +1125,6 @@ internal static class GrindRunner
                         if (VendorDue()) { vendorInterrupt = true; return true; }
                         if (FightNeeded(hwnd, SearchYd)) return true;
                     }
-                    if (Buffs.TotemNeedsAttention(hwnd, () => _stop))
-                    { buffInterrupt = true; return true; }
                     if (gatherDuringGrind && GatherRunner.HasGrindResource(GatherAreaSafe))
                     { resourceInterrupt = true; return true; }
                     if (GatherSettings.SkinNearby && unchecked(Environment.TickCount - lastSkinCheck) >= 1000)
@@ -1158,12 +1156,6 @@ internal static class GrindRunner
                     {
                         if (roam == null) index--;
                         Logging.Write("[Grind] vendor trip due; pausing the hotspot leg before the next pull");
-                        continue;
-                    }
-                    if (buffInterrupt)
-                    {
-                        if (roam == null) index--;
-                        Logging.Write("[Buff] missing totem effect; pausing the hotspot leg for a guarded recheck");
                         continue;
                     }
                     if (resourceInterrupt)
@@ -2566,9 +2558,6 @@ internal static class GrindRunner
 
     internal static bool BuffForGather(IntPtr hwnd, ClickAimMover mover, Func<bool> stopped)
         => Buffs.TryApply(hwnd, stopped, () => StopForBuff(hwnd, mover));
-
-    internal static bool TotemNeedsAttention(IntPtr hwnd, Func<bool> stopped)
-        => Buffs.TotemNeedsAttention(hwnd, stopped);
 
     // ------------------------------------------------------------------ the heal's price
 

@@ -21,13 +21,13 @@ internal sealed class ClickAimBuffController
     private readonly ClickAimBuffSchedule _schedule = new ClickAimBuffSchedule();
     private readonly Func<long> _clock;
     private readonly Dictionary<int, string> _reportedAuraState = new Dictionary<int, string>();
-    private long _nextScan, _nextTotemWalkCheck;
+    private long _nextScan;
 
     internal ClickAimBuffController() : this(() => Environment.TickCount64) { }
     internal ClickAimBuffController(Func<long> clock) { _clock = clock; }
 
     // New run or confirmed resurrection: the next quiet opportunity starts fresh.
-    internal void Reset() { _schedule.Reset(); _reportedAuraState.Clear(); _nextScan = 0; _nextTotemWalkCheck = 0; }
+    internal void Reset() { _schedule.Reset(); _reportedAuraState.Clear(); _nextScan = 0; }
 
     private void ReportAura(ClickAimAction action, int? remaining)
     {
@@ -105,32 +105,6 @@ internal sealed class ClickAimBuffController
         catch { return false; }
     }
 
-    // Movement callbacks only ask whether to return to the normal outer loop;
-    // they never cast, nest a route or bypass combat/vendor priority.
-    internal bool TotemNeedsAttention(IntPtr hwnd, Func<bool> stopped)
-    {
-        long now = _clock();
-        if (now < _nextTotemWalkCheck || now < _nextScan || stopped() || ClickAimAbort.Requested ||
-            RouteRunner.StopRequested || !ClickAimSettings.UseBuffs) return false;
-        _nextTotemWalkCheck = now + ScanIntervalMs;
-        Memory? memory = ObjectManager.Wow;
-        WowBReader? reader = ObjectManager.WowB;
-        if (memory == null || reader == null || !reader.IsExperimental70862 || hwnd == IntPtr.Zero) return false;
-        try
-        {
-            if (!TryQuietPlayer(memory, reader, hwnd, stopped, out WowBObservedUnit player, out uint map)) return false;
-            List<ClickAimAction> bar = ClickAimCombat.ReadBar(reader);
-            if (!bar.Exists(action => Eligible(action) && TotemSupported(reader, action))) return false;
-            WowBTotemAuraCandidate? aura = WowBTotemAuraCandidate.Capture(memory, reader, player);
-            if (!SameQuietPlayer(memory, reader, hwnd, stopped, player, map)) return false;
-            foreach (ClickAimAction action in bar)
-                if (Eligible(action) && TotemSupported(reader, action) && TotemDue(action, aura, now) &&
-                    TotemManaEnough(reader, player, action) && SameSlot(action, ClickAimCombat.ReadBar(reader))) return true;
-        }
-        catch { }
-        return false;
-    }
-
     private void ReportTotem(ClickAimAction action, WowBTotemAuraCandidate? aura)
     {
         bool? active = aura?.Active(action.Id);
@@ -197,6 +171,7 @@ internal sealed class ClickAimBuffController
                 if (minimum == 0 || mana < minimum || !Eligible(action)) continue;
                 if (TotemSupported(reader, action))
                 {
+                    ReportTotem(action, totemAura);
                     if (TotemManaEnough(reader, expectedPlayer, action) && TotemDue(action, totemAura, _clock())) { buff = action; break; }
                     continue;
                 }
@@ -243,18 +218,12 @@ internal sealed class ClickAimBuffController
         var seen = new HashSet<int>();
         bool hasSupportedAura = reader.IsExperimental70707 && bar.Exists(action => Eligible(action) && WowBInlineAuraCandidate.Supported(action.Id));
         WowBInlineAuraCandidate? aura = hasSupportedAura ? WowBInlineAuraCandidate.Capture(memory, player) : null;
-        WowBTotemAuraCandidate? totemAura = reader.IsExperimental70862 && bar.Exists(action => Eligible(action) && TotemSupported(reader, action))
-            ? WowBTotemAuraCandidate.Capture(memory, reader, player) : null;
         foreach (ClickAimAction action in bar)
         {
             if (!Eligible(action) || !seen.Add(action.Id)) continue;
-            if (WowBTotemAuraCandidate.EffectForCast(action.Id) != 0)
-            {
-                if (!TotemSupported(reader, action)) continue;
-                ReportTotem(action, totemAura);
-                if (TotemDue(action, totemAura, now) && TotemManaEnough(reader, player, action)) due.Add(action);
-                continue;
-            }
+            // These exact totem spells are combat-only, even when their
+            // role was manually set to Buff. Never fall back to the quiet timer.
+            if (WowBTotemAuraCandidate.EffectForCast(action.Id) != 0) continue;
             int? remaining = aura?.Remaining(action.Id);
             if (reader.IsExperimental70707 && WowBInlineAuraCandidate.Supported(action.Id)) ReportAura(action, remaining);
             if (_schedule.Due(action.Id, now, remaining)) due.Add(action);
@@ -278,22 +247,14 @@ internal sealed class ClickAimBuffController
             {
                 if (!SameQuietPlayer(memory, reader, hwnd, stopped, player, map) || reader.ReadTargetGuid() != selected ||
                     !SameSlot(action, ClickAimCombat.ReadBar(reader)) || !Allowed(memory, reader, hwnd, stopped)) break;
-                // Re-read between keys. Unknown totem effects withhold the
-                // key; older inline buffs retain their existing timer fallback.
-                if (TotemSupported(reader, action))
-                {
-                    totemAura = WowBTotemAuraCandidate.Capture(memory, reader, player);
-                    if (!TotemDue(action, totemAura, _clock()) || !TotemManaEnough(reader, player, action)) continue;
-                }
-                else
-                {
-                    aura = reader.IsExperimental70707 && WowBInlineAuraCandidate.Supported(action.Id)
-                        ? WowBInlineAuraCandidate.Capture(memory, player) : null;
-                    if (!_schedule.Due(action.Id, _clock(), aura?.Remaining(action.Id))) continue;
-                }
+                // Re-read between keys; unknown inline candidates retain their
+                // existing timer fallback. Totems remain combat-only.
+                if (WowBTotemAuraCandidate.EffectForCast(action.Id) != 0) continue;
+                aura = reader.IsExperimental70707 && WowBInlineAuraCandidate.Supported(action.Id)
+                    ? WowBInlineAuraCandidate.Capture(memory, player) : null;
+                if (!_schedule.Due(action.Id, _clock(), aura?.Remaining(action.Id))) continue;
                 if (!SameQuietPlayer(memory, reader, hwnd, stopped, player, map) || reader.ReadTargetGuid() != selected ||
-                    !SameSlot(action, ClickAimCombat.ReadBar(reader)) || !Allowed(memory, reader, hwnd, stopped) ||
-                    (TotemSupported(reader, action) && !TotemManaEnough(reader, player, action))) break;
+                    !SameSlot(action, ClickAimCombat.ReadBar(reader)) || !Allowed(memory, reader, hwnd, stopped)) break;
                 ClickAimInput.TapKey(hwnd, action.KeyVk, 40);
                 _schedule.RecordAttempt(action.Id, _clock());
                 onAttempt?.Invoke();

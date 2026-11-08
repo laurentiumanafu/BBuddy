@@ -23,7 +23,6 @@ class TotemBuffs(unittest.TestCase):
         self.assertIn('{ "Strength of Earth Totem", ClickAimSpellRole.Buff }', C)
         self.assertIn('{ "Healing Stream Totem", ClickAimSpellRole.Buff }', C)
         self.assertIn('reader.IsExperimental70862 && WowBTotemAuraCandidate.EffectForCast', B)
-        self.assertIn('if (!TotemSupported(reader, action)) continue;', B)
 
     def test_unknown_absent_and_active_are_distinct(self):
         for item in ('!reader.IsExperimental70862', 'ReadExternalCandidate(memory, player.UnitAddress',
@@ -34,7 +33,7 @@ class TotemBuffs(unittest.TestCase):
         self.assertNotIn('duration', A.lower())
         self.assertIn('!active.HasValue ? "unavailable; cast withheld"', B)
 
-    def test_backoff_and_safety_in_combat_and_quiet(self):
+    def test_combat_only_and_ten_second_backoff(self):
         self.assertIn('TotemRetryMs = 10_000', B)
         self.assertIn('_schedule.PastAttemptBackoff(action.Id, now, TotemRetryMs)', B)
         self.assertIn('fields.PlayerPowerTypeCandidate == 0', B)
@@ -44,27 +43,27 @@ class TotemBuffs(unittest.TestCase):
         for text in ('CombatPlayerSafe(', 'targetSafe()', 'SameSlot(', 'TotemManaEnough(',
                      'TotemDue(', 'ClickAimSettings.UseBuffsInCombat', '_schedule.RecordAttempt'):
             self.assertIn(text, combat)
+        safe = section(B, 'private static bool CombatPlayerSafe(', '    internal bool TryApplyInCombat(')
+        self.assertIn('!GrindRunner.TryReadGatherCombat(out bool fighting) || !fighting', safe)
+        self.assertGreaterEqual(combat.count('CombatPlayerSafe('), 3)
         quiet = section(B, 'internal bool TryApply(', '// 70707 research candidate')
-        for text in ('SameQuietPlayer(', 'reader.ReadTargetGuid() != selected', 'SameSlot(',
-                     'TotemManaEnough(', 'TotemDue(', '_schedule.RecordAttempt'):
-            self.assertIn(text, quiet)
-        self.assertLess(quiet.index('WowBTotemAuraCandidate.Capture(memory, reader, player)', quiet.index('foreach (ClickAimAction action in due)')), quiet.index('ClickAimInput.TapKey'))
+        self.assertEqual(quiet.count('if (WowBTotemAuraCandidate.EffectForCast(action.Id) != 0) continue;'), 2)
+        self.assertNotIn('WowBTotemAuraCandidate.Capture(', quiet)
+        self.assertNotIn('TotemDue(', quiet)
+        self.assertIn('_schedule.Due(action.Id, now, remaining)', quiet)
+        self.assertIn('SameQuietPlayer(', quiet)
 
-    def test_walking_yields_to_outer_loop_without_cast_in_callback(self):
-        need = section(B, 'internal bool TotemNeedsAttention(', '    private void ReportTotem(')
-        self.assertNotIn('TapKey', need)
-        for text in ('TryQuietPlayer(', 'SameQuietPlayer(', 'TotemManaEnough(', 'TotemDue(', 'ScanIntervalMs'):
-            self.assertIn(text, need)
-        self.assertIn('Buffs.TotemNeedsAttention(hwnd, () => _stop)', G)
-        self.assertIn('GrindRunner.TotemNeedsAttention(ObjectManager.Wow?.WindowHandle', H)
-        walk = section(G, 'RouteRunner.ShouldInterrupt = () =>', 'RouteRunner.PollInterruptDuringWalk = true;')
-        self.assertLess(walk.index('VendorDue()'), walk.index('Buffs.TotemNeedsAttention'))
-        self.assertLess(walk.index('FightNeeded('), walk.index('Buffs.TotemNeedsAttention'))
+    def test_no_walk_interrupts_or_out_of_combat_retries(self):
+        for source in (B, G, H):
+            self.assertNotIn('TotemNeedsAttention', source)
+        self.assertNotIn('buffInterrupt', G)
 
     def test_ui_and_docs_are_honest(self):
         ET.fromstring(X)
-        self.assertIn('Walking out of range can cause a new totem', X)
+        self.assertIn('The supported 70862 totems are combat-only', X)
         self.assertIn('at least 10 seconds between attempts', X)
-        self.assertIn('Other ranks and spells are **not** mapped', read('TOTEM_BUFFS_70862.md'))
+        doc = read('TOTEM_BUFFS_70862.md')
+        self.assertIn('Other ranks and spells are **not** mapped', doc)
+        self.assertIn('no attempts out of combat', doc)
 
 if __name__ == '__main__': unittest.main()
