@@ -17,7 +17,7 @@ namespace Styx.WoWInternals {
   internal bool TryGetUnit(WowBGuid g,out WowBObservedUnit u){u=g==Test.Corpse.Guid?Test.Corpse:Test.Other; return Test.CorpsePresent && u.Guid==g;}
  }
  internal class WowBReader {
-  internal bool IsExperimental70707=true, ExperimentalGrindActive=true;
+  internal bool IsExperimental70707=true, IsExperimental70862=true, ExperimentalGrindActive=true;
   internal bool TryReadMapId(out uint m){m=Test.Map;return Test.MapReadable;}
   internal WowBGuid ReadTargetGuid()=>Test.Target;
   internal bool TryReadMouseoverGuidCandidate(out WowBGuid hover){hover=Test.Target;return true;}
@@ -31,17 +31,17 @@ namespace Styx.Logic.Pathing {
   internal static WowBObservedUnit Player,Corpse,Other;
   internal static WowBGuid Target;
   internal static uint Map,Health;
-  internal static bool Combat,CombatReadable,MapReadable,FieldsReadable,PlayerPresent,CorpsePresent,Snapshot,Death,PathOk,PixelOk,Faction,Vendor,InterruptDuringPath,ChangeDuringProbe,StopDuringProbe,ChangeBeforeClick,MoveOk;
-  internal static int Clicks,Skin,Paths,ClickX,ClickY,Waits;
+  internal static bool Combat,CombatReadable,MapReadable,FieldsReadable,PlayerPresent,CorpsePresent,Snapshot,Death,PathOk,PixelOk,Faction,Vendor,InterruptDuringPath,ChangeDuringProbe,StopDuringProbe,ChangeBeforeClick,MoveOk,PixelAfterFace,StopOnFace;
+  internal static int Clicks,Skin,Paths,ClickX,ClickY,Waits,Faces,Probes;
   internal static Action? OnWait;
   internal static void Reset(){
    Player=new WowBObservedUnit{Guid=new WowBGuid(99),RecordAddress=10,UnitAddress=11,IsLocalPlayer=true};
    Corpse=new WowBObservedUnit{Guid=new WowBGuid(1),RecordAddress=12,UnitAddress=13,Location=new Position{X=3}};
    Other=new WowBObservedUnit{Guid=new WowBGuid(2),RecordAddress=14,UnitAddress=15,Location=new Position{X=2}};
    Target=default; Map=1;Health=0;
-   Combat=Death=Vendor=InterruptDuringPath=ChangeDuringProbe=StopDuringProbe=ChangeBeforeClick=false;
+   Combat=Death=Vendor=InterruptDuringPath=ChangeDuringProbe=StopDuringProbe=ChangeBeforeClick=PixelAfterFace=StopOnFace=false;
    CombatReadable=MapReadable=FieldsReadable=PlayerPresent=CorpsePresent=Snapshot=PathOk=PixelOk=Faction=MoveOk=true;
-   Clicks=Skin=Paths=ClickX=ClickY=Waits=0; OnWait=null; ClickAimAbort.Requested=false;RouteRunner.StopRequested=false; GatherSettings.Skinning=false;
+   Clicks=Skin=Paths=ClickX=ClickY=Waits=Faces=Probes=0; OnWait=null; ClickAimAbort.Requested=false;RouteRunner.StopRequested=false; GatherSettings.Skinning=false;
    ObjectManager.Wow=new GreenMagic.Memory(); ObjectManager.WowB=new WowBReader(); GrindRunner.Reset();
   }
  }
@@ -50,7 +50,7 @@ namespace Styx.Logic.Pathing {
  internal static class ClickAimMath { internal static double Len(double x,double y)=>Math.Sqrt(x*x+y*y); }
  internal static class ClickAimPositions { internal static bool TryRead(out double x,out double y){x=Test.Player.Location.X;y=Test.Player.Location.Y;return true;} }
  internal static class ClickAimKeySteer {
-  internal static void ReleaseHeld(){} internal static bool Face(double x,double y,IntPtr h,double d,int n)=>true;
+  internal static void ReleaseHeld(){} internal static bool Face(double x,double y,IntPtr h,double d,int n){Test.Faces++;if(Test.StopOnFace) ClickAimAbort.Requested=true;if(Test.PixelAfterFace)Test.PixelOk=true;return true;}
   internal static bool Steer(double x,double y,IntPtr h,bool b,out double rem){rem=0;return true;}
  }
  internal static class ClickAimInput {
@@ -71,7 +71,7 @@ namespace Styx.Logic.Pathing {
   private static bool _stop,_vendorDue,_running=true,_lootProbed,_clickBiasKnown;
   private static int _clickBiasX,_clickBiasY,_clicks,_loots,_lootsSinceTrip,_recentLootQuietAt;
   private const double LootYd=18,LootReachYd=4,RecentLootApproachYd=3;
-  private const int LootWalkMs=20000,LootSettleMs=1500,LootNoClick=-2,LootUnderAttack=-1;
+  private const int LootWalkMs=20000,LootSettleMs=1500,LootNoClick=-2,LootUnderAttack=-1,ClickProbeMax=40;
   private static readonly WowBRecentLoot RecentLoot=new();
   private static readonly HashSet<WowBGuid> _looted=new();
   private static readonly Dictionary<WowBGuid,int> _recentLootRetryAt=new();
@@ -94,7 +94,7 @@ namespace Styx.Logic.Pathing {
   private static void StopAndSettle(IntPtr h){}
   private static bool TryProject(IntPtr h,double px,double py,double x,double y,double z,out int dx,out int dy){dx=dy=0;return true;}
   private static void DismissRejectedSelection(IntPtr h,WowBReader? r,WowBGuid p,WowBGuid c){if(Test.Target==c)Test.Target=p;}
-  private static bool FindUnitPixel(IntPtr h,WowBObservedUnit u,double px,double py,out int x,out int y,out string how,Func<bool>? cancel=null){x=10;y=-20;how="fixture";if(Test.StopDuringProbe)ClickAimAbort.Requested=true;if(Test.ChangeDuringProbe)Test.Health=1;if(!Test.PixelOk||(cancel!=null&&cancel()))return false;Test.Target=u.Guid;return true;}
+  private static bool FindUnitPixel(IntPtr h,WowBObservedUnit u,double px,double py,out int x,out int y,out string how,int maxProbes,out bool exhausted,Func<bool>? cancel=null){x=10;y=-20;how="fixture";Test.Probes++;exhausted=false;if(Test.StopDuringProbe)ClickAimAbort.Requested=true;if(Test.ChangeDuringProbe)Test.Health=1;if(ClickAimAbort.Requested||(cancel!=null&&cancel()))return false;if(!Test.PixelOk){exhausted=true;return false;}Test.Target=u.Guid;return true;}
   private static bool SkinCorpseCurrent(WowBReader r,GreenMagic.Memory m,uint map,WowBObservedUnit u,WowBGuid p,out WowBObservedUnit c,out WowBObservedUnit player){c=u;player=Test.Player;return false;}
   private static void TrySkinLootedBeast(IntPtr h,WowBReader r,WowBObservedUnit u,uint map){Test.Skin++;}
   private static uint[][]? CaptureWords(WowBObservedUnit u)=>null;
@@ -112,6 +112,12 @@ namespace Styx.Logic.Pathing {
    Ready(); Test.Health=5; Test.OnWait=()=>Test.Combat=true; GrindRunner.Poll();Check(Test.Clicks==0&&Test.Waits==1,"combat interrupts death observation");
    Ready(); Test.Health=5; Test.OnWait=()=>ClickAimAbort.Requested=true; GrindRunner.Poll();Check(Test.Clicks==0&&Test.Waits==1,"stop interrupts death observation");
    Ready(); Test.Health=5; GrindRunner.Poll();Check(Test.Clicks==0&&Test.Waits==4,"live target bounded observation");
+   Ready(); Test.Corpse.Location.X=3.7; GrindRunner.Run();Check(Test.Paths==0 && Test.Faces==0 && Test.Clicks==1,"70862 in-reach loot avoids calibration and facing");
+   Ready(); Test.Corpse.Location.X=4.2; GrindRunner.Run();Check(Test.Paths>0 && Test.Clicks==1,"out-of-reach corpse still uses mesh");
+   Ready(); Test.PixelOk=false;Test.PixelAfterFace=true;GrindRunner.Run();Check(Test.Faces==1 && Test.Probes==2 && Test.Clicks==1,"missed quick probe faces and performs guarded full search once");
+   Ready(); Test.PixelOk=false;Test.StopOnFace=true;GrindRunner.Run();Check(Test.Faces==1 && Test.Clicks==0 && Test.Probes==1,"STOP during fallback prevents second search and click");
+   Ready(); Test.ChangeBeforeClick=true;GrindRunner.Run();Check(Test.Faces==0 && Test.Clicks==0 && Test.Probes==1,"selection change at final click never triggers facing fallback");
+   Ready(); ObjectManager.WowB!.IsExperimental70862=false; Test.Corpse.Location.X=3.7;GrindRunner.Run();Check(Test.Paths>0 && Test.Faces==1 && Test.Clicks==1,"older builds retain approach and facing");
    Ready(); Test.Target=default; GrindRunner.Run();Check(Test.Clicks==1,"selection cleared: loot once");Check(Test.ClickX==410&&Test.ClickY==280,"centre-relative pixel conversion");GrindRunner.Run();Check(Test.Clicks==1,"no duplicate loot");
    Ready();Test.Target=Test.Other.Guid;GrindRunner.Run();Check(Test.Clicks==1,"different selection still loots exact recent body");
    Test.Reset();NoClick("unrelated corpse not looted");

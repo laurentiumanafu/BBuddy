@@ -77,7 +77,7 @@ class MacroWiring(unittest.TestCase):
         self.assertIn('(keyOneMacro || (auto != null', R)
         self.assertIn('PreferShockMelee(shockAutoPlan, shockReady)', G)
         self.assertIn('bool temporaryShockMelee = shockAutoPlan && !melee', G)
-        self.assertIn('keyOneMacro && mobAfter == 0 && mobBeforeHealth > 0', G)
+        self.assertIn('reader.IsExperimental70862 && mobAfter == 0 && mobBeforeHealth > 0', G)
         self.assertIn('return "killed with " + string.Join', G)
         # A denied follow-up must not bypass the normal death/loot accounting.
         shock = section(G, 'ClickAimInput.TapKey(hwnd, castDamage!', '/* Wait for the cast')

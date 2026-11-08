@@ -3589,6 +3589,9 @@ internal static class GrindRunner
             {
                 if (CheckDeathCheckpoint() || !RecentCorpseCurrent(reader, memory, map, original,
                         out WowBObservedUnit corpse, out WowBObservedUnit player, out double distance)) return false;
+                // Already inside the exact 3D click guard? Do not calibrate turn
+                // keys or walk closer merely to meet the smaller approach target.
+                if (reader.IsExperimental70862 && RecentLootInReach(corpse, player)) return true;
                 if (distance <= RecentLootApproachYd)
                 {
                     if (!RecentLootInReach(corpse, player))
@@ -3654,7 +3657,11 @@ internal static class GrindRunner
             return LootNoClick;
         }
 
-        ClickAimKeySteer.Face(corpse.Location.X, corpse.Location.Y, hwnd, 30.0, 4);
+        // 70862 recent corpses first get a short, guarded on-screen probe
+        // without turning. Nearby bodies often need no rotation at all.
+        bool fastRecentProbe = recentOnly && lootReader?.IsExperimental70862 == true && recentMemory != null && recentSafe != null;
+        if (!fastRecentProbe)
+            ClickAimKeySteer.Face(corpse.Location.X, corpse.Location.Y, hwnd, 30.0, 4);
 
         // A killing blow commonly leaves this corpse selected. For an opted-in
         // beast, clear it safely before the loot probe so that both the first
@@ -3673,7 +3680,29 @@ internal static class GrindRunner
         uint[][]? before = probe ? CaptureWords(corpse) : null;
 
         string how;
-        if (!TryClickUnit(hwnd, corpse, lx, ly, true, out how, out lootPixelConfirmed, recentSafe))
+        bool searchExhausted = false;
+        bool lootClicked = fastRecentProbe
+            ? TryClickUnit(hwnd, corpse, lx, ly, true, out how, out lootPixelConfirmed, recentSafe, 9, out searchExhausted)
+            : TryClickUnit(hwnd, corpse, lx, ly, true, out how, out lootPixelConfirmed, recentSafe);
+        if (!lootClicked && fastRecentProbe && searchExhausted && recentSafe != null && recentSafe() &&
+            lootReader != null && recentMemory != null &&
+            RecentCorpseCurrent(lootReader, recentMemory, recentMap, corpse,
+                out WowBObservedUnit beforeTurnCorpse, out WowBObservedUnit beforeTurnPlayer, out _) &&
+            RecentLootInReach(beforeTurnCorpse, beforeTurnPlayer))
+        {
+            // Only a completed pixel search without any right-button down may
+            // fall back to facing. Recheck everything before turning and again
+            // before the second guarded search; never duplicate a loot click.
+            Logging.Write("[Loot] close corpse not found in the quick probe; trying a guarded turn and full pixel search");
+            ClickAimKeySteer.Face(beforeTurnCorpse.Location.X, beforeTurnCorpse.Location.Y, hwnd, 30.0, 4);
+            if (recentSafe() && RecentCorpseCurrent(lootReader, recentMemory, recentMap, corpse,
+                out WowBObservedUnit afterTurnCorpse, out WowBObservedUnit afterTurnPlayer, out _) &&
+                afterTurnPlayer.Guid == beforeTurnPlayer.Guid && afterTurnPlayer.UnitAddress == beforeTurnPlayer.UnitAddress &&
+                afterTurnPlayer.RecordAddress == beforeTurnPlayer.RecordAddress && RecentLootInReach(afterTurnCorpse, afterTurnPlayer))
+                lootClicked = TryClickUnit(hwnd, afterTurnCorpse, afterTurnPlayer.Location.X, afterTurnPlayer.Location.Y,
+                    true, out how, out lootPixelConfirmed, recentSafe);
+        }
+        if (!lootClicked)
         {
             Logging.Write(string.Format(CultureInfo.InvariantCulture,
                 "[Loot] could not reach the body of {0} with the mouse: {1}", corpse.Guid, how));
@@ -4676,9 +4705,15 @@ internal static class GrindRunner
 
     private static bool TryClickUnit(IntPtr hwnd, WowBObservedUnit unit, double px, double py,
                                      bool mustSelect, out string how, out bool pixelConfirmed, Func<bool>? safeToClick = null)
+        => TryClickUnit(hwnd, unit, px, py, mustSelect, out how, out pixelConfirmed, safeToClick, ClickProbeMax, out _);
+
+    private static bool TryClickUnit(IntPtr hwnd, WowBObservedUnit unit, double px, double py,
+                                     bool mustSelect, out string how, out bool pixelConfirmed, Func<bool>? safeToClick,
+                                     int maxProbes, out bool searchExhausted)
     {
         how = "";
         pixelConfirmed = false;
+        searchExhausted = false;
 
         if (!mustSelect)
         {
@@ -4719,7 +4754,7 @@ internal static class GrindRunner
         if (safeToClick != null && !ClickAimInput.ClientSize(hwnd, out probeWidth, out probeHeight))
         { how = "client size unavailable before loot probe"; return false; }
         int fx, fy;
-        if (FindUnitPixel(hwnd, unit, px, py, out fx, out fy, out how,
+        if (FindUnitPixel(hwnd, unit, px, py, out fx, out fy, out how, maxProbes, out searchExhausted,
                 strictClick ? () => !TryReadGatherCombat(out bool probeFighting) || probeFighting ||
                     (safeToClick != null && !safeToClick()) : null))
         {
@@ -4787,9 +4822,16 @@ internal static class GrindRunner
     /// </summary>
     private static bool FindUnitPixel(IntPtr hwnd, WowBObservedUnit unit, double px, double py,
                                       out int foundX, out int foundY, out string how, Func<bool>? cancel = null)
+        => FindUnitPixel(hwnd, unit, px, py, out foundX, out foundY, out how, ClickProbeMax, out _, cancel);
+
+    private static bool FindUnitPixel(IntPtr hwnd, WowBObservedUnit unit, double px, double py,
+                                      out int foundX, out int foundY, out string how, int maxProbes,
+                                      out bool searchExhausted, Func<bool>? cancel = null)
     {
         foundX = 0;
         foundY = 0;
+        searchExhausted = false;
+        if (maxProbes < 1 || maxProbes > ClickProbeMax) { how = "invalid pixel probe limit"; return false; }
 
         Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
         if (reader == null)
@@ -4826,7 +4868,7 @@ internal static class GrindRunner
             {
                 if (_stop || ClickAimAbort.Requested || (cancel != null && cancel()))
                 { how = "probe interrupted by stop or combat"; return false; }
-                if (probes >= ClickProbeMax) break;
+                if (probes >= maxProbes) break;
 
                 int dx = centreX;
                 int dy = centreY;
@@ -4869,6 +4911,7 @@ internal static class GrindRunner
             }
         }
 
+        searchExhausted = true;
         how = string.Format(CultureInfo.InvariantCulture,
             "{0} left-click probe(s) found no pixel with that unit under it{1}", probes,
             projected
@@ -6065,7 +6108,10 @@ internal static class GrindRunner
                         && reader.TryGetUnitFields(me3.UnitAddress, out mine))
                         manaAfter = mine.Power;
                     WowBObservedUnit t3;
-                    if (afterCast.TryGetSelectedTarget(out t3) && t3.Guid == defenceTarget) mobAfter = Health(t3);
+                    if (afterCast.TryGetSelectedTarget(out t3) && t3.Guid == defenceTarget &&
+                        (!reader.IsExperimental70862 || (t3.UnitAddress == expectedPull.UnitAddress &&
+                         t3.RecordAddress == expectedPull.RecordAddress && !t3.IsLocalPlayer && !t3.HasPlayerVtable)))
+                        mobAfter = Health(t3);
 
                     spentMana = manaAfter > 0 && manaAfter < manaBefore;
                     hurtMob = mobAfter >= 0 && mobBeforeHealth >= 0 && mobAfter < mobBeforeHealth;
@@ -6086,7 +6132,7 @@ internal static class GrindRunner
                                 ? "[Grind] after {0}, mob health {1} -> {2} (mana {3} -> {4}); damage source and swing state unverified"
                                 : "[Grind] {0} does damage: mob health {1} -> {2} (mana {3} -> {4})",
                             castDamage!.Name, lastHealth, mobAfter, manaBefore, manaAfter));
-                        if (keyOneMacro && mobAfter == 0 && mobBeforeHealth > 0)
+                        if (reader.IsExperimental70862 && mobAfter == 0 && mobBeforeHealth > 0)
                         {
                             if (_focusedFightGuid == defenceTarget) _focusedFightGuid = default;
                             return "killed with " + string.Join(", ", worked.ToArray());
@@ -6357,7 +6403,15 @@ internal static class GrindRunner
                     ? "target gone while attacking and nothing had landed"
                     : "killed or fled while attacking; what landed: " + string.Join(", ", worked.ToArray());
 
+            if (reader.IsExperimental70862 && (target.Guid != defenceTarget || target.IsLocalPlayer || target.HasPlayerVtable ||
+                target.UnitAddress != expectedPull.UnitAddress || target.RecordAddress != expectedPull.RecordAddress))
+                return YieldForTargetChange(reader, fightMemory, defenceTarget);
             health = Health(target);
+            if (reader.IsExperimental70862 && lastHealth > 0 && health == 0)
+            {
+                if (_focusedFightGuid == defenceTarget) _focusedFightGuid = default;
+                return "killed" + (worked.Count == 0 ? "" : " with " + string.Join(", ", worked.ToArray()));
+            }
             if (health >= 0 && lastHealth >= 0 && health < lastHealth)
             {
                 if (conservativeShockAttack)
