@@ -21,6 +21,9 @@ namespace CopilotBuddy.UI
         private readonly TextBlock _beastCount = new TextBlock { TextWrapping = TextWrapping.Wrap };
         private readonly CheckBox _roam = new CheckBox { Content = "Roam on the mesh when no profile is loaded", Margin = new Thickness(0, 10, 0, 4) };
         private readonly CheckBox _grind = new CheckBox { Content = "Gather nearby resources while grinding", Margin = new Thickness(0, 10, 0, 4) };
+        private readonly CheckBox _ignoreMonsters = new CheckBox { Content = "Ignore monsters and keep gathering (GatherBuddy)", Margin = new Thickness(0, 10, 0, 4) };
+        private readonly CheckBox _movementSkill = new CheckBox { Content = "Use movement skill when travelling (GatherBuddy, 70862)", Margin = new Thickness(0, 10, 0, 4) };
+        private readonly TextBox _movementSlot = new TextBox { Width = 90, HorizontalAlignment = HorizontalAlignment.Left };
         private readonly TextBox _roamRadius = new TextBox { Width = 90, HorizontalAlignment = HorizontalAlignment.Left };
         private readonly TextBox _miningSkill = new TextBox { Width = 90, HorizontalAlignment = HorizontalAlignment.Left };
         private readonly TextBox _herbSkill = new TextBox { Width = 90, HorizontalAlignment = HorizontalAlignment.Left };
@@ -33,6 +36,9 @@ namespace CopilotBuddy.UI
             Width = 460; Height = 550; ResizeMode = ResizeMode.NoResize;
             WindowStartupLocation = WindowStartupLocation.CenterOwner;
             _grind.IsChecked = GatherSettings.GatherWhileGrinding;
+            _ignoreMonsters.IsChecked = GatherSettings.IgnoreMonsters;
+            _movementSkill.IsChecked = GatherSettings.UseMovementSkill;
+            _movementSlot.Text = GatherSettings.MovementSkillSlot.ToString(CultureInfo.InvariantCulture);
             _roam.IsChecked = GatherSettings.RoamWithoutProfile;
             _roamRadius.Text = GatherSettings.RoamRadiusYd.ToString(CultureInfo.InvariantCulture);
             _mining.IsChecked = GatherSettings.Mining;
@@ -64,6 +70,12 @@ namespace CopilotBuddy.UI
             panel.Children.Add(new TextBlock { Text = "Roaming destination radius from start (100–3000 yd)" });
             panel.Children.Add(_roamRadius);
             panel.Children.Add(new TextBlock { Text = "Experimental: zone borders are unknown. Combat, resources and route detours can go beyond this radius or into another zone. Loaded profiles take priority.", TextWrapping = TextWrapping.Wrap });
+            panel.Children.Add(_ignoreMonsters);
+            panel.Children.Add(new TextBlock { Text = "Standalone GatherBuddy will not defend while this is checked, even when attacked. Gathering may fail or be interrupted, and the character can die. STOP and death recovery still apply. Grind is unchanged.", TextWrapping = TextWrapping.Wrap });
+            panel.Children.Add(_movementSkill);
+            panel.Children.Add(new TextBlock { Text = "First-bar movement skill slot (1–12)" });
+            panel.Children.Add(_movementSlot);
+            panel.Children.Add(new TextBlock { Text = "Supported: Ghost Wolf, Travel Form and Aspect of the Cheetah on the first action bar. Put the spell on the first bar with the default 1–9, 0, - or = key binding. The bot tries once before travel and again after a node interaction; it cannot verify the form or success, and a repeat may toggle a form off. If a form changes the action bar, the existing safety guard may pause or stop the bot.", TextWrapping = TextWrapping.Wrap });
             panel.Children.Add(_grind);
             panel.Children.Add(new TextBlock { Text = "Grind fights first. Gathering waits if combat or a nearby living NPC is detected; friendly NPCs can also block it because hostility is not known (100 yd).", TextWrapping = TextWrapping.Wrap });
             panel.Children.Add(new TextBlock { Text = "Gathering works with WoW in the foreground or background. Moving the mouse in the foreground can interrupt a hover; the bot retries automatically.", TextWrapping = TextWrapping.Wrap });
@@ -102,6 +114,12 @@ namespace CopilotBuddy.UI
 
         private void SaveClick(object sender, RoutedEventArgs e)
         {
+            if (!int.TryParse(_movementSlot.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out int movementSlot) ||
+                movementSlot < 0 || movementSlot > 12 || (_movementSkill.IsChecked == true && movementSlot == 0))
+            {
+                MessageBox.Show(this, "Enter the first-bar slot (1–12) containing your movement skill. Use 0 only when the option is off.", "Gatherbuddy", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
             if (!int.TryParse(_roamRadius.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out int roamRadius)
                 || roamRadius < 100 || roamRadius > 3000
                 || !uint.TryParse(_miningSkill.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out uint mining)
@@ -114,6 +132,9 @@ namespace CopilotBuddy.UI
                 return;
             }
             GatherSettings.GatherWhileGrinding = _grind.IsChecked == true;
+            GatherSettings.IgnoreMonsters = _ignoreMonsters.IsChecked == true;
+            GatherSettings.UseMovementSkill = _movementSkill.IsChecked == true;
+            GatherSettings.MovementSkillSlot = movementSlot;
             GatherSettings.RoamWithoutProfile = _roam.IsChecked == true;
             GatherSettings.RoamRadiusYd = roamRadius;
             GatherSettings.Mining = _mining.IsChecked == true;

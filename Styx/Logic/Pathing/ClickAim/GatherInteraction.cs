@@ -170,8 +170,12 @@ internal static class GatherInteraction
     public static bool TryInteract(IntPtr hwnd, GatherNodeScanner.Node node,
                                    Func<GatherNodeScanner.Node, bool> allowed, Func<bool>? extraSafety,
                                    out GatherNodeScanner.Node clickedNode, out string reason, out bool hoverMiss,
-                                   out bool cursorMoved)
+                                   out bool cursorMoved, bool ignoreMonsters = false, Func<bool>? ignoreSafety = null)
     {
+        // Grind always supplies its own safety callback and cannot opt out.
+        // Standalone ignore mode additionally requires the runner's live
+        // death, session and map guard throughout the hover search.
+        ignoreMonsters = ignoreMonsters && extraSafety == null && ignoreSafety != null;
         clickedNode = default;
         hoverMiss = false;
         cursorMoved = false;
@@ -198,6 +202,7 @@ internal static class GatherInteraction
         if (!CursorGuard(hwnd, background, realX, realY, width, height, originX, originY, out reason, out bool initialMoved))
         { cursorMoved = initialMoved; return false; }
         if (ClickAimAbort.Requested) { reason = "stopped before hover-away"; return false; }
+        if (ignoreMonsters && !ignoreSafety!()) { reason = "Gather safety check failed before hover-away"; return false; }
         reason = "failed to post hover-away mouse move";
         if (!ClickAimInput.PostMouseMoveFraction(hwnd, 0.05, 0.05)) return false;
         reason = "Stop requested while waiting for hover-away";
@@ -220,6 +225,7 @@ internal static class GatherInteraction
         {
             if (ClickAimAbort.Requested) { reason = "Stop requested during hover search"; return false; }
             if (extraSafety != null && !extraSafety()) { reason = "Grind safety check interrupted hover search"; return false; }
+            if (ignoreMonsters && !ignoreSafety!()) { reason = "Gather safety check interrupted hover search"; return false; }
             if (ObjectManager.Wow != memory) { reason = "attached client changed during hover search"; return false; }
             if (memory.WindowHandle != hwnd) { reason = "game window handle changed during hover search"; return false; }
             if (!CursorGuard(hwnd, background, realX, realY, width, height, originX, originY, out reason, out bool sampleCursorMoved))
@@ -233,7 +239,7 @@ internal static class GatherInteraction
             double x = point.X;
             double y = point.Y;
             reason = "combat detected or combat state unreadable during hover search";
-            if (!GrindRunner.TryReadGatherCombat(out bool combat) || combat) return false;
+            if (!GrindRunner.TryReadGatherCombat(out bool combat) || (combat && !ignoreMonsters)) return false;
             reason = "failed to post hover-search mouse move";
             if (!ClickAimInput.PostMouseMoveFraction(hwnd, x, y)) return false;
             reason = "Stop requested while waiting for hover update";
@@ -282,7 +288,7 @@ internal static class GatherInteraction
                 if (!CursorGuard(hwnd, background, realX, realY, width, height, originX, originY, out string cursorReason, out bool moved))
                 { validation = cursorReason; movedDuringValidation = moved; return false; }
                 if (!GrindRunner.TryReadGatherCombat(out bool fighting)) { validation = "combat state unreadable"; return false; }
-                if (fighting) { validation = "combat detected"; return false; }
+                if (fighting && !ignoreMonsters) { validation = "combat detected"; return false; }
                 if (!GatherNodeScanner.TryCapture(5.0, out List<GatherNodeScanner.Node> fresh))
                 { validation = "final resource scan failed"; return false; }
                 bool present = false;
@@ -292,8 +298,9 @@ internal static class GatherInteraction
                     if (item.Distance <= 5.0 && Near(node, item)) { present = true; break; }
                 }
                 if (!present) { validation = "eligible node not observed in reach near the intended resource"; return false; }
-                if (!GrindRunner.TryReadGatherCombat(out fighting) || fighting) { validation = "combat detected or unreadable after node scan"; return false; }
+                if (!GrindRunner.TryReadGatherCombat(out fighting) || (fighting && !ignoreMonsters)) { validation = "combat detected or unreadable after node scan"; return false; }
                 if (extraSafety != null && !extraSafety()) { validation = "Grind safety check failed before interaction"; return false; }
+                if (ignoreMonsters && !ignoreSafety!()) { validation = "Gather safety check failed before interaction"; return false; }
                 if (!CursorGuard(hwnd, background, realX, realY, width, height, originX, originY, out cursorReason, out moved))
                 { validation = cursorReason; movedDuringValidation = moved; return false; }
                 if (!ReadHover(memory, reader, out WowBGuid final)) { validation = "final hover read failed"; return false; }

@@ -27,7 +27,7 @@ internal static class Program
         ClickAimAbort.Requested = false; ClickAimAbort.WaitCount = 0; ClickAimAbort.OnWait = null;
         WowBReader.ReadCount = 0; WowBReader.OnRead = null;
         GatherNodeScanner.Available = true;
-        GrindRunner.Fighting = false;
+        GrindRunner.Fighting = false; GrindRunner.CombatReadable = true;
         GatherInteraction.ResetHoverHint();
     }
 
@@ -78,6 +78,34 @@ internal static class Program
         Reset(true); GrindRunner.Fighting = true;
         Require(!Try(out moved) && ClickAimInput.DownCount == 0, "combat prevents click");
 
+        Reset(true); GrindRunner.Fighting = true;
+        Require(GatherInteraction.TryInteract(Window, Node, _ => true, null, out _, out _, out _, out _, true, () => true) &&
+                ClickAimInput.DownCount == 1, "standalone opt-in permits known combat with guard");
+        Reset(true); GrindRunner.Fighting = true; GrindRunner.CombatReadable = false;
+        Require(!GatherInteraction.TryInteract(Window, Node, _ => true, null, out _, out _, out _, out _, true, () => true) &&
+                ClickAimInput.DownCount == 0, "opt-in never permits unreadable combat");
+        Reset(true); GrindRunner.Fighting = true;
+        Require(!GatherInteraction.TryInteract(Window, Node, _ => true, null, out _, out _, out _, out _, true) &&
+                ClickAimInput.DownCount == 0, "ignore mode requires standalone safety guard");
+        Reset(true); GrindRunner.Fighting = true;
+        Require(!GatherInteraction.TryInteract(Window, Node, _ => true, () => true, out _, out _, out _, out _, true, () => true) &&
+                ClickAimInput.DownCount == 0, "Grind callback cannot bypass known combat");
+        Reset(true); GrindRunner.Fighting = true;
+        Require(!GatherInteraction.TryInteract(Window, Node, _ => true, null, out _, out _, out _, out _, true, () => false) &&
+                ClickAimInput.DownCount == 0, "standalone safety veto prevents click");
+        Reset(true); GrindRunner.Fighting = true;
+        bool liveGuard = true;
+        ClickAimAbort.OnWait = n => { if (n == 3) liveGuard = false; };
+        Require(!GatherInteraction.TryInteract(Window, Node, _ => true, null, out _, out _, out _, out _, true, () => liveGuard) &&
+                ClickAimInput.DownCount == 0, "standalone safety rechecked before button-down");
+        Reset(true); GrindRunner.Fighting = true;
+        ClickAimAbort.OnWait = n => { if (n == 2) ClickAimAbort.Requested = true; };
+        Require(!GatherInteraction.TryInteract(Window, Node, _ => true, null, out _, out _, out _, out _, true, () => true) &&
+                ClickAimInput.DownCount == 0, "STOP still prevents ignore-mode click");
+        Reset(true); GrindRunner.Fighting = true; GatherNodeScanner.Available = false;
+        Require(!GatherInteraction.TryInteract(Window, Node, _ => true, null, out _, out _, out _, out _, true, () => true) &&
+                ClickAimInput.DownCount == 0, "ignore mode still requires a fresh node");
+
         Reset(true); GatherNodeScanner.Available = false;
         Require(!Try(out moved) && ClickAimInput.DownCount == 0, "missing fresh node prevents click");
 
@@ -87,7 +115,22 @@ internal static class Program
         Reset(true);
         Require(!GatherInteraction.TryInteract(Window, Node, _ => true, () => false, out _, out _, out _, out _) &&
                 ClickAimInput.DownCount == 0, "extra Grind safety veto prevents click");
-        Console.WriteLine("Synthetic GatherInteraction foreground/background fixtures passed (no live game or Windows input test).");
+        var movement = new ClickAimAction { Slot = 10, Kind = ClickAimActionKind.Spell, Id = 2645, Raw = 2645, KeyVk = 0x30 };
+        Require(GatherMovementSkill.IsSupported(movement, 10), "Ghost Wolf in selected first-bar slot");
+        Require(!GatherMovementSkill.IsSupported(movement, 1) && !GatherMovementSkill.IsSupported(movement, 0), "wrong or unset slot withheld");
+        movement.Id = 783; movement.Raw = 783;
+        Require(GatherMovementSkill.IsSupported(movement, 10), "Travel Form supported");
+        movement.Id = 5118; movement.Raw = 5118;
+        Require(GatherMovementSkill.IsSupported(movement, 10), "Aspect of the Cheetah supported");
+        movement.Raw |= 0x8000000000000000UL;
+        Require(!GatherMovementSkill.IsSupported(movement, 10), "item/macro or unexpected type bits withheld");
+        movement.Raw = 5118; movement.Kind = ClickAimActionKind.Item;
+        Require(!GatherMovementSkill.IsSupported(movement, 10), "item withheld");
+        movement.Kind = ClickAimActionKind.Spell; movement.Id = 6603; movement.Raw = 6603;
+        Require(!GatherMovementSkill.IsSupported(movement, 10), "unrelated attack withheld");
+        movement.Id = 2645; movement.Raw = 2645; movement.KeyVk = 0x31;
+        Require(!GatherMovementSkill.IsSupported(movement, 10), "unexpected key withheld");
+        Console.WriteLine("Synthetic GatherInteraction and movement-slot fixtures passed (no live game or Windows input test).");
     }
 }
 
@@ -142,6 +185,12 @@ namespace Bots.Gatherbuddy
 }
 namespace Styx.Logic.Pathing
 {
+    internal enum ClickAimActionKind { Spell, Item }
+    internal sealed class ClickAimAction { public int Slot, Id, KeyVk; public ulong Raw; public ClickAimActionKind Kind; }
+    internal static class ClickAimCombat
+    {
+        public static int KeyForSlot(int slot) => slot >= 1 && slot <= 9 ? 0x30 + slot : slot == 10 ? 0x30 : slot == 11 ? 0xBD : slot == 12 ? 0xBB : 0;
+    }
     public readonly struct WoWPoint
     {
         public readonly double X, Y, Z;
@@ -190,7 +239,7 @@ namespace Styx.Logic.Pathing
         public static Action<int>? OnWait;
         public static bool Wait(int ms) { OnWait?.Invoke(++WaitCount); return Requested; }
     }
-    internal static class GrindRunner { public static bool Fighting; public static bool TryReadGatherCombat(out bool fighting) { fighting = Fighting; return true; } }
+    internal static class GrindRunner { public static bool Fighting, CombatReadable = true; public static bool TryReadGatherCombat(out bool fighting) { fighting = Fighting; return CombatReadable; } }
     internal static class ClickAimPositions
     {
         public static bool TryReadCamera(out double x, out double y, out double z) { x = y = z = 0; return false; }

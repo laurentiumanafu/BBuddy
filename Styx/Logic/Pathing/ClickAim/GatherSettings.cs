@@ -16,6 +16,11 @@ internal static class GatherSettings
     public static bool SkinNearby;
     // Opt-in: legacy settings files do not enable gathering during Grind.
     public static bool GatherWhileGrinding;
+    // Standalone GatherBuddy only. The player may be attacked or killed.
+    public static bool IgnoreMonsters;
+    // A recognized movement spell on the first hotbar, also standalone only.
+    public static bool UseMovementSkill;
+    public static int MovementSkillSlot;
     // Opt-in only when no profile is loaded; normal profiles always take precedence.
     public static bool RoamWithoutProfile;
     public static int RoamRadiusYd = 250;
@@ -29,6 +34,9 @@ internal static class GatherSettings
         // A missing or malformed setting must not retain a previous opt-in.
         Skinning = false;
         SkinNearby = false;
+        IgnoreMonsters = false;
+        UseMovementSkill = false;
+        MovementSkillSlot = 0;
         // Older files may contain AllowBackgroundCursorMovement. It is ignored:
         // mouse-assisted gathering is now always enabled.
         try
@@ -44,6 +52,9 @@ internal static class GatherSettings
                 else if (key == "Skinning" && bool.TryParse(value, out bool skin)) Skinning = skin;
                 else if (key == "SkinNearby" && bool.TryParse(value, out bool nearby)) SkinNearby = nearby;
                 else if (key == "GatherWhileGrinding" && bool.TryParse(value, out bool g)) GatherWhileGrinding = g;
+                else if (key == "IgnoreMonsters" && bool.TryParse(value, out bool ignore)) IgnoreMonsters = ignore;
+                else if (key == "UseMovementSkill" && bool.TryParse(value, out bool movement)) UseMovementSkill = movement;
+                else if (key == "MovementSkillSlot" && int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int slot) && slot >= 1 && slot <= 12) MovementSkillSlot = slot;
                 else if (key == "RoamWithoutProfile" && bool.TryParse(value, out bool r)) RoamWithoutProfile = r;
                 else if (key == "RoamRadiusYd" && int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int radius) && radius >= 100 && radius <= 3000) RoamRadiusYd = radius;
                 else if (key == "MiningSkill" && uint.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out uint ms) && ms <= 1000) MiningSkill = ms;
@@ -64,6 +75,9 @@ internal static class GatherSettings
                 "Skinning=" + Skinning,
                 "SkinNearby=" + SkinNearby,
                 "GatherWhileGrinding=" + GatherWhileGrinding,
+                "IgnoreMonsters=" + IgnoreMonsters,
+                "UseMovementSkill=" + UseMovementSkill,
+                "MovementSkillSlot=" + MovementSkillSlot.ToString(CultureInfo.InvariantCulture),
                 "RoamWithoutProfile=" + RoamWithoutProfile,
                 "RoamRadiusYd=" + RoamRadiusYd.ToString(CultureInfo.InvariantCulture) });
             return true;

@@ -8,5 +8,6 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../../Styx/Logic/Pathing/ClickAim/GatherInteraction.cs" Link="GatherInteraction.cs" />
+    <Compile Include="../../Styx/Logic/Pathing/ClickAim/GatherMovementSkill.cs" Link="GatherMovementSkill.cs" />
   </ItemGroup>
 </Project>
