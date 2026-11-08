@@ -45,6 +45,9 @@ internal static class ClickAimSettings
     /// </summary>
     public static int HealMinManaPercent = 25;
 
+    // Explicit opt-in: user has placed a repeat-safe Start Attack macro on key 1.
+    // Macro contents and bindings cannot be inspected or verified by the bot.
+    public static bool UseKeyOneStartAttackMacro;
     // 70862 only: an explicitly configured WoW "Start Attack" binding, NOT
     // the toggling Attack Target/action-bar Attack. 0 means disabled. The bot
     // cannot read or verify the game's key bindings or actual swing state.
@@ -156,6 +159,7 @@ internal static class ClickAimSettings
         DrinkBelowPercent = 35;
         HealBelowPercent = 60;
         HealMinManaPercent = 25;
+        UseKeyOneStartAttackMacro = false;
         PostHealStartAttackVk = 0;
         PostHealStartAttackPreferredVk = 0x75;
         UseDamageOverTime = true;
@@ -179,6 +183,8 @@ internal static class ClickAimSettings
     /// </summary>
     public static void Load()
     {
+        // Missing or malformed files never carry a previous macro opt-in.
+        UseKeyOneStartAttackMacro = false;
         string path;
         try { path = Path; }
         catch { return; }
@@ -254,6 +260,11 @@ internal static class ClickAimSettings
         if (string.Equals(key, "HealMinManaPercent", StringComparison.OrdinalIgnoreCase))
         {
             if (hasNumber) HealMinManaPercent = number;
+            return true;
+        }
+        if (string.Equals(key, "UseKeyOneStartAttackMacro", StringComparison.OrdinalIgnoreCase))
+        {
+            UseKeyOneStartAttackMacro = flag;
             return true;
         }
         if (string.Equals(key, "PostHealStartAttackVk", StringComparison.OrdinalIgnoreCase))
@@ -375,6 +386,8 @@ internal static class ClickAimSettings
         text.AppendLine("DrinkBelowPercent = " + DrinkBelowPercent.ToString(CultureInfo.InvariantCulture));
         text.AppendLine("HealBelowPercent = " + HealBelowPercent.ToString(CultureInfo.InvariantCulture));
         text.AppendLine("HealMinManaPercent = " + HealMinManaPercent.ToString(CultureInfo.InvariantCulture));
+        text.AppendLine("# Optional 70862 key 1 macro: explicitly verify it is repeat-safe and does not toggle attack off.");
+        text.AppendLine("UseKeyOneStartAttackMacro = " + (UseKeyOneStartAttackMacro ? "true" : "false"));
         text.AppendLine("# Optional 70862 non-toggle Start Attack key: 0 = off, 117..121 = F6..F10. Bind it in WoW first.");
         text.AppendLine("PostHealStartAttackVk = " + PostHealStartAttackVk.ToString(CultureInfo.InvariantCulture));
         text.AppendLine("# Remembered selection only; it does not enable the checkbox.");
@@ -443,6 +456,9 @@ internal static class ClickAimSettings
               "defaults");
         check(HealMinManaPercent == 25, "defaultHealMana");
         check(!UseBuffsInCombat, "combatBuffDefaultOff");
+        check(!UseKeyOneStartAttackMacro, "keyOneMacroDefaultOff");
+        check(Apply("UseKeyOneStartAttackMacro", "true") && UseKeyOneStartAttackMacro, "keyOneMacroOptIn");
+        check(Apply("UseKeyOneStartAttackMacro", "nonsense") && !UseKeyOneStartAttackMacro, "keyOneMacroMalformedOff");
         check(PostHealStartAttackVk == 0 && PostHealStartAttackPreferredVk == 0x75, "postHealStartAttackDefaultOff");
         check(Apply("PostHealStartAttackPreferredVk", "119") && PostHealStartAttackPreferredVk == 119 && PostHealStartAttackVk == 0, "postHealPreferenceDoesNotEnable");
         check(Apply("PostHealStartAttackPreferredVk", "1") && PostHealStartAttackPreferredVk == 0x75, "postHealPreferenceInvalidDefaults");

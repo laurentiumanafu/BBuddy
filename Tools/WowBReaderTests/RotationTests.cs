@@ -29,6 +29,8 @@ internal static class RotationTests
         bool hybrid = ClickAimClassRotation.ShockAutoPlan(plan, attack);
         Check(hybrid && plan.Damage?.Id == 8042, "ignored Lightning Bolt enables Earth Shock and Attack");
         Check(!ClickAimClassRotation.ShockAutoPlan(plan, null), "no Attack key keeps ranged fallback");
+        Check(ClickAimClassRotation.ShockAutoPlan(plan, null, true), "opted-in macro supports Earth Shock without decoded Attack");
+        Check(!ClickAimClassRotation.ShockAutoPlan(normal, null, true), "macro does not change Lightning Bolt filler");
         Check(!ClickAimClassRotation.ShockAutoPlan(ClickAimClassRotation.Build(ClickAimRotationClass.Hunter, Bar(3044)), attack), "Hunter does not chase on cooldown");
         Check(!ClickAimClassRotation.ShockAutoPlan(ClickAimClassRotation.Build(ClickAimRotationClass.Mage, Bar(2136)), attack), "Mage does not chase on cooldown");
         Check(!ClickAimClassRotation.ShockAutoPlan(ClickAimClassRotation.Build(ClickAimRotationClass.Generic, Bar(8042)), attack), "generic rotation unchanged");
@@ -76,6 +78,11 @@ internal static class RotationTests
         var frostDefault = ClickAimClassRotation.Build(ClickAimRotationClass.Auto, Bar(6603, 8056));
         Check(frostDefault.Class == ClickAimRotationClass.Shaman && frostDefault.Damage?.Id == 8056 &&
               frostDefault.DamageGroup == "Shocks" && frostDefault.DamageIntervalMs == 8000, "Frost alone resolves Shaman and cooldown");
+        var macroFrost = ClickAimClassRotation.Build(ClickAimRotationClass.Auto, Bar(8056, 331));
+        Check(ClickAimClassRotation.ShockAutoPlan(macroFrost, null, true), "macro plus Frost closes during cooldown without Attack slot");
+        Check(ClickAimClassRotation.PreferShockMelee(ClickAimClassRotation.ShockAutoPlan(macroFrost, null, true), false), "macro Frost does not wait idle");
+        Check(ClickAimClassRotation.IsAnyShock(A(8042)) && ClickAimClassRotation.IsAnyShock(A(8056)) &&
+              ClickAimClassRotation.IsAnyShock(A(8050)) && !ClickAimClassRotation.IsAnyShock(A(403)), "all known Shock types only");
         var both = ClickAimClassRotation.Build(ClickAimRotationClass.Shaman, Bar(6603, 8056, 8045));
         Check(both.Damage?.Id == 8045, "Earth Shock remains preferred over Frost when both available");
         var boltAndFrost = ClickAimClassRotation.Build(ClickAimRotationClass.Shaman, Bar(6603, 915, 8056));

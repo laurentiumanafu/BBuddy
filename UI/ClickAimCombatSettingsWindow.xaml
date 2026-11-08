@@ -111,6 +111,11 @@
                     </StackPanel>
                     <TextBlock TextWrapping="Wrap" FontSize="11" Opacity="0.7" Margin="0,5,0,0"
                                Text="Generic retains the older first-spell behavior, including its limitations. Class profiles omit rune abilities, feral forms, finishers and pet actions unless manually overridden. On 70707/70755/70790/70862 the experimental gate supports mana-type and candidate rage-type characters; rage-dependent actions remain withheld."/>
+                    <CheckBox x:Name="chkKeyOneAttackMacro" IsChecked="False" Margin="0,8,0,0"
+                              Content="Use my repeat-safe Start Attack macro on key 1 (70862)"
+                              ToolTip="Place your Start Attack macro on the first action bar, bound to key 1. Test manually that repeated presses never stop auto-attack. Contents, binding and swing state cannot be verified. This takes priority over the separate post-heal key."/>
+                    <TextBlock TextWrapping="Wrap" FontSize="11" Opacity="0.7" Margin="0,4,0,0"
+                               Text="Key 1 is attempted at fight start and after heal or Shock attempts. Use a repeat-safe, non-toggle Start Attack macro; the bot cannot verify macro contents or success. This overrides the post-heal key below."/>
                     <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
                         <CheckBox x:Name="chkPostHealStartAttack" IsChecked="False" VerticalAlignment="Center" Margin="0,0,8,0"
                                   Content="Restart auto-attack after heal (70862)"

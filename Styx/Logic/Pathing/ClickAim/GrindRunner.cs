@@ -5116,6 +5116,43 @@ internal static class GrindRunner
         return true;
     }
 
+    // Key 1 is an explicit, user-tested non-toggle macro, not a decoded spell.
+    // Its contents, binding, actual cast and swing state cannot be verified.
+    private static bool TryFightKeyOneMacro(IntPtr hwnd, WowBReader reader, GreenMagic.Memory memory,
+        WowBObservedUnit expectedPlayer, WowBObservedUnit expectedTarget, uint expectedMap,
+        bool defenceOnly, bool defenceFactionFilter, double maxDistance, string reason)
+    {
+        if (!reader.IsExperimental70862 || !ClickAimSettings.UseKeyOneStartAttackMacro ||
+            expectedPlayer.Guid.IsEmpty || expectedTarget.Guid.IsEmpty || expectedMap == uint.MaxValue ||
+            CheckDeathCheckpoint(trackerOnly: true)) return false;
+        try
+        {
+            using var uncached = memory.TemporaryCacheState(false);
+            if (!reader.TryReadMapId(out uint map) || map != expectedMap ||
+                !reader.TryReadExperimentalActionSnapshot(out ulong[] bar) || bar.Length != 12 || bar[0] == 0 ||
+                !FightAttackInputAllowed(reader, memory, expectedTarget.Guid, expectedTarget,
+                    !defenceOnly || defenceFactionFilter, defenceOnly, !defenceOnly) ||
+                !Capture(out WowBWorldSnapshot? fresh) || fresh == null ||
+                !fresh.TryGetLocalPlayer(out WowBObservedUnit player) ||
+                player.Guid != expectedPlayer.Guid || player.UnitAddress != expectedPlayer.UnitAddress || player.RecordAddress != expectedPlayer.RecordAddress ||
+                !reader.TryGetUnitFields(player.UnitAddress, out WowBReader.WowBUnitFields self) || self.Health == 0 ||
+                !fresh.TryGetSelectedTarget(out WowBObservedUnit target) || target.Guid != expectedTarget.Guid ||
+                target.UnitAddress != expectedTarget.UnitAddress || target.RecordAddress != expectedTarget.RecordAddress ||
+                target.IsLocalPlayer || target.HasPlayerVtable ||
+                !reader.TryGetUnitFields(target.UnitAddress, out WowBReader.WowBUnitFields mob) ||
+                !DefenceFieldsValid(mob.Health, mob.UnitFlags, _notViable.Contains(target.Guid))) return false;
+            double distance = ClickAimMath.Len(target.Location.X - player.Location.X, target.Location.Y - player.Location.Y);
+            if (!double.IsFinite(distance) || distance > maxDistance || !reader.TryReadMapId(out map) || map != expectedMap ||
+                !ClickAimSettings.UseKeyOneStartAttackMacro ||
+                !FightAttackInputAllowed(reader, memory, expectedTarget.Guid, expectedTarget,
+                    !defenceOnly || defenceFactionFilter, defenceOnly, !defenceOnly)) return false;
+            ClickAimInput.TapKey(hwnd, 0x31, 40);
+            Logging.Write("[Grind] key 1 Start Attack macro attempted " + reason + "; binding, macro contents and swing state unverified");
+            return true;
+        }
+        catch { return false; }
+    }
+
     /// <summary>
     /// One fight using a hotbar-only class priority or the legacy generic selector.
     /// Healing, estimated DoT timing and optional instants share the existing
@@ -5156,6 +5193,9 @@ internal static class GrindRunner
         bool postHealStartPending = false;
         WowBGuid postHealPlayer = default;
         int postHealStartKey = ClickAimSettings.PostHealStartAttackVk;
+        bool keyOneMacro = false, keyOneStarted = false;
+        WowBObservedUnit macroPlayer = default;
+        uint macroMap = uint.MaxValue;
         bool shockMeleeLogged = false, conservativeShockAttack = false;
         int lastShockDamageMs = 0;
         bool noSafeAutoLogged = false;
@@ -5203,6 +5243,15 @@ internal static class GrindRunner
         Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
         GreenMagic.Memory? fightMemory = ObjectManager.Wow;
         if (reader == null || fightMemory == null) return "client attachment unavailable; fight withheld";
+        keyOneMacro = reader.IsExperimental70862 && ClickAimSettings.UseKeyOneStartAttackMacro;
+        if (keyOneMacro)
+        {
+            postHealStartKey = 0; // never combine two independently configured start keys
+            if (!snap.TryGetLocalPlayer(out macroPlayer) || macroPlayer.Guid.IsEmpty ||
+                !reader.TryReadMapId(out macroMap) || macroMap == uint.MaxValue ||
+                !reader.TryReadExperimentalActionSnapshot(out ulong[] macroBar) || macroBar.Length != 12 || macroBar[0] == 0)
+                return StopFightForSafety("key 1 macro mode requires a readable player, map and non-empty first bar slot; stopping");
+        }
         Func<bool>? defensiveMovement = defenceOnly && remoteDefence
             ? () => RemoteDefenceMovementAllowed(reader, fightMemory, expectedPull) : null;
         List<ClickAimAction> bar = ClickAimCombat.ReadBar(reader);
@@ -5507,7 +5556,7 @@ internal static class GrindRunner
                         ? "off"
                         : "slot " + dot.Slot + " '" + ClickAimCombat.KeyLabel(dot.KeyVk) + "' " + dot.Name
                           + " every " + ClickAimSettings.DotRefreshSeconds.ToString(CultureInfo.InvariantCulture) + " s",
-                    auto == null ? "right-click only" : "slot " + auto.Slot + " '" + ClickAimCombat.KeyLabel(auto.KeyVk) + "'",
+                    keyOneMacro ? "key 1 macro (unverified)" : auto == null ? "right-click only" : "slot " + auto.Slot + " '" + ClickAimCombat.KeyLabel(auto.KeyVk) + "'",
                     castRange,
                     damage == null || !damage.IsMelee ? ""
                         : " - a melee ability, so the fight closes to arm's length",
@@ -5515,6 +5564,33 @@ internal static class GrindRunner
                         : ", melee ability " + meleeHit.Name + " (slot " + meleeHit.Slot + " '"
                           + ClickAimCombat.KeyLabel(meleeHit.KeyVk) + "')",
                     ClickAimSettings.HealMinManaPercent));
+            }
+
+            // One start attempt per fight, before any heal or offensive spell. If
+            // engaged at range, the repeat-safe macro can also be attempted there;
+            // neither the binding nor the resulting swing is observable.
+            if (keyOneMacro && !keyOneStarted)
+            {
+                if (!TryFightKeyOneMacro(hwnd, reader, fightMemory, macroPlayer, expectedPull, macroMap,
+                    defenceOnly, defenceFactionFilter, defenceOnly ? defenceLimit : GiveUpYd, "at fight start"))
+                    return YieldForTargetChange(reader, fightMemory, defenceTarget);
+                keyOneStarted = true;
+                attackPressed = true;
+                if (d <= AttackRangeYd)
+                {
+                    lastAttackPressMs = Environment.TickCount;
+                    lastMeleeDamageMs = lastAttackPressMs;
+                    MarkFocusedAttack(target);
+                }
+                presses++;
+                _presses++;
+            }
+            if (keyOneMacro && keyOneStarted && lastAttackPressMs == 0 && d <= AttackRangeYd)
+            {
+                // Start the no-damage timeout at melee arrival, not at the distant opener.
+                lastAttackPressMs = Environment.TickCount;
+                lastMeleeDamageMs = lastAttackPressMs;
+                MarkFocusedAttack(target);
             }
 
             /* ---- 1. heal, where Singular puts it: before everything else ----
@@ -5657,6 +5733,19 @@ internal static class GrindRunner
                     }
                 }
 
+                if (keyOneMacro)
+                {
+                    // Wait through the full heal window even when a health sample
+                    // changed early: it does not prove the cast finished or landed.
+                    int remaining = ClickAimCombat.HealVerifyMs - unchecked(Environment.TickCount - lastHealMs);
+                    if (remaining > 0 && (ClickAimAbort.Wait(remaining) || _stop)) return "stopped";
+                    if (TryFightKeyOneMacro(hwnd, reader, fightMemory, macroPlayer, expectedPull, macroMap,
+                        defenceOnly, defenceFactionFilter, defenceOnly ? defenceLimit : GiveUpYd, "after a heal attempt"))
+                    { presses++; _presses++; }
+                    else
+                        Logging.Write("[Grind] key 1 follow-up withheld after a heal attempt; rechecking the fight");
+                }
+
                 // Healing and the actual swing state are not observable. If the
                 // user configured a separate Start Attack binding, allow one
                 // guarded attempt after a heal with observed net effect; never
@@ -5734,9 +5823,9 @@ internal static class GrindRunner
             // actually in melee range, even if Shock is ready. A health drop is
             // not proof of a swing. Attack is a toggle, so attempt it only once
             // per Fight and never retry merely because damage is quiet.
-            bool shockAutoPlan = ClickAimClassRotation.ShockAutoPlan(rotation, auto);
+            bool shockAutoPlan = ClickAimClassRotation.ShockAutoPlan(rotation, auto, keyOneMacro);
             if (shockAutoPlan) conservativeShockAttack = true;
-            if (ClickAimClassRotation.MayPressConservativeAttack(shockAutoPlan, attackPressed, false, false, d, AttackRangeYd))
+            if (!keyOneMacro && ClickAimClassRotation.MayPressConservativeAttack(shockAutoPlan, attackPressed, false, false, d, AttackRangeYd))
             {
                 ClickAimKeySteer.ReleaseHeld();
                 if (!ClickAimKeySteer.Face(target.Location.X, target.Location.Y, hwnd, 45.0, 3))
@@ -5797,6 +5886,14 @@ internal static class GrindRunner
                 ClickAimInput.TapKey(hwnd, dot.KeyVk, 40);
                 if (rotation.Class == ClickAimRotationClass.Shaman)
                     ClickAimClassRotation.Defer(_rotationCooldowns, ClickAimClassRotation.DotCooldownGroup(dot), 8000, Environment.TickCount);
+                if (keyOneMacro && ClickAimClassRotation.IsAnyShock(dot))
+                {
+                    if (TryFightKeyOneMacro(hwnd, reader, fightMemory, macroPlayer, expectedPull, macroMap,
+                        defenceOnly, defenceFactionFilter, defenceOnly ? defenceLimit : GiveUpYd, "after a Shock attempt"))
+                    { presses++; _presses++; }
+                    else
+                        Logging.Write("[Grind] key 1 follow-up withheld after a Shock attempt; rechecking the fight");
+                }
                 MarkFocusedAttack(target);
                 presses++;
                 _presses++;
@@ -5937,6 +6034,14 @@ internal static class GrindRunner
                 ClickAimClassRotation.Defer(_rotationCooldowns,
                     supplemental ? rotation.SupplementalGroup : rotation.DamageGroup,
                     supplemental ? rotation.SupplementalIntervalMs : rotation.DamageIntervalMs, Environment.TickCount);
+                if (keyOneMacro && ClickAimClassRotation.IsAnyShock(castDamage))
+                {
+                    if (TryFightKeyOneMacro(hwnd, reader, fightMemory, macroPlayer, expectedPull, macroMap,
+                        defenceOnly, defenceFactionFilter, defenceOnly ? defenceLimit : GiveUpYd, "after a Shock attempt"))
+                    { presses++; _presses++; }
+                    else
+                        Logging.Write("[Grind] key 1 follow-up withheld after a Shock attempt; rechecking the fight");
+                }
                 MarkFocusedAttack(target);
                 presses++;
                 _presses++;
@@ -5981,6 +6086,11 @@ internal static class GrindRunner
                                 ? "[Grind] after {0}, mob health {1} -> {2} (mana {3} -> {4}); damage source and swing state unverified"
                                 : "[Grind] {0} does damage: mob health {1} -> {2} (mana {3} -> {4})",
                             castDamage!.Name, lastHealth, mobAfter, manaBefore, manaAfter));
+                        if (keyOneMacro && mobAfter == 0 && mobBeforeHealth > 0)
+                        {
+                            if (_focusedFightGuid == defenceTarget) _focusedFightGuid = default;
+                            return "killed with " + string.Join(", ", worked.ToArray());
+                        }
                         lastHealth = mobAfter;
                         if (shockAutoPlan) { lastShockDamageMs = Environment.TickCount; quietRounds = 0; }
                     }
@@ -6159,7 +6269,7 @@ internal static class GrindRunner
              * loop pressed Attack a second time 2.8 s after the first, which on this client is a
              * toggle: the swing the first press started was turned off again. */
             bool pressPending = lastAttackPressMs != 0 && sincePressMs < MeleePressGraceMs;
-            if (auto != null)
+            if (!keyOneMacro && auto != null)
             {
                 /* One press is the norm. A second is only made when the first demonstrably did
                  * nothing - no swing has landed for twice MeleeSwingQuietMs - because after a
@@ -6187,7 +6297,7 @@ internal static class GrindRunner
                                 + "something stops it; pressing it again would turn it off)");
                 }
             }
-            else if (!swinging && !pressPending && !preserveAttackAfterHeal
+            else if (!keyOneMacro && !swinging && !pressPending && !preserveAttackAfterHeal
                      && !((!defenceOnly || defenceFactionFilter || reader.IsExperimental70862) && GrindFactionSettings.Rules.Enabled)
                      && unchecked(Environment.TickCount - lastMeleeClickMs) >= MeleeClickMs)
             {
@@ -6201,7 +6311,7 @@ internal static class GrindRunner
                 }
             }
 
-            if (auto == null && !noSafeAutoLogged && (!defenceOnly || defenceFactionFilter || reader.IsExperimental70862) && GrindFactionSettings.Rules.Enabled)
+            if (!keyOneMacro && auto == null && !noSafeAutoLogged && (!defenceOnly || defenceFactionFilter || reader.IsExperimental70862) && GrindFactionSettings.Rules.Enabled)
             {
                 noSafeAutoLogged = true;
                 Logging.Write("[Grind] faction filter: unverified melee right-click withheld; put Attack on an action bar to start auto-attack safely");
@@ -6220,6 +6330,14 @@ internal static class GrindRunner
                 if (!ResourceInputStillAllowed(reader)) continue;
                 ClickAimInput.TapKey(hwnd, meleeHit.KeyVk, 40);
                 ClickAimClassRotation.Defer(_rotationCooldowns, rotation.MeleeGroup, rotation.MeleeIntervalMs, Environment.TickCount);
+                if (keyOneMacro && ClickAimClassRotation.IsAnyShock(meleeHit))
+                {
+                    if (TryFightKeyOneMacro(hwnd, reader, fightMemory, macroPlayer, expectedPull, macroMap,
+                        defenceOnly, defenceFactionFilter, defenceOnly ? defenceLimit : GiveUpYd, "after a Shock attempt"))
+                    { presses++; _presses++; }
+                    else
+                        Logging.Write("[Grind] key 1 follow-up withheld after a Shock attempt; rechecking the fight");
+                }
                 if (rotation.MeleeIntervalMs > 0) { _pendingCastId = meleeHit.Id; _pendingCastMana = myMana; }
                 MarkFocusedAttack(target);
                 presses++;

@@ -717,7 +717,12 @@ internal static class ClickAimCombat
         var result = new List<ClickAimAction>();
         if (reader == null) return result;
 
-        return DecodeBar(reader.ReadActionBar());
+        List<ClickAimAction> decoded = DecodeBar(reader.ReadActionBar());
+        // Macro slot encoding is not established. Do not misclassify its raw
+        // ID as a spell, heal, item or buff while the explicit key-1 mode is on.
+        if (reader.IsExperimental70862 && ClickAimSettings.UseKeyOneStartAttackMacro)
+            decoded.RemoveAll(action => action.Slot == 1);
+        return decoded;
     }
 
     // UI preview is read-only and does not authorize 70707 gameplay reads.

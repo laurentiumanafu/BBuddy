@@ -13,7 +13,7 @@ assert 'unmeasuredRage = reader.IsExperimental70707 && mine.PlayerPowerTypeCandi
 assert 'ClickAimSettings.UseDamageOverTime && !unmeasuredRage' in fight
 assert 'meleeHit != null && !unmeasuredRage' in fight
 assert fight.count('if (!ResourceInputStillAllowed(reader)) continue;') >= 3
-auto = fight[fight.index('            if (auto != null)'):fight.index('            else if (!swinging && !pressPending')]
+auto = fight[fight.index('            if (!keyOneMacro && auto != null)'):fight.index('            else if (!keyOneMacro && !swinging && !pressPending')]
 assert 'ClickAimInput.TapKey(hwnd, auto.KeyVk' in auto and 'ResourceInputStillAllowed' not in auto
 assert 'HealPowerOk(freshHeal.Power, freshHeal.MaxPower)' in fight
 project = '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><Nullable>enable</Nullable></PropertyGroup></Project>'

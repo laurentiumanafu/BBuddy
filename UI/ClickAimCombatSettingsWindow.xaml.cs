@@ -56,7 +56,9 @@ namespace CopilotBuddy.UI
         {
             InitializeComponent();
 
-            ClickAimSettings.Load();   // also loads the user's spell roles
+            // Do not reload hand-edited runtime settings while a bot is active.
+            if (!ClickAimUi.Running && !ClickAimUi.Paused)
+                ClickAimSettings.Load();   // also loads the user's spell roles
             CaptureOriginalRoles();
             LoadFromSettings();
             LoadSpells();
@@ -231,6 +233,7 @@ namespace CopilotBuddy.UI
         {
             cmbRotation.ItemsSource = Enum.GetValues(typeof(ClickAimRotationClass));
             cmbRotation.SelectedItem = ClickAimSettings.RotationClass;
+            chkKeyOneAttackMacro.IsChecked = ClickAimSettings.UseKeyOneStartAttackMacro;
             int savedStartAttack = ClickAimSettings.PostHealStartAttackVk;
             chkPostHealStartAttack.IsChecked = savedStartAttack != 0 && ClickAimSettings.ValidStartAttackVk(savedStartAttack);
             int preferredStartAttack = savedStartAttack != 0 && ClickAimSettings.ValidStartAttackVk(savedStartAttack)
@@ -292,13 +295,15 @@ namespace CopilotBuddy.UI
                 return false;
             }
             int selectedStartAttack = chkPostHealStartAttack.IsChecked == true ? preferredStartAttack : 0;
-            if (selectedStartAttack != ClickAimSettings.PostHealStartAttackVk && (ClickAimUi.Running || ClickAimUi.Paused))
+            bool macroEnabled = chkKeyOneAttackMacro.IsChecked == true;
+            if ((selectedStartAttack != ClickAimSettings.PostHealStartAttackVk || macroEnabled != ClickAimSettings.UseKeyOneStartAttackMacro) && (ClickAimUi.Running || ClickAimUi.Paused))
             {
                 System.Windows.MessageBox.Show("Stop the bot before changing the Start Attack binding.", "Combat settings", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return false;
             }
             if (cmbRotation.SelectedItem is ClickAimRotationClass selectedRotation)
                 ClickAimSettings.RotationClass = selectedRotation;
+            ClickAimSettings.UseKeyOneStartAttackMacro = macroEnabled;
             ClickAimSettings.PostHealStartAttackVk = selectedStartAttack;
             if (preferredStartAttack != 0) ClickAimSettings.PostHealStartAttackPreferredVk = preferredStartAttack;
             ClickAimSettings.HealBelowPercent = heal;
@@ -1015,6 +1020,8 @@ namespace CopilotBuddy.UI
 
         private void btnDefaults_Click(object sender, RoutedEventArgs e)
         {
+            if (ClickAimUi.Running || ClickAimUi.Paused)
+            { System.Windows.MessageBox.Show("Stop the bot before restoring combat defaults.", "Combat settings", MessageBoxButton.OK, MessageBoxImage.Warning); return; }
             ClickAimSettings.ResetDefaults();
             LoadFromSettings();
         }

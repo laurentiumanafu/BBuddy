@@ -19,7 +19,7 @@ assert 'if (target.Guid != defenceTarget)' in fight
 assert 'FactionPullStillAllowed(reader, expectedPull, target)' in fight
 for condition in ('_stop', 'ClickAimAbort.Requested', 'reader.ReadTargetGuid() != target', 'FactionAttackInputAllowed'):
     assert condition in guard
-attack = fight[fight.index('            if (auto != null)'):fight.index('            else if (!swinging && !pressPending')]
+attack = fight[fight.index('            if (!keyOneMacro && auto != null)'):fight.index('            else if (!keyOneMacro && !swinging && !pressPending')]
 assert attack.index('FightAttackInputAllowed(') < attack.index('ClickAimInput.TapKey(hwnd, auto.KeyVk')
 assert attack.index('if (!auto.IsAttack)') < attack.index('ClickAimInput.TapKey(hwnd, auto.KeyVk')
 assert 'MayPressConservativeAttack(true, attackPressed, swinging, pressPending, d, AttackRangeYd)' in attack
@@ -61,7 +61,7 @@ assert 'ClickAimInput.TapKey(hwnd, 0x70' not in heal and 'ClickAimInput.TapKey(h
 assert 'TryRestoreHealTarget' not in fight and 'meleeSwinging = false' not in heal
 assert 'if (attackPressed || lastMeleeClickMs != 0) preserveAttackAfterHeal = true;' in heal
 assert 'conservativeShockAttack || preserveAttackAfterHeal' in attack
-assert '!preserveAttackAfterHeal' in fight[fight.index('            else if (!swinging && !pressPending'):]
+assert '!preserveAttackAfterHeal' in fight[fight.index('            else if (!keyOneMacro && !swinging && !pressPending'):]
 print('Shock/Attack and no-retarget heal integration assertions passed (static, not a live fight).')
 fixture = (Path(__file__).parent / 'Fixture.cs.txt').read_text().replace('        // __GUARD__', guard)
 project = '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><Nullable>enable</Nullable></PropertyGroup></Project>'

@@ -155,11 +155,15 @@ internal static class ClickAimClassRotation
     // estimated shared cooldown, not a ranged filler. With Attack available,
     // close in after the opener and use melee between shocks. Do not apply this
     // policy to a Lightning Bolt filler, Hunter shots, or an ignored Attack.
-    internal static bool ShockAutoPlan(ClickAimRotationPlan plan, ClickAimAction? auto)
+    internal static bool ShockAutoPlan(ClickAimRotationPlan plan, ClickAimAction? auto, bool keyOneMacro = false)
         => plan.Class == ClickAimRotationClass.Shaman && plan.Damage != null && plan.Damage.IsDamage &&
            IsDirectShock(plan.Damage) &&
-           plan.DamageGroup == "Shocks" && plan.DamageIntervalMs > 0 && plan.Supplemental == null &&
-           auto != null && auto.IsAutoAttack && auto.IsAttack && auto.KeyVk != 0;
+           plan.DamageGroup == "Shocks" && plan.DamageIntervalMs > 0 &&
+           (plan.Supplemental == null || (keyOneMacro && IsDirectShock(plan.Supplemental))) &&
+           (keyOneMacro || (auto != null && auto.IsAutoAttack && auto.IsAttack && auto.KeyVk != 0));
+
+    internal static bool IsAnyShock(ClickAimAction action)
+        => IsDirectShock(action) || string.Equals(ClickAimCombat.NameOf(action.Id), "Flame Shock", StringComparison.OrdinalIgnoreCase);
 
     internal static bool PreferShockMelee(bool shockAutoPlan, bool shockReady)
         => shockAutoPlan && !shockReady;
