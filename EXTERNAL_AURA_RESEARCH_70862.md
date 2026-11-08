@@ -1,0 +1,18 @@
+# 70862 external aura candidate: read-only research
+
+The three 2026-11-08 traces showed a candidate count changing 12 → 14 when the recordings were labeled with Strength of Earth and Healing Stream, and 14 → 12 → 14 during the in/out-of-range recording. The player header candidate at `+0x5F0` pointed outside the player window, with candidate length 17 and capacity 24. This is a lead, not proof of a complete aura list, pointer semantics, effect IDs, or totem activity.
+
+## How to record
+
+1. Build and run the updated Windows x64 application and attach to 70862. Stop Grind, GatherBuddy, and any route; remain in a safe area. The recording does not press keys, use Lua, call game functions, or write into the client.
+2. Open **Combat settings → Combat research** and check **Also record bounded external aura candidate (70862 only)**. The option starts unchecked and applies only to that recording. Keep the same character, selection and action bar throughout each trace. If the character, target, attachment, bar or bot state changes, the recorder discards the affected sample and stops.
+3. Record a 25-second control with neither tested totem active. Wait until the status says **Recording**, then remain still and do nothing. Label it `no totems control`.
+4. For a second trace, still with neither tested totem active, label it `Strength of Earth alone`. After **Recording** appears, wait about five seconds and manually place that totem once. Stay within range. Note its rank and the visible buff icon and approximate time. Wait for the trace to finish.
+5. Once the first totem and its effect have expired or been removed, repeat with only Healing Stream, labelled `Healing Stream alone`. Note the rank and whether a player buff icon is visible. If convenient, add a fourth trace for entering and leaving range of a single totem, with approximate times and visible changes.
+6. Files are saved under `Logs/CombatResearch`. They contain raw process memory, GUIDs, addresses and possibly other sensitive data; inspect before sharing. Send the traces and notes. If the trace contains `external unavailable`, send that too; it indicates an unreadable, unstable, inline or unsupported candidate, **not** an absent effect. Cancel recording with **Stop recording**.
+
+## What is bounded
+
+This optional diagnostic is gated to 70862 and reads no pointer graph. It double-reads the 24-byte candidate header at `player+0x5F0`, checks a plausible aligned external pointer and candidate length/capacity (maximum 24 slots, maximum capacity 32), limits the read to `length × 0x128` bytes (at most 7,104), and requires one committed readable non-guard memory region. It reads the candidate bytes twice and rechecks the header and memory region; if these change or cannot be read, the sample is unavailable and the previous baseline is discarded. Player, attachment, target and bar are checked before and after each sample. The recorder is read-only, but these checks are not atomic and cannot prevent ABA changes, pointer reuse, unrelated content or all process-read risks.
+
+The old candidate's inline ID position is `0xE8` relative to the candidate base, with a `0x128` stride; the external representation is **not established**. The trace writes the raw bounded bytes and subsequent dword changes. `python Tools/analyze_external_aura_trace.py <trace>` reconstructs candidate triples as a research aid only. A failed read or missing candidate is not proof that an effect is absent. This does not enable automatic totems, buff detection, or combat behavior.

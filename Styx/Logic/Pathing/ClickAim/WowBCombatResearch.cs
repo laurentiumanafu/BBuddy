@@ -11,8 +11,9 @@ using Styx.WoWInternals;
 
 namespace Styx.Logic.Pathing;
 
-// Read-only evidence collection. No Lua, casts, keyboard/mouse input, pointer
-// chasing or gameplay offset promotion. The raw windows may miss the state.
+// Read-only evidence collection. No Lua, casts, keyboard/mouse input or
+// gameplay offset promotion. An explicit 70862-only option samples one bounded
+// external candidate pointer; it never follows a pointer graph. Data may miss state.
 internal static class WowBCombatResearch
 {
     internal const int WindowSize = 0x2800, ChunkSize = 0x100;
@@ -131,9 +132,91 @@ internal static class WowBCombatResearch
         return text.ToString();
     }
 
+    // Candidate header observed on one 70862 player. Its meanings and the
+    // 0x128 stride are hypotheses, not a verified aura container. Research only.
+    private const int ExternalHeaderOffset = 0x5F0, ExternalHeaderSize = 24;
+    internal const int ExternalCandidateStride = 0x128, ExternalMaxSlots = 24;
+    private const ulong ExternalMaxCapacity = 32;
+
+    internal sealed class ExternalCandidateSample
+    {
+        internal readonly ulong Address, Length, Capacity;
+        internal readonly byte[] Bytes;
+        internal ExternalCandidateSample(ulong address, ulong length, ulong capacity, byte[] bytes)
+        { Address = address; Length = length; Capacity = capacity; Bytes = bytes; }
+    }
+
+    private static bool SameBytes(byte[]? a, byte[]? b)
+    {
+        if (a == null || b == null || a.Length != b.Length) return false;
+        for (int i = 0; i < a.Length; i++) if (a[i] != b[i]) return false;
+        return true;
+    }
+
+    // Called only from the opt-in stopped 70862 research trace. Reads one
+    // candidate pointer, not a pointer graph. A readable region and identical
+    // pre/post headers and data reduce risk, but cannot exclude ABA/reuse.
+    internal static ExternalCandidateSample? ReadExternalCandidate(Memory memory, ulong playerUnit, out string reason)
+    {
+        reason = "header unreadable or unstable";
+        try
+        {
+            if (playerUnit < 0x10000 || playerUnit > UserLimit - WindowSize) return null;
+            byte[]? header1 = memory.ReadBytes64(playerUnit + ExternalHeaderOffset, ExternalHeaderSize);
+            byte[]? header2 = memory.ReadBytes64(playerUnit + ExternalHeaderOffset, ExternalHeaderSize);
+            if (!SameBytes(header1, header2) || header1 == null || header1.Length != ExternalHeaderSize) return null;
+            ulong address = BitConverter.ToUInt64(header1, 0);
+            ulong length = BitConverter.ToUInt64(header1, 8);
+            ulong capacity = BitConverter.ToUInt64(header1, 16);
+            reason = "candidate header outside external research bounds";
+            if (length == 0 || length > ExternalMaxSlots || capacity == 0 || capacity > ExternalMaxCapacity ||
+                length > capacity || address < 0x10000 || (address & 7) != 0) return null;
+            int size = (int)length * ExternalCandidateStride;
+            if (address > UserLimit - (ulong)size ||
+                (address < playerUnit + WindowSize && address + (ulong)size > playerUnit)) return null;
+            reason = "candidate region not wholly committed and readable";
+            if (!memory.IsCommittedReadableRange64(address, size)) return null;
+            reason = "candidate data unreadable or unstable";
+            byte[]? first = memory.ReadBytes64(address, size);
+            byte[]? second = memory.ReadBytes64(address, size);
+            if (!SameBytes(first, second) || second == null || second.Length != size) return null;
+            reason = "header or region changed during candidate read";
+            byte[]? header3 = memory.ReadBytes64(playerUnit + ExternalHeaderOffset, ExternalHeaderSize);
+            byte[]? header4 = memory.ReadBytes64(playerUnit + ExternalHeaderOffset, ExternalHeaderSize);
+            if (!SameBytes(header1, header3) || !SameBytes(header1, header4) ||
+                !memory.IsCommittedReadableRange64(address, size)) return null;
+            reason = "";
+            return new ExternalCandidateSample(address, length, capacity, second);
+        }
+        catch { return null; }
+    }
+
+    // A new pointer/header or a failed read resets the baseline. An omitted or
+    // unavailable candidate is never interpreted as an absent effect.
+    internal static string FormatExternalCandidate(ExternalCandidateSample? previous, ExternalCandidateSample current)
+    {
+        if (previous == null || previous.Address != current.Address || previous.Length != current.Length ||
+            previous.Capacity != current.Capacity || previous.Bytes.Length != current.Bytes.Length)
+            return "external baseline pointer=0x" + current.Address.ToString("X", CultureInfo.InvariantCulture) +
+                " length=" + current.Length.ToString(CultureInfo.InvariantCulture) +
+                " capacity=" + current.Capacity.ToString(CultureInfo.InvariantCulture) +
+                " bytes=" + Convert.ToHexString(current.Bytes) + Environment.NewLine;
+        var text = new StringBuilder();
+        for (int i = 0; i < current.Bytes.Length; i += 4)
+        {
+            uint oldWord = BitConverter.ToUInt32(previous.Bytes, i), newWord = BitConverter.ToUInt32(current.Bytes, i);
+            if (oldWord == newWord) continue;
+            if (text.Length == 0) text.Append("external changes");
+            text.Append(" +0x").Append(i.ToString("X4", CultureInfo.InvariantCulture)).Append(':')
+                .Append(oldWord.ToString("X8", CultureInfo.InvariantCulture)).Append('>')
+                .Append(newWord.ToString("X8", CultureInfo.InvariantCulture));
+        }
+        return text.Length == 0 ? "external stable" + Environment.NewLine : text.AppendLine().ToString();
+    }
+
     // Shorter bounded parameters allow the same production capture path to be
     // exercised in synthetic fixtures. The UI uses 100 x 250 ms (25 seconds).
-    internal static string Capture(string label, CancellationToken cancel, int samples = 100, int intervalMs = 250, Action? onStarted = null)
+    internal static string Capture(string label, CancellationToken cancel, int samples = 100, int intervalMs = 250, Action? onStarted = null, bool includeExternalArray = false)
     {
         if (Interlocked.CompareExchange(ref _running, 1, 0) != 0) return "A combat research capture is already running.";
         string? path = null;
@@ -145,6 +228,8 @@ internal static class WowBCombatResearch
             WowBReader? reader = ObjectManager.WowB;
             if (memory == null || reader == null || !memory.Is64BitTarget || !reader.IsExperimental70707)
                 return "Attach to a 70707, 70755, 70790 or 70862 client and enter the world first.";
+            if (includeExternalArray && !reader.IsExperimental70862)
+                return "External aura research is currently limited to 70862; uncheck it for other builds.";
             using var uncached = memory.TemporaryCacheState(false);
             if (!WowBGrindFactions.TraceBuild70707(memory, reader) ||
                 !reader.TryCaptureWorldSnapshot(out WowBWorldSnapshot? snapshot) || snapshot == null ||
@@ -177,11 +262,14 @@ internal static class WowBCombatResearch
                     (target.HasValue ? " targetUnit=0x" + target.Value.UnitAddress.ToString("X", CultureInfo.InvariantCulture) : " target window not captured"));
                 output.WriteLine("Player and optional selected NPC: unit+0x0000..0x27FF; 256-byte chunks; baseline hex bytes or 32-bit LE changes; unreadable != zero.");
                 output.WriteLine("Reads are non-atomic; game events, effects and other causes can change fields. No keyboard, mouse, Lua or game writes were used.");
+                if (includeExternalArray)
+                    output.WriteLine("External candidate enabled: bounded read-only pointer at player+0x5F0; length, capacity and stride are unverified. Raw data may be sensitive.");
                 foreach (var slot in bar)
                     output.WriteLine("bar slot=" + slot.Index.ToString(CultureInfo.InvariantCulture) + " raw=0x" + slot.Raw.ToString("X16", CultureInfo.InvariantCulture));
                 var watch = Stopwatch.StartNew();
                 onStarted?.Invoke();
                 byte[]?[]? priorPlayer = null, priorTarget = null;
+                ExternalCandidateSample? priorExternal = null;
                 for (int i = 0; i < samples; i++)
                 {
                     if (cancel.IsCancellationRequested) { reason = "cancelled"; break; }
@@ -190,12 +278,24 @@ internal static class WowBCombatResearch
                     long started = watch.ElapsedMilliseconds;
                     byte[]?[] playerBytes = ReadWindow(memory, player.UnitAddress);
                     byte[]?[]? targetBytes = target.HasValue ? ReadWindow(memory, target.Value.UnitAddress) : null;
+                    string externalReason = "";
+                    ExternalCandidateSample? external = includeExternalArray && !cancel.IsCancellationRequested
+                        ? ReadExternalCandidate(memory, player.UnitAddress, out externalReason) : null;
+                    if (cancel.IsCancellationRequested) { reason = "cancelled during read; last sample discarded"; break; }
                     if (!StableWithBar(memory, reader, player, target, snapshot.TargetGuid, bar, out why))
                     { reason = "state changed during read (" + why + "); last sample discarded"; break; }
                     output.WriteLine("sample=" + i.ToString(CultureInfo.InvariantCulture) + " startMs=" + started.ToString(CultureInfo.InvariantCulture) +
                         " endMs=" + watch.ElapsedMilliseconds.ToString(CultureInfo.InvariantCulture) + " utc=" + DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
                     output.Write(Diff(priorPlayer, playerBytes, "player"));
                     if (targetBytes != null) output.Write(Diff(priorTarget, targetBytes, "target"));
+                    if (includeExternalArray)
+                    {
+                        if (external == null)
+                            output.WriteLine("external unavailable: " + externalReason + "; previous baseline discarded");
+                        else
+                            output.Write(FormatExternalCandidate(priorExternal, external));
+                        priorExternal = external;
+                    }
                     priorPlayer = playerBytes; priorTarget = targetBytes; saved++;
                     int wait = (int)Math.Max(0, intervalMs - (watch.ElapsedMilliseconds - started));
                     if (cancel.WaitHandle.WaitOne(wait)) { reason = "cancelled"; break; }

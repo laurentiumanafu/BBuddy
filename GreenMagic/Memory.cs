@@ -1302,6 +1302,26 @@ namespace GreenMagic
         }
 
         /// <summary>
+        /// True only when one committed, readable, non-guard region contains the
+        /// entire range. A failed query or split range is unknown, not readable.
+        /// This does not guarantee that the region remains mapped during a read.
+        /// </summary>
+        public bool IsCommittedReadableRange64(ulong address, int length)
+        {
+            if (ProcessHandle == IntPtr.Zero || length <= 0 || address > long.MaxValue) return false;
+            int infoSize = Marshal.SizeOf(typeof(MEMORY_BASIC_INFORMATION64));
+            IntPtr result = Imports.VirtualQueryEx64(ProcessHandle, new IntPtr((long)address),
+                out MEMORY_BASIC_INFORMATION64 info, (IntPtr)infoSize);
+            uint protection = info.Protect & 0xFF;
+            bool readable = protection == 0x02 || protection == 0x04 || protection == 0x08 ||
+                            protection == 0x20 || protection == 0x40 || protection == 0x80;
+            if (result.ToInt64() != infoSize || info.State != 0x1000 || !readable ||
+                (info.Protect & 0x100) != 0 || info.BaseAddress > address || info.RegionSize < (ulong)length)
+                return false;
+            return address - info.BaseAddress <= info.RegionSize - (ulong)length;
+        }
+
+        /// <summary>
         /// True only when VirtualQueryEx positively reports that the entire range
         /// is MEM_FREE. Query failures, reserved/committed pages and mixed regions
         /// are unknown, not evidence that a pointer is invalid.

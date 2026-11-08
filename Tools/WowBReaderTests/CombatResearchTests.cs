@@ -80,6 +80,56 @@ internal static class CombatResearchTests
                 data.Contains("+0x0150:00000000>0000007B") && data.Contains("sample=2 ") &&
                 data.Contains("end: completed; samples=3"), "baseline, change, timestamps, action bar and label");
             Check(!reader.HasExperimentalGrindSession && reader.ReadActionBar().Count == 0, "trace does not arm gameplay");
+            Check(WowBCombatResearch.Capture("external on 70707", CancellationToken.None, 1, 10, includeExternalArray: true)
+                .Contains("limited to 70862"), "external probe is build gated");
+
+            // The following synthetic bytes exercise only the bounded candidate
+            // reader; they do not validate the live 70862 header or layout.
+            ulong externalBase = 0x50000000;
+            int externalSize = 17 * WowBCombatResearch.ExternalCandidateStride;
+            mem.Bytes(externalBase, new byte[externalSize]);
+            mem.U64(playerUnit + 0x5F0, externalBase);
+            mem.U64(playerUnit + 0x5F8, 17);
+            mem.U64(playerUnit + 0x600, 24);
+            mem.U32(externalBase + 0xE8, 324);
+            var ext = WowBCombatResearch.ReadExternalCandidate(mem, playerUnit, out string extReason);
+            Check(ext != null && ext.Bytes.Length == externalSize && extReason == "", "stable bounded external candidate");
+            Check(WowBCombatResearch.FormatExternalCandidate(null, ext!).Contains("external baseline"), "initial baseline");
+            mem.U32(externalBase + 0xE8, 1234);
+            var extChanged = WowBCombatResearch.ReadExternalCandidate(mem, playerUnit, out extReason);
+            Check(extChanged != null && WowBCombatResearch.FormatExternalCandidate(ext, extChanged).Contains("+0x00E8:00000144>000004D2"), "candidate changes");
+            Check(WowBCombatResearch.FormatExternalCandidate(extChanged, extChanged!).Contains("external stable"), "stable candidate");
+            mem.ReadableRangeAllowed = false;
+            Check(WowBCombatResearch.ReadExternalCandidate(mem, playerUnit, out extReason) == null && extReason.Contains("committed"), "unreadable region denied");
+            mem.ReadableRangeAllowed = true;
+            mem.U64(playerUnit + 0x5F8, 25);
+            Check(WowBCombatResearch.ReadExternalCandidate(mem, playerUnit, out extReason) == null, "excess length denied");
+            mem.U64(playerUnit + 0x5F8, 17);
+            mem.U64(playerUnit + 0x600, 16);
+            Check(WowBCombatResearch.ReadExternalCandidate(mem, playerUnit, out extReason) == null, "length beyond capacity denied");
+            mem.U64(playerUnit + 0x600, 24);
+            mem.U64(playerUnit + 0x5F0, playerUnit + 0x608);
+            Check(WowBCombatResearch.ReadExternalCandidate(mem, playerUnit, out extReason) == null, "inline pointer denied");
+            mem.U64(playerUnit + 0x5F0, externalBase);
+            int externalReads = 0;
+            mem.OnRead = (address, count) =>
+            {
+                if (address == externalBase && count == externalSize && ++externalReads == 2)
+                    mem.U32(externalBase + 0xE8, 4321);
+            };
+            Check(WowBCombatResearch.ReadExternalCandidate(mem, playerUnit, out extReason) == null && extReason.Contains("unstable"), "changing data discarded");
+            mem.OnRead = null;
+            int headerReads = 0;
+            mem.OnRead = (address, count) =>
+            {
+                if (address == playerUnit + 0x5F0 && count == 24 && ++headerReads == 3)
+                    mem.U64(playerUnit + 0x5F8, 16);
+            };
+            Check(WowBCombatResearch.ReadExternalCandidate(mem, playerUnit, out extReason) == null && extReason.Contains("changed"), "changed header discarded");
+            mem.OnRead = null;
+            mem.U64(playerUnit + 0x5F0, 0);
+            mem.U64(playerUnit + 0x5F8, 0);
+            mem.U64(playerUnit + 0x600, 0);
             mem.Remove(playerUnit + 0x103);
             var sparse = WowBCombatResearch.ReadWindow(mem, playerUnit);
             Check(sparse[1] == null && sparse[0] != null && sparse[2] != null, "unreadable chunk stays null");

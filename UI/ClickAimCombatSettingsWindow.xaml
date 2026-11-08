@@ -181,6 +181,9 @@
                            Text="Stop the bot. Select a target before recording if you need target data, then start the trace. Wait for the Recording message, return to the game, wait about five seconds and manually cast one spell once. Keep the same character and target selected."/>
                 <TextBlock TextWrapping="Wrap" Margin="0,0,0,10"
                            Text="The trace samples raw player data and, when available, the selected NPC. It does not press keys, use Lua, or identify cooldowns or auras. The data may contain GUIDs, process addresses and other sensitive information."/>
+                <CheckBox x:Name="chkExternalAuraResearch" IsChecked="False" Margin="0,0,0,8"
+                          Content="Also record bounded external aura candidate (70862 only)"
+                          ToolTip="Read-only research; captures additional raw memory that may be sensitive. This does not identify buffs or change gameplay."/>
                 <TextBlock Text="Experiment label (e.g. Mage Fireball or Shaman Lightning Bolt):" Margin="0,0,0,4"/>
                 <TextBox x:Name="txtCombatResearchLabel" MaxLength="80" Margin="0,0,0,10"/>
                 <StackPanel Orientation="Horizontal">

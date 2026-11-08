@@ -80,6 +80,8 @@ namespace CopilotBuddy.UI
             btnCombatResearch.IsEnabled = false;
             btnCancelCombatResearch.IsEnabled = true;
             string label = txtCombatResearchLabel.Text;
+            bool includeExternalArray = chkExternalAuraResearch.IsChecked == true;
+            chkExternalAuraResearch.IsEnabled = false;
             lblCombatResearch.Text = "Preparing and checking identity; wait for Recording before returning to the game.";
             try
             {
@@ -88,7 +90,7 @@ namespace CopilotBuddy.UI
                     {
                         if (!cancellation.IsCancellationRequested)
                             lblCombatResearch.Text = "Recording for 25 seconds. Return to the game, wait about 5 seconds, then manually cast once; keep the same target.";
-                    }))));
+                    })), includeExternalArray: includeExternalArray));
                 lblCombatResearch.Text = result;
                 Logging.Write("[Combat research] " + result);
             }
@@ -99,6 +101,7 @@ namespace CopilotBuddy.UI
                 _combatResearchCancellation = null;
                 cancellation.Dispose();
                 btnCombatResearch.IsEnabled = true;
+                chkExternalAuraResearch.IsEnabled = true;
                 btnCancelCombatResearch.IsEnabled = false;
             }
         }

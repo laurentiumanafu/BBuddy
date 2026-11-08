@@ -536,6 +536,13 @@ namespace GreenMagic
             OnFreeQuery?.Invoke(address);
             return length == 0x20 && FreeHeaders.Contains(address);
         }
+        public bool ReadableRangeAllowed { get; set; } = true;
+        public bool IsCommittedReadableRange64(ulong address, int length)
+        {
+            if (!ReadableRangeAllowed || length <= 0) return false;
+            for (int i = 0; i < length; i++) if (!bytes.ContainsKey(address + (ulong)i)) return false;
+            return true;
+        }
         public bool CacheEnabled { get; private set; }
         public void EnableCache() => CacheEnabled = true;
         public void DisableCache() => CacheEnabled = false;
