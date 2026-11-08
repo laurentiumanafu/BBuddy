@@ -81,6 +81,10 @@ namespace Styx.Logic.Pathing
         public static ClickAimSpellRole RoleOverrideOf(int id) => Overrides.TryGetValue(id, out var role) ? role : ClickAimSpellRole.Unknown;
         public static ClickAimSpellRole RoleOf(int id) => Overrides.TryGetValue(id, out var role) ? role : ClickAimSpellRole.Buff;
     }
+    static class WowBStoneclawPolicy
+    {
+        internal static uint ManaEstimate(int id) => id switch { 5730 => 15U, 6390 => 30U, 6391 => 55U, 6392 => 75U, 10427 => 105U, 10428 => 140U, _ => 0U };
+    }
     static class WowBCombatResearch
     {
         internal const int ExternalCandidateStride = 0x128, ExternalMaxSlots = 24;
@@ -369,7 +373,10 @@ namespace Styx.Logic.Pathing
             Check(!controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 0, "reset/resurrection does not cast totems out of combat");
             ClickAimCombat.Bar.Add(Action(3, 4)); now = 10000; controller.Reset();
             Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 1 && ClickAimInput.Keys[0] == 0x34, "ordinary quiet buffs still cast without totems");
-            ClickAimInput.Keys.Clear(); ClickAimCombat.Bar.RemoveAt(2); GrindRunner.Combat = true;
+            ClickAimInput.Keys.Clear(); ClickAimCombat.Bar.RemoveAt(2);
+            ClickAimCombat.Bar.Add(Action(6390, 4)); ClickAimCombat.Overrides[6390] = ClickAimSpellRole.Buff; now = 15000; controller.Reset();
+            Check(!controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 0, "Stoneclaw never becomes an out-of-combat buff");
+            ClickAimCombat.Bar.RemoveAt(2); GrindRunner.Combat = true;
             combatPlayer = ObjectManager.WowB.Player; now = 0; controller.Reset();
             Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "combat checkbox off prevents totem");
             ClickAimSettings.UseBuffsInCombat = true; TotemBytes(777, 8162, 5672);
@@ -380,11 +387,17 @@ namespace Styx.Logic.Pathing
             Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "Earth retry waits ten seconds");
             now = 10000;
             Check(controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe) && ClickAimInput.Keys.Count == 2, "Earth retries after ten seconds in combat");
-            TotemBytes(777, 8162, 5672); now = 20000;
+            TotemBytes(777, 5672); now = 20000; controller.ReserveEarthAfterStoneclaw();
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "Stoneclaw holds Earth buff for twenty seconds");
+            now = 39999;
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "Earth hold does not end early");
+            now = 40000;
+            Check(controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe) && ClickAimInput.Keys.Count == 3, "Earth may return after hold if effect is still absent");
+            TotemBytes(777, 8162, 5672); now = 50000;
             Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "active effects suppress retries");
-            TotemBytes(777, 8162); now = 25000;
-            Check(controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe) && ClickAimInput.Keys.Count == 3 && ClickAimInput.Keys[2] == 0x33, "missing Healing Stream attempts water totem independently");
-            TotemBytes(777, 777); now = 35000;
+            TotemBytes(777, 8162); now = 55000;
+            Check(controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe) && ClickAimInput.Keys.Count == 4 && ClickAimInput.Keys[3] == 0x33, "missing Healing Stream attempts water totem independently");
+            TotemBytes(777, 777); now = 65000;
             Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "duplicate candidates are unknown not absent");
             TotemBytes(777); ObjectManager.Wow!.ChangeTotemCount = true;
             Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "unstable count withholds cast");
@@ -393,9 +406,9 @@ namespace Styx.Logic.Pathing
             TotemBytes(777); ObjectManager.WowB.Power = 39;
             Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "low mana withholds both totems");
             ObjectManager.WowB.Power = 100; WowBCombatResearch.CombatEndsDuringRead = true;
-            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe) && ClickAimInput.Keys.Count == 3, "combat ending during read prevents totem input");
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe) && ClickAimInput.Keys.Count == 4, "combat ending during read prevents totem input");
             WowBCombatResearch.CombatEndsDuringRead = false; GrindRunner.Combat = true; WowBCombatResearch.StopDuringRead = true;
-            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe) && ClickAimInput.Keys.Count == 3, "STOP during external read withholds input");
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe) && ClickAimInput.Keys.Count == 4, "STOP during external read withholds input");
             Reset(); controller.Reset(); now = 0; ObjectManager.WowB!.IsExperimental70862 = false;
             ClickAimCombat.Bar = new List<ClickAimAction> { Action(8160, 2) }; TotemBytes(777); GrindRunner.Combat = true;
             combatPlayer = ObjectManager.WowB.Player; ClickAimSettings.UseBuffsInCombat = true;

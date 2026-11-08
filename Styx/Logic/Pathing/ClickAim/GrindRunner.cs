@@ -1268,7 +1268,7 @@ internal static class GrindRunner
         _dotUntil = 0;
         _manaPeak = 0;
         _healthPeak = 0;
-        Buffs.Reset();
+        Buffs.Reset(); _stoneclawNextAttempt = 0;
         _healCostGuess = 0;
         _healCostSpellId = 0;
         _castCosts.Clear();
@@ -4233,7 +4233,7 @@ internal static class GrindRunner
         _remoteDefenceAttempted = false;
         _gaveUpAt = 0;
         ClickAimSettings.Load();
-        Buffs.Reset();
+        Buffs.Reset(); _stoneclawNextAttempt = 0;
         _manaPeak = 0;
         _healthPeak = 0;
         _healCostGuess = 0;
@@ -5159,6 +5159,77 @@ internal static class GrindRunner
         return true;
     }
 
+    // Shared across successive fights in the session, not a client cooldown.
+    private static long _stoneclawNextAttempt;
+
+    private static bool StoneclawSlotCurrent(WowBReader reader, ClickAimAction action)
+    {
+        foreach (ClickAimAction current in ClickAimCombat.ReadBar(reader))
+            if (WowBStoneclawPolicy.Eligible(current) && current.Slot == action.Slot && current.Raw == action.Raw &&
+                current.Id == action.Id && current.KeyVk == action.KeyVk) return true;
+        return false;
+    }
+
+    private static bool StoneclawSnapshot(WowBReader reader, GreenMagic.Memory memory, IntPtr hwnd,
+        WowBObservedUnit expectedPlayer, WowBObservedUnit expectedTarget, uint map, uint mana,
+        Func<bool> targetSafe, out WowBWorldSnapshot? snapshot, out WowBObservedUnit player)
+    {
+        snapshot = null; player = default;
+        if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested || CheckDeathCheckpoint(trackerOnly: true) ||
+            ObjectManager.Wow != memory || ObjectManager.WowB != reader || memory.WindowHandle != hwnd ||
+            !reader.IsExperimental70862 || !WowBGrindFactions.Experimental70707BarSafe(reader) ||
+            !TryReadGatherCombat(out bool fighting) || !fighting || !targetSafe() ||
+            !reader.TryReadMapId(out uint currentMap) || currentMap != map ||
+            !reader.TryCaptureWorldSnapshot(out snapshot) || snapshot == null ||
+            !snapshot.TryGetLocalPlayer(out player) || !WowBStoneclawPolicy.SameIdentity(player, expectedPlayer) ||
+            !snapshot.TryGetSelectedTarget(out WowBObservedUnit target) || target.IsLocalPlayer || target.HasPlayerVtable ||
+            !WowBStoneclawPolicy.SameIdentity(target, expectedTarget) ||
+            !reader.TryGetUnitFields(target.UnitAddress, out WowBReader.WowBUnitFields mob) ||
+            !DefenceFieldsValid(mob.Health, mob.UnitFlags, false) ||
+            !reader.TryGetUnitFields(player.UnitAddress, out WowBReader.WowBUnitFields me) ||
+            me.Health == 0 || me.MaxHealth == 0 || me.Health > me.MaxHealth ||
+            me.PlayerPowerTypeCandidate != 0 || me.Power < mana ||
+            !WowBGrindFactions.TryReadGhostFlagCandidate(memory, reader, player, out bool ghost) || ghost ||
+            !reader.TryReadMapId(out currentMap) || currentMap != map) return false;
+        return !_stop && !ClickAimAbort.Requested && !RouteRunner.StopRequested && ObjectManager.Wow == memory &&
+            ObjectManager.WowB == reader && TryReadGatherCombat(out fighting) && fighting && targetSafe();
+    }
+
+    // Explicitly approved heuristic: two nearby live NPC candidates, NOT two
+    // confirmed attackers. Never change selection or run during travel.
+    private static bool TryStoneclaw(IntPtr hwnd, WowBReader reader, GreenMagic.Memory memory,
+        WowBObservedUnit expectedPlayer, WowBObservedUnit expectedTarget, Func<bool> targetSafe)
+    {
+        if (!reader.IsExperimental70862 || _stop || ClickAimAbort.Requested || RouteRunner.StopRequested ||
+            Environment.TickCount64 < _stoneclawNextAttempt) return false;
+        try
+        {
+            using var uncached = memory.TemporaryCacheState(false);
+            ClickAimAction? action = null;
+            foreach (ClickAimAction candidate in ClickAimCombat.ReadBar(reader))
+                if (WowBStoneclawPolicy.Eligible(candidate)) { action = candidate; break; }
+            if (action == null || !reader.TryReadMapId(out uint map) || map == uint.MaxValue ||
+                !StoneclawSnapshot(reader, memory, hwnd, expectedPlayer, expectedTarget, map,
+                    WowBStoneclawPolicy.ManaEstimate(action.Id), targetSafe, out WowBWorldSnapshot? first, out WowBObservedUnit player) ||
+                first == null || !WowBStoneclawPolicy.FindPair(reader, first, player, out WowBObservedUnit a, out WowBObservedUnit b)) return false;
+            if (!StoneclawSnapshot(reader, memory, hwnd, expectedPlayer, expectedTarget, map,
+                    WowBStoneclawPolicy.ManaEstimate(action.Id), targetSafe, out WowBWorldSnapshot? second, out player) ||
+                second == null || !WowBStoneclawPolicy.SamePairStillNear(reader, second, player, a, b) ||
+                !StoneclawSlotCurrent(reader, action) || !targetSafe() || !TryReadGatherCombat(out bool fighting) || !fighting ||
+                _stop || ClickAimAbort.Requested || RouteRunner.StopRequested || ObjectManager.Wow != memory || ObjectManager.WowB != reader ||
+                !reader.TryReadMapId(out uint finalMap) || finalMap != map || Environment.TickCount64 < _stoneclawNextAttempt) return false;
+            // Reserve before sending: TapKey cannot prove delivery and might
+            // fail after key-down. Avoid rapid retries and Earth-slot replacement.
+            _stoneclawNextAttempt = Environment.TickCount64 + WowBStoneclawPolicy.RetryMs;
+            Buffs.ReserveEarthAfterStoneclaw();
+            ClickAimInput.TapKey(hwnd, action.KeyVk, 40);
+            Logging.Write("[Grind] attempted " + action.Name + " (slot " + action.Slot +
+                ") because two nearby NPC candidates were observed; attacker identity, hostility and cast success are unverified; Earth buff held briefly");
+            return true;
+        }
+        catch { return false; }
+    }
+
     // Key 1 is an explicit, user-tested non-toggle macro, not a decoded spell.
     // Its contents, binding, actual cast and swing state cannot be verified.
     private static bool TryFightKeyOneMacro(IntPtr hwnd, WowBReader reader, GreenMagic.Memory memory,
@@ -5211,6 +5282,7 @@ internal static class GrindRunner
         int lastHealMs = 0;
         int lastCastMs = 0;
         int lastCombatBuffCheckMs = unchecked(started - 1000);
+        int lastStoneclawCheckMs = unchecked(started - 1000);
         int quietRounds = 0;
         int faceFailures = 0;
         bool meleeOnce = false;
@@ -5842,6 +5914,24 @@ internal static class GrindRunner
                 presses++; _presses++;
                 Logging.Write("[Grind] sent configured Start Attack binding once after heal; key binding and swing state are unverified");
                 continue;
+            }
+
+            // Defensive Stoneclaw has priority over ordinary Earth buffs. The
+            // 70862-only nearby-NPC heuristic is explicitly user-approved.
+            if (reader.IsExperimental70862 && unchecked(Environment.TickCount - lastStoneclawCheckMs) >= 1000 &&
+                (lastCastMs == 0 || unchecked(Environment.TickCount - lastCastMs) >= ClickAimCombat.CastSettleMs) &&
+                (lastHealMs == 0 || unchecked(Environment.TickCount - lastHealMs) >= ClickAimCombat.CastSettleMs))
+            {
+                lastStoneclawCheckMs = Environment.TickCount;
+                if (TryStoneclaw(hwnd, reader, fightMemory, me, expectedPull,
+                    () => FightAttackInputAllowed(reader, fightMemory, defenceTarget, expectedPull,
+                        !defenceOnly || defenceFactionFilter, true, !defenceOnly)))
+                {
+                    presses++; _presses++;
+                    lastCastMs = Environment.TickCount;
+                    if (ClickAimAbort.Wait(ClickAimCombat.CastSettleMs)) return "stopped";
+                    continue;
+                }
             }
 
             // Optional observed-expired self-only buffs. The 70862 path also

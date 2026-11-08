@@ -269,6 +269,8 @@ internal static class ClickAimCombat
         { 8017, "Rockbiter Weapon" }, { 8018, "Rockbiter Weapon" }, { 8019, "Rockbiter Weapon" },
         // Only the ranks whose player effects were observed on 70862.
         { 8160, "Strength of Earth Totem" }, { 5394, "Healing Stream Totem" },
+        { 5730, "Stoneclaw Totem" }, { 6390, "Stoneclaw Totem" }, { 6391, "Stoneclaw Totem" },
+        { 6392, "Stoneclaw Totem" }, { 10427, "Stoneclaw Totem" }, { 10428, "Stoneclaw Totem" },
         { 17364, "Stormstrike" },
 
         /* --- Paladin --- */
@@ -396,6 +398,7 @@ internal static class ClickAimCombat
         { "Frost Nova", ClickAimSpellRole.Utility }, { "Polymorph", ClickAimSpellRole.Utility },
         { "Hammer of Justice", ClickAimSpellRole.Utility }, { "Charge", ClickAimSpellRole.Utility },
         { "Stealth", ClickAimSpellRole.Utility }, { "Gouge", ClickAimSpellRole.Utility },
+        { "Stoneclaw Totem", ClickAimSpellRole.Utility },
         { "Life Tap", ClickAimSpellRole.Utility }, { "Hunter's Mark", ClickAimSpellRole.Utility },
         { "Hamstring", ClickAimSpellRole.Damage }, { "Kick", ClickAimSpellRole.Utility },
         { "Sap", ClickAimSpellRole.Utility }, { "Pounce", ClickAimSpellRole.Utility },

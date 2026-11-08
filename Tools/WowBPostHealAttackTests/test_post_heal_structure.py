@@ -54,7 +54,7 @@ class PostHealStartAttack(unittest.TestCase):
         self.assertNotIn('TapKey(hwnd, TabVk', heal)
 
     def test_one_guarded_press_at_melee_after_settle(self):
-        post = section(G, '            // A user-supplied non-toggle Start Attack binding', '            // Optional observed-expired self-only buffs.')
+        post = section(G, '            // A user-supplied non-toggle Start Attack binding', '            // Defensive Stoneclaw has priority')
         key = post.index('ClickAimInput.TapKey(hwnd, postHealStartKey, 40);')
         for guard in ('ClickAimCombat.HealVerifyMs', 'ClickAimKeySteer.ReleaseHeld()',
                       'postHealPlayer.IsEmpty', 'resumePlayer.Guid != postHealPlayer', 'resumeSelf.Health == 0',
@@ -70,7 +70,7 @@ class PostHealStartAttack(unittest.TestCase):
         self.assertNotIn('ClickAimInput.Click', post)
 
     def test_no_cast_or_attack_is_held_waiting_for_timer(self):
-        post = section(G, '            // A user-supplied non-toggle Start Attack binding', '            // Optional observed-expired self-only buffs.')
+        post = section(G, '            // A user-supplied non-toggle Start Attack binding', '            // Defensive Stoneclaw has priority')
         self.assertNotIn('ClickAimAbort.Wait(ClickAimCombat.HealVerifyMs)', post)
         self.assertIn('ClickAimCombat.HealVerifyMs', post)
         ready = section(P, '    internal static bool ReadyPostHealStartAttack(', '    internal static bool StillOnBar(')

@@ -21,13 +21,13 @@ internal sealed class ClickAimBuffController
     private readonly ClickAimBuffSchedule _schedule = new ClickAimBuffSchedule();
     private readonly Func<long> _clock;
     private readonly Dictionary<int, string> _reportedAuraState = new Dictionary<int, string>();
-    private long _nextScan;
+    private long _nextScan, _earthReservedUntil;
 
     internal ClickAimBuffController() : this(() => Environment.TickCount64) { }
     internal ClickAimBuffController(Func<long> clock) { _clock = clock; }
 
     // New run or confirmed resurrection: the next quiet opportunity starts fresh.
-    internal void Reset() { _schedule.Reset(); _reportedAuraState.Clear(); _nextScan = 0; }
+    internal void Reset() { _schedule.Reset(); _reportedAuraState.Clear(); _nextScan = 0; _earthReservedUntil = 0; }
 
     private void ReportAura(ClickAimAction action, int? remaining)
     {
@@ -75,9 +75,14 @@ internal sealed class ClickAimBuffController
            map == expectedMap && current.Guid == expected.Guid && current.UnitAddress == expected.UnitAddress &&
            current.RecordAddress == expected.RecordAddress;
 
+    // A Stoneclaw input attempt reserves the shared Earth slot. Actual cast
+    // success/lifetime is unverified; this is a conservative local hold.
+    internal void ReserveEarthAfterStoneclaw() => _earthReservedUntil = _clock() + 20_000;
+    private bool EarthReserved(ClickAimAction action) => action.Id == 8160 && _clock() < _earthReservedUntil;
+
     private static bool Eligible(ClickAimAction action)
     {
-        if (action.Id <= 0 || action.KeyVk == 0 || !action.IsBuff) return false;
+        if (action.Id <= 0 || action.KeyVk == 0 || !action.IsBuff || WowBStoneclawPolicy.ManaEstimate(action.Id) != 0) return false;
         string name = ClickAimCombat.NameOf(action.Id);
         // Forms can toggle off when pressed again. Do not schedule them by
         // default, even when class auto-detection falls back to Generic.
@@ -168,7 +173,7 @@ internal sealed class ClickAimBuffController
             foreach (ClickAimAction action in bar)
             {
                 uint minimum = CombatManaEstimate(action.Id);
-                if (minimum == 0 || mana < minimum || !Eligible(action)) continue;
+                if (minimum == 0 || mana < minimum || !Eligible(action) || EarthReserved(action)) continue;
                 if (TotemSupported(reader, action))
                 {
                     ReportTotem(action, totemAura);
@@ -189,7 +194,7 @@ internal sealed class ClickAimBuffController
             int? remaining = totem ? null : WowBInlineAuraCandidate.Capture(memory, expectedPlayer)?.Remaining(buff.Id);
             bool stillDue = totem ? TotemManaEnough(reader, expectedPlayer, buff) && TotemDue(buff, WowBTotemAuraCandidate.Capture(memory, reader, expectedPlayer), _clock())
                                   : remaining.HasValue && remaining.Value <= 0;
-            if (!stillDue ||
+            if (!stillDue || EarthReserved(buff) ||
                 !CombatPlayerSafe(memory, reader, hwnd, stopped, expectedPlayer, out afterMap, out mana) || map != afterMap || mana < minimumMana ||
                 !SameSlot(buff, ClickAimCombat.ReadBar(reader)) || (totem && !TotemManaEnough(reader, expectedPlayer, buff)) || !targetSafe() || !ClickAimSettings.UseBuffsInCombat ||
                 !Allowed(memory, reader, hwnd, stopped) || !_schedule.PastAttemptBackoff(buff.Id, _clock(), CombatRetryMs)) return false;

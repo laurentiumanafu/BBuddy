@@ -1,0 +1,92 @@
+using System;
+using System.Collections.Generic;
+using GreenMagic;
+using Styx.WoWInternals;
+using Styx.Helpers;
+namespace GreenMagic {
+ sealed class Memory { public IntPtr WindowHandle=(IntPtr)7; public IDisposable TemporaryCacheState(bool b)=>new Scope(); sealed class Scope:IDisposable{public void Dispose(){}} }
+}
+namespace Styx.Helpers { static class Logging { public static void Write(string s){} } }
+namespace Styx.WoWInternals {
+ readonly struct WowBGuid : IEquatable<WowBGuid> {
+  readonly int n; public WowBGuid(int v){n=v;} public bool IsEmpty=>n==0; public bool Equals(WowBGuid g)=>n==g.n;
+  public override bool Equals(object? o)=>o is WowBGuid g&&Equals(g); public override int GetHashCode()=>n;
+  public static bool operator ==(WowBGuid a,WowBGuid b)=>a.Equals(b); public static bool operator !=(WowBGuid a,WowBGuid b)=>!a.Equals(b);
+ }
+ struct Point {public double X,Y,Z;}
+ struct WowBObservedUnit {public WowBGuid Guid; public ulong UnitAddress,RecordAddress; public bool IsLocalPlayer,HasPlayerVtable; public Point Location;}
+ sealed class WowBWorldSnapshot {
+  public List<WowBObservedUnit> Units=new(); public WowBObservedUnit Player,Target;
+  public bool TryGetLocalPlayer(out WowBObservedUnit p){p=Player;return true;}
+  public bool TryGetSelectedTarget(out WowBObservedUnit t){t=Target;return true;}
+  public bool TryGetUnit(WowBGuid g,out WowBObservedUnit unit){foreach(var u in Units)if(u.Guid==g){unit=u;return true;}unit=default;return false;}
+ }
+ sealed class WowBReader {
+  public struct WowBUnitFields {public uint Health,MaxHealth,Power,UnitFlags;public int? PlayerPowerTypeCandidate;}
+  public bool IsExperimental70862=true, Combat=true, BarSafe=true, Ghost, MapValid=true;
+  public int Captures; public Action<int>? OnCapture; public uint Map=1;
+  public WowBWorldSnapshot Snapshot=new(); public Dictionary<ulong,WowBUnitFields> Fields=new();
+  public bool TryReadMapId(out uint m){m=Map;return MapValid;}
+  public bool TryCaptureWorldSnapshot(out WowBWorldSnapshot? s){Captures++;OnCapture?.Invoke(Captures);s=Snapshot;return true;}
+  public bool TryGetUnitFields(ulong address,out WowBUnitFields f)=>Fields.TryGetValue(address,out f);
+ }
+ static class ObjectManager{public static WowBReader? WowB;public static Memory? Wow;}
+}
+namespace Styx.Logic.Pathing {
+ enum ClickAimActionKind{Spell,Item}
+ enum ClickAimSpellRole{Unknown,Utility,Buff,Ignore,Damage}
+ sealed class ClickAimAction{public int Id,KeyVk,Slot;public ulong Raw;public string Name="Stoneclaw";public ClickAimActionKind Kind;}
+ static class ClickAimCombat {
+  public static List<ClickAimAction> Bar=new(); public static ClickAimSpellRole Override;
+  public static ClickAimSpellRole RoleOverrideOf(int i)=>Override;
+  public static List<ClickAimAction> ReadBar(WowBReader r)=>new(Bar);
+ }
+ static class ClickAimAbort {public static bool Requested;}
+ static class RouteRunner {public static bool StopRequested;}
+ static class WowBGrindFactions {
+  public static bool Experimental70707BarSafe(WowBReader r)=>r.BarSafe;
+  public static bool TryReadGhostFlagCandidate(Memory m,WowBReader r,WowBObservedUnit p,out bool ghost){ghost=r.Ghost;return true;}
+ }
+ static class ClickAimInput {public static int Keys;public static void TapKey(IntPtr h,int key,int ms){Keys++;}}
+ sealed class BuffControl {public int Holds; public void ReserveEarthAfterStoneclaw(){Holds++;}}
+ static class GrindRunner {
+  static bool _stop;static readonly BuffControl Buffs=new();
+  static bool CheckDeathCheckpoint(bool trackerOnly=false)=>false;
+  static bool TryReadGatherCombat(out bool f){f=ObjectManager.WowB!.Combat;return true;}
+  static bool DefenceFieldsValid(uint hp,uint flags,bool refused)=>hp>0&&(flags&(0x2|0x100|0x200))==0&&!refused;
+  // METHODS
+  internal static bool Run(WowBReader r,Memory m,WowBObservedUnit p,WowBObservedUnit t,Func<bool> safe)=>TryStoneclaw((IntPtr)7,r,m,p,t,safe);
+  internal static void Reset(){_stop=ClickAimAbort.Requested=RouteRunner.StopRequested=false;_stoneclawNextAttempt=0;ClickAimInput.Keys=Buffs.Holds=0;}
+  internal static int Holds=>Buffs.Holds;
+ }
+ static class Program {
+  static int checks;static void Check(bool b,string msg){checks++;if(!b)throw new Exception(msg);}
+  static WowBObservedUnit Unit(int n,double x,bool player=false)=>new(){Guid=new(n),UnitAddress=(ulong)n*0x10000,RecordAddress=(ulong)n*0x10000+0x100,Location=new(){X=x},IsLocalPlayer=player,HasPlayerVtable=player};
+  static void Main(){
+   var r=new WowBReader();var m=new Memory();ObjectManager.Wow=m;ObjectManager.WowB=r;
+   var me=Unit(1,0,true);var target=Unit(2,2);var other=Unit(3,7);
+   r.Snapshot.Player=me;r.Snapshot.Target=target;r.Snapshot.Units.AddRange(new[]{me,target,other});
+   r.Fields[me.UnitAddress]=new(){Health=100,MaxHealth=100,Power=100,PlayerPowerTypeCandidate=0};
+   r.Fields[target.UnitAddress]=new(){Health=80,MaxHealth=100};r.Fields[other.UnitAddress]=new(){Health=80,MaxHealth=100};
+   ClickAimCombat.Bar.Add(new(){Id=6390,Slot=2,KeyVk=0x32,Raw=6390});Func<bool> safe=()=>true;
+   GrindRunner.Reset();r.Combat=false;Check(!GrindRunner.Run(r,m,me,target,safe),"out of combat");r.Combat=true;
+   r.Snapshot.Units.Remove(other);Check(!GrindRunner.Run(r,m,me,target,safe),"one candidate");r.Snapshot.Units.Add(other);
+   var corpse=r.Fields[other.UnitAddress];corpse.Health=0;r.Fields[other.UnitAddress]=corpse;Check(!GrindRunner.Run(r,m,me,target,safe),"dead other");
+   corpse.Health=5;corpse.MaxHealth=5;r.Fields[other.UnitAddress]=corpse;Check(!GrindRunner.Run(r,m,me,target,safe),"small-health totem-like candidate");
+   corpse.Health=80;corpse.MaxHealth=100;r.Fields[other.UnitAddress]=corpse;
+   var far=other;far.Location.Z=9;r.Snapshot.Units[2]=far;Check(!GrindRunner.Run(r,m,me,target,safe),"3D range");r.Snapshot.Units[2]=other;
+   var friend=other;friend.HasPlayerVtable=true;r.Snapshot.Units[2]=friend;Check(!GrindRunner.Run(r,m,me,target,safe),"player excluded");r.Snapshot.Units[2]=other;
+   ClickAimCombat.Override=ClickAimSpellRole.Ignore;Check(!GrindRunner.Run(r,m,me,target,safe),"ignore override");ClickAimCombat.Override=ClickAimSpellRole.Unknown;
+   var self=r.Fields[me.UnitAddress];self.Power=29;r.Fields[me.UnitAddress]=self;Check(!GrindRunner.Run(r,m,me,target,safe),"low mana");self.Power=100;r.Fields[me.UnitAddress]=self;
+   r.Captures=0;r.OnCapture=i=>{if(i==2){var u=r.Snapshot.Units[2];u.RecordAddress++;r.Snapshot.Units[2]=u;}};
+   Check(!GrindRunner.Run(r,m,me,target,safe),"changed NPC identity");r.OnCapture=null;r.Snapshot.Units[2]=other;
+   Check(!GrindRunner.Run(r,m,me,target,()=>false),"target guard");
+   r.Captures=0;r.OnCapture=i=>{if(i==2)r.Combat=false;};Check(!GrindRunner.Run(r,m,me,target,safe),"combat ends before input");r.OnCapture=null;r.Combat=true;
+   Check(GrindRunner.Run(r,m,me,target,safe)&&ClickAimInput.Keys==1&&GrindRunner.Holds==1,"two candidates cause one attempt and reserve Earth");
+   Check(!GrindRunner.Run(r,m,me,target,safe)&&ClickAimInput.Keys==1,"30-second attempt cooldown");
+   GrindRunner.Reset();ClickAimAbort.Requested=true;Check(!GrindRunner.Run(r,m,me,target,safe),"STOP");
+   GrindRunner.Reset();r.IsExperimental70862=false;Check(!GrindRunner.Run(r,m,me,target,safe),"other build");
+   Console.WriteLine($"Stoneclaw synthetic tests passed: {checks} (no live client validation).");
+  }
+ }
+}
