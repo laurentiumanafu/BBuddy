@@ -51,13 +51,14 @@ namespace Styx.WoWInternals
         public struct WowBUnitFields { public uint Health, MaxHealth, Power; public int PlayerPowerTypeCandidate; }
         public bool IsExperimental70707 = true, IsExperimental70862, Readable = true;
         public uint Map = 0, Health = 100, MaxHealth = 100, Power = 100;
+        public int PowerType;
         public WowBGuid Selected;
         public ulong[] RawBar = new ulong[12];
         public bool TryReadExperimentalActionSnapshot(out ulong[] bar) { bar = (ulong[])RawBar.Clone(); return Readable; }
         public WowBObservedUnit Player = new WowBObservedUnit { Guid = new WowBGuid(1), UnitAddress = 0x20000, RecordAddress = 0x30000 };
         public bool TryReadMapId(out uint map) { map = Map; return Readable; }
         public bool TryCaptureWorldSnapshot(out WowBWorldSnapshot? snapshot) { snapshot = Readable ? new WowBWorldSnapshot { Player = Player } : null; return Readable; }
-        public bool TryGetUnitFields(ulong address, out WowBUnitFields fields) { fields = new WowBUnitFields { Health = Health, MaxHealth = MaxHealth, Power = Power }; return Readable && address == Player.UnitAddress; }
+        public bool TryGetUnitFields(ulong address, out WowBUnitFields fields) { fields = new WowBUnitFields { Health = Health, MaxHealth = MaxHealth, Power = Power, PlayerPowerTypeCandidate = PowerType }; return Readable && address == Player.UnitAddress; }
         public WowBGuid ReadTargetGuid() => Selected;
     }
     static class ObjectManager { public static Memory? Wow; public static WowBReader? WowB; }
@@ -100,9 +101,10 @@ namespace Styx.Logic.Pathing
         internal const int ExternalCandidateStride = 0x128, ExternalMaxSlots = 24;
         internal static byte[]? Data;
         internal static bool StopDuringRead, CombatEndsDuringRead;
+        internal static Action? OnRead;
         internal sealed class ExternalCandidateSample { internal readonly byte[] Bytes; internal ExternalCandidateSample(byte[] b) { Bytes = b; } }
         internal static ExternalCandidateSample? ReadExternalCandidate(Memory memory, ulong unit, out string reason)
-        { reason = "fixture"; if (StopDuringRead) ClickAimAbort.Requested = true; if (CombatEndsDuringRead) GrindRunner.Combat = false; return Data == null ? null : new ExternalCandidateSample((byte[])Data.Clone()); }
+        { reason = "fixture"; OnRead?.Invoke(); if (StopDuringRead) ClickAimAbort.Requested = true; if (CombatEndsDuringRead) GrindRunner.Combat = false; return Data == null ? null : new ExternalCandidateSample((byte[])Data.Clone()); }
     }
     static class WowBGrindFactions
     {
@@ -165,7 +167,7 @@ namespace Styx.Logic.Pathing
             ObjectManager.Wow = new Memory(); ObjectManager.WowB = new WowBReader { Selected = new WowBGuid(8) };
             ClickAimCombat.Bar = new List<ClickAimAction> { Action(1, 1), Action(2, 2), Action(3, 3) };
             ClickAimCombat.Overrides.Clear(); ClickAimInput.Keys.Clear();
-            WowBCombatResearch.Data = null; WowBCombatResearch.StopDuringRead = WowBCombatResearch.CombatEndsDuringRead = false;
+            WowBCombatResearch.Data = null; WowBCombatResearch.OnRead = null; WowBCombatResearch.StopDuringRead = WowBCombatResearch.CombatEndsDuringRead = false;
             ClickAimSettings.UseBuffs = true; ClickAimSettings.UseBuffsInCombat = false; ClickAimSettings.RotationClass = ClickAimRotationClass.Auto;
             ClickAimSettings.UseShamanTotemMacro = ClickAimSettings.UseKeyOneStartAttackMacro = false;
             ClickAimSettings.ShamanTotemEarth = ClickAimSettings.ShamanTotemHealing = ClickAimSettings.ShamanTotemMana = false;
@@ -375,6 +377,53 @@ namespace Styx.Logic.Pathing
             Check(!controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 0, "implicit druid forms and passive racial excluded");
             controller.Reset(); now = 0; ClickAimSettings.RotationClass = ClickAimRotationClass.Generic;
             Check(!controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 0, "forms excluded even if class is Generic");
+            // The observed 70862 rank-3 shield uses a grown external candidate
+            // array, not the 70707 inline layout; candidate 905 is presence only.
+            Reset(); controller.Reset(); now = 0; ObjectManager.WowB!.IsExperimental70862 = true;
+            ObjectManager.WowB.Power = 125; ClickAimCombat.Bar = new List<ClickAimAction> { Action(905, 6) };
+            TotemBytes(777, 905); GrindRunner.Combat = true;
+            combatPlayer = ObjectManager.WowB.Player; ClickAimSettings.UseBuffsInCombat = true;
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "rank 3 active is not recast");
+            TotemBytes(777); ObjectManager.WowB.Power = 124;
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "rank 3 below estimated cost withheld");
+            ObjectManager.WowB.Power = 125; ObjectManager.WowB.PowerType = 1;
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "rank 3 non-mana power withheld");
+            ObjectManager.WowB.PowerType = 0;
+            Check(controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe) && ClickAimInput.Keys.Count == 1 &&
+                ClickAimInput.Keys[0] == 0x36 && ObjectManager.WowB.Selected == new WowBGuid(8), "absent rank 3 attempted without target change");
+            now = 9999; Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "rank 3 retry waits 10 seconds");
+            now = 10000; TotemBytes(777, 905);
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "rank 3 active suppresses retry");
+            TotemBytes(777); ObjectManager.Wow!.TotemCount = 2;
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "rank 3 mismatched count is unknown");
+            TotemBytes(777, 777);
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "rank 3 duplicate IDs unknown");
+            WowBCombatResearch.Data = null;
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "rank 3 unreadable external buffer unknown");
+            TotemBytes(777); int externalReads = 0;
+            WowBCombatResearch.OnRead = () => { if (++externalReads == 2) TotemBytes(777, 905); };
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "rank 3 appearing before input withholds cast");
+            WowBCombatResearch.OnRead = null; TotemBytes(777);
+            Check(controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe) && ClickAimInput.Keys.Count == 2,
+                "rank 3 still absent after 10 seconds retries");
+            now = 20000;
+            ObjectManager.WowB.Selected = new WowBGuid(9);
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "rank 3 changed target withheld");
+            ObjectManager.WowB.Selected = new WowBGuid(8); ClickAimSettings.UseBuffsInCombat = false;
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "rank 3 combat option off");
+            ClickAimSettings.UseBuffsInCombat = true; WowBCombatResearch.StopDuringRead = true;
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "rank 3 STOP during read withheld");
+            WowBCombatResearch.StopDuringRead = false; ClickAimAbort.Requested = false; GrindRunner.Combat = false;
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "rank 3 not combat path out of combat");
+            GrindRunner.Combat = true; ObjectManager.WowB.IsExperimental70862 = false;
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "rank 3 unsupported on older builds");
+            Reset(); controller.Reset(); now = 0; ObjectManager.WowB!.IsExperimental70862 = true;
+            ClickAimCombat.Bar = new List<ClickAimAction> { Action(905, 6) }; TotemBytes(777, 905);
+            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement), "quiet fresh start still attempts shield");
+            ClickAimInput.Keys.Clear(); now = 30000;
+            Check(!controller.TryApply(new IntPtr(7), stopped, stopMovement), "quiet active rank 3 is held");
+            TotemBytes(777); now = 35000;
+            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 1, "quiet absent rank 3 retried");
             // 70862 totems are exclusively combat buffs: never cast at
             // startup, while idle/travelling or after combat/resurrection.
             Reset(); controller.Reset(); now = 0; ObjectManager.WowB!.IsExperimental70862 = true;

@@ -15,6 +15,10 @@ internal sealed class WowBTotemAuraCandidate
     private WowBTotemAuraCandidate(HashSet<uint> ids) { _ids = ids; }
 
     internal static int EffectForCast(int castId) => castId == 8160 ? 8162 : castId == 5394 ? 5672 : castId == 5675 ? 5677 : 0;
+    // 70862 rank 3 was observed appearing in this same candidate array.
+    // Presence/absence is experimental, not proof of charges or cast success.
+    internal bool LightningShield905Active() => _ids.Contains(905);
+
     internal bool? Active(int castId)
     {
         int effect = EffectForCast(castId);
