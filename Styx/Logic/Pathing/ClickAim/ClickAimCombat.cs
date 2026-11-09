@@ -265,7 +265,7 @@ internal static class ClickAimCombat
         { 8056, "Frost Shock" }, { 8058, "Frost Shock" }, { 10472, "Frost Shock" },
         { 10473, "Frost Shock" },
         { 324, "Lightning Shield" }, { 325, "Lightning Shield" }, { 905, "Lightning Shield" },
-        { 945, "Lightning Shield" }, { 8134, "Lightning Shield" },
+        { 945, "Lightning Shield" }, { 8134, "Lightning Shield" }, { 10431, "Lightning Shield" }, { 10432, "Lightning Shield" },
         { 8017, "Rockbiter Weapon" }, { 8018, "Rockbiter Weapon" }, { 8019, "Rockbiter Weapon" },
         // Only the ranks whose player effects were observed on 70862.
         { 8160, "Strength of Earth Totem" }, { 5394, "Healing Stream Totem" }, { 5675, "Mana Spring Totem" },

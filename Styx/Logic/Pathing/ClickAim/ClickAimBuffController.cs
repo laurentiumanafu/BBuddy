@@ -16,8 +16,8 @@ internal sealed class ClickAimBuffController
     private const long TotemRetryMs = 10_000;
     // Observed net mana drops were 45 (Shield) and 60 (Armor). Actual costs
     // and modifiers are unreadable; thresholds are not proof of affordability.
-    private static uint CombatManaEstimate(int spellId) => spellId == 324 ? 60U : spellId == 168 ? 80U :
-        spellId == 905 ? 125U : spellId == 8160 ? 65U : spellId == 5394 ? 40U : spellId == 5675 ? 40U : 0U;
+    private static uint CombatManaEstimate(int spellId) => spellId == 168 ? 80U :
+        spellId == 8160 ? 65U : spellId == 5394 ? 40U : spellId == 5675 ? 40U : WowBLightningShield.ManaEstimate(spellId);
     private readonly ClickAimBuffSchedule _schedule = new ClickAimBuffSchedule();
     private readonly Func<long> _clock;
     private readonly Dictionary<int, string> _reportedAuraState = new Dictionary<int, string>();
@@ -95,23 +95,40 @@ internal sealed class ClickAimBuffController
         return true;
     }
 
-    private static bool Shield905Supported(WowBReader reader, int id) => reader.IsExperimental70862 && id == 905;
+    private static bool ShieldSupported(WowBReader reader, int id)
+        => reader.IsExperimental70862 && WowBLightningShield.Rank(id) != 0;
 
-    // Presence only: do not imply a measured duration or charges. Unknown is
-    // null and never permits an in-combat attempt. A positive sentinel keeps
-    // the existing quiet buff schedule from refreshing an observed active aura.
-    private static int? Shield905Remaining(WowBTotemAuraCandidate? aura)
-        => aura == null ? (int?)null : aura.LightningShield905Active() ? ClickAimBuffSchedule.RefreshBeforeMs + 1 : -1;
+    // If several ranks are on the bar, choose the highest eligible one rather
+    // than casting multiple shields or accidentally replacing it with a lower rank.
+    private static int PreferredShield(List<ClickAimAction> bar)
+    {
+        int best = 0;
+        foreach (ClickAimAction action in bar)
+            if (Eligible(action) && WowBLightningShield.Rank(action.Id) > WowBLightningShield.Rank(best)) best = action.Id;
+        return best;
+    }
 
-    private static int? ReadShield905(Memory memory, WowBReader reader, WowBObservedUnit player)
-        => Shield905Remaining(WowBTotemAuraCandidate.Capture(memory, reader, player));
+    // Presence only; no claim about remaining charges or duration. Unknown
+    // never authorizes an in-combat attempt. The inline and grown layouts are
+    // mutually exclusive and each reader checks its own header/count/stability.
+    private static int? ShieldRemaining(WowBInlineAuraCandidate? inline, WowBTotemAuraCandidate? external)
+    {
+        if (inline != null) return inline.LightningShieldActive() ? ClickAimBuffSchedule.RefreshBeforeMs + 1 : -1;
+        return external == null ? (int?)null : external.LightningShieldActive() ? ClickAimBuffSchedule.RefreshBeforeMs + 1 : -1;
+    }
 
-    private void ReportShield905(int? state)
+    private static int? ReadShield(Memory memory, WowBReader reader, WowBObservedUnit player)
+    {
+        WowBInlineAuraCandidate? inline = WowBInlineAuraCandidate.Capture(memory, player);
+        return ShieldRemaining(inline, inline == null ? WowBTotemAuraCandidate.Capture(memory, reader, player) : null);
+    }
+
+    private void ReportShield(ClickAimAction action, int? state)
     {
         string text = !state.HasValue ? "unavailable; combat cast withheld" : state.Value < 0 ? "absent" : "present";
-        if (_reportedAuraState.TryGetValue(905, out string? old) && old == text) return;
-        _reportedAuraState[905] = text;
-        Logging.Write("[Buff] 70862 experimental Lightning Shield rank 3 candidate: " + text + " (not verified)");
+        if (_reportedAuraState.TryGetValue(action.Id, out string? old) && old == text) return;
+        _reportedAuraState[action.Id] = text;
+        Logging.Write("[Buff] 70862 experimental Lightning Shield candidate: " + text + " (rank " + WowBLightningShield.Rank(action.Id) + "; not verified)");
     }
 
     private static bool TotemSupported(WowBReader reader, ClickAimAction action)
@@ -247,12 +264,13 @@ internal sealed class ClickAimBuffController
             List<ClickAimAction> bar = ClickAimCombat.ReadBar(reader);
             int macroMask = reader.IsExperimental70862 ? MacroMask() : 0;
             bool conflictWater = reader.IsExperimental70862 && ConflictingWater(bar) && (macroMask & 6) == 0;
+            int preferredShield = reader.IsExperimental70862 ? PreferredShield(bar) : 0;
             if (!bar.Exists(action => CombatManaEstimate(action.Id) > 0 && Eligible(action) &&
                 (WowBTotemAuraCandidate.EffectForCast(action.Id) == 0 || TotemSupported(reader, action)))) return false;
             if (!CombatPlayerSafe(memory, reader, hwnd, stopped, expectedPlayer, out uint map, out uint mana) || !targetSafe()) return false;
             WowBInlineAuraCandidate? aura = WowBInlineAuraCandidate.Capture(memory, expectedPlayer);
             WowBTotemAuraCandidate? totemAura = reader.IsExperimental70862 && bar.Exists(action => Eligible(action) &&
-                (TotemSupported(reader, action) || Shield905Supported(reader, action.Id)))
+                (TotemSupported(reader, action) || ShieldSupported(reader, action.Id)))
                 ? WowBTotemAuraCandidate.Capture(memory, reader, expectedPlayer) : null;
             ClickAimAction? buff = null;
             foreach (ClickAimAction action in bar)
@@ -266,10 +284,11 @@ internal sealed class ClickAimBuffController
                     if (TotemManaEnough(reader, expectedPlayer, action) && TotemDue(action, totemAura, _clock())) { buff = action; break; }
                     continue;
                 }
-                if (Shield905Supported(reader, action.Id))
+                if (ShieldSupported(reader, action.Id))
                 {
-                    int? shield = Shield905Remaining(totemAura);
-                    ReportShield905(shield);
+                    if (action.Id != preferredShield) continue;
+                    int? shield = ShieldRemaining(aura, totemAura);
+                    ReportShield(action, shield);
                     if (shield.HasValue && shield.Value < 0 && TotemManaEnough(reader, expectedPlayer, action) &&
                         _schedule.PastAttemptBackoff(action.Id, _clock(), CombatRetryMs)) { buff = action; break; }
                     continue;
@@ -285,14 +304,15 @@ internal sealed class ClickAimBuffController
             if (!CombatPlayerSafe(memory, reader, hwnd, stopped, expectedPlayer, out uint afterMap, out mana) || map != afterMap || mana < minimumMana ||
                 !SameSlot(buff, ClickAimCombat.ReadBar(reader)) || !targetSafe()) return false;
             bool totem = TotemSupported(reader, buff);
-            bool shield905 = Shield905Supported(reader, buff.Id);
-            int? remaining = totem ? null : shield905 ? ReadShield905(memory, reader, expectedPlayer) :
+            bool shieldAction = ShieldSupported(reader, buff.Id);
+            int? remaining = totem ? null : shieldAction ? ReadShield(memory, reader, expectedPlayer) :
                 WowBInlineAuraCandidate.Capture(memory, expectedPlayer)?.Remaining(buff.Id);
             bool stillDue = totem ? TotemManaEnough(reader, expectedPlayer, buff) && TotemDue(buff, WowBTotemAuraCandidate.Capture(memory, reader, expectedPlayer), _clock())
                                   : remaining.HasValue && remaining.Value <= 0;
             if (!stillDue || EarthReserved(buff) ||
                 !CombatPlayerSafe(memory, reader, hwnd, stopped, expectedPlayer, out afterMap, out mana) || map != afterMap || mana < minimumMana ||
-                !SameSlot(buff, ClickAimCombat.ReadBar(reader)) || ((totem || shield905) && !TotemManaEnough(reader, expectedPlayer, buff)) || !targetSafe() || !ClickAimSettings.UseBuffsInCombat ||
+                !SameSlot(buff, ClickAimCombat.ReadBar(reader)) || (shieldAction && PreferredShield(ClickAimCombat.ReadBar(reader)) != buff.Id) ||
+                ((totem || shieldAction) && !TotemManaEnough(reader, expectedPlayer, buff)) || !targetSafe() || !ClickAimSettings.UseBuffsInCombat ||
                 !Allowed(memory, reader, hwnd, stopped) || !_schedule.PastAttemptBackoff(buff.Id, _clock(), CombatRetryMs)) return false;
             ClickAimInput.TapKey(hwnd, buff.KeyVk, 40);
             _schedule.RecordAttempt(buff.Id, _clock());
@@ -317,6 +337,7 @@ internal sealed class ClickAimBuffController
         List<ClickAimAction> bar = ClickAimCombat.ReadBar(reader);
         var due = new List<ClickAimAction>();
         var seen = new HashSet<int>();
+        int preferredShield = reader.IsExperimental70862 ? PreferredShield(bar) : 0;
         bool hasSupportedAura = reader.IsExperimental70707 && bar.Exists(action => Eligible(action) && WowBInlineAuraCandidate.Supported(action.Id));
         WowBInlineAuraCandidate? aura = hasSupportedAura ? WowBInlineAuraCandidate.Capture(memory, player) : null;
         foreach (ClickAimAction action in bar)
@@ -325,9 +346,10 @@ internal sealed class ClickAimBuffController
             // These exact totem spells are combat-only, even when their
             // role was manually set to Buff. Never fall back to the quiet timer.
             if (WowBTotemAuraCandidate.EffectForCast(action.Id) != 0) continue;
-            bool shield905 = Shield905Supported(reader, action.Id);
-            int? remaining = shield905 ? ReadShield905(memory, reader, player) : aura?.Remaining(action.Id);
-            if (shield905) ReportShield905(remaining);
+            bool shield = ShieldSupported(reader, action.Id);
+            if (shield && action.Id != preferredShield) continue;
+            int? remaining = shield ? ReadShield(memory, reader, player) : aura?.Remaining(action.Id);
+            if (shield) ReportShield(action, remaining);
             else if (reader.IsExperimental70707 && WowBInlineAuraCandidate.Supported(action.Id)) ReportAura(action, remaining);
             if (_schedule.Due(action.Id, now, remaining)) due.Add(action);
         }
@@ -355,10 +377,12 @@ internal sealed class ClickAimBuffController
                 if (WowBTotemAuraCandidate.EffectForCast(action.Id) != 0) continue;
                 aura = reader.IsExperimental70707 && WowBInlineAuraCandidate.Supported(action.Id)
                     ? WowBInlineAuraCandidate.Capture(memory, player) : null;
-                int? remaining = Shield905Supported(reader, action.Id) ? ReadShield905(memory, reader, player) : aura?.Remaining(action.Id);
+                int? remaining = ShieldSupported(reader, action.Id) ? ReadShield(memory, reader, player) : aura?.Remaining(action.Id);
                 if (!_schedule.Due(action.Id, _clock(), remaining)) continue;
                 if (!SameQuietPlayer(memory, reader, hwnd, stopped, player, map) || reader.ReadTargetGuid() != selected ||
-                    !SameSlot(action, ClickAimCombat.ReadBar(reader)) || !Allowed(memory, reader, hwnd, stopped)) break;
+                    !SameSlot(action, ClickAimCombat.ReadBar(reader)) ||
+                    (ShieldSupported(reader, action.Id) && PreferredShield(ClickAimCombat.ReadBar(reader)) != action.Id) ||
+                    !Allowed(memory, reader, hwnd, stopped)) break;
                 ClickAimInput.TapKey(hwnd, action.KeyVk, 40);
                 _schedule.RecordAttempt(action.Id, _clock());
                 onAttempt?.Invoke();
@@ -436,6 +460,12 @@ internal sealed class WowBInlineAuraCandidate
         catch { return null; }
     }
 
+    internal bool LightningShieldActive()
+    {
+        foreach (uint id in _id) if (id <= int.MaxValue && WowBLightningShield.Rank((int)id) != 0) return true;
+        return false;
+    }
+
     // Null means unknown; -1 means missing in this bounded candidate layout.
     // The exact ID relation, clock and capacity remain experimental. A bad or
     // indefinite timing word is unknown, not expired.
@@ -452,4 +482,18 @@ internal sealed class WowBInlineAuraCandidate
         }
         return -1;
     }
+}
+
+// Known 1.60 shield ranks. The user's traces observed IDs 324 and 905;
+// other aura IDs are inferred from the cast IDs, not independently verified.
+internal static class WowBLightningShield
+{
+    internal static int Rank(int id) => id switch
+    {
+        324 => 1, 325 => 2, 905 => 3, 945 => 4, 8134 => 5, 10431 => 6, 10432 => 7, _ => 0
+    };
+    internal static uint ManaEstimate(int id) => id switch
+    {
+        324 => 60U, 325 => 80U, 905 => 125U, 945 => 180U, 8134 => 240U, 10431 => 305U, 10432 => 370U, _ => 0U
+    };
 }

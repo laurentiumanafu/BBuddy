@@ -424,6 +424,50 @@ namespace Styx.Logic.Pathing
             Check(!controller.TryApply(new IntPtr(7), stopped, stopMovement), "quiet active rank 3 is held");
             TotemBytes(777); now = 35000;
             Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 1, "quiet absent rank 3 retried");
+            // All seven known ranks, rank-specific cost gates, and any active
+            // rank suppressing the chosen action, using the grown 70862 list.
+            int[] shieldIds = { 324, 325, 905, 945, 8134, 10431, 10432 };
+            uint[] shieldCosts = { 60, 80, 125, 180, 240, 305, 370 };
+            for (int rank = 0; rank < shieldIds.Length; rank++)
+            {
+                Reset(); controller.Reset(); now = 0; ObjectManager.WowB!.IsExperimental70862 = true;
+                ObjectManager.WowB.Power = shieldCosts[rank] - 1; GrindRunner.Combat = true;
+                ClickAimSettings.UseBuffsInCombat = true; combatPlayer = ObjectManager.WowB.Player;
+                ClickAimCombat.Bar = new List<ClickAimAction> { Action(shieldIds[rank], 2) }; TotemBytes(777);
+                Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "rank cost gate " + rank);
+                ObjectManager.WowB.Power = shieldCosts[rank];
+                TotemBytes(777, (uint)shieldIds[(rank + 1) % shieldIds.Length]);
+                Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "different active rank holds " + rank);
+                TotemBytes(777);
+                Check(controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe) && ClickAimInput.Keys[0] == 0x32,
+                    "known rank missing attempts " + rank);
+                now = 9999;
+                Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "rank retry backoff " + rank);
+            }
+            // Inline 11-slot snapshot on 70862 must work too, and must not
+            // falsely consider rank 3 absent when a different rank is active.
+            Reset(); controller.Reset(); now = 0; ObjectManager.WowB!.IsExperimental70862 = true;
+            ObjectManager.Wow.AuraBytes = ShamanCandidate(); ObjectManager.WowB.Power = 125;
+            ClickAimCombat.Bar = new List<ClickAimAction> { Action(905, 6) }; GrindRunner.Combat = true;
+            ClickAimSettings.UseBuffsInCombat = true; combatPlayer = ObjectManager.WowB.Player;
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "inline lower-rank shield prevents recast");
+            Write32(ObjectManager.Wow.AuraBytes!, 0x940, 0); Write32(ObjectManager.Wow.AuraBytes!, 0x1A60, 9);
+            Check(controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "inline no rank shield triggers cast");
+            // Multiple bar ranks select the highest eligible rank, never both.
+            Reset(); controller.Reset(); now = 0; ObjectManager.WowB!.IsExperimental70862 = true; ObjectManager.WowB.Power = 370;
+            ClickAimCombat.Bar = new List<ClickAimAction> { Action(325, 1), Action(10432, 2), Action(905, 3) }; TotemBytes(777);
+            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 1 && ClickAimInput.Keys[0] == 0x32,
+                "quiet startup attempts highest rank only");
+            ClickAimInput.Keys.Clear(); controller.Reset(); GrindRunner.Combat = true; ClickAimSettings.UseBuffsInCombat = true;
+            combatPlayer = ObjectManager.WowB.Player;
+            Check(controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe) && ClickAimInput.Keys.Count == 1 && ClickAimInput.Keys[0] == 0x32,
+                "combat attempts highest rank only");
+            Reset(); controller.Reset(); now = 0; ObjectManager.WowB!.IsExperimental70862 = true; ObjectManager.WowB.Power = 125;
+            ClickAimCombat.Bar = new List<ClickAimAction> { Action(905, 3), Action(10432, 2) };
+            ClickAimCombat.Overrides[10432] = ClickAimSpellRole.Ignore; TotemBytes(777); GrindRunner.Combat = true;
+            ClickAimSettings.UseBuffsInCombat = true; combatPlayer = ObjectManager.WowB.Player;
+            Check(controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe) && ClickAimInput.Keys[0] == 0x33,
+                "ignored higher rank does not block eligible rank");
             // 70862 totems are exclusively combat buffs: never cast at
             // startup, while idle/travelling or after combat/resurrection.
             Reset(); controller.Reset(); now = 0; ObjectManager.WowB!.IsExperimental70862 = true;

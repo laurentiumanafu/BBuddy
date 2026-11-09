@@ -131,7 +131,7 @@
                                Text="Optional: bind the same key to WoW's Start Attack first; do not use Attack Target (toggle). Test the binding manually. Bot cannot verify it or the swing state."/>
                     <CheckBox x:Name="chkBuffsInCombat" Margin="0,8,0,0"
                               Content="Re-cast supported buffs when they run out during combat"
-                              ToolTip="Requires Apply self-buffs. Experimental Lightning Shield rank 1 and Frost Armor rank 1; on 70862 also Lightning Shield rank 3, Strength of Earth Totem rank 2, Healing Stream Totem rank 1 and Mana Spring Totem rank 1, only in combat, with at least 10 seconds between attempts. Missing effects from leaving range can cause a replacement. Unknown reads withhold totems; mana costs and cast success are not verified."/>
+                              ToolTip="Requires Apply self-buffs. Experimental Frost Armor rank 1 and Lightning Shield rank 1; on 70862 Lightning Shield ranks 1–7, plus Strength of Earth Totem rank 2, Healing Stream Totem rank 1 and Mana Spring Totem rank 1. Totems are combat-only; with at least 10 seconds between attempts. Missing effects from leaving range can cause a totem replacement. Unknown reads withhold combat casts; mana costs and cast success are not verified."/>
                     <Button Content="Shaman totem macro…" HorizontalAlignment="Left" Height="26" Padding="10,0" Margin="0,8,0,0"
                             Click="btnShamanTotemMacro_Click" ToolTip="Configure a user-made macro on keys 1–9 and choose which totem effects to check (70862, combat only)."/>
                 </StackPanel>
