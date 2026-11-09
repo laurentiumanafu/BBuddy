@@ -382,7 +382,7 @@ internal static class GrindRunner
         _recentLootRetryAt.Clear();
         _recentLootRetried.Clear();
         _focusedFightGuid = default; _defenceHandoffGuid = default; _focusedDamageObserved = false; _unverifiedGuid = default;
-        _remoteDefenceAttempted = false;
+        _remoteDefenceAttempted = false; _nearDefenceAttempted = false; _nearDefenceCursor = 0;
         _combatHold = false; _poolApproachHandled = false;
         Buffs.Reset(); // confirmed revival; reapply at the next quiet opportunity
         return !_stop && !ClickAimAbort.Requested;
@@ -822,7 +822,7 @@ internal static class GrindRunner
         _defenceHandoffGuid = default;
         _focusedFightGuid = default(WowBGuid);
         _focusedDamageObserved = false;
-        _remoteDefenceAttempted = false;
+        _remoteDefenceAttempted = false; _nearDefenceAttempted = false; _nearDefenceCursor = 0;
         _looted.Clear();
         RecentLoot.Clear();
         NearbySkinAttempts.Clear();
@@ -4230,7 +4230,7 @@ internal static class GrindRunner
         _defenceHandoffGuid = default;
         _focusedFightGuid = default(WowBGuid);
         _focusedDamageObserved = false;
-        _remoteDefenceAttempted = false;
+        _remoteDefenceAttempted = false; _nearDefenceAttempted = false; _nearDefenceCursor = 0;
         _gaveUpAt = 0;
         ClickAimSettings.Load();
         Buffs.Reset(); _stoneclawNextAttempt = 0;
@@ -4252,7 +4252,7 @@ internal static class GrindRunner
     {
         // Do not touch _stop here: STOP may have arrived during recovery.
         _focusedFightGuid = default; _defenceHandoffGuid = default; _focusedDamageObserved = false; _unverifiedGuid = default;
-        _remoteDefenceAttempted = false;
+        _remoteDefenceAttempted = false; _nearDefenceAttempted = false; _nearDefenceCursor = 0;
         _combatHold = false; _poolApproachHandled = false;
         Buffs.Reset(); // Gather calls this only after confirmed revival.
     }
@@ -4284,9 +4284,9 @@ internal static class GrindRunner
     // a remote TAB pick while a nearby live NPC may be attacking the character.
     private const double GatherDefenceRadius = 12.0;
     private const double RemoteDefenceRadius = 40.0;
-    private const int RemoteDefenceRetryMs = 3000;
-    private static int _remoteDefenceLast;
-    private static bool _remoteDefenceAttempted;
+    private const int RemoteDefenceRetryMs = 3000, NearDefenceRetryMs = 2000;
+    private static int _remoteDefenceLast, _nearDefenceLast, _nearDefenceCursor;
+    private static bool _remoteDefenceAttempted, _nearDefenceAttempted;
 
     internal static string DefendGatherer(IntPtr hwnd)
         => DefendNearby(hwnd, ObjectManager.WowB?.IsExperimental70707 == true, out _);
@@ -4300,6 +4300,60 @@ internal static class GrindRunner
     // unreadable faction keys. Combat state and TAB do not identify the attacker.
     private static bool DefenceFactionAllowed(WowBReader reader, bool grindMode, WowBObservedUnit unit)
         => !grindMode || reader.IsExperimental70862 || WowBGrindFactions.AllowsPull(reader, unit, out _);
+
+    // On 70862 a TAB may select a different nearby NPC than the pool entry
+    // we aimed toward. Accept the actual selection only after two fresh,
+    // matching snapshots and live combat/attachment/target checks. Neither
+    // selection nor proximity proves hostility or attacker identity.
+    private static bool TrySelectedNearbyDefence(WowBReader reader, bool grindMode,
+        out WowBObservedUnit player, out WowBObservedUnit selected)
+    {
+        player = default; selected = default;
+        GreenMagic.Memory? memory = ObjectManager.Wow;
+        if (!reader.IsExperimental70862 || memory == null || ObjectManager.WowB != reader ||
+            _stop || ClickAimAbort.Requested || RouteRunner.StopRequested) return false;
+        try
+        {
+            using var uncached = memory.TemporaryCacheState(false);
+            if (reader.ReadTargetGuid().IsEmpty) return false;
+            WowBObservedUnit firstPlayer = default, firstTarget = default;
+            for (int pass = 0; pass < 2; pass++)
+            {
+                if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested || ObjectManager.Wow != memory || ObjectManager.WowB != reader ||
+                    !WowBGrindFactions.Experimental70707BarSafe(reader) ||
+                    !TryReadGatherCombat(out bool fighting) || !fighting ||
+                    !Capture(out WowBWorldSnapshot? snap) || snap == null ||
+                    !snap.TryGetLocalPlayer(out WowBObservedUnit currentPlayer) || currentPlayer.Guid.IsEmpty ||
+                    !snap.TryGetSelectedTarget(out WowBObservedUnit currentTarget) || currentTarget.Guid.IsEmpty ||
+                    currentTarget.IsLocalPlayer || currentTarget.HasPlayerVtable || reader.ReadTargetGuid() != currentTarget.Guid ||
+                    !reader.TryGetUnitFields(currentTarget.UnitAddress, out WowBReader.WowBUnitFields fields) ||
+                    !DefenceFieldsValid(fields.Health, fields.UnitFlags, grindMode && _notViable.Contains(currentTarget.Guid)) ||
+                    !DefenceFactionAllowed(reader, grindMode, currentTarget)) return false;
+                double distance = ClickAimMath.Len(currentTarget.Location.X - currentPlayer.Location.X, currentTarget.Location.Y - currentPlayer.Location.Y);
+                if (!double.IsFinite(distance) || distance > GatherDefenceRadius) return false;
+                if (pass == 0) { firstPlayer = currentPlayer; firstTarget = currentTarget; }
+                else if (currentPlayer.Guid != firstPlayer.Guid || currentPlayer.UnitAddress != firstPlayer.UnitAddress ||
+                    currentPlayer.RecordAddress != firstPlayer.RecordAddress || currentTarget.Guid != firstTarget.Guid ||
+                    currentTarget.UnitAddress != firstTarget.UnitAddress || currentTarget.RecordAddress != firstTarget.RecordAddress) return false;
+                player = currentPlayer; selected = currentTarget;
+            }
+            return !_stop && !ClickAimAbort.Requested && !RouteRunner.StopRequested && ObjectManager.Wow == memory &&
+                ObjectManager.WowB == reader && WowBGrindFactions.Experimental70707BarSafe(reader) &&
+                reader.ReadTargetGuid() == selected.Guid && TryReadGatherCombat(out bool stillFighting) && stillFighting;
+        }
+        catch { player = default; selected = default; return false; }
+    }
+
+    private static bool TryFightSelectedNearby(IntPtr hwnd, WowBReader reader, bool grindMode, string source, out string report)
+    {
+        report = "";
+        if (!TrySelectedNearbyDefence(reader, grindMode, out WowBObservedUnit player, out WowBObservedUnit selected)) return false;
+        Logging.Write((grindMode ? "[Grind]" : "[Gather]") + " combat: rotation on nearby " + source + " NPC " + selected.Guid +
+            "; selection and proximity do not prove it is the attacker or hostile");
+        if (grindMode) LogFactionFight(reader, selected, true);
+        try { report = FightDefenceWithHandoffs(hwnd, reader, grindMode, player, selected); return true; }
+        finally { ClickAimKeySteer.ReleaseHeld(); }
+    }
 
     private static bool TryTakeDefenceHandoff(WowBReader reader, bool grindMode,
                                               out WowBObservedUnit player, out WowBObservedUnit selected)
@@ -4351,7 +4405,7 @@ internal static class GrindRunner
     {
         engaged = false;
         if (_stop || ClickAimAbort.Requested || !TryReadGatherCombat(out bool fighting) || !fighting)
-        { _defenceHandoffGuid = default; return ""; }
+        { _defenceHandoffGuid = default; _nearDefenceAttempted = false; _nearDefenceCursor = 0; return ""; }
         WowBReader? reader = ObjectManager.WowB;
         if (reader == null) return "cannot read nearby units";
         if (!_defenceHandoffGuid.IsEmpty && TryTakeDefenceHandoff(reader, grindMode, out WowBObservedUnit handoffPlayer, out WowBObservedUnit handoffTarget))
@@ -4362,6 +4416,13 @@ internal static class GrindRunner
             try { return FightDefenceWithHandoffs(hwnd, reader, grindMode, handoffPlayer, handoffTarget); }
             finally { ClickAimKeySteer.ReleaseHeld(); }
         }
+        // Check a current nearby selection before scanning or turning, including
+        // during the retry delay. Selected/proximity do not establish hostility.
+        string selectedReport;
+        if (reader.IsExperimental70862 && TryFightSelectedNearby(hwnd, reader, grindMode, "already-selected", out selectedReport))
+        { engaged = true; return selectedReport; }
+        if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested || !TryReadGatherCombat(out fighting) || !fighting)
+            return "combat ended or state unreadable";
         if (!Capture(out WowBWorldSnapshot? snap) || snap == null
             || !snap.TryGetLocalPlayer(out WowBObservedUnit player)) return "cannot read nearby units";
         var nearby = new List<WowBObservedUnit>();
@@ -4397,7 +4458,8 @@ internal static class GrindRunner
         // bounded remote movement guards as the 12–40 yd defence path, rather
         // than entering a near-only fight that immediately rejects and repeats.
         bool focusedRemote = reader.IsExperimental70862 && focusedDistance > GatherDefenceRadius;
-        if (_focusedDamageObserved && !_focusedFightGuid.IsEmpty && hasFocused && focused.Guid == _focusedFightGuid &&
+        if ((!reader.IsExperimental70862 || focusedRemote) &&
+            _focusedDamageObserved && !_focusedFightGuid.IsEmpty && hasFocused && focused.Guid == _focusedFightGuid &&
             !focused.IsLocalPlayer && !focused.HasPlayerVtable && double.IsFinite(focusedDistance) &&
             focusedDistance <= ClickAimCombat.CasterRangeYd &&
             (!focusedRemote || (!Unreachable(focused.Guid) && !HasNearbyOtherNpc(snap, player, focused.Guid, reader))) &&
@@ -4410,6 +4472,25 @@ internal static class GrindRunner
             engaged = true;
             try { return FightDefenceWithHandoffs(hwnd, reader, grindMode, player, focused, focusedRemote); }
             finally { ClickAimKeySteer.ReleaseHeld(); }
+        }
+        // Let TAB offer a candidate before rotating. Validate its actual
+        // selection rather than assuming it corresponds to a pool entry.
+        if (reader.IsExperimental70862)
+        {
+            if (nearby.Count > 0)
+            {
+                if (_nearDefenceAttempted && unchecked(Environment.TickCount - _nearDefenceLast) < NearDefenceRetryMs)
+                    return "nearby defensive selection retry deferred; attacker identity is unknown";
+                if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested || ObjectManager.WowB != reader || ObjectManager.Wow == null ||
+                    !TryReadGatherCombat(out fighting) || !fighting)
+                    return "combat ended or state unreadable";
+                _nearDefenceAttempted = true; _nearDefenceLast = Environment.TickCount;
+                ClickAimInput.TapKey(hwnd, TabVk, 40);
+                if (ClickAimAbort.Wait(TabSettleMs) || _stop || RouteRunner.StopRequested) return "stopped";
+                if (!TryReadGatherCombat(out fighting) || !fighting) return "combat ended or state unreadable";
+                if (TryFightSelectedNearby(hwnd, reader, grindMode, "TAB-selected", out selectedReport))
+                { engaged = true; return selectedReport; }
+            }
         }
         if (nearby.Count == 0)
         {
@@ -4426,15 +4507,23 @@ internal static class GrindRunner
                 inRange, unreadable, dead, flagged, refused, factionBlocked,
                 grindMode && GrindFactionSettings.Rules.Enabled ? "attacker identity is unknown; defence selection is heuristic" : "attacker may be ranged or missing from the snapshot");
         }
-        int candidates = Math.Min(nearby.Count, 6);
-        for (int i = 0; i < candidates && !_stop && !ClickAimAbort.Requested; i++)
+        int candidates = Math.Min(nearby.Count, reader.IsExperimental70862 ? 3 : 6);
+        int startCandidate = reader.IsExperimental70862 ? _nearDefenceCursor % nearby.Count : 0;
+        if (reader.IsExperimental70862) _nearDefenceCursor = (startCandidate + candidates) % nearby.Count;
+        for (int i = 0; i < candidates && !_stop && !ClickAimAbort.Requested && !RouteRunner.StopRequested; i++)
         {
-            WowBObservedUnit candidate = nearby[i];
+            if ((reader.IsExperimental70862 && (ObjectManager.WowB != reader || ObjectManager.Wow == null)) ||
+                !TryReadGatherCombat(out fighting) || !fighting) return "combat ended or state unreadable";
+            WowBObservedUnit candidate = nearby[(startCandidate + i) % nearby.Count];
             // Turning is only an aim for TAB. Pool proximity/flags do NOT prove hostility.
             if (!ClickAimKeySteer.Face(candidate.Location.X, candidate.Location.Y, hwnd, 30.0, 6)) continue;
-            for (int tries = 0; tries < 3 && !_stop && !ClickAimAbort.Requested; tries++)
+            if (reader.IsExperimental70862 && TryFightSelectedNearby(hwnd, reader, grindMode, "already-selected", out string faceReport))
+            { engaged = true; return faceReport; }
+            int maxTries = reader.IsExperimental70862 ? 1 : 3;
+            for (int tries = 0; tries < maxTries && !_stop && !ClickAimAbort.Requested && !RouteRunner.StopRequested; tries++)
             {
-                if (!TryReadGatherCombat(out fighting) || !fighting) return "combat ended or state unreadable";
+                if ((reader.IsExperimental70862 && (ObjectManager.WowB != reader || ObjectManager.Wow == null)) ||
+                    !TryReadGatherCombat(out fighting) || !fighting) return "combat ended or state unreadable";
                 WowBGuid before = reader.ReadTargetGuid();
                 // Reuse an already-selected nearby candidate instead of selecting
                 // self to force TAB. Otherwise require TAB to select this candidate.
@@ -4446,6 +4535,12 @@ internal static class GrindRunner
                     if (ClickAimAbort.Wait(TabSettleMs)) return "stopped";
                 }
                 if (!TryReadGatherCombat(out fighting) || !fighting) return "combat ended or state unreadable";
+                if (reader.IsExperimental70862)
+                {
+                    if (TryFightSelectedNearby(hwnd, reader, grindMode, "TAB-selected", out string tabReport))
+                    { engaged = true; return tabReport; }
+                    continue; // never fall through to an unvalidated 70862 selection
+                }
                 if (!Capture(out snap) || snap == null || !snap.TryGetLocalPlayer(out player)
                     || !snap.TryGetSelectedTarget(out WowBObservedUnit selected)
                     || selected.Guid != candidate.Guid || selected.UnitAddress != candidate.UnitAddress
@@ -4466,6 +4561,7 @@ internal static class GrindRunner
                 finally { ClickAimKeySteer.ReleaseHeld(); }
             }
         }
+        if (reader.IsExperimental70862) _nearDefenceLast = Environment.TickCount;
         return "no eligible nearby NPC selected by the defensive TAB check; holding position";
     }
 

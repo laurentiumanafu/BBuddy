@@ -70,6 +70,25 @@ class DefenceScopeTests(unittest.TestCase):
         self.assertIn('WowBGrindFactions.AllowsPull(reader, target, out _)', select)
         self.assertIn('WowBGrindFactions.AllowsPull(reader, actual, out _)', verify)
 
+    def test_70862_actual_selection_is_double_checked_before_turn_and_after_tab(self):
+        selected = section('    private static bool TrySelectedNearbyDefence(', '    private static bool TryFightSelectedNearby(')
+        for guard in ('pass < 2', 'TemporaryCacheState(false)', 'ObjectManager.Wow != memory',
+                      'ObjectManager.WowB != reader', 'RouteRunner.StopRequested',
+                      'TryReadGatherCombat(out bool fighting)', 'TryReadGatherCombat(out bool stillFighting)',
+                      'TryGetLocalPlayer', 'TryGetSelectedTarget', 'currentTarget.HasPlayerVtable',
+                      'reader.ReadTargetGuid() != currentTarget.Guid', 'reader.ReadTargetGuid() == selected.Guid',
+                      'DefenceFieldsValid', 'DefenceFactionAllowed', 'double.IsFinite(distance)',
+                      'distance > GatherDefenceRadius', 'currentTarget.RecordAddress != firstTarget.RecordAddress',
+                      'currentTarget.UnitAddress != firstTarget.UnitAddress'):
+            self.assertIn(guard, selected)
+        near = section('    private static string DefendNearby(', '    // Out-of-melee combat fallback.')
+        self.assertLess(near.index('"already-selected"'), near.index('ClickAimKeySteer.Face('))
+        self.assertLess(near.index('"TAB-selected"'), near.index('ClickAimKeySteer.Face('))
+        self.assertIn('continue; // never fall through to an unvalidated 70862 selection', near)
+        self.assertIn('NearDefenceRetryMs', near)
+        self.assertIn('_nearDefenceCursor = (startCandidate + candidates) % nearby.Count', near)
+        self.assertIn('reader.IsExperimental70862 ? 1 : 3', near)
+
     def test_stop_combat_and_selection_checks_remain(self):
         guard = section('    private static bool FightAttackInputAllowed(', '    // End the old rotation')
         self.assertIn('RouteRunner.StopRequested', guard)

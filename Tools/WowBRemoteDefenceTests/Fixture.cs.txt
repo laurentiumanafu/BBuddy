@@ -3,7 +3,10 @@ using System.Collections.Generic;
 using System.Globalization;
 using Styx.WoWInternals;
 using Styx.Helpers;
-namespace GreenMagic { public sealed class Memory { } }
+namespace GreenMagic { public sealed class Memory {
+    private sealed class Scope : IDisposable { public void Dispose() { } }
+    public IDisposable TemporaryCacheState(bool enabled) => new Scope();
+} }
 namespace Styx.WoWInternals
 {
     public readonly struct WowBGuid
@@ -64,8 +67,8 @@ namespace Styx.Logic.Pathing
     }
     static class ClickAimKeySteer
     {
-        public static Action? OnFace;
-        public static bool Face(double x, double y, IntPtr hwnd, double t, int n) { OnFace?.Invoke(); return true; }
+        public static Action? OnFace; public static int Faces; public static List<double> FaceXs = new();
+        public static bool Face(double x, double y, IntPtr hwnd, double t, int n) { Faces++; FaceXs.Add(x); OnFace?.Invoke(); return true; }
         public static void ReleaseHeld() { }
     }
     static class ClickAimInput
@@ -76,21 +79,21 @@ namespace Styx.Logic.Pathing
     static class Harness
     {
         const double GatherDefenceRadius = 12, RemoteDefenceRadius = 40;
-        const int RemoteDefenceRetryMs = 3000, TabVk = 9, TabSettleMs = 1;
+        const int RemoteDefenceRetryMs = 3000, NearDefenceRetryMs = 2000, TabVk = 9, TabSettleMs = 1;
         const uint NotAFightFlag = 0x302;
-        static bool _stop, _focusedDamageObserved, _remoteDefenceAttempted;
-        static int _remoteDefenceLast, FightCalls; static bool LastRemote, Fighting = true, CombatReadable = true;
+        static bool _stop, _focusedDamageObserved, _remoteDefenceAttempted, _nearDefenceAttempted;
+        static int _remoteDefenceLast, _nearDefenceLast, _nearDefenceCursor, FightCalls, CaptureCount; static Action<int>? OnCapture; static WowBGuid LastFightTarget; static bool LastRemote, Fighting = true, CombatReadable = true;
         static WowBGuid _focusedFightGuid, _defenceHandoffGuid;
         static HashSet<WowBGuid> _notViable = new();
         static WowBWorldSnapshot snapshot = null!;
         static bool TryReadGatherCombat(out bool fighting) { fighting = Fighting; return CombatReadable; }
-        static bool Capture(out WowBWorldSnapshot? snap) { snap = snapshot; return true; }
+        static bool Capture(out WowBWorldSnapshot? snap) { OnCapture?.Invoke(++CaptureCount); snap = snapshot; return true; }
         static bool MarkedUnreachable;
         static bool Unreachable(WowBGuid guid) => MarkedUnreachable;
         static bool TryTakeDefenceHandoff(WowBReader r, bool mode, out WowBObservedUnit p, out WowBObservedUnit t) { p = t = default; return false; }
         static void LogFactionFight(WowBReader? reader, WowBObservedUnit unit, bool defence) { }
         static string FightDefenceWithHandoffs(IntPtr hwnd, WowBReader reader, bool mode, WowBObservedUnit player, WowBObservedUnit target, bool remoteDefence = false)
-        { FightCalls++; LastRemote = remoteDefence; return "fight"; }
+        { FightCalls++; LastRemote = remoteDefence; LastFightTarget = target.Guid; return "fight"; }
         static bool FightAttackInputAllowed(WowBReader r, GreenMagic.Memory m, WowBGuid guid, WowBObservedUnit unit, bool enforce)
             => !_stop && !ClickAimAbort.Requested && ObjectManager.WowB == r && ObjectManager.Wow == m && r.Selected == guid && (!enforce || WowBGrindFactions.Allowed) && WowBGrindFactions.BarSafe;
         // __HAS_NEARBY__
@@ -109,7 +112,8 @@ namespace Styx.Logic.Pathing
             r.Fields[1] = new() { Health=100 }; r.Fields[2] = new() { Health=100 };
             r.Selected = default; ClickAimInput.TabTarget = npc.Guid; ClickAimInput.Tabs = 0; ClickAimInput.OnTab = null; ClickAimKeySteer.OnFace = null;
             Fighting = CombatReadable = WowBGrindFactions.Allowed = WowBGrindFactions.BarSafe = GrindFactionSettings.Rules.Enabled = true;
-            _stop = ClickAimAbort.Requested = RouteRunner.StopRequested = _focusedDamageObserved = _remoteDefenceAttempted = false;
+            _stop = ClickAimAbort.Requested = RouteRunner.StopRequested = _focusedDamageObserved = _remoteDefenceAttempted = _nearDefenceAttempted = false;
+            _nearDefenceCursor = 0; CaptureCount = 0; OnCapture = null; ClickAimKeySteer.Faces = 0; ClickAimKeySteer.FaceXs.Clear(); LastFightTarget = default;
             WowBAttackerResearch.Calls = 0;
             _focusedFightGuid = _defenceHandoffGuid = default; _notViable.Clear(); FightCalls = 0; LastRemote = false; MarkedUnreachable = false;
         }
@@ -170,6 +174,45 @@ namespace Styx.Logic.Pathing
             Setup(21); ObjectManager.WowB!.IsExperimental70862 = true; ObjectManager.WowB.Selected = new WowBGuid(2);
             _focusedFightGuid = new WowBGuid(2); _focusedDamageObserved = true; ClickAimAbort.Requested = true;
             Defend(out engaged); Require(!engaged && FightCalls == 0, "STOP blocks focused remote defence");
+            Setup(8); ObjectManager.WowB!.IsExperimental70862 = true; ObjectManager.WowB.Selected = new WowBGuid(2);
+            Require(Defend(out engaged) == "fight" && engaged && LastFightTarget == new WowBGuid(2) && ClickAimInput.Tabs == 0 && ClickAimKeySteer.Faces == 0, "already selected nearby before TAB or turning");
+            Setup(8); AddNearby(); snapshot.Units[2] = Unit(3,9); ObjectManager.WowB!.IsExperimental70862 = true; ClickAimInput.TabTarget = default;
+            ClickAimInput.OnTab = () => { if (ClickAimInput.Tabs == 2) ObjectManager.WowB!.Selected = new WowBGuid(3); };
+            Require(Defend(out engaged) == "fight" && engaged && LastFightTarget == new WowBGuid(3) && ClickAimInput.Tabs == 2 && ClickAimKeySteer.Faces == 1, "TAB selecting different nearby NPC after facing");
+            Setup(8); AddNearby(); ObjectManager.WowB!.IsExperimental70862 = true; ClickAimInput.TabTarget = new WowBGuid(3);
+            Require(Defend(out engaged) == "fight" && engaged && LastFightTarget == new WowBGuid(3) && ClickAimKeySteer.Faces == 0, "first TAB accepts nearby NPC without turning");
+            Setup(8); ObjectManager.WowB!.IsExperimental70862 = true; ClickAimInput.TabTarget = new WowBGuid(99); Defend(out engaged);
+            int priorFaces = ClickAimKeySteer.Faces, priorTabs = ClickAimInput.Tabs;
+            Defend(out engaged); Require(!engaged && ClickAimKeySteer.Faces == priorFaces && ClickAimInput.Tabs == priorTabs, "failed nearby scan throttles turning");
+            ObjectManager.WowB.Selected = new WowBGuid(2); Require(Defend(out engaged) == "fight" && engaged, "valid selection bypasses retry delay");
+            Setup(4); ObjectManager.WowB!.IsExperimental70862 = true;
+            for (int id = 3; id <= 5; id++) { snapshot.Units.Add(Unit(id, id + 2)); ObjectManager.WowB.Fields[(ulong)id] = new() { Health = 100 }; }
+            ClickAimInput.TabTarget = new WowBGuid(99); Defend(out engaged);
+            Require(ClickAimKeySteer.FaceXs.Count == 3, "first scan is bounded to three directions");
+            _nearDefenceLast = unchecked(Environment.TickCount - NearDefenceRetryMs);
+            Defend(out engaged); Require(ClickAimKeySteer.FaceXs.Count == 6 && ClickAimKeySteer.FaceXs[3] == 7, "later scans rotate through remaining candidates");
+
+            Setup(8); ObjectManager.WowB!.IsExperimental70862 = true; ObjectManager.WowB.Selected = new WowBGuid(2);
+            Require(TrySelectedNearbyDefence(ObjectManager.WowB, true, out _, out _) && CaptureCount == 2, "two fresh snapshots");
+            Setup(8); ObjectManager.WowB!.IsExperimental70862 = true; ObjectManager.WowB.Selected = new WowBGuid(2); OnCapture = n => { if (n == 2) ObjectManager.WowB!.Selected = new WowBGuid(99); };
+            Require(!TrySelectedNearbyDefence(ObjectManager.WowB, true, out _, out _), "changed selection rejected");
+            Setup(8); ObjectManager.WowB!.IsExperimental70862 = true; ObjectManager.WowB.Selected = new WowBGuid(2); OnCapture = n => { if (n == 2) { var u = snapshot.Units[1]; u.RecordAddress++; snapshot.Units[1] = u; } };
+            Require(!TrySelectedNearbyDefence(ObjectManager.WowB, true, out _, out _), "changed record rejected");
+            Setup(8); ObjectManager.WowB!.IsExperimental70862 = true; ObjectManager.WowB.Selected = new WowBGuid(2); OnCapture = n => { if (n == 1) Fighting = false; };
+            Require(!TrySelectedNearbyDefence(ObjectManager.WowB, true, out _, out _), "combat loss rejected");
+            Setup(8); ObjectManager.WowB!.IsExperimental70862 = true; ObjectManager.WowB.Selected = new WowBGuid(2); OnCapture = n => { if (n == 1) RouteRunner.StopRequested = true; };
+            Require(!TrySelectedNearbyDefence(ObjectManager.WowB, true, out _, out _), "STOP rejected");
+            Setup(8); ObjectManager.WowB!.IsExperimental70862 = true; ObjectManager.WowB.Selected = new WowBGuid(2); OnCapture = n => { if (n == 1) ObjectManager.Wow = new GreenMagic.Memory(); };
+            Require(!TrySelectedNearbyDefence(ObjectManager.WowB, true, out _, out _), "attachment change rejected");
+            Setup(8); ObjectManager.WowB!.IsExperimental70862 = true; ObjectManager.WowB.Selected = new WowBGuid(2); ObjectManager.WowB.Fields[2] = new() { Health = 0 };
+            Require(!TrySelectedNearbyDefence(ObjectManager.WowB, true, out _, out _), "dead selection rejected");
+            Setup(8); ObjectManager.WowB!.IsExperimental70862 = true; ObjectManager.WowB.Selected = new WowBGuid(2); snapshot.Units[1] = Unit(2,8,true);
+            Require(!TrySelectedNearbyDefence(ObjectManager.WowB, true, out _, out _), "player selection rejected");
+            Setup(13); ObjectManager.WowB!.IsExperimental70862 = true; ObjectManager.WowB.Selected = new WowBGuid(2);
+            Require(!TrySelectedNearbyDefence(ObjectManager.WowB, true, out _, out _), "out of range rejected");
+            Setup(double.NaN); ObjectManager.WowB!.IsExperimental70862 = true; ObjectManager.WowB.Selected = new WowBGuid(2);
+            Require(!TrySelectedNearbyDefence(ObjectManager.WowB, true, out _, out _), "nonfinite distance rejected");
+
             Setup(8); Require(Defend(out engaged) == "fight" && engaged && !LastRemote, "nearby defence still takes priority");
             Setup(8); ObjectManager.WowB!.IsExperimental70862=true; WowBGrindFactions.Allowed=false;
             Require(Defend(out engaged) == "fight" && engaged && FightCalls==1 && ClickAimInput.Tabs==1, "70862 nearby excluded NPC can be selected during combat");
