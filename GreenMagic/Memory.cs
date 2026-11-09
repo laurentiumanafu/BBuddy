@@ -1338,6 +1338,23 @@ namespace GreenMagic
         }
 
         /// <summary>
+        /// Query the state/protection only if one region covers the whole range.
+        /// MEM_RESERVE is uncommitted, but the mapping can change immediately;
+        /// committed/no-access and query failures remain unknown to callers.
+        /// </summary>
+        public bool TryQueryMemoryRangeState64(ulong address, int length, out uint state, out uint protection)
+        {
+            state = 0; protection = 0;
+            if (ProcessHandle == IntPtr.Zero || length <= 0 || address > long.MaxValue) return false;
+            int infoSize = Marshal.SizeOf(typeof(MEMORY_BASIC_INFORMATION64));
+            IntPtr result = Imports.VirtualQueryEx64(ProcessHandle, new IntPtr((long)address),
+                out MEMORY_BASIC_INFORMATION64 info, (IntPtr)infoSize);
+            if (result.ToInt64() != infoSize || info.BaseAddress > address || info.RegionSize < (ulong)length ||
+                address - info.BaseAddress > info.RegionSize - (ulong)length) return false;
+            state = info.State; protection = info.Protect; return true;
+        }
+
+        /// <summary>
         /// Retrieves the thread context of a 64-bit thread. The FltSave and
         /// VectorRegister arrays must be pre-allocated for the marshaller,
         /// which this method handles.

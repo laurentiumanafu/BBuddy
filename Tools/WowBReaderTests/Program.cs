@@ -536,6 +536,15 @@ namespace GreenMagic
             OnFreeQuery?.Invoke(address);
             return length == 0x20 && FreeHeaders.Contains(address);
         }
+        public Dictionary<ulong, uint> HeaderStates { get; } = new();
+        public Action<ulong>? OnStateQuery { get; set; }
+        public bool TryQueryMemoryRangeState64(ulong address, int length, out uint state, out uint protection)
+        {
+            OnStateQuery?.Invoke(address);
+            protection = 0;
+            state = 0;
+            return length == 0x20 && HeaderStates.TryGetValue(address, out state);
+        }
         public bool ReadableRangeAllowed { get; set; } = true;
         public bool IsCommittedReadableRange64(ulong address, int length)
         {

@@ -104,6 +104,28 @@ internal static class Experimental70862Tests
             exploratory.Contains("research subtotal unavailable") && WowBInventoryProbe.ObservedBags().Count == 0,
             "unreadable alternative reports raw research only, without subtotal or choices");
         Require(!WowBInventoryProbe.ClassifyBag(choices[0], WowBBagKind.Specialty, out _), "unresolved candidate cannot be classified");
+        // Regression for the 2026-11-09 log: a reserved (not committed) address
+        // has no present header. No assumption is made about that log's actual map.
+        const ulong alternative = 0x258000000E0;
+        memory.U64(bagRecord + 0x40, alternative);
+        memory.HeaderStates[alternative] = 0x1000; // committed but unreadable
+        string committed = WowBInventoryProbe.Capture();
+        Require(committed.Contains("state=0x1000") && committed.Contains("research subtotal unavailable") &&
+            WowBInventoryProbe.ObservedBags().Count == 0, "committed unreadable remains unknown");
+        memory.HeaderStates[alternative] = 0x2000; // MEM_RESERVE, whole header
+        string reserved = WowBInventoryProbe.Capture();
+        Require(reserved.Contains("confirmed reserved headers=1") && reserved.Contains("70862 research subtotal: candidate sizes=18, zero-tags=18") &&
+            WowBInventoryProbe.ObservedBags().Count == 1, "stable reserved range cannot hold a current header");
+        int stateQueries = 0;
+        memory.OnStateQuery = address => {
+            if (address == alternative && ++stateQueries == 3) memory.HeaderStates[address] = 0x1000;
+        };
+        Require(WowBInventoryProbe.Capture().Contains("memory map, identity table") && WowBInventoryProbe.ObservedBags().Count == 0,
+            "reserved region becoming committed before publication fails closed");
+        memory.OnStateQuery = null; memory.HeaderStates.Remove(alternative);
+        ClickAimUi.Running = true;
+        Require(!WowBInventoryProbe.TryCaptureSellingSubtotal(out _, out _), "unqueried alternative never authorizes active selling");
+        ClickAimUi.Running = false;
         // Reproduce the two pointer-like values observed in the 2026-11-06 log.
         // The simulated OS query must affirm the entire 32-byte header is free;
         // unconfirmed unreadable pages still block all choices and selling.
@@ -190,6 +212,18 @@ internal static class Experimental70862Tests
         ClickAimUi.Running = true;
         Require(WowBInventoryProbe.TryCaptureSellingSubtotal(out int tags, out WowBGuid owner) && tags == 16 && owner == player,
             "70862 active selling subtotal excludes specialty slots");
+        memory.U64(bagRecord + 0x40, alternative); memory.HeaderStates[alternative] = 0x2000;
+        Require(WowBInventoryProbe.TryCaptureSellingSubtotal(out tags, out owner) && tags == 16 && owner == player,
+            "active subtotal accepts a rechecked reserved header for a classified bag");
+        memory.HeaderStates[alternative] = 0x1000;
+        Require(!WowBInventoryProbe.TryCaptureSellingSubtotal(out _, out _), "committed unreadable alternative blocks active subtotal");
+        memory.HeaderStates[alternative] = 0x2000;
+        int activeQueries = 0;
+        memory.OnStateQuery = address => {
+            if (address == alternative && ++activeQueries == 3) memory.HeaderStates[address] = 0x1000;
+        };
+        Require(!WowBInventoryProbe.TryCaptureSellingSubtotal(out _, out _), "reserved-to-committed change blocks active subtotal");
+        memory.OnStateQuery = null; memory.HeaderStates.Remove(alternative); memory.U64(bagRecord + 0x40, 0);
         memory.U64(bagRecord + 0x58, 0x1FFFE0D4); memory.U64(bagRecord + 0x118, 0x8FFFFDFC);
         memory.FreeHeaders.Add(0x1FFFE0D4); memory.FreeHeaders.Add(0x8FFFFDFC);
         Require(WowBInventoryProbe.TryCaptureSellingSubtotal(out tags, out owner) && tags == 16 && owner == player,

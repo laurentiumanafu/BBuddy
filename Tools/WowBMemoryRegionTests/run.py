@@ -5,14 +5,16 @@ import subprocess
 import tempfile
 root = Path(__file__).resolve().parents[2]
 source = (root / 'GreenMagic/Memory.cs').read_text(encoding='utf-8-sig')
-start = source.index('        public bool IsMemoryRangeFree64(')
-opening = source.index('{', start)
-depth = 1
-end = opening + 1
-while depth:
-    depth += (source[end] == '{') - (source[end] == '}')
-    end += 1
-method = source[start:end]
+def extract(signature):
+    start = source.index('        public bool ' + signature + '(')
+    opening = source.index('{', start)
+    depth = 1
+    end = opening + 1
+    while depth:
+        depth += (source[end] == '{') - (source[end] == '}')
+        end += 1
+    return source[start:end]
+method = extract('IsMemoryRangeFree64') + '\n' + extract('TryQueryMemoryRangeState64')
 fixture = (Path(__file__).parent / 'Fixture.cs.txt').read_text(encoding='utf-8').replace('        // __METHOD__', method)
 project = '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><Nullable>enable</Nullable></PropertyGroup></Project>'
 with tempfile.TemporaryDirectory(prefix='wowb-memory-region-') as directory:

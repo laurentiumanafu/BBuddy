@@ -37,6 +37,20 @@ static class Program
         Imports.Info.State=0x1000; Imports.Info.Protect=1; Check(!memory.IsMemoryRangeFree64(0x1000,32),"committed no-access unknown");
         Imports.Info.State=0x10000; memory.ProcessHandle=IntPtr.Zero; Check(!memory.IsMemoryRangeFree64(0x1000,32),"missing process unknown");
         memory.ProcessHandle=(IntPtr)1; Check(!memory.IsMemoryRangeFree64(0x8000000000000000,32),"unsupported address unknown");
+        Imports.Info = new MEMORY_BASIC_INFORMATION64 { BaseAddress=0x1000, RegionSize=0x1000, State=0x2000, Protect=0 };
+        Check(memory.TryQueryMemoryRangeState64(0x1FE0, 32, out uint state, out uint protect) && state == 0x2000 && protect == 0,
+            "whole reserved region reported");
+        Check(!memory.TryQueryMemoryRangeState64(0x1FE1, 32, out _, out _), "split range unknown");
+        Imports.Info.State=0x1000; Imports.Info.Protect=1;
+        Check(memory.TryQueryMemoryRangeState64(0x1000, 32, out state, out protect) && state == 0x1000 && protect == 1,
+            "committed no-access accurately reported, not reserved");
+        Imports.Returned=40; Check(!memory.TryQueryMemoryRangeState64(0x1000, 32, out _, out _), "partial result unknown");
+        Imports.Returned=0; Check(!memory.TryQueryMemoryRangeState64(0x1000, 32, out _, out _), "failed result unknown");
+        Imports.Returned=48; memory.ProcessHandle=IntPtr.Zero;
+        Check(!memory.TryQueryMemoryRangeState64(0x1000, 32, out _, out _), "missing process unknown");
+        memory.ProcessHandle=(IntPtr)1;
+        Check(!memory.TryQueryMemoryRangeState64(0x8000000000000000, 32, out _, out _), "unsupported address unknown");
+        Check(!memory.TryQueryMemoryRangeState64(0x1000, 0, out _, out _), "empty range unknown");
         Console.WriteLine("Memory-free region guard fixtures passed (mock VirtualQueryEx, not Windows validation).");
     }
 }
