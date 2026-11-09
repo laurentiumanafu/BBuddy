@@ -12,6 +12,7 @@ handoff = (root / 'Styx/Logic/Pathing/ClickAim/WowBDefenceHandoff.cs').read_text
 def section(start, end):
     a = g.index(start)
     return g[a:g.index(end, a)]
+focus = section('    private static bool IsDamagedVoluntaryFocus(', '    private static bool ShouldYieldRemotePull(')
 near = section('    private static bool HasNearbyOtherNpc(', '    // Proximity is a heuristic')
 fields = section('    private static bool DefenceFieldsValid(', '    private static bool TryTakeDefenceHandoff(')
 defend = section('    private static string DefendNearby(', '    // Out-of-melee combat fallback.')
@@ -39,7 +40,7 @@ assert 'FactionPullStillAllowed(reader, expected, expected)' in g
 assert 'requireCombat && (!TryReadGatherCombat(out bool activeCombat) || !activeCombat)' in g
 assert '(!requireCombat || (TryReadGatherCombat(out bool stillFighting) && stillFighting))' in g
 fixture = (Path(__file__).parent / 'Fixture.cs.txt').read_text(encoding='utf-8')
-for marker, content in [('__HAS_NEARBY__', near), ('__DEFENCE_FIELDS__', fields), ('__DEFEND_NEARBY__', defend), ('__DEFEND_REMOTE__', remote), ('__MOVE_GUARD__', movement)]:
+for marker, content in [('__FOCUS__', focus), ('__HAS_NEARBY__', near), ('__DEFENCE_FIELDS__', fields), ('__DEFEND_NEARBY__', defend), ('__DEFEND_REMOTE__', remote), ('__MOVE_GUARD__', movement)]:
     fixture = fixture.replace('        // ' + marker, content)
 project = '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><Nullable>enable</Nullable></PropertyGroup></Project>'
 with tempfile.TemporaryDirectory(prefix='wowb-remote-defence-') as directory:

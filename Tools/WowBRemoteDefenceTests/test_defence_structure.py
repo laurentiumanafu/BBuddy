@@ -43,12 +43,12 @@ class DefenceScopeTests(unittest.TestCase):
     def test_damaged_focus_uses_bounded_remote_chase(self):
         near = section('    private static string DefendNearby(', '    // Out-of-melee combat fallback.')
         self.assertIn('reader.IsExperimental70862 && focusedDistance > GatherDefenceRadius', near)
-        self.assertIn('!Unreachable(focused.Guid) && !HasNearbyOtherNpc', near)
+        self.assertIn('!Unreachable(focused.Guid) && !RemoteDefenceBlocked', near)
         self.assertIn('player, focused, focusedRemote)', near)
         fight = section('    private static string Fight(', "    /// <summary>\n    /// A unit's health straight out of its data block")
         self.assertIn('defenceOnly && remoteDefence', fight)
         self.assertIn('RemoteDefenceMovementAllowed(reader, fightMemory, expectedPull)', fight)
-        self.assertIn('defenceOnly && remoteDefence && d > GatherDefenceRadius && HasNearbyOtherNpc', fight)
+        self.assertIn('defenceOnly && remoteDefence && d > GatherDefenceRadius && RemoteDefenceBlocked', fight)
         self.assertIn('combatMoveAllowed: defensiveMovement', fight)
 
     def test_combat_buff_stops_chase_before_cast(self):
@@ -78,16 +78,48 @@ class DefenceScopeTests(unittest.TestCase):
                       'TryGetLocalPlayer', 'TryGetSelectedTarget', 'currentTarget.HasPlayerVtable',
                       'reader.ReadTargetGuid() != currentTarget.Guid', 'reader.ReadTargetGuid() == selected.Guid',
                       'DefenceFieldsValid', 'DefenceFactionAllowed', 'double.IsFinite(distance)',
-                      'distance > GatherDefenceRadius', 'currentTarget.RecordAddress != firstTarget.RecordAddress',
+                      'distance > maxDistance', 'currentTarget.RecordAddress != firstTarget.RecordAddress',
                       'currentTarget.UnitAddress != firstTarget.UnitAddress'):
             self.assertIn(guard, selected)
         near = section('    private static string DefendNearby(', '    // Out-of-melee combat fallback.')
         self.assertLess(near.index('"already-selected"'), near.index('ClickAimKeySteer.Face('))
-        self.assertLess(near.index('"TAB-selected"'), near.index('ClickAimKeySteer.Face('))
+        self.assertIn('for (int attempt = -1;', near)
+        self.assertIn('RemoteDefenceRadius, true', near)
         self.assertIn('continue; // never fall through to an unvalidated 70862 selection', near)
         self.assertIn('NearDefenceRetryMs', near)
         self.assertIn('_nearDefenceCursor = (startCandidate + candidates) % nearby.Count', near)
         self.assertIn('reader.IsExperimental70862 ? 1 : 3', near)
+
+    def test_70862_preserves_damaged_voluntary_pull_and_prioritises_allow_lists(self):
+        focus = section('    private static bool IsDamagedVoluntaryFocus(', '    private static bool ShouldYieldRemotePull(')
+        for guard in ('reader.IsExperimental70862', '_damagedVoluntaryTarget.Guid', 'target.UnitAddress == _damagedVoluntaryTarget.UnitAddress',
+                      'target.RecordAddress == _damagedVoluntaryTarget.RecordAddress', '!Unreachable(target.Guid)'):
+            self.assertIn(guard, focus)
+        fight = section('    private static string Fight(', "    /// <summary>\n    /// A unit's health straight out of its data block")
+        self.assertIn('if (!defenceOnly) _damagedVoluntaryTarget = target', fight)
+        self.assertIn('IsDamagedVoluntaryFocus(reader, target) && double.IsFinite(d) && d <= RemoteDefenceRadius + 3.0', fight)
+        self.assertIn('combatNow && !keepDamagedPull && ShouldYieldRemotePull', fight)
+        self.assertIn('DamagedPullMovementAllowed(reader, fightMemory, expectedPull)', fight)
+        self.assertIn('!closingShockTarget && ClickAimSettings.UseBuffsInCombat', fight)
+        self.assertIn('_focusedDamageObserved && d > MeleeEngageYd', fight)
+        movement = section('    private static bool DamagedPullMovementAllowed(', '    private static bool InRealCombat()')
+        for guard in ('RouteRunner.StopRequested', 'ObjectManager.Wow != memory', 'TryReadGatherCombat',
+                      'selected.UnitAddress != expected.UnitAddress', 'selected.RecordAddress != expected.RecordAddress',
+                      'DefenceFieldsValid', 'RemoteDefenceRadius + 3.0',
+                      'FightAttackInputAllowed(reader, memory, expected.Guid, expected, true, true, true)'):
+            self.assertIn(guard, movement)
+        self.assertIn('FactionPullStillAllowed(reader, expectedPull, target)', fight)
+        self.assertIn('ProfileTargetAllowed(reader, target)', fight)
+        policy = section('    private static bool DefencePreferred(', '    // On 70862 a TAB')
+        self.assertIn('GrindFactionSettings.Rules.ContainsAllowedKey(key)', policy)
+        self.assertIn('_defenceManualRules.ContainsAllowedKey(key)', policy)
+        self.assertIn('PreferredDefenceCandidates(reader, snap, player, target.Guid, GatherDefenceRadius', policy)
+        self.assertIn('return HasNearbyOtherNpc(snap, player, target.Guid, reader)', policy)
+        near = section('    private static string DefendNearby(', '    // Out-of-melee combat fallback.')
+        self.assertLess(near.index('PreferredDefenceCandidates(reader, snap, player, default'),
+                        near.index('no preferred faction NPC confirmed by TAB'))
+        self.assertIn('Math.Min(preferred.Count, 3)', near)
+        self.assertIn('RemoteDefenceRadius, true', near)
 
     def test_stop_combat_and_selection_checks_remain(self):
         guard = section('    private static bool FightAttackInputAllowed(', '    // End the old rotation')

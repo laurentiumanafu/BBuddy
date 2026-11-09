@@ -25,6 +25,10 @@ internal sealed class GrindFactionRules
     private static string Format(HashSet<uint> keys)
     { var sorted = new List<uint>(keys); sorted.Sort(); return string.Join(", ", sorted); }
 
+    // Explicit allow-list membership, independent of the currently selected
+    // filter mode. It is a preference, never a hostility verdict.
+    public bool ContainsAllowedKey(uint key) => key != 0 && _allowed.Contains(key);
+
     public bool Allows(bool readable, uint key)
         => !Enabled || (readable && key != 0 &&
             (Mode == GrindFactionMode.Allow ? _allowed.Contains(key) : !_blacklisted.Contains(key)));

@@ -18,12 +18,14 @@ namespace Styx.Logic.Pathing
             Check(!GrindFactionRules.TryCreate(true, "189, 0", out _, out _), "zero rejected");
             Check(!GrindFactionRules.TryCreate(false, "189, xx", out _, out _), "invalid rejected even when disabled");
             Check(GrindFactionRules.TryCreate(true, "189, 4 189", out var parsed, out _) && parsed.KeyText == "4, 189" && parsed.Allows(true, 4) && !parsed.Allows(true, 5) && !parsed.Allows(false, 4), "canonicalization and unknown deny");
+            Check(parsed.ContainsAllowedKey(4) && parsed.ContainsAllowedKey(189) && !parsed.ContainsAllowedKey(5) && !parsed.ContainsAllowedKey(0), "explicit allow-list membership for defence preference");
             Check(GrindFactionSettings.SaveList("189, 4", out _) && GrindFactionSettings.TryLoad(out var loaded, out _) && loaded.Enabled && loaded.KeyText == "4, 189", "persist and reload");
             Check(!GrindFactionSettings.SaveList("bad", out _) && GrindFactionSettings.TryLoad(out loaded, out _) && loaded.Enabled, "invalid save does not replace file");
             File.WriteAllText(GrindFactionSettings.PathName, "Enabled=False\nKeys=4, 189\n");
             Check(GrindFactionSettings.TryLoad(out loaded, out _) && loaded.Enabled, "older unchecked populated list activates");
             Check(!GrindFactionRules.TryCreate(GrindFactionMode.Blacklist, "189", "", out _, out _), "empty active blacklist rejected");
             Check(GrindFactionRules.TryCreate(GrindFactionMode.Blacklist, "189", "57, 55, 57", out var denied, out _) && denied.BlacklistKeyText == "55, 57" && denied.Allows(true, 189) && !denied.Allows(true, 57) && !denied.Allows(false, 189) && !denied.Allows(true, 0), "blacklist excludes only listed keys but denies unknown");
+            Check(denied.ContainsAllowedKey(189) && !denied.ContainsAllowedKey(55) && !denied.ContainsAllowedKey(0), "blacklist mode does not turn every non-blacklisted faction into a preference");
             Check(GrindFactionSettings.Save(GrindFactionMode.Blacklist, "189, 4", "57, 55", out _) && GrindFactionSettings.TryLoad(out loaded, out _) && loaded.Mode == GrindFactionMode.Blacklist && loaded.AllowedKeyText == "4, 189" && loaded.BlacklistKeyText == "55, 57", "blacklist persists without losing allowlist");
             Check(WowBGrindFactions.PrepareForGrind(out _), "blacklist signatures prepare filter");
             var blackReader = ObjectManager.WowB!;

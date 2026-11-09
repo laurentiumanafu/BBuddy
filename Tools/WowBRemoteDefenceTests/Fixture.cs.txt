@@ -38,7 +38,7 @@ namespace Styx.WoWInternals
     public sealed class WowBReader
     {
         public struct WowBUnitFields { public uint Health, UnitFlags; }
-        public Dictionary<ulong,WowBUnitFields> Fields = new();
+        public Dictionary<ulong,WowBUnitFields> Fields = new(); public Dictionary<ulong,uint> Factions = new();
         public WowBGuid Selected; public bool IsExperimental70707 = true, IsExperimental70862 = false;
         public WowBGuid ReadTargetGuid() => Selected;
         public bool TryGetUnitFields(ulong p, out WowBUnitFields f) => Fields.TryGetValue(p, out f);
@@ -58,11 +58,12 @@ namespace Styx.Logic.Pathing
     static class ClickAimCombat { public const double CasterRangeYd = 28; }
     static class RouteRunner { public static bool StopRequested; }
     static class ClickAimAbort { public static bool Requested; public static bool Wait(int ms) => Requested; }
-    static class GrindFactionSettings { public sealed class Rule { public bool Enabled = true; } public static Rule Rules = new(); }
+    static class GrindFactionSettings { public sealed class Rule { public bool Enabled = true; public HashSet<uint> Allowed = new(); public bool ContainsAllowedKey(uint key) => key != 0 && Allowed.Contains(key); } public static Rule Rules = new(); }
     static class WowBGrindFactions
     {
         public static bool Allowed = true, BarSafe = true;
         public static bool AllowsPull(WowBReader? r, WowBObservedUnit unit, out bool unknown) { unknown = false; return Allowed; }
+        public static bool TryReadBoundKey(WowBReader? r, WowBObservedUnit unit, out uint key) { key = 0; return r != null && r.Factions.TryGetValue(unit.UnitAddress, out key); }
         public static bool Experimental70707BarSafe(WowBReader r) => BarSafe;
     }
     static class ClickAimKeySteer
@@ -82,8 +83,9 @@ namespace Styx.Logic.Pathing
         const int RemoteDefenceRetryMs = 3000, NearDefenceRetryMs = 2000, TabVk = 9, TabSettleMs = 1;
         const uint NotAFightFlag = 0x302;
         static bool _stop, _focusedDamageObserved, _remoteDefenceAttempted, _nearDefenceAttempted;
-        static int _remoteDefenceLast, _nearDefenceLast, _nearDefenceCursor, FightCalls, CaptureCount; static Action<int>? OnCapture; static WowBGuid LastFightTarget; static bool LastRemote, Fighting = true, CombatReadable = true;
+        static int _remoteDefenceLast, _nearDefenceLast, _nearDefenceCursor, _preferredDefenceCursor, FightCalls, CaptureCount; static Action<int>? OnCapture; static WowBGuid LastFightTarget; static bool LastRemote, Fighting = true, CombatReadable = true;
         static WowBGuid _focusedFightGuid, _defenceHandoffGuid;
+        static WowBObservedUnit _damagedVoluntaryTarget; static GrindFactionSettings.Rule _defenceManualRules = new();
         static HashSet<WowBGuid> _notViable = new();
         static WowBWorldSnapshot snapshot = null!;
         static bool TryReadGatherCombat(out bool fighting) { fighting = Fighting; return CombatReadable; }
@@ -94,8 +96,9 @@ namespace Styx.Logic.Pathing
         static void LogFactionFight(WowBReader? reader, WowBObservedUnit unit, bool defence) { }
         static string FightDefenceWithHandoffs(IntPtr hwnd, WowBReader reader, bool mode, WowBObservedUnit player, WowBObservedUnit target, bool remoteDefence = false)
         { FightCalls++; LastRemote = remoteDefence; LastFightTarget = target.Guid; return "fight"; }
-        static bool FightAttackInputAllowed(WowBReader r, GreenMagic.Memory m, WowBGuid guid, WowBObservedUnit unit, bool enforce)
-            => !_stop && !ClickAimAbort.Requested && ObjectManager.WowB == r && ObjectManager.Wow == m && r.Selected == guid && (!enforce || WowBGrindFactions.Allowed) && WowBGrindFactions.BarSafe;
+        static bool FightAttackInputAllowed(WowBReader r, GreenMagic.Memory m, WowBGuid guid, WowBObservedUnit unit, bool enforce, bool requireCombat = false, bool enforceProfile = false)
+            => (!_stop && !RouteRunner.StopRequested && (!requireCombat || (CombatReadable && Fighting))) && !_stop && !ClickAimAbort.Requested && ObjectManager.WowB == r && ObjectManager.Wow == m && r.Selected == guid && (!enforce || WowBGrindFactions.Allowed) && WowBGrindFactions.BarSafe;
+        // __FOCUS__
         // __HAS_NEARBY__
         // __DEFENCE_FIELDS__
         // __DEFEND_NEARBY__
@@ -113,7 +116,7 @@ namespace Styx.Logic.Pathing
             r.Selected = default; ClickAimInput.TabTarget = npc.Guid; ClickAimInput.Tabs = 0; ClickAimInput.OnTab = null; ClickAimKeySteer.OnFace = null;
             Fighting = CombatReadable = WowBGrindFactions.Allowed = WowBGrindFactions.BarSafe = GrindFactionSettings.Rules.Enabled = true;
             _stop = ClickAimAbort.Requested = RouteRunner.StopRequested = _focusedDamageObserved = _remoteDefenceAttempted = _nearDefenceAttempted = false;
-            _nearDefenceCursor = 0; CaptureCount = 0; OnCapture = null; ClickAimKeySteer.Faces = 0; ClickAimKeySteer.FaceXs.Clear(); LastFightTarget = default;
+            _nearDefenceCursor = _preferredDefenceCursor = 0; _damagedVoluntaryTarget = default; GrindFactionSettings.Rules.Allowed.Clear(); _defenceManualRules.Allowed.Clear(); CaptureCount = 0; OnCapture = null; ClickAimKeySteer.Faces = 0; ClickAimKeySteer.FaceXs.Clear(); LastFightTarget = default;
             WowBAttackerResearch.Calls = 0;
             _focusedFightGuid = _defenceHandoffGuid = default; _notViable.Clear(); FightCalls = 0; LastRemote = false; MarkedUnreachable = false;
         }
@@ -174,6 +177,43 @@ namespace Styx.Logic.Pathing
             Setup(21); ObjectManager.WowB!.IsExperimental70862 = true; ObjectManager.WowB.Selected = new WowBGuid(2);
             _focusedFightGuid = new WowBGuid(2); _focusedDamageObserved = true; ClickAimAbort.Requested = true;
             Defend(out engaged); Require(!engaged && FightCalls == 0, "STOP blocks focused remote defence");
+            Setup(21); ObjectManager.WowB!.IsExperimental70862 = true; ObjectManager.WowB.Selected = new WowBGuid(2); AddNearby();
+            _damagedVoluntaryTarget = snapshot.Units[1]; _focusedFightGuid = new WowBGuid(2); _focusedDamageObserved = true;
+            Require(IsDamagedVoluntaryFocus(ObjectManager.WowB, snapshot.Units[1]), "damaged voluntary target identity recognised");
+            Require(Defend(out engaged) == "fight" && engaged && LastRemote && LastFightTarget == new WowBGuid(2), "damaged pull stays on target despite nearby NPC");
+            Require(RemoteDefenceMovementAllowed(ObjectManager.WowB, ObjectManager.Wow!, snapshot.Units[1]), "damaged pull movement allowed despite nearby NPC");
+            Require(DamagedPullMovementAllowed(ObjectManager.WowB, ObjectManager.Wow!, snapshot.Units[1]), "voluntary combat movement keeps identity and combat guards");
+            ObjectManager.WowB.Selected = new WowBGuid(3); Require(!DamagedPullMovementAllowed(ObjectManager.WowB, ObjectManager.Wow!, snapshot.Units[1]), "voluntary movement stops when selection changes"); ObjectManager.WowB.Selected = new WowBGuid(2);
+            Fighting = false; Require(!DamagedPullMovementAllowed(ObjectManager.WowB, ObjectManager.Wow!, snapshot.Units[1]), "voluntary movement stops when combat ends"); Fighting = true;
+            RouteRunner.StopRequested = true; Require(!DamagedPullMovementAllowed(ObjectManager.WowB, ObjectManager.Wow!, snapshot.Units[1]), "voluntary movement stops on STOP"); RouteRunner.StopRequested = false;
+            var replaced = snapshot.Units[1]; replaced.RecordAddress++; snapshot.Units[1] = replaced;
+            Require(!IsDamagedVoluntaryFocus(ObjectManager.WowB, replaced) && !RemoteDefenceMovementAllowed(ObjectManager.WowB, ObjectManager.Wow!, _damagedVoluntaryTarget), "changed voluntary identity cannot bypass safety");
+            Setup(21); ObjectManager.WowB!.IsExperimental70862 = true; ObjectManager.WowB.Selected = new WowBGuid(2); AddNearby();
+            ObjectManager.WowB.Factions[2] = 44; ObjectManager.WowB.Factions[3] = 999; GrindFactionSettings.Rules.Allowed.Add(44);
+            Require(Defend(out engaged) == "fight" && engaged && LastRemote && LastFightTarget == new WowBGuid(2) && ClickAimKeySteer.Faces == 0, "preferred selected ranged NPC beats nearby nonpreferred totem");
+            Require(RemoteDefenceMovementAllowed(ObjectManager.WowB, ObjectManager.Wow!, snapshot.Units[1]), "preferred remote movement ignores nonpreferred nearby candidate");
+            ObjectManager.WowB.Factions[3] = 44;
+            Require(!RemoteDefenceMovementAllowed(ObjectManager.WowB, ObjectManager.Wow!, snapshot.Units[1]), "nearby preferred alternative interrupts remote movement");
+            Setup(8); AddNearby(); ObjectManager.WowB!.IsExperimental70862 = true; ObjectManager.WowB.Selected = new WowBGuid(3);
+            ObjectManager.WowB.Factions[2] = 60; ObjectManager.WowB.Factions[3] = 999; _defenceManualRules.Allowed.Add(60); ClickAimInput.TabTarget = new WowBGuid(2);
+            Require(Defend(out engaged) == "fight" && engaged && LastFightTarget == new WowBGuid(2) && ClickAimInput.Tabs == 1, "manual allowed faction preferred over selected nonpreferred");
+            Setup(8); AddNearby(); ObjectManager.WowB!.IsExperimental70862 = true;
+            ObjectManager.WowB.Factions[2] = 44; ObjectManager.WowB.Factions[3] = 999; GrindFactionSettings.Rules.Allowed.Add(44);
+            ClickAimInput.TabTarget = new WowBGuid(3); ClickAimInput.OnTab = () => { if (ClickAimInput.Tabs == 2) ObjectManager.WowB!.Selected = new WowBGuid(2); };
+            Require(Defend(out engaged) == "fight" && engaged && LastFightTarget == new WowBGuid(2) && ClickAimInput.Tabs == 2, "nonpreferred TAB result is skipped while trying preferred");
+            Setup(8); AddNearby(); ObjectManager.WowB!.IsExperimental70862 = true;
+            ObjectManager.WowB.Factions[2] = 44; ObjectManager.WowB.Factions[3] = 999; GrindFactionSettings.Rules.Allowed.Add(44); ClickAimInput.TabTarget = new WowBGuid(3);
+            Require(Defend(out engaged) == "fight" && engaged && LastFightTarget == new WowBGuid(3), "fallback remains available if preferred cannot be selected");
+            Setup(8); AddNearby(); ObjectManager.WowB!.IsExperimental70862 = true;
+            ObjectManager.WowB.Factions[2] = 44; GrindFactionSettings.Rules.Allowed.Add(44); ClickAimInput.TabTarget = new WowBGuid(2); ClickAimInput.OnTab = () => Fighting = false;
+            Defend(out engaged); Require(!engaged && FightCalls == 0, "combat loss after preferred TAB blocks fight");
+            Setup(8); ObjectManager.WowB!.IsExperimental70862 = true; ObjectManager.WowB.Selected = new WowBGuid(2);
+            ObjectManager.WowB.Factions[2] = 44; GrindFactionSettings.Rules.Allowed.Add(44); OnCapture = n => { if (n == 2) ObjectManager.WowB!.Factions[2] = 999; };
+            Require(!TrySelectedNearbyDefence(ObjectManager.WowB, true, out _, out _, RemoteDefenceRadius, true), "preferred faction must match in both snapshots");
+            Setup(8); AddNearby(); ObjectManager.WowB!.IsExperimental70862 = true;
+            ObjectManager.WowB.Factions[2] = 44; GrindFactionSettings.Rules.Allowed.Add(44); ObjectManager.WowB.Fields[2] = new() { Health = 0 }; ClickAimInput.TabTarget = new WowBGuid(3);
+            Require(Defend(out engaged) == "fight" && engaged && LastFightTarget == new WowBGuid(3), "dead preferred NPC does not block fallback");
+
             Setup(8); ObjectManager.WowB!.IsExperimental70862 = true; ObjectManager.WowB.Selected = new WowBGuid(2);
             Require(Defend(out engaged) == "fight" && engaged && LastFightTarget == new WowBGuid(2) && ClickAimInput.Tabs == 0 && ClickAimKeySteer.Faces == 0, "already selected nearby before TAB or turning");
             Setup(8); AddNearby(); snapshot.Units[2] = Unit(3,9); ObjectManager.WowB!.IsExperimental70862 = true; ClickAimInput.TabTarget = default;
