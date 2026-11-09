@@ -17,17 +17,18 @@ internal sealed class ClickAimBuffController
     // Observed net mana drops were 45 (Shield) and 60 (Armor). Actual costs
     // and modifiers are unreadable; thresholds are not proof of affordability.
     private static uint CombatManaEstimate(int spellId) => spellId == 324 ? 60U : spellId == 168 ? 80U :
-        spellId == 8160 ? 65U : spellId == 5394 ? 40U : 0U;
+        spellId == 8160 ? 65U : spellId == 5394 ? 40U : spellId == 5675 ? 40U : 0U;
     private readonly ClickAimBuffSchedule _schedule = new ClickAimBuffSchedule();
     private readonly Func<long> _clock;
     private readonly Dictionary<int, string> _reportedAuraState = new Dictionary<int, string>();
-    private long _nextScan, _earthReservedUntil;
+    private long _nextScan, _earthReservedUntil, _macroRetryAt, _macroNextPressAt;
+    private int _macroRemaining;
 
     internal ClickAimBuffController() : this(() => Environment.TickCount64) { }
     internal ClickAimBuffController(Func<long> clock) { _clock = clock; }
 
     // New run or confirmed resurrection: the next quiet opportunity starts fresh.
-    internal void Reset() { _schedule.Reset(); _reportedAuraState.Clear(); _nextScan = 0; _earthReservedUntil = 0; }
+    internal void Reset() { _schedule.Reset(); _reportedAuraState.Clear(); _nextScan = 0; _earthReservedUntil = 0; _macroRetryAt = 0; _macroNextPressAt = 0; _macroRemaining = 0; }
 
     private void ReportAura(ClickAimAction action, int? remaining)
     {
@@ -153,6 +154,67 @@ internal sealed class ClickAimBuffController
         catch { return false; }
     }
 
+    // The macro is opaque. Each key is individually guarded; a burst is
+    // non-blocking, so healing, STOP, combat and fight safety keep priority.
+    private static int MacroMask()
+    {
+        if (!ClickAimSettings.ShamanTotemMacroValid()) return 0;
+        return (ClickAimSettings.ShamanTotemEarth ? 1 : 0) |
+               (ClickAimSettings.ShamanTotemHealing ? 2 : 0) |
+               (ClickAimSettings.ShamanTotemMana ? 4 : 0);
+    }
+    private static bool MacroMissing(WowBTotemAuraCandidate aura, int mask)
+        => ((mask & 1) != 0 && aura.Active(8160) == false) ||
+           ((mask & 2) != 0 && aura.Active(5394) == false) ||
+           ((mask & 4) != 0 && aura.Active(5675) == false);
+    private static bool MacroHandles(int mask, int id)
+        => (id == 8160 && (mask & 1) != 0) ||
+           ((id == 5394 || id == 5675) && (mask & 6) != 0);
+    private static bool ConflictingWater(List<ClickAimAction> bar)
+        => bar.Exists(action => action.Id == 5394 && Eligible(action)) && bar.Exists(action => action.Id == 5675 && Eligible(action));
+
+    private bool TryTotemMacro(Memory memory, WowBReader reader, IntPtr hwnd, Func<bool> stopped,
+                               WowBObservedUnit player, Func<bool> targetSafe, Action? onAttempt)
+    {
+        int mask = MacroMask(), key = ClickAimSettings.ShamanTotemMacroKey, count = ClickAimSettings.ShamanTotemMacroPresses;
+        long now = _clock();
+        if (!reader.IsExperimental70862 || mask == 0 || now < _earthReservedUntil)
+        { _macroRemaining = 0; return false; }
+        // A long interruption ends the incomplete burst rather than carrying it
+        // indefinitely into a later fight. The retry delay starts at the last key.
+        if (_macroRemaining > 0 && now >= _macroRetryAt) _macroRemaining = 0;
+        bool starting = _macroRemaining == 0;
+        if (starting ? now < _macroRetryAt : now < _macroNextPressAt) return false;
+        uint minimumMana = (mask & 1) != 0 ? 65U : 40U; // most expensive configured rank; next step is unknown
+        if (!CombatPlayerSafe(memory, reader, hwnd, stopped, player, out uint map, out uint mana) || mana < minimumMana ||
+            !targetSafe() || !reader.TryGetUnitFields(player.UnitAddress, out WowBReader.WowBUnitFields fields) ||
+            fields.PlayerPowerTypeCandidate != 0 || fields.Power < minimumMana ||
+            !reader.TryReadExperimentalActionSnapshot(out ulong[] bar) || bar.Length != 12 || bar[key - 1] == 0) return false;
+        WowBTotemAuraCandidate? aura = WowBTotemAuraCandidate.Capture(memory, reader, player);
+        if (aura == null || (starting && !MacroMissing(aura, mask))) return false;
+        if (!CombatPlayerSafe(memory, reader, hwnd, stopped, player, out uint afterMap, out mana) || map != afterMap || mana < minimumMana ||
+            !reader.TryGetUnitFields(player.UnitAddress, out fields) || fields.PlayerPowerTypeCandidate != 0 || fields.Power < minimumMana ||
+            !targetSafe() || !reader.TryReadExperimentalActionSnapshot(out ulong[] afterBar) || afterBar.Length != 12 || afterBar[key - 1] != bar[key - 1]) return false;
+        aura = WowBTotemAuraCandidate.Capture(memory, reader, player);
+        if (aura == null || (starting && !MacroMissing(aura, mask)) ||
+            !CombatPlayerSafe(memory, reader, hwnd, stopped, player, out afterMap, out mana) || map != afterMap || mana < minimumMana ||
+            !reader.TryGetUnitFields(player.UnitAddress, out fields) || fields.PlayerPowerTypeCandidate != 0 || fields.Power < minimumMana ||
+            !targetSafe() || !Allowed(memory, reader, hwnd, stopped) || !ClickAimSettings.UseBuffsInCombat ||
+            mask != MacroMask() || key != ClickAimSettings.ShamanTotemMacroKey || count != ClickAimSettings.ShamanTotemMacroPresses ||
+            _clock() < _earthReservedUntil) return false;
+        // Record before input: delivery, macro contents and actual cast cannot be verified.
+        now = _clock();
+        if (starting) _macroRemaining = count;
+        _macroRemaining--;
+        _macroNextPressAt = now + ClickAimCombat.CastSettleMs;
+        _macroRetryAt = now + TotemRetryMs;
+        ClickAimInput.TapKey(hwnd, 0x30 + key, 40);
+        onAttempt?.Invoke();
+        Logging.Write("[Buff] attempted Shaman totem macro key " + key + "; remaining in burst " + _macroRemaining +
+            "; macro content, binding and cast are unverified");
+        return true;
+    }
+
     internal bool TryApplyInCombat(IntPtr hwnd, Func<bool> stopped, WowBObservedUnit expectedPlayer, Func<bool> targetSafe, Action? onAttempt = null)
     {
         Memory? memory = ObjectManager.Wow;
@@ -162,7 +224,10 @@ internal sealed class ClickAimBuffController
         try
         {
             using var uncached = memory.TemporaryCacheState(false);
+            if (TryTotemMacro(memory, reader, hwnd, stopped, expectedPlayer, targetSafe, onAttempt)) return true;
             List<ClickAimAction> bar = ClickAimCombat.ReadBar(reader);
+            int macroMask = reader.IsExperimental70862 ? MacroMask() : 0;
+            bool conflictWater = reader.IsExperimental70862 && ConflictingWater(bar) && (macroMask & 6) == 0;
             if (!bar.Exists(action => CombatManaEstimate(action.Id) > 0 && Eligible(action) &&
                 (WowBTotemAuraCandidate.EffectForCast(action.Id) == 0 || TotemSupported(reader, action)))) return false;
             if (!CombatPlayerSafe(memory, reader, hwnd, stopped, expectedPlayer, out uint map, out uint mana) || !targetSafe()) return false;
@@ -173,7 +238,8 @@ internal sealed class ClickAimBuffController
             foreach (ClickAimAction action in bar)
             {
                 uint minimum = CombatManaEstimate(action.Id);
-                if (minimum == 0 || mana < minimum || !Eligible(action) || EarthReserved(action)) continue;
+                if (minimum == 0 || mana < minimum || !Eligible(action) || EarthReserved(action) ||
+                    MacroHandles(macroMask, action.Id) || (conflictWater && (action.Id == 5394 || action.Id == 5675))) continue;
                 if (TotemSupported(reader, action))
                 {
                     ReportTotem(action, totemAura);

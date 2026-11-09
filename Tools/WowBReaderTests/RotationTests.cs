@@ -166,6 +166,17 @@ internal static class RotationTests
             Check(ClickAimSettings.RotationClass == ClickAimRotationClass.Shaman, "setting parse");
             ClickAimSettings.Apply("RotationClass", "999");
             Check(ClickAimSettings.RotationClass == ClickAimRotationClass.Shaman, "invalid setting ignored");
+            Check(!ClickAimSettings.UseShamanTotemMacro && !ClickAimSettings.ShamanTotemMacroValid(), "totem macro default off");
+            ClickAimSettings.Apply("UseShamanTotemMacro", "true");
+            ClickAimSettings.Apply("ShamanTotemMacroKey", "3"); ClickAimSettings.Apply("ShamanTotemMacroPresses", "2");
+            ClickAimSettings.Apply("ShamanTotemEarth", "true"); ClickAimSettings.Apply("ShamanTotemMana", "true");
+            Check(ClickAimSettings.ShamanTotemMacroValid(), "valid Earth and Mana Spring macro");
+            ClickAimSettings.Apply("ShamanTotemHealing", "true");
+            Check(!ClickAimSettings.ShamanTotemMacroValid(), "two Water effects are rejected");
+            ClickAimSettings.Apply("ShamanTotemHealing", "false");
+            ClickAimSettings.Apply("ShamanTotemMacroKey", "1"); ClickAimSettings.Apply("UseKeyOneStartAttackMacro", "true");
+            Check(!ClickAimSettings.ShamanTotemMacroValid(), "key one conflict rejected");
+            ClickAimSettings.Apply("UseKeyOneStartAttackMacro", "false"); ClickAimSettings.Apply("ShamanTotemMacroKey", "3");
             string originalPath = Styx.Helpers.Logging.ApplicationPath;
             string temporaryPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "bbuddy-rotation-" + Guid.NewGuid().ToString("N"));
             try
@@ -175,6 +186,9 @@ internal static class RotationTests
                 ClickAimSettings.ResetDefaults();
                 ClickAimSettings.Load();
                 Check(ClickAimSettings.RotationClass == ClickAimRotationClass.Shaman, "persisted setting round-trip");
+                Check(ClickAimSettings.ShamanTotemMacroValid() && ClickAimSettings.ShamanTotemMacroKey == 3 &&
+                      ClickAimSettings.ShamanTotemMacroPresses == 2 && ClickAimSettings.ShamanTotemEarth &&
+                      ClickAimSettings.ShamanTotemMana && !ClickAimSettings.ShamanTotemHealing, "totem macro settings round-trip");
             }
             finally
             {

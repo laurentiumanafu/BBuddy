@@ -268,7 +268,7 @@ internal static class ClickAimCombat
         { 945, "Lightning Shield" }, { 8134, "Lightning Shield" },
         { 8017, "Rockbiter Weapon" }, { 8018, "Rockbiter Weapon" }, { 8019, "Rockbiter Weapon" },
         // Only the ranks whose player effects were observed on 70862.
-        { 8160, "Strength of Earth Totem" }, { 5394, "Healing Stream Totem" },
+        { 8160, "Strength of Earth Totem" }, { 5394, "Healing Stream Totem" }, { 5675, "Mana Spring Totem" },
         { 5730, "Stoneclaw Totem" }, { 6390, "Stoneclaw Totem" }, { 6391, "Stoneclaw Totem" },
         { 6392, "Stoneclaw Totem" }, { 10427, "Stoneclaw Totem" }, { 10428, "Stoneclaw Totem" },
         { 17364, "Stormstrike" },
@@ -388,7 +388,7 @@ internal static class ClickAimCombat
         { "Power Word: Shield", ClickAimSpellRole.Buff },
         { "Demon Skin", ClickAimSpellRole.Buff }, { "Lightning Shield", ClickAimSpellRole.Buff },
         { "Rockbiter Weapon", ClickAimSpellRole.Buff }, { "Battle Shout", ClickAimSpellRole.Buff },
-        { "Strength of Earth Totem", ClickAimSpellRole.Buff }, { "Healing Stream Totem", ClickAimSpellRole.Buff },
+        { "Strength of Earth Totem", ClickAimSpellRole.Buff }, { "Healing Stream Totem", ClickAimSpellRole.Buff }, { "Mana Spring Totem", ClickAimSpellRole.Buff },
         { "Devotion Aura", ClickAimSpellRole.Buff }, { "Seal of Righteousness", ClickAimSpellRole.Buff },
         { "Aspect of the Hawk", ClickAimSpellRole.Buff }, { "Endurance", ClickAimSpellRole.Buff },
         { "Nature Resistance", ClickAimSpellRole.Buff },
@@ -728,6 +728,11 @@ internal static class ClickAimCombat
         // ID as a spell, heal, item or buff while the explicit key-1 mode is on.
         if (reader.IsExperimental70862 && ClickAimSettings.UseKeyOneStartAttackMacro)
             decoded.RemoveAll(action => action.Slot == 1);
+        // A manually configured macro is opaque; never decode its slot as a
+        // spell, item, healing action or rotation ability.
+        if (reader.IsExperimental70862 && ClickAimSettings.UseShamanTotemMacro &&
+            ClickAimSettings.ShamanTotemMacroKey >= 1 && ClickAimSettings.ShamanTotemMacroKey <= 9)
+            decoded.RemoveAll(action => action.Slot == ClickAimSettings.ShamanTotemMacroKey);
         return decoded;
     }
 

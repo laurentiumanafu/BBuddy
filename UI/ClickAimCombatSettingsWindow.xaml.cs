@@ -47,6 +47,7 @@ namespace CopilotBuddy.UI
         }
 
         private readonly List<SpellRow> _rows = new List<SpellRow>();
+        private ShamanTotemMacroOptions _shamanTotemOptions = ShamanTotemMacroOptions.Current();
 
         /// <summary>The spell roles as they were when the window opened, so Cancel can undo.</summary>
         private readonly Dictionary<int, ClickAimSpellRole> _originalRoles =
@@ -61,6 +62,7 @@ namespace CopilotBuddy.UI
                 ClickAimSettings.Load();   // also loads the user's spell roles
             CaptureOriginalRoles();
             LoadFromSettings();
+            _shamanTotemOptions = ShamanTotemMacroOptions.Current();
             LoadSpells();
             LoadFactionSettings();
 
@@ -304,6 +306,23 @@ namespace CopilotBuddy.UI
                 System.Windows.MessageBox.Show("Stop the bot before changing the Start Attack binding.", "Combat settings", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return false;
             }
+            if ((ClickAimUi.Running || ClickAimUi.Paused) &&
+                (_shamanTotemOptions.Enabled != ClickAimSettings.UseShamanTotemMacro ||
+                 _shamanTotemOptions.Key != ClickAimSettings.ShamanTotemMacroKey ||
+                 _shamanTotemOptions.Presses != ClickAimSettings.ShamanTotemMacroPresses ||
+                 _shamanTotemOptions.Earth != ClickAimSettings.ShamanTotemEarth ||
+                 _shamanTotemOptions.Healing != ClickAimSettings.ShamanTotemHealing ||
+                 _shamanTotemOptions.Mana != ClickAimSettings.ShamanTotemMana))
+            {
+                System.Windows.MessageBox.Show("Stop the bot before changing the Shaman totem macro.", "Combat settings", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return false;
+            }
+            if (_shamanTotemOptions.Enabled && _shamanTotemOptions.Key == 1 && macroEnabled)
+            {
+                System.Windows.MessageBox.Show("Key 1 cannot be shared by the Start Attack and Shaman totem macros. Choose another totem key.", "Combat settings", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return false;
+            }
+            _shamanTotemOptions.Apply();
             if (cmbRotation.SelectedItem is ClickAimRotationClass selectedRotation)
                 ClickAimSettings.RotationClass = selectedRotation;
             ClickAimSettings.UseKeyOneStartAttackMacro = macroEnabled;
@@ -515,6 +534,14 @@ namespace CopilotBuddy.UI
 
             ClickAimCombat.SetRoleOverride(row.Id, RoleAtIndex(cmbRole.SelectedIndex));
             LoadSpells();
+        }
+
+        private void btnShamanTotemMacro_Click(object sender, RoutedEventArgs e)
+        {
+            if (ClickAimUi.Running || ClickAimUi.Paused)
+            { System.Windows.MessageBox.Show("Stop the bot before changing the Shaman totem macro.", "Shaman totem macro", MessageBoxButton.OK, MessageBoxImage.Warning); return; }
+            var dialog = new ShamanTotemMacroWindow(_shamanTotemOptions, chkKeyOneAttackMacro.IsChecked == true) { Owner = this };
+            if (dialog.ShowDialog() == true && dialog.Result != null) _shamanTotemOptions = dialog.Result;
         }
 
         private void btnRefreshSpells_Click(object sender, RoutedEventArgs e)
@@ -1026,6 +1053,7 @@ namespace CopilotBuddy.UI
             if (ClickAimUi.Running || ClickAimUi.Paused)
             { System.Windows.MessageBox.Show("Stop the bot before restoring combat defaults.", "Combat settings", MessageBoxButton.OK, MessageBoxImage.Warning); return; }
             ClickAimSettings.ResetDefaults();
+            _shamanTotemOptions = ShamanTotemMacroOptions.Current();
             LoadFromSettings();
         }
 

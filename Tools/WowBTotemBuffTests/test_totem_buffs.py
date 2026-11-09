@@ -17,11 +17,13 @@ def section(text, start, end):
 
 class TotemBuffs(unittest.TestCase):
     def test_exact_observed_mapping_and_roles(self):
-        self.assertIn('castId == 8160 ? 8162 : castId == 5394 ? 5672 : 0', A)
+        self.assertIn('castId == 8160 ? 8162 : castId == 5394 ? 5672 : castId == 5675 ? 5677 : 0', A)
         self.assertIn('{ 8160, "Strength of Earth Totem" }', C)
         self.assertIn('{ 5394, "Healing Stream Totem" }', C)
+        self.assertIn('{ 5675, "Mana Spring Totem" }', C)
         self.assertIn('{ "Strength of Earth Totem", ClickAimSpellRole.Buff }', C)
         self.assertIn('{ "Healing Stream Totem", ClickAimSpellRole.Buff }', C)
+        self.assertIn('{ "Mana Spring Totem", ClickAimSpellRole.Buff }', C)
         self.assertIn('reader.IsExperimental70862 && WowBTotemAuraCandidate.EffectForCast', B)
 
     def test_unknown_absent_and_active_are_distinct(self):
@@ -37,7 +39,7 @@ class TotemBuffs(unittest.TestCase):
         self.assertIn('TotemRetryMs = 10_000', B)
         self.assertIn('_schedule.PastAttemptBackoff(action.Id, now, TotemRetryMs)', B)
         self.assertIn('fields.PlayerPowerTypeCandidate == 0', B)
-        self.assertIn('spellId == 8160 ? 65U : spellId == 5394 ? 40U', B)
+        self.assertIn('spellId == 8160 ? 65U : spellId == 5394 ? 40U : spellId == 5675 ? 40U', B)
         combat = section(B, 'internal bool TryApplyInCombat(', '    // Returns true only if at least one buff key')
         self.assertLess(combat.index('WowBTotemAuraCandidate.Capture'), combat.index('ClickAimInput.TapKey'))
         for text in ('CombatPlayerSafe(', 'targetSafe()', 'SameSlot(', 'TotemManaEnough(',

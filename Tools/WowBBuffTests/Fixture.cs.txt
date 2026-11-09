@@ -52,6 +52,8 @@ namespace Styx.WoWInternals
         public bool IsExperimental70707 = true, IsExperimental70862, Readable = true;
         public uint Map = 0, Health = 100, MaxHealth = 100, Power = 100;
         public WowBGuid Selected;
+        public ulong[] RawBar = new ulong[12];
+        public bool TryReadExperimentalActionSnapshot(out ulong[] bar) { bar = (ulong[])RawBar.Clone(); return Readable; }
         public WowBObservedUnit Player = new WowBObservedUnit { Guid = new WowBGuid(1), UnitAddress = 0x20000, RecordAddress = 0x30000 };
         public bool TryReadMapId(out uint map) { map = Map; return Readable; }
         public bool TryCaptureWorldSnapshot(out WowBWorldSnapshot? snapshot) { snapshot = Readable ? new WowBWorldSnapshot { Player = Player } : null; return Readable; }
@@ -69,7 +71,15 @@ namespace Styx.Logic.Pathing
         public int Id, KeyVk, Slot; public ulong Raw; public string Name = "";
         public bool IsBuff => ClickAimCombat.RoleOf(Id) == ClickAimSpellRole.Buff;
     }
-    static class ClickAimSettings { public static bool UseBuffs = true, UseBuffsInCombat; public static ClickAimRotationClass RotationClass = ClickAimRotationClass.Auto; }
+    static class ClickAimSettings {
+        public static bool UseBuffs = true, UseBuffsInCombat, UseShamanTotemMacro, UseKeyOneStartAttackMacro;
+        public static bool ShamanTotemEarth, ShamanTotemHealing, ShamanTotemMana;
+        public static int ShamanTotemMacroKey=2, ShamanTotemMacroPresses=2;
+        public static ClickAimRotationClass RotationClass = ClickAimRotationClass.Auto;
+        public static bool ShamanTotemMacroValid() => UseShamanTotemMacro && ShamanTotemMacroKey >= 1 && ShamanTotemMacroKey <= 9 &&
+            ShamanTotemMacroPresses >= 1 && ShamanTotemMacroPresses <= 9 && (ShamanTotemEarth || ShamanTotemHealing || ShamanTotemMana) &&
+            !(ShamanTotemHealing && ShamanTotemMana) && !(UseKeyOneStartAttackMacro && ShamanTotemMacroKey==1);
+    }
     static class ClickAimClassRotation { public static ClickAimRotationClass Resolve(ClickAimRotationClass type, List<ClickAimAction> bar) => type; }
     static class ClickAimCombat
     {
@@ -157,6 +167,9 @@ namespace Styx.Logic.Pathing
             ClickAimCombat.Overrides.Clear(); ClickAimInput.Keys.Clear();
             WowBCombatResearch.Data = null; WowBCombatResearch.StopDuringRead = WowBCombatResearch.CombatEndsDuringRead = false;
             ClickAimSettings.UseBuffs = true; ClickAimSettings.UseBuffsInCombat = false; ClickAimSettings.RotationClass = ClickAimRotationClass.Auto;
+            ClickAimSettings.UseShamanTotemMacro = ClickAimSettings.UseKeyOneStartAttackMacro = false;
+            ClickAimSettings.ShamanTotemEarth = ClickAimSettings.ShamanTotemHealing = ClickAimSettings.ShamanTotemMana = false;
+            ClickAimSettings.ShamanTotemMacroKey = 2; ClickAimSettings.ShamanTotemMacroPresses = 2;
             GrindRunner.Combat = ClickAimAbort.Requested = RouteRunner.StopRequested = false;
             GrindRunner.CombatReadable = WowBGrindFactions.BarSafe = WowBGrindFactions.GhostReadable = ClickAimInput.F1Works = true;
             WowBGrindFactions.Ghost = ClickAimInput.StopOnF1 = ClickAimInput.StopAfterFirst = ClickAimInput.DisableAfterFirst = ClickAimInput.CombatAfterFirst = ClickAimInput.ChangeSecondAfterFirst = ClickAimInput.ChangeTargetAfterFirst = ClickAimInput.ChangeMapAfterFirst = false;
@@ -413,6 +426,44 @@ namespace Styx.Logic.Pathing
             ClickAimCombat.Bar = new List<ClickAimAction> { Action(8160, 2) }; TotemBytes(777); GrindRunner.Combat = true;
             combatPlayer = ObjectManager.WowB.Player; ClickAimSettings.UseBuffsInCombat = true;
             Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "older builds do not use 70862 totem layout");
+            // Direct Mana Spring: effect 5677, same combat-only/readable/10s rules.
+            Reset(); controller.Reset(); now = 0; ObjectManager.WowB!.IsExperimental70862 = true;
+            ClickAimCombat.Bar = new List<ClickAimAction> { Action(5675, 2) }; TotemBytes(777); GrindRunner.Combat = true;
+            combatPlayer = ObjectManager.WowB.Player; ClickAimSettings.UseBuffsInCombat = true;
+            Check(controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "missing Mana Spring attempted");
+            now = 9999; Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "Mana Spring retry wait");
+            TotemBytes(777, 5677); now = 10000; Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "Mana Spring present");
+            TotemBytes(777); now = 20000; ClickAimCombat.Bar.Add(Action(5394, 3));
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "conflicting Water totems withheld");
+            // User-controlled macro: two individually guarded presses, then 10s from last key.
+            Reset(); controller.Reset(); now = 0; ObjectManager.WowB!.IsExperimental70862 = true; GrindRunner.Combat = true;
+            combatPlayer = ObjectManager.WowB.Player; ClickAimSettings.UseBuffsInCombat = true;
+            ClickAimSettings.UseShamanTotemMacro = true; ClickAimSettings.ShamanTotemEarth = true; ClickAimSettings.ShamanTotemMana = true;
+            ObjectManager.WowB.RawBar[1] = 0x123456; ClickAimCombat.Bar = new List<ClickAimAction> { Action(8160, 3), Action(5675, 4) }; TotemBytes(777, 8162, 5677);
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "all macro effects present");
+            TotemBytes(777); ObjectManager.WowB.Power = 64;
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "macro unknown next step needs enough mana");
+            ObjectManager.WowB.Power = 100; TotemBytes(777, 777);
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "unknown macro aura");
+            TotemBytes(777); GrindRunner.Combat = false;
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "macro only in combat"); GrindRunner.Combat = true;
+            Check(controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe) && ClickAimInput.Keys.Count == 1 && ClickAimInput.Keys[0] == 0x32, "first macro key");
+            now = 1799; Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "macro GCD spacing");
+            TotemBytes(777, 8162, 5677); now = 1800; Check(controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe) && ClickAimInput.Keys.Count == 2, "second macro key even if effects arrive during burst");
+            TotemBytes(777); now = 11799; Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "ten seconds after last press");
+            now = 11800; TotemBytes(777, 8162, 5677); Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "completed effects suppress next burst");
+            TotemBytes(777, 8162); Check(controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "one missing effect starts another burst");
+            now = 13600; controller.ReserveEarthAfterStoneclaw(); Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "Stoneclaw holds entire opaque macro");
+            Reset(); controller.Reset(); now = 0; ObjectManager.WowB!.IsExperimental70862 = true; GrindRunner.Combat = true;
+            combatPlayer = ObjectManager.WowB.Player; ClickAimSettings.UseBuffsInCombat = true; ClickAimSettings.UseShamanTotemMacro = true;
+            ClickAimSettings.ShamanTotemHealing = ClickAimSettings.ShamanTotemMana = true; ObjectManager.WowB.RawBar[1] = 123;
+            TotemBytes(777); ClickAimCombat.Bar.Clear();
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "conflicting macro Water selections fail closed");
+            ClickAimSettings.ShamanTotemHealing = false; ClickAimSettings.ShamanTotemMacroKey = 1; ClickAimSettings.UseKeyOneStartAttackMacro = true; ObjectManager.WowB.RawBar[0] = 123;
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "key 1 conflict fail closed");
+            ClickAimSettings.UseKeyOneStartAttackMacro = false; ClickAimSettings.ShamanTotemMacroKey = 2;
+            WowBCombatResearch.StopDuringRead = true;
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "STOP during macro aura capture");
             Console.WriteLine("Buff scheduling and safety fixtures passed (synthetic only; no real cast or aura validation).");
         }
     }

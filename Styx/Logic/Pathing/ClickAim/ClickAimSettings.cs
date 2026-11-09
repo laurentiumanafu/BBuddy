@@ -69,6 +69,17 @@ internal static class ClickAimSettings
     /// <summary>Allow supported, observed-expired self-buffs during combat; off by default.</summary>
     public static bool UseBuffsInCombat = false;
 
+    // 70862 only. The user supplies an opaque, tested cast-sequence macro.
+    public static bool UseShamanTotemMacro;
+    public static int ShamanTotemMacroKey = 2, ShamanTotemMacroPresses = 2;
+    public static bool ShamanTotemEarth, ShamanTotemHealing, ShamanTotemMana;
+    internal static bool ShamanTotemMacroValid()
+        => UseShamanTotemMacro && ShamanTotemMacroKey >= 1 && ShamanTotemMacroKey <= 9 &&
+           ShamanTotemMacroPresses >= 1 && ShamanTotemMacroPresses <= 9 &&
+           (ShamanTotemEarth || ShamanTotemHealing || ShamanTotemMana) &&
+           !(ShamanTotemHealing && ShamanTotemMana) &&
+           !(UseKeyOneStartAttackMacro && ShamanTotemMacroKey == 1);
+
     /// <summary>Bar slot holding food; 0 means "work it out from the item id on the bar".</summary>
     public static int FoodSlot;
 
@@ -165,6 +176,8 @@ internal static class ClickAimSettings
         UseDamageOverTime = true;
         UseBuffs = true;
         UseBuffsInCombat = false;
+        UseShamanTotemMacro = ShamanTotemEarth = ShamanTotemHealing = ShamanTotemMana = false;
+        ShamanTotemMacroKey = 2; ShamanTotemMacroPresses = 2;
         FoodSlot = 0;
         DrinkSlot = 0;
         DotRefreshSeconds = 12;
@@ -185,6 +198,8 @@ internal static class ClickAimSettings
     {
         // Missing or malformed files never carry a previous macro opt-in.
         UseKeyOneStartAttackMacro = false;
+        UseShamanTotemMacro = ShamanTotemEarth = ShamanTotemHealing = ShamanTotemMana = false;
+        ShamanTotemMacroKey = 2; ShamanTotemMacroPresses = 2;
         string path;
         try { path = Path; }
         catch { return; }
@@ -293,6 +308,12 @@ internal static class ClickAimSettings
             UseBuffsInCombat = flag;
             return true;
         }
+        if (string.Equals(key, "UseShamanTotemMacro", StringComparison.OrdinalIgnoreCase)) { UseShamanTotemMacro = flag; return true; }
+        if (string.Equals(key, "ShamanTotemMacroKey", StringComparison.OrdinalIgnoreCase)) { ShamanTotemMacroKey = hasNumber ? number : 0; return true; }
+        if (string.Equals(key, "ShamanTotemMacroPresses", StringComparison.OrdinalIgnoreCase)) { ShamanTotemMacroPresses = hasNumber ? number : 0; return true; }
+        if (string.Equals(key, "ShamanTotemEarth", StringComparison.OrdinalIgnoreCase)) { ShamanTotemEarth = flag; return true; }
+        if (string.Equals(key, "ShamanTotemHealing", StringComparison.OrdinalIgnoreCase)) { ShamanTotemHealing = flag; return true; }
+        if (string.Equals(key, "ShamanTotemMana", StringComparison.OrdinalIgnoreCase)) { ShamanTotemMana = flag; return true; }
         if (string.Equals(key, "FoodSlot", StringComparison.OrdinalIgnoreCase))
         {
             if (hasNumber) FoodSlot = number;
@@ -395,6 +416,13 @@ internal static class ClickAimSettings
         text.AppendLine("UseDamageOverTime = " + (UseDamageOverTime ? "true" : "false"));
         text.AppendLine("UseBuffs = " + (UseBuffs ? "true" : "false"));
         text.AppendLine("UseBuffsInCombat = " + (UseBuffsInCombat ? "true" : "false"));
+        text.AppendLine("# Optional 70862 user-supplied Shaman totem macro; contents and bindings are unverified.");
+        text.AppendLine("UseShamanTotemMacro = " + (UseShamanTotemMacro ? "true" : "false"));
+        text.AppendLine("ShamanTotemMacroKey = " + ShamanTotemMacroKey.ToString(CultureInfo.InvariantCulture));
+        text.AppendLine("ShamanTotemMacroPresses = " + ShamanTotemMacroPresses.ToString(CultureInfo.InvariantCulture));
+        text.AppendLine("ShamanTotemEarth = " + (ShamanTotemEarth ? "true" : "false"));
+        text.AppendLine("ShamanTotemHealing = " + (ShamanTotemHealing ? "true" : "false"));
+        text.AppendLine("ShamanTotemMana = " + (ShamanTotemMana ? "true" : "false"));
         text.AppendLine("FoodSlot = " + FoodSlot.ToString(CultureInfo.InvariantCulture));
         text.AppendLine("DrinkSlot = " + DrinkSlot.ToString(CultureInfo.InvariantCulture));
         text.AppendLine("DotRefreshSeconds = " + DotRefreshSeconds.ToString(CultureInfo.InvariantCulture));

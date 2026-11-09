@@ -1,0 +1,34 @@
+<mah:MetroWindow x:Class="CopilotBuddy.UI.ShamanTotemMacroWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:mah="http://metro.mahapps.com/winfx/xaml/controls"
+        Title="Shaman totem macro (70862)" Width="500" Height="560" MinWidth="460" MinHeight="510"
+        TitleCharacterCasing="Normal" WindowStartupLocation="CenterOwner"
+        Background="{DynamicResource WindowBackgroundBrush}">
+    <Grid Margin="18">
+        <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+            <StackPanel>
+                <CheckBox x:Name="chkEnabled" Content="Use my Shaman totem macro" Margin="0,0,0,10"/>
+                <TextBlock TextWrapping="Wrap" Margin="0,0,0,10" Text="Create and test a cast-sequence macro in WoW first. Put it on the normal first action bar, bound to the selected key. The bot cannot inspect the macro or verify its binding, sequence, or cast success."/>
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                    <TextBlock Text="Macro key (1–9):" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                    <ComboBox x:Name="cmbKey" Width="70" Margin="0,0,20,0"/>
+                    <TextBlock Text="Presses per attempt:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                    <ComboBox x:Name="cmbPresses" Width="70"/>
+                </StackPanel>
+                <TextBlock FontWeight="Bold" Text="Check the effects your macro is meant to maintain:" Margin="0,0,0,6"/>
+                <CheckBox x:Name="chkEarth" Content="Strength of Earth Totem — rank 2 (effect 8162)" Margin="0,3"/>
+                <CheckBox x:Name="chkHealing" Content="Healing Stream Totem — rank 1 (effect 5672)" Margin="0,3"/>
+                <CheckBox x:Name="chkMana" Content="Mana Spring Totem — rank 1 (effect 5677)" Margin="0,3"/>
+                <TextBlock TextWrapping="Wrap" Margin="0,10,0,0" Text="Choose Healing Stream OR Mana Spring: both use the Water totem slot. Include only the checked spells in your macro. A cast sequence can re-cast an already-active effect; the bot cannot skip a specific macro step."/>
+                <TextBlock TextWrapping="Wrap" Margin="0,10,0,0" Text="Requires Apply self-buffs and Re-cast supported buffs during combat. Only in combat: when any checked effect is missing, the bot attempts the configured number of presses with global-cooldown spacing, then waits at least 10 seconds before checking for another attempt. Unknown effect reads withhold keys."/>
+                <TextBlock TextWrapping="Wrap" Margin="0,10,0,0" Text="Key 1 cannot be shared with the Start Attack macro. The totem macro is held after Stoneclaw to avoid replacing it. Changes take effect when you save Combat settings."/>
+            </StackPanel>
+        </ScrollViewer>
+        <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+            <Button Content="OK" Width="90" Height="28" Margin="0,0,8,0" IsDefault="True" Click="Ok_Click"/>
+            <Button Content="Cancel" Width="90" Height="28" IsCancel="True"/>
+        </StackPanel>
+    </Grid>
+</mah:MetroWindow>

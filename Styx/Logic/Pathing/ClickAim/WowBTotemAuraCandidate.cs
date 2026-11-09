@@ -14,7 +14,7 @@ internal sealed class WowBTotemAuraCandidate
     private readonly HashSet<uint> _ids;
     private WowBTotemAuraCandidate(HashSet<uint> ids) { _ids = ids; }
 
-    internal static int EffectForCast(int castId) => castId == 8160 ? 8162 : castId == 5394 ? 5672 : 0;
+    internal static int EffectForCast(int castId) => castId == 8160 ? 8162 : castId == 5394 ? 5672 : castId == 5675 ? 5677 : 0;
     internal bool? Active(int castId)
     {
         int effect = EffectForCast(castId);
