@@ -40,6 +40,30 @@ class DefenceScopeTests(unittest.TestCase):
         self.assertIn('target.RecordAddress != expectedPull.RecordAddress', fight)
         self.assertIn('reader.IsExperimental70862) && GrindFactionSettings.Rules.Enabled', fight)
 
+    def test_damaged_focus_uses_bounded_remote_chase(self):
+        near = section('    private static string DefendNearby(', '    // Out-of-melee combat fallback.')
+        self.assertIn('reader.IsExperimental70862 && focusedDistance > GatherDefenceRadius', near)
+        self.assertIn('!Unreachable(focused.Guid) && !HasNearbyOtherNpc', near)
+        self.assertIn('player, focused, focusedRemote)', near)
+        fight = section('    private static string Fight(', "    /// <summary>\n    /// A unit's health straight out of its data block")
+        self.assertIn('defenceOnly && remoteDefence', fight)
+        self.assertIn('RemoteDefenceMovementAllowed(reader, fightMemory, expectedPull)', fight)
+        self.assertIn('defenceOnly && remoteDefence && d > GatherDefenceRadius && HasNearbyOtherNpc', fight)
+        self.assertIn('combatMoveAllowed: defensiveMovement', fight)
+
+    def test_combat_buff_stops_chase_before_cast(self):
+        fight = section('    private static string Fight(', "    /// <summary>\n    /// A unit's health straight out of its data block")
+        self.assertIn('beforeAttempt: ClickAimKeySteer.ReleaseHeld', fight)
+        stone = section('    private static bool TryStoneclaw(', '    // Key 1 is an explicit')
+        self.assertLess(stone.index('ClickAimKeySteer.ReleaseHeld()'), stone.index('ClickAimInput.TapKey'))
+        buff = (ROOT / 'Styx/Logic/Pathing/ClickAim/ClickAimBuffController.cs').read_text(encoding='utf-8-sig')
+        combat = buff[buff.index('    internal bool TryApplyInCombat('):buff.index('    // Returns true only if at least one buff key')]
+        macro = buff[buff.index('    private bool TryTotemMacro('):buff.index('    internal bool TryApplyInCombat(')]
+        for body in (combat, macro):
+            self.assertLess(body.index('beforeAttempt?.Invoke()'), body.index('ClickAimInput.TapKey'))
+            self.assertIn('CombatPlayerSafe(', body[body.index('beforeAttempt?.Invoke()'):])
+            self.assertIn('targetSafe()', body[body.index('beforeAttempt?.Invoke()'):])
+
     def test_pull_still_checks_faction(self):
         select = section('    private static bool TryCurrentSelection(', '    // A fresh voluntary pull')
         verify = section('    private static bool FactionPullStillAllowed(', '    // Re-read the selected GUID')

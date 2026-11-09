@@ -468,6 +468,32 @@ namespace Styx.Logic.Pathing
             ClickAimSettings.UseBuffsInCombat = true; combatPlayer = ObjectManager.WowB.Player;
             Check(controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe) && ClickAimInput.Keys[0] == 0x33,
                 "ignored higher rank does not block eligible rank");
+            // Chasing must be released before a due combat cast, not on every
+            // inactive poll. A STOP from the release callback blocks input.
+            Reset(); controller.Reset(); now = 0; ObjectManager.WowB!.IsExperimental70862 = true;
+            ObjectManager.WowB.Power = 125; GrindRunner.Combat = true; ClickAimSettings.UseBuffsInCombat = true;
+            ClickAimCombat.Bar = new List<ClickAimAction> { Action(905, 6) }; combatPlayer = ObjectManager.WowB.Player;
+            TotemBytes(777, 905); int releases = 0;
+            Action release = () => { releases++; Check(ClickAimInput.Keys.Count == 0, "release precedes input"); };
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe, beforeAttempt: release) && releases == 0,
+                "active shield does not interrupt chase");
+            TotemBytes(777);
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe,
+                beforeAttempt: () => { releases++; ClickAimAbort.Requested = true; }) && ClickAimInput.Keys.Count == 0,
+                "STOP during release blocks shield key");
+            ClickAimAbort.Requested = false;
+            Check(controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe, beforeAttempt: release) && releases == 2 &&
+                ClickAimInput.Keys.Count == 1, "release happens before due shield key");
+            Reset(); controller.Reset(); now = 0; ObjectManager.WowB!.IsExperimental70862 = true;
+            GrindRunner.Combat = true; ClickAimSettings.UseBuffsInCombat = ClickAimSettings.UseShamanTotemMacro = true;
+            ClickAimSettings.ShamanTotemEarth = true; ObjectManager.WowB.RawBar[1] = 100;
+            combatPlayer = ObjectManager.WowB.Player; TotemBytes(777); releases = 0;
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe,
+                beforeAttempt: () => { releases++; ClickAimAbort.Requested = true; }) && ClickAimInput.Keys.Count == 0,
+                "STOP during release blocks totem macro");
+            ClickAimAbort.Requested = false;
+            Check(controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe, beforeAttempt: release) && releases == 2 &&
+                ClickAimInput.Keys.Count == 1 && ClickAimInput.Keys[0] == 0x32, "release happens before totem macro");
             // 70862 totems are exclusively combat buffs: never cast at
             // startup, while idle/travelling or after combat/resurrection.
             Reset(); controller.Reset(); now = 0; ObjectManager.WowB!.IsExperimental70862 = true;

@@ -4390,9 +4390,17 @@ internal static class GrindRunner
         nearby.Sort((a, b) => ClickAimMath.Len(a.Location.X - player.Location.X, a.Location.Y - player.Location.Y)
             .CompareTo(ClickAimMath.Len(b.Location.X - player.Location.X, b.Location.Y - player.Location.Y)));
         WowBObservedUnit focused = default;
-        if (_focusedDamageObserved && !_focusedFightGuid.IsEmpty && snap.TryGetSelectedTarget(out focused) && focused.Guid == _focusedFightGuid &&
-            !focused.IsLocalPlayer && !focused.HasPlayerVtable &&
-            ClickAimMath.Len(focused.Location.X - player.Location.X, focused.Location.Y - player.Location.Y) <= ClickAimCombat.CasterRangeYd &&
+        bool hasFocused = snap.TryGetSelectedTarget(out focused);
+        double focusedDistance = hasFocused ? ClickAimMath.Len(focused.Location.X - player.Location.X, focused.Location.Y - player.Location.Y) : double.NaN;
+        // An already-damaged selected target may be within the focus search
+        // radius but outside the current spell's range. On 70862 use the same
+        // bounded remote movement guards as the 12–40 yd defence path, rather
+        // than entering a near-only fight that immediately rejects and repeats.
+        bool focusedRemote = reader.IsExperimental70862 && focusedDistance > GatherDefenceRadius;
+        if (_focusedDamageObserved && !_focusedFightGuid.IsEmpty && hasFocused && focused.Guid == _focusedFightGuid &&
+            !focused.IsLocalPlayer && !focused.HasPlayerVtable && double.IsFinite(focusedDistance) &&
+            focusedDistance <= ClickAimCombat.CasterRangeYd &&
+            (!focusedRemote || (!Unreachable(focused.Guid) && !HasNearbyOtherNpc(snap, player, focused.Guid, reader))) &&
             reader.TryGetUnitFields(focused.UnitAddress, out WowBReader.WowBUnitFields focusFields) &&
             DefenceFieldsValid(focusFields.Health, focusFields.UnitFlags, grindMode && _notViable.Contains(focused.Guid)) &&
             DefenceFactionAllowed(reader, grindMode, focused))
@@ -4400,7 +4408,7 @@ internal static class GrindRunner
             Logging.Write("[Grind] continuing the already damaged selected target " + focused.Guid + "; attacker identity remains unknown");
             if (grindMode) LogFactionFight(reader, focused, true);
             engaged = true;
-            try { return FightDefenceWithHandoffs(hwnd, reader, grindMode, player, focused); }
+            try { return FightDefenceWithHandoffs(hwnd, reader, grindMode, player, focused, focusedRemote); }
             finally { ClickAimKeySteer.ReleaseHeld(); }
         }
         if (nearby.Count == 0)
@@ -5216,6 +5224,7 @@ internal static class GrindRunner
                 !StoneclawSnapshot(reader, memory, hwnd, expectedPlayer, expectedTarget, map,
                     WowBStoneclawPolicy.ManaEstimate(action.Id), targetSafe, out WowBWorldSnapshot? first, out WowBObservedUnit player) ||
                 first == null || !WowBStoneclawPolicy.FindPair(reader, first, player, factions, out WowBObservedUnit a, out WowBObservedUnit b)) return false;
+            ClickAimKeySteer.ReleaseHeld(); // do not walk past the target during the cast wait
             if (!StoneclawSnapshot(reader, memory, hwnd, expectedPlayer, expectedTarget, map,
                     WowBStoneclawPolicy.ManaEstimate(action.Id), targetSafe, out WowBWorldSnapshot? second, out player) ||
                 second == null || !WowBStoneclawPolicy.SamePairStillNear(reader, second, player, a, b, factions) ||
@@ -5949,7 +5958,7 @@ internal static class GrindRunner
                 lastCombatBuffCheckMs = Environment.TickCount;
                 if (Buffs.TryApplyInCombat(hwnd, () => _stop, me,
                     () => FightAttackInputAllowed(reader, fightMemory, defenceTarget, expectedPull, !defenceOnly || defenceFactionFilter, defenceOnly, !defenceOnly),
-                    () => _presses++))
+                    () => _presses++, beforeAttempt: ClickAimKeySteer.ReleaseHeld))
                 {
                     presses++;
                     lastCastMs = Environment.TickCount;

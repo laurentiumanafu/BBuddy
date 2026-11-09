@@ -210,7 +210,7 @@ internal sealed class ClickAimBuffController
         => bar.Exists(action => action.Id == 5394 && Eligible(action)) && bar.Exists(action => action.Id == 5675 && Eligible(action));
 
     private bool TryTotemMacro(Memory memory, WowBReader reader, IntPtr hwnd, Func<bool> stopped,
-                               WowBObservedUnit player, Func<bool> targetSafe, Action? onAttempt)
+                               WowBObservedUnit player, Func<bool> targetSafe, Action? onAttempt, Action? beforeAttempt)
     {
         int mask = MacroMask(), key = ClickAimSettings.ShamanTotemMacroKey, count = ClickAimSettings.ShamanTotemMacroPresses;
         long now = _clock();
@@ -228,6 +228,9 @@ internal sealed class ClickAimBuffController
             !reader.TryReadExperimentalActionSnapshot(out ulong[] bar) || bar.Length != 12 || bar[key - 1] == 0) return false;
         WowBTotemAuraCandidate? aura = WowBTotemAuraCandidate.Capture(memory, reader, player);
         if (aura == null || (starting && !MacroMissing(aura, mask))) return false;
+        // Stop any held chase movement only after an attempt is actually due;
+        // revalidate combat, target, bar and aura after releasing the key.
+        beforeAttempt?.Invoke();
         if (!CombatPlayerSafe(memory, reader, hwnd, stopped, player, out uint afterMap, out mana) || map != afterMap || mana < minimumMana ||
             !reader.TryGetUnitFields(player.UnitAddress, out fields) || fields.PlayerPowerTypeCandidate != 0 || fields.Power < minimumMana ||
             !targetSafe() || !reader.TryReadExperimentalActionSnapshot(out ulong[] afterBar) || afterBar.Length != 12 || afterBar[key - 1] != bar[key - 1]) return false;
@@ -251,7 +254,7 @@ internal sealed class ClickAimBuffController
         return true;
     }
 
-    internal bool TryApplyInCombat(IntPtr hwnd, Func<bool> stopped, WowBObservedUnit expectedPlayer, Func<bool> targetSafe, Action? onAttempt = null)
+    internal bool TryApplyInCombat(IntPtr hwnd, Func<bool> stopped, WowBObservedUnit expectedPlayer, Func<bool> targetSafe, Action? onAttempt = null, Action? beforeAttempt = null)
     {
         Memory? memory = ObjectManager.Wow;
         WowBReader? reader = ObjectManager.WowB;
@@ -260,7 +263,7 @@ internal sealed class ClickAimBuffController
         try
         {
             using var uncached = memory.TemporaryCacheState(false);
-            if (TryTotemMacro(memory, reader, hwnd, stopped, expectedPlayer, targetSafe, onAttempt)) return true;
+            if (TryTotemMacro(memory, reader, hwnd, stopped, expectedPlayer, targetSafe, onAttempt, beforeAttempt)) return true;
             List<ClickAimAction> bar = ClickAimCombat.ReadBar(reader);
             int macroMask = reader.IsExperimental70862 ? MacroMask() : 0;
             bool conflictWater = reader.IsExperimental70862 && ConflictingWater(bar) && (macroMask & 6) == 0;
@@ -299,6 +302,7 @@ internal sealed class ClickAimBuffController
             }
             if (buff == null) return false;
             uint minimumMana = CombatManaEstimate(buff.Id);
+            beforeAttempt?.Invoke(); // release held chase movement before key/GCD wait
             // Recheck identity, aura, spell slot, target, combat and mana after
             // the non-atomic reads and again before the key. Unknown is not absent.
             if (!CombatPlayerSafe(memory, reader, hwnd, stopped, expectedPlayer, out uint afterMap, out mana) || map != afterMap || mana < minimumMana ||

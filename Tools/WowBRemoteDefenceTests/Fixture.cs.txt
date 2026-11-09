@@ -85,7 +85,8 @@ namespace Styx.Logic.Pathing
         static WowBWorldSnapshot snapshot = null!;
         static bool TryReadGatherCombat(out bool fighting) { fighting = Fighting; return CombatReadable; }
         static bool Capture(out WowBWorldSnapshot? snap) { snap = snapshot; return true; }
-        static bool Unreachable(WowBGuid guid) => false;
+        static bool MarkedUnreachable;
+        static bool Unreachable(WowBGuid guid) => MarkedUnreachable;
         static bool TryTakeDefenceHandoff(WowBReader r, bool mode, out WowBObservedUnit p, out WowBObservedUnit t) { p = t = default; return false; }
         static void LogFactionFight(WowBReader? reader, WowBObservedUnit unit, bool defence) { }
         static string FightDefenceWithHandoffs(IntPtr hwnd, WowBReader reader, bool mode, WowBObservedUnit player, WowBObservedUnit target, bool remoteDefence = false)
@@ -110,7 +111,7 @@ namespace Styx.Logic.Pathing
             Fighting = CombatReadable = WowBGrindFactions.Allowed = WowBGrindFactions.BarSafe = GrindFactionSettings.Rules.Enabled = true;
             _stop = ClickAimAbort.Requested = RouteRunner.StopRequested = _focusedDamageObserved = _remoteDefenceAttempted = false;
             WowBAttackerResearch.Calls = 0;
-            _focusedFightGuid = _defenceHandoffGuid = default; _notViable.Clear(); FightCalls = 0; LastRemote = false;
+            _focusedFightGuid = _defenceHandoffGuid = default; _notViable.Clear(); FightCalls = 0; LastRemote = false; MarkedUnreachable = false;
         }
         static string Defend(out bool engaged) => DefendNearby(new IntPtr(1), true, out engaged);
         static void AddNearby(bool readable = true, bool dead = false)
@@ -145,6 +146,30 @@ namespace Styx.Logic.Pathing
             reader.Selected = expected.Guid; Fighting = false; Require(!RemoteDefenceMovementAllowed(reader, mem, expected), "combat end cancels movement");
             Fighting = true; WowBGrindFactions.Allowed = false; Require(!RemoteDefenceMovementAllowed(reader, mem, expected), "changed faction cancels movement");
             WowBGrindFactions.Allowed = true; ClickAimAbort.Requested = true; Require(!RemoteDefenceMovementAllowed(reader, mem, expected), "STOP cancels movement");
+            Setup(21); ObjectManager.WowB!.IsExperimental70862 = true; ObjectManager.WowB.Selected = new WowBGuid(2);
+            _focusedFightGuid = new WowBGuid(2); _focusedDamageObserved = true;
+            Require(Defend(out engaged) == "fight" && engaged && LastRemote && ClickAimInput.Tabs == 0,
+                "70862 damaged focus at 21 yd uses bounded remote defence, not near-only loop");
+            Require(RemoteDefenceMovementAllowed(ObjectManager.WowB, ObjectManager.Wow!, snapshot.Units[1]),
+                "focused remote fight may approach with movement guard");
+            AddNearby(); Require(!RemoteDefenceMovementAllowed(ObjectManager.WowB, ObjectManager.Wow!, snapshot.Units[1]),
+                "nearby NPC interrupts focused remote movement");
+            Setup(21); ObjectManager.WowB!.IsExperimental70862 = true; ObjectManager.WowB.Selected = new WowBGuid(2);
+            _focusedFightGuid = new WowBGuid(2); _focusedDamageObserved = true; MarkedUnreachable = true;
+            Defend(out engaged); Require(!engaged && FightCalls == 0, "unreachable focused target does not repeatedly restart");
+            Setup(21); ObjectManager.WowB!.IsExperimental70862 = true; ObjectManager.WowB.Selected = new WowBGuid(2);
+            _focusedFightGuid = new WowBGuid(2); _focusedDamageObserved = true; AddNearby(); ClickAimInput.TabTarget = new WowBGuid(3);
+            Require(Defend(out engaged) == "fight" && engaged && !LastRemote && ClickAimInput.Tabs == 1,
+                "other nearby NPC is reconsidered before remote focus");
+            Setup(12); ObjectManager.WowB!.IsExperimental70862 = true; ObjectManager.WowB.Selected = new WowBGuid(2);
+            _focusedFightGuid = new WowBGuid(2); _focusedDamageObserved = true;
+            Require(Defend(out engaged) == "fight" && engaged && !LastRemote, "12 yd focus keeps nearby defence");
+            Setup(21); ObjectManager.WowB!.IsExperimental70862 = true; ObjectManager.WowB.Selected = new WowBGuid(2);
+            _focusedFightGuid = new WowBGuid(2); _focusedDamageObserved = true; Fighting = false;
+            Defend(out engaged); Require(!engaged && FightCalls == 0, "no focus chase outside combat");
+            Setup(21); ObjectManager.WowB!.IsExperimental70862 = true; ObjectManager.WowB.Selected = new WowBGuid(2);
+            _focusedFightGuid = new WowBGuid(2); _focusedDamageObserved = true; ClickAimAbort.Requested = true;
+            Defend(out engaged); Require(!engaged && FightCalls == 0, "STOP blocks focused remote defence");
             Setup(8); Require(Defend(out engaged) == "fight" && engaged && !LastRemote, "nearby defence still takes priority");
             Setup(8); ObjectManager.WowB!.IsExperimental70862=true; WowBGrindFactions.Allowed=false;
             Require(Defend(out engaged) == "fight" && engaged && FightCalls==1 && ClickAimInput.Tabs==1, "70862 nearby excluded NPC can be selected during combat");
