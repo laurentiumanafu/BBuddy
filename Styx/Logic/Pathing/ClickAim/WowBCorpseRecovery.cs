@@ -30,15 +30,13 @@ internal static class WowBCorpseRecovery
             if (!Allowed(memory, reader, hwnd, running)) return State.Unknown;
             using var uncached = memory.TemporaryCacheState(false);
             if (!reader.TryReadMapId(out uint map) || map != checkpoint.Map ||
-                !reader.TryCaptureWorldSnapshot(out WowBWorldSnapshot? snapshot) || snapshot == null ||
-                !snapshot.TryGetLocalPlayer(out WowBObservedUnit player) || player.Guid != checkpoint.Player ||
-                !reader.TryGetUnitFields(player.UnitAddress, out WowBReader.WowBUnitFields fields) ||
-                fields.MaxHealth == 0 || fields.Health > fields.MaxHealth ||
+                !WowBDeathCheckpoint.ReadRecoveryPlayer(reader, out WowBObservedUnit player, out uint health, out uint maxHealth) ||
+                player.Guid != checkpoint.Player || maxHealth == 0 || health > maxHealth ||
                 !WowBGrindFactions.TryReadGhostFlagCandidate(memory, reader, player, out bool ghost) ||
                 !reader.TryReadMapId(out uint mapAfter) || mapAfter != map || !Allowed(memory, reader, hwnd, running)) return State.Unknown;
             position = player.Location;
             if (!double.IsFinite(position.X) || !double.IsFinite(position.Y) || !double.IsFinite(position.Z)) return State.Unknown;
-            return ghost ? State.Ghost : fields.Health == 0 ? State.Dead : State.Alive;
+            return ghost ? State.Ghost : health == 0 ? State.Dead : State.Alive;
         }
         catch { return State.Unknown; }
     }

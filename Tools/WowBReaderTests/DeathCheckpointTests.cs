@@ -83,6 +83,70 @@ internal static class DeathCheckpointTests
         }
     }
 
+    internal static void RunActive70888(Memory memory, WowBReader reader, ulong unit, WowBGuid player)
+    {
+        string oldPath = Styx.Helpers.Logging.ApplicationPath;
+        string folder = Path.Combine(Path.GetTempPath(), "bbuddy-70888-death-" + Guid.NewGuid().ToString("N"));
+        ulong manaMax = unit + Wow70707Offsets.MaxPowerArrayCandidateOffset;
+        ulong hp = unit + Wow70707Offsets.HealthCandidateOffset;
+        ulong target = memory.ImageBase64 + Wow70888Offsets.PlayerTargetGuid;
+        WowBGuid originalTarget = reader.ReadTargetGuid();
+        try
+        {
+            Styx.Helpers.Logging.ApplicationPath = folder;
+            memory.U64(hp, 148);
+            var tracker = new WowBDeathCheckpoint();
+            if (tracker.Poll(out bool observed) || !observed) throw new Exception("70888 alive observation missing");
+            memory.U32(manaMax, 0); // plausible source of the original full-vitals failure, not proof of it
+            memory.U64(hp, 0);
+            if (reader.TryGetUnitFields(unit, out _)) throw new Exception("combat vitals must still reject invalid mana");
+            ulong ghostAddress = unit + Wow70707Offsets.GhostFlagsCandidateOffset;
+            memory.Bytes(ghostAddress, new byte[] { Wow70707Offsets.GhostFlagCandidate });
+            if (!tracker.Poll(out _) || tracker.Recorded.HasValue)
+                throw new Exception("70888 ghost must not be saved as a corpse location");
+            memory.Remove(ghostAddress);
+            if (!tracker.Poll(out _) || tracker.Recorded.HasValue)
+                throw new Exception("unreadable 70888 ghost state must not authorize a checkpoint");
+            memory.Bytes(ghostAddress, new byte[] { 0 });
+            int targetReads = 0, targetChanges = 0;
+            memory.OnRead = (address, count) => {
+                if (address == target) targetReads++;
+                if (address == hp && count == 16)
+                    memory.Guid(target, ++targetChanges % 2 == 0 ? originalTarget : new WowBGuid(777, 888));
+            };
+            if (!tracker.Poll(out observed) || !observed || !tracker.Recorded.HasValue ||
+                tracker.Recorded.Value.Player != player || tracker.Recorded.Value.Map != 7 || targetReads != 0 || targetChanges < 2)
+                throw new Exception("70888 checkpoint must use stable local health, not target or mana");
+            memory.OnRead = null;
+            int hpReads = 0;
+            memory.OnRead = (address, count) => {
+                if (address == hp && count == 16 && ++hpReads == 2) memory.U64(hp, 1);
+            };
+            if (reader.TryRead70888RecoveryPlayer(out _, out _, out _))
+                throw new Exception("changing recovery health must be rejected");
+            memory.OnRead = null;
+            memory.U64(hp, 0);
+            memory.U64(unit + Wow70707Offsets.MaxHealthCandidateOffset, 0);
+            if (reader.TryRead70888RecoveryPlayer(out _, out _, out _))
+                throw new Exception("unknown maximum health must not be treated as death");
+            memory.U64(unit + Wow70707Offsets.MaxHealthCandidateOffset, 148);
+            memory.Guid(memory.ImageBase64 + Wow70888Offsets.PlayerGuid, new WowBGuid(999, 888));
+            if (reader.TryRead70888RecoveryPlayer(out _, out _, out _))
+                throw new Exception("changed local identity must fail closed");
+        }
+        finally
+        {
+            memory.OnRead = null;
+            memory.Guid(target, originalTarget);
+            memory.Guid(memory.ImageBase64 + Wow70888Offsets.PlayerGuid, player);
+            memory.U64(hp, 148);
+            memory.U64(unit + Wow70707Offsets.MaxHealthCandidateOffset, 148);
+            memory.U32(manaMax, 20);
+            Styx.Helpers.Logging.ApplicationPath = oldPath;
+            if (Directory.Exists(folder)) Directory.Delete(folder, true);
+        }
+    }
+
     internal static void Run()
     {
         var a = new WowBGuid(1, 2);
@@ -110,6 +174,12 @@ internal static class DeathCheckpointTests
         polls = waits = 0;
         if (WowBDeathCheckpoint.ObserveSafetyExit(() => { polls++; return false; }, () => stopped, Wait) || polls != 21 || waits != 20)
             throw new Exception("Alive or unreadable state must time out without authorizing recovery");
+        polls = waits = 0;
+        if (!WowBDeathCheckpoint.ObserveSafetyExit(() => ++polls == 41, () => stopped, Wait, 200) || polls != 41 || waits != 40)
+            throw new Exception("70888 safety pause must catch a death later than the old two-second window");
+        polls = waits = 0;
+        if (WowBDeathCheckpoint.ObserveSafetyExit(() => { polls++; return false; }, () => stopped, Wait, 200) || polls != 201 || waits != 200)
+            throw new Exception("extended unreadable/alive safety pause must remain bounded");
         polls = waits = 0; stopped = true;
         if (WowBDeathCheckpoint.ObserveSafetyExit(() => { polls++; return true; }, () => stopped, Wait) || polls != 0)
             throw new Exception("STOP before the safety pause must suppress polling and recovery");

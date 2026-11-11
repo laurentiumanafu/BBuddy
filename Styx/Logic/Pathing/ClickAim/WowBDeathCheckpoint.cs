@@ -23,20 +23,30 @@ internal sealed class WowBDeathCheckpoint
     private WowBGuid _aliveGuid;
     private uint _aliveMap;
     private int _aliveAt;
-    private bool _hasAlive, _saved;
+    private bool _hasAlive, _saved, _hasGhostWarning;
+    private int _lastGhostWarning;
     private const int AliveEvidenceMaxMs = 30000;
+
+    private void WarnGhost(string message)
+    {
+        int now = Environment.TickCount;
+        if (_hasGhostWarning && unchecked(now - _lastGhostWarning) < 5000) return;
+        _hasGhostWarning = true; _lastGhostWarning = now;
+        Logging.Write(message);
+    }
 
     internal static bool MayBeginRecovery(bool pending, bool hasCheckpoint, int deathGeneration, int currentGeneration,
                                           bool abortRequested, bool routeStopped)
         => pending && hasCheckpoint && deathGeneration == currentGeneration && !abortRequested && !routeStopped;
 
     // A combat safety exit can race the next scheduled death sample. While no
-    // gameplay input is being sent, allow 20 short waits (two seconds plus read
-    // time) for a checkpoint or ghost veto. A STOP wins, including one that
-    // arrives during a poll. An unreadable/alive result never authorizes recovery.
-    internal static bool ObserveSafetyExit(Func<bool> poll, Func<bool> cancelled, Func<int, bool> wait)
+    // gameplay input is being sent, allow bounded short waits for a checkpoint
+    // or ghost veto. A STOP wins, including one that arrives during a poll.
+    // An unreadable/alive result never authorizes recovery.
+    internal static bool ObserveSafetyExit(Func<bool> poll, Func<bool> cancelled, Func<int, bool> wait, int intervals = 20)
     {
-        const int intervals = 20, intervalMs = 100;
+        const int intervalMs = 100;
+        intervals = Math.Clamp(intervals, 0, 200);
         for (int i = 0; i <= intervals; i++)
         {
             if (cancelled()) return false;
@@ -56,6 +66,20 @@ internal sealed class WowBDeathCheckpoint
            && double.IsFinite(x) && double.IsFinite(y) && double.IsFinite(z)
            && Math.Abs(x) < 100000 && Math.Abs(y) < 100000 && Math.Abs(z) < 100000;
 
+    // 70888 recovery must not depend on target selection or mana remaining
+    // readable during death. Older builds retain their established path.
+    internal static bool ReadRecoveryPlayer(WowBReader reader, out WowBObservedUnit player, out uint health, out uint maxHealth)
+    {
+        player = default; health = maxHealth = 0;
+        if (reader.IsExperimental70888)
+            return reader.TryRead70888RecoveryPlayer(out player, out health, out maxHealth);
+        if (!reader.TryCaptureWorldSnapshot(out WowBWorldSnapshot? snapshot) || snapshot == null ||
+            !snapshot.TryGetLocalPlayer(out player) ||
+            !reader.TryGetUnitFields(player.UnitAddress, out WowBReader.WowBUnitFields fields)) return false;
+        health = fields.Health; maxHealth = fields.MaxHealth;
+        return maxHealth != 0 && health <= maxHealth;
+    }
+
     // False means either alive or unreadable, never proof of life. True vetoes
     // gameplay for zero health, a set ghost candidate or an unreadable ghost byte.
     // Recorded coordinates are not proven corpse coordinates.
@@ -69,43 +93,39 @@ internal sealed class WowBDeathCheckpoint
         {
             using var uncached = memory.TemporaryCacheState(false);
             if (!reader.TryReadMapId(out uint map) ||
-                !reader.TryCaptureWorldSnapshot(out WowBWorldSnapshot? first) || first == null ||
-                !first.TryGetLocalPlayer(out WowBObservedUnit player) || player.Guid.IsEmpty ||
-                !reader.TryGetUnitFields(player.UnitAddress, out WowBReader.WowBUnitFields before) ||
-                before.MaxHealth == 0 || before.Health > before.MaxHealth ||
+                !ReadRecoveryPlayer(reader, out WowBObservedUnit player, out uint health, out uint maxHealth) ||
+                player.Guid.IsEmpty || maxHealth == 0 || health > maxHealth ||
                 ObjectManager.Wow != memory || ObjectManager.WowB != reader) return false;
             if (reader.IsExperimental70707)
             {
                 if (!WowBGrindFactions.TryReadGhostFlagCandidate(memory, reader, player, out bool ghostFlag))
                 {
-                    Logging.Write("[Corpse] " + reader.ExperimentalBuildNumber + " ghost flag candidate unavailable or changed; stopping rather than guessing");
+                    WarnGhost("[Corpse] " + reader.ExperimentalBuildNumber + " ghost flag candidate unavailable or changed; gameplay remains stopped rather than guessing");
                     observed = true;
                     return true;
                 }
                 if (ghostFlag)
                 {
-                    Logging.Write("[Corpse] " + reader.ExperimentalBuildNumber + " ghost flag candidate is set; stopping for manual recovery");
+                    WarnGhost("[Corpse] " + reader.ExperimentalBuildNumber + " ghost flag candidate is set; no new corpse position will be inferred");
                     observed = true;
                     return true;
                 }
             }
-            if (before.Health > 0)
+            if (health > 0)
             {
                 _aliveGuid = player.Guid; _aliveMap = map; _aliveAt = Environment.TickCount; _hasAlive = true;
                 observed = true;
                 return false;
             }
-            if (!reader.TryGetUnitFields(player.UnitAddress, out WowBReader.WowBUnitFields after) ||
-                after.MaxHealth != before.MaxHealth || after.Health != before.Health ||
-                !reader.TryCaptureWorldSnapshot(out WowBWorldSnapshot? second) || second == null ||
-                !second.TryGetLocalPlayer(out WowBObservedUnit current) || current.Guid != player.Guid ||
+            if (!ReadRecoveryPlayer(reader, out WowBObservedUnit current, out uint healthAfter, out uint maxAfter) ||
+                maxAfter != maxHealth || healthAfter != health || current.Guid != player.Guid ||
                 current.RecordAddress != player.RecordAddress || current.UnitAddress != player.UnitAddress ||
                 !reader.TryReadMapId(out uint mapAfter) || mapAfter != map ||
                 ObjectManager.Wow != memory || ObjectManager.WowB != reader) return false;
             if (reader.IsExperimental70707 &&
                 (!WowBGrindFactions.TryReadGhostFlagCandidate(memory, reader, current, out bool ghostAfter) || ghostAfter))
             {
-                Logging.Write("[Corpse] ghost candidate changed or became unavailable during 0-health observation; not saving a location");
+                WarnGhost("[Corpse] ghost candidate changed or became unavailable during 0-health observation; not saving a location");
                 observed = true;
                 return true;
             }
@@ -113,7 +133,7 @@ internal sealed class WowBDeathCheckpoint
             int now = Environment.TickCount;
             WoWPoint position = current.Location;
             if (MayRecord(_hasAlive, _saved, _aliveGuid, _aliveMap, unchecked(now - _aliveAt), current.Guid, map,
-                          after.Health, after.MaxHealth, position.X, position.Y, position.Z))
+                          healthAfter, maxAfter, position.X, position.Y, position.Z))
             {
                 // One write per run; never overwrite an earlier candidate at a graveyard.
                 _saved = true;

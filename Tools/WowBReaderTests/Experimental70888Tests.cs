@@ -318,6 +318,7 @@ internal static class Experimental70888Tests
         Require(reader.TryReadMapId(out map) && map == 7 && reader.ReadActionBar().Count == 1 &&
             reader.TryGetUnitFields(units[0], out var fields) && fields.Health == 148 && fields.Power == 10,
             "70888 session reads candidate gameplay fields and its own action array");
+        DeathCheckpointTests.RunActive70888(memory, reader, units[0], player);
         ulong actionAddress = image + Wow70888Offsets.StoredActionArrayCandidate;
         memory.U64(actionAddress, 1);
         Require(!WowBGrindFactions.Experimental70707BarSafe(reader), "changed 70888 action bar invalidates the session guard");

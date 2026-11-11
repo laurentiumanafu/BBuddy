@@ -322,7 +322,7 @@ internal static class GrindRunner
     private static bool _recoveryReady;
     private static int _deathStopGeneration;
 
-    private static bool CheckDeathCheckpoint(bool trackerOnly = false)
+    private static bool CheckDeathCheckpoint(bool trackerOnly = false, bool deferUnconfirmed = false)
     {
         // Standalone Gather uses this fight loop for defence and owns its tracker.
         if (_deathCheckpoint == null && GatherRunner.Running)
@@ -335,6 +335,12 @@ internal static class GrindRunner
         bool observed = false;
         bool veto = _deathCheckpoint != null && _deathCheckpoint.Poll(out observed);
         if (!veto && (observed || trackerOnly || !PlayerDead())) return false;
+        // During a no-input 70888 safety pause, a transient ghost/unreadable
+        // veto without a checkpoint must not end the retry immediately. It is
+        // still never permission to release or move; STOP remains authoritative.
+        if (deferUnconfirmed && ObjectManager.WowB?.IsExperimental70888 == true &&
+            _deathCheckpoint != null && !_deathCheckpoint.Recorded.HasValue && !_stop && !ClickAimAbort.Requested)
+            return false;
         lock (StartStopGate)
         {
             if (_stop || ClickAimAbort.Requested) return true;
@@ -355,9 +361,16 @@ internal static class GrindRunner
     private static string StopFightForSafety(string reason)
     {
         ClickAimKeySteer.ReleaseHeld();
-        Logging.Write("[Grind] " + reason + "; pausing to check for a death/ghost transition before stopping");
-        bool veto = WowBDeathCheckpoint.ObserveSafetyExit(() => CheckDeathCheckpoint(trackerOnly: true),
-            () => ClickAimAbort.Requested || RouteRunner.StopRequested, ClickAimAbort.Wait);
+        WowBReader? safetyReader = ObjectManager.WowB;
+        var safetyMemory = ObjectManager.Wow;
+        bool extended = safetyReader?.IsExperimental70888 == true && _deathCheckpoint != null;
+        Logging.Write("[Grind] " + reason + "; pausing input to check for a death/ghost transition" +
+            (extended ? " (70888: up to 20 seconds plus read time)" : " before stopping"));
+        bool veto = WowBDeathCheckpoint.ObserveSafetyExit(
+            () => CheckDeathCheckpoint(trackerOnly: true, deferUnconfirmed: extended),
+            () => ClickAimAbort.Requested || RouteRunner.StopRequested ||
+                  ObjectManager.Wow != safetyMemory || ObjectManager.WowB != safetyReader,
+            ClickAimAbort.Wait, extended ? 200 : 20);
         if (veto) return "death/ghost safety check; fight halted for recovery if a checkpoint was captured";
         _stop = true;
         ClickAimAbort.Request();
