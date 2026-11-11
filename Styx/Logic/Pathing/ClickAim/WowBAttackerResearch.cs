@@ -59,7 +59,7 @@ internal static class WowBAttackerResearch
     internal static void Observe(WowBReader reader, Memory memory, WowBObservedUnit player,
         List<WowBObservedUnit> blocked, Func<bool> stop, Func<bool> combatStillActive)
     {
-        if (!reader.IsExperimental70862 || blocked.Count == 0 || player.Guid.IsEmpty || stop() ||
+        if (!reader.Uses70862Features || blocked.Count == 0 || player.Guid.IsEmpty || stop() ||
             ObjectManager.Wow != memory || ObjectManager.WowB != reader) return;
         try
         {

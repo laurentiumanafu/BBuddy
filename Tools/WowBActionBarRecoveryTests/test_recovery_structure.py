@@ -25,7 +25,7 @@ class ActionBarRecovery(unittest.TestCase):
 
     def test_bounded_wait_guarded_by_stop_attachment_and_player(self):
         wait = section(F, '    internal static bool WaitForExperimentalBar(', '    private static bool CheckExperimentalBuild(')
-        self.assertIn('reader.IsExperimental70862 ? 60000 : 1200', wait)
+        self.assertIn('reader.Uses70862Features ? 60000 : 1200', wait)
         self.assertIn('Environment.TickCount64 + timeout', wait)
         self.assertIn('ExperimentalBarStatus(reader, out reason)', wait)
         self.assertIn('first.IsEmpty', wait)
@@ -56,24 +56,24 @@ class ActionBarRecovery(unittest.TestCase):
         self.assertIn('barInterrupt = true; return true;', route)
         self.assertIn('if (barInterrupt)', route)
         vendor = section(G, '    private static bool VendorTrip(', '    /// <summary>\n    /// Replays the recorded plan')
-        self.assertIn('vendorReader.IsExperimental70862 && !WowBGrindFactions.Experimental70707BarSafe(vendorReader)', vendor)
+        self.assertIn('vendorReader.Uses70862Features && !WowBGrindFactions.Experimental70707BarSafe(vendorReader)', vendor)
         candidate = section(G, '    private static bool VendorCandidateStillValid(', '    private static bool TryClickRecordedMerchant(')
-        self.assertIn('reader.IsExperimental70862 && !WowBGrindFactions.Experimental70707BarSafe(reader)', candidate)
+        self.assertIn('reader.Uses70862Features && !WowBGrindFactions.Experimental70707BarSafe(reader)', candidate)
         gather = section(H, '    private static bool Interrupt(bool checkNodes)', '    private static bool MapStillCurrent()')
-        self.assertIn('barReader?.IsExperimental70862 == true && !WowBGrindFactions.Experimental70707BarSafe(barReader)', gather)
+        self.assertIn('barReader?.Uses70862Features == true && !WowBGrindFactions.Experimental70707BarSafe(barReader)', gather)
 
     def test_combat_and_postfight_loot_do_not_continue_on_changed_bar(self):
         fight = section(G, '    private static string Fight(', "    /// <summary>\n    /// A unit's health straight out of its data block")
         block = fight[fight.index('while (!_stop && !ClickAimAbort.Requested'):]
-        self.assertIn('reader.IsExperimental70862 && !WowBGrindFactions.Experimental70707BarSafe(reader)', block)
+        self.assertIn('reader.Uses70862Features && !WowBGrindFactions.Experimental70707BarSafe(reader)', block)
         self.assertLess(block.index('Experimental70707BarSafe(reader)'), block.index('!Capture(out snap)'))
         engage = section(G, '    private static bool TryEngage(', '    private static bool FactionAttackInputAllowed(')
-        self.assertIn('trialReader?.IsExperimental70862 == true && !WowBGrindFactions.Experimental70707BarSafe(trialReader)', engage)
+        self.assertIn('trialReader?.Uses70862Features == true && !WowBGrindFactions.Experimental70707BarSafe(trialReader)', engage)
         dwell_start = G.index('    private static string DwellAtHotspot(')
         dwell = G[dwell_start:G.index('    private static', dwell_start + 25)]
         self.assertIn('!WowBGrindFactions.Experimental70707BarSafe(barReader)) break;', dwell)
         loot = section(G, '    private static void PollRecentLootAfterFight(', '    private static bool RecentLootRetryPending(')
-        self.assertIn('reader.IsExperimental70862 && !WowBGrindFactions.Experimental70707BarSafe(reader)', loot)
+        self.assertIn('reader.Uses70862Features && !WowBGrindFactions.Experimental70707BarSafe(reader)', loot)
         self.assertLess(loot.index('Experimental70707BarSafe(reader)'), loot.index('LootNearby('))
 
 

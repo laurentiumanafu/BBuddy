@@ -726,11 +726,11 @@ internal static class ClickAimCombat
         List<ClickAimAction> decoded = DecodeBar(reader.ReadActionBar());
         // Macro slot encoding is not established. Do not misclassify its raw
         // ID as a spell, heal, item or buff while the explicit key-1 mode is on.
-        if (reader.IsExperimental70862 && ClickAimSettings.UseKeyOneStartAttackMacro)
+        if (reader.Uses70862Features && ClickAimSettings.UseKeyOneStartAttackMacro)
             decoded.RemoveAll(action => action.Slot == 1);
         // A manually configured macro is opaque; never decode its slot as a
         // spell, item, healing action or rotation ability.
-        if (reader.IsExperimental70862 && ClickAimSettings.UseShamanTotemMacro &&
+        if (reader.Uses70862Features && ClickAimSettings.UseShamanTotemMacro &&
             ClickAimSettings.ShamanTotemMacroKey >= 1 && ClickAimSettings.ShamanTotemMacroKey <= 9)
             decoded.RemoveAll(action => action.Slot == ClickAimSettings.ShamanTotemMacroKey);
         return decoded;

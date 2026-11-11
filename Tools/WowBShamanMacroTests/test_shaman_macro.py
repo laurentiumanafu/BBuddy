@@ -24,7 +24,7 @@ class Macro(unittest.TestCase):
  def test_opaque_macro_reserved_and_safety(self):
   self.assertIn('decoded.RemoveAll(action => action.Slot == ClickAimSettings.ShamanTotemMacroKey)',C)
   i=B.index('private bool TryTotemMacro('); j=B.index('    internal bool TryApplyInCombat(',i); body=B[i:j]
-  for t in ('reader.IsExperimental70862','MacroMask()', 'now < _earthReservedUntil','_macroRetryAt','_macroNextPressAt',
+  for t in ('reader.Uses70862Features','MacroMask()', 'now < _earthReservedUntil','_macroRetryAt','_macroNextPressAt',
             'CombatPlayerSafe(', 'targetSafe()', 'PlayerPowerTypeCandidate != 0','fields.Power < minimumMana',
             'TryReadExperimentalActionSnapshot(', 'bar[key - 1] == 0', 'afterBar[key - 1] != bar[key - 1]',
             'WowBTotemAuraCandidate.Capture(', 'aura == null', 'starting && !MacroMissing',

@@ -29,7 +29,7 @@ class Stoneclaw(unittest.TestCase):
             'me.PlayerPowerTypeCandidate != 0','me.Power < mana','SameIdentity(player, expectedPlayer)',
             'SameIdentity(target, expectedTarget)','currentMap != map'):
    self.assertIn(t,safe)
-  for t in ('!reader.IsExperimental70862', 'area == null', 'GrindFactionRules.TryCreate(GrindFactionMode.Allow, area.Factions', 'map != _profileSessionMap', '_activeProfileArea != area', 'area.Factions != factionText', 'StoneclawSnapshot(', 'WowBStoneclawPolicy.FindPair(',
+  for t in ('!reader.Uses70862Features', 'area == null', 'GrindFactionRules.TryCreate(GrindFactionMode.Allow, area.Factions', 'map != _profileSessionMap', '_activeProfileArea != area', 'area.Factions != factionText', 'StoneclawSnapshot(', 'WowBStoneclawPolicy.FindPair(',
             'WowBStoneclawPolicy.SamePairStillNear(', 'StoneclawSlotCurrent(', '!targetSafe()',
             'WowBStoneclawPolicy.RetryMs', 'Buffs.ReserveEarthAfterStoneclaw()',
             'ClickAimInput.TapKey(hwnd, action.KeyVk, 40)'):

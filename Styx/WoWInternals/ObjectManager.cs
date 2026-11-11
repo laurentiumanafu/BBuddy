@@ -332,7 +332,7 @@ namespace Styx.WoWInternals
                 // read path and logs a full state snapshot on attach.
                 WowB = new WowBReader(memory, initialBuild == ClientAttachPolicy.ExperimentalBuild,
                     initialBuild == ClientAttachPolicy.ExperimentalBuild70755, initialBuild == ClientAttachPolicy.ExperimentalBuild70790,
-                    initialBuild == ClientAttachPolicy.ExperimentalBuild70862);
+                    initialBuild == ClientAttachPolicy.ExperimentalBuild70862, initialBuild == ClientAttachPolicy.ExperimentalBuild70888);
                 if (ClientAttachPolicy.IsExperimentalBuild(initialBuild))
                 {
                     try { Logging.Write(WowB.DescribeExperimental70707()); }

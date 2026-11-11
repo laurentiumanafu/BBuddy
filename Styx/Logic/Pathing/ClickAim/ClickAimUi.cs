@@ -174,7 +174,7 @@ internal static class ClickAimUi
     private static string FactionStatus()
         => GrindFactionSettings.Rules.Enabled
             ? "Faction pull filter " + GrindFactionSettings.Rules.Mode + ": " + GrindFactionSettings.Rules.KeyText +
-              (ObjectManager.WowB?.IsExperimental70862 == true
+              (ObjectManager.WowB?.Uses70862Features == true
                   ? "; combat defence bypasses factions and may attack the wrong NPC, including a friendly."
                   : "; blocked and unknown attackers are withheld.")
             : "Faction attack filter OFF.";

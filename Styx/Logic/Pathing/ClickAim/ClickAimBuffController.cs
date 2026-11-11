@@ -96,7 +96,7 @@ internal sealed class ClickAimBuffController
     }
 
     private static bool ShieldSupported(WowBReader reader, int id)
-        => reader.IsExperimental70862 && WowBLightningShield.Rank(id) != 0;
+        => reader.Uses70862Features && WowBLightningShield.Rank(id) != 0;
 
     // If several ranks are on the bar, choose the highest eligible one rather
     // than casting multiple shields or accidentally replacing it with a lower rank.
@@ -128,11 +128,11 @@ internal sealed class ClickAimBuffController
         string text = !state.HasValue ? "unavailable; combat cast withheld" : state.Value < 0 ? "absent" : "present";
         if (_reportedAuraState.TryGetValue(action.Id, out string? old) && old == text) return;
         _reportedAuraState[action.Id] = text;
-        Logging.Write("[Buff] 70862 experimental Lightning Shield candidate: " + text + " (rank " + WowBLightningShield.Rank(action.Id) + "; not verified)");
+        Logging.Write("[Buff] 70862/70888 experimental Lightning Shield candidate: " + text + " (rank " + WowBLightningShield.Rank(action.Id) + "; not verified)");
     }
 
     private static bool TotemSupported(WowBReader reader, ClickAimAction action)
-        => reader.IsExperimental70862 && WowBTotemAuraCandidate.EffectForCast(action.Id) != 0;
+        => reader.Uses70862Features && WowBTotemAuraCandidate.EffectForCast(action.Id) != 0;
 
     private bool TotemDue(ClickAimAction action, WowBTotemAuraCandidate? aura, long now)
         => aura?.Active(action.Id) == false && _schedule.PastAttemptBackoff(action.Id, now, TotemRetryMs);
@@ -153,7 +153,7 @@ internal sealed class ClickAimBuffController
         string state = !active.HasValue ? "unavailable; cast withheld" : active.Value ? "active" : "absent; retry limited to 10 seconds";
         if (_reportedAuraState.TryGetValue(action.Id, out string? old) && old == state) return;
         _reportedAuraState[action.Id] = state;
-        Logging.Write("[Buff] 70862 experimental totem effect " + action.Name + ": " + state + " (player effect, not totem existence)");
+        Logging.Write("[Buff] 70862/70888 experimental totem effect " + action.Name + ": " + state + " (player effect, not totem existence)");
     }
 
     private static bool SameSlot(ClickAimAction action, List<ClickAimAction> bar)
@@ -214,7 +214,7 @@ internal sealed class ClickAimBuffController
     {
         int mask = MacroMask(), key = ClickAimSettings.ShamanTotemMacroKey, count = ClickAimSettings.ShamanTotemMacroPresses;
         long now = _clock();
-        if (!reader.IsExperimental70862 || mask == 0 || now < _earthReservedUntil)
+        if (!reader.Uses70862Features || mask == 0 || now < _earthReservedUntil)
         { _macroRemaining = 0; return false; }
         // A long interruption ends the incomplete burst rather than carrying it
         // indefinitely into a later fight. The retry delay starts at the last key.
@@ -265,14 +265,14 @@ internal sealed class ClickAimBuffController
             using var uncached = memory.TemporaryCacheState(false);
             if (TryTotemMacro(memory, reader, hwnd, stopped, expectedPlayer, targetSafe, onAttempt, beforeAttempt)) return true;
             List<ClickAimAction> bar = ClickAimCombat.ReadBar(reader);
-            int macroMask = reader.IsExperimental70862 ? MacroMask() : 0;
-            bool conflictWater = reader.IsExperimental70862 && ConflictingWater(bar) && (macroMask & 6) == 0;
-            int preferredShield = reader.IsExperimental70862 ? PreferredShield(bar) : 0;
+            int macroMask = reader.Uses70862Features ? MacroMask() : 0;
+            bool conflictWater = reader.Uses70862Features && ConflictingWater(bar) && (macroMask & 6) == 0;
+            int preferredShield = reader.Uses70862Features ? PreferredShield(bar) : 0;
             if (!bar.Exists(action => CombatManaEstimate(action.Id) > 0 && Eligible(action) &&
                 (WowBTotemAuraCandidate.EffectForCast(action.Id) == 0 || TotemSupported(reader, action)))) return false;
             if (!CombatPlayerSafe(memory, reader, hwnd, stopped, expectedPlayer, out uint map, out uint mana) || !targetSafe()) return false;
             WowBInlineAuraCandidate? aura = WowBInlineAuraCandidate.Capture(memory, expectedPlayer);
-            WowBTotemAuraCandidate? totemAura = reader.IsExperimental70862 && bar.Exists(action => Eligible(action) &&
+            WowBTotemAuraCandidate? totemAura = reader.Uses70862Features && bar.Exists(action => Eligible(action) &&
                 (TotemSupported(reader, action) || ShieldSupported(reader, action.Id)))
                 ? WowBTotemAuraCandidate.Capture(memory, reader, expectedPlayer) : null;
             ClickAimAction? buff = null;
@@ -341,7 +341,7 @@ internal sealed class ClickAimBuffController
         List<ClickAimAction> bar = ClickAimCombat.ReadBar(reader);
         var due = new List<ClickAimAction>();
         var seen = new HashSet<int>();
-        int preferredShield = reader.IsExperimental70862 ? PreferredShield(bar) : 0;
+        int preferredShield = reader.Uses70862Features ? PreferredShield(bar) : 0;
         bool hasSupportedAura = reader.IsExperimental70707 && bar.Exists(action => Eligible(action) && WowBInlineAuraCandidate.Supported(action.Id));
         WowBInlineAuraCandidate? aura = hasSupportedAura ? WowBInlineAuraCandidate.Capture(memory, player) : null;
         foreach (ClickAimAction action in bar)

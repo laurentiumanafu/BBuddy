@@ -19,7 +19,7 @@ class ExternalResearch(unittest.TestCase):
         checkbox = next(c for c in ET.fromstring(X).findall('.//p:CheckBox', ns) if c.get(name) == 'chkExternalAuraResearch')
         self.assertEqual(checkbox.get('IsChecked'), 'False')
         self.assertIn('includeExternalArray = false', S)
-        self.assertIn('includeExternalArray && !reader.IsExperimental70862', S)
+        self.assertIn('includeExternalArray && !reader.Uses70862Features', S)
         self.assertIn('chkExternalAuraResearch.IsChecked == true', U)
         self.assertIn('includeExternalArray: includeExternalArray', U)
         self.assertIn('if (!Stopped)', S)

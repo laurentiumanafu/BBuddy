@@ -17,7 +17,7 @@ def section(start, end):
 class DefenceScopeTests(unittest.TestCase):
     def test_bypass_is_70862_only(self):
         policy = section('    private static bool DefenceFactionAllowed(', '    private static bool TryTakeDefenceHandoff(')
-        self.assertIn('!grindMode || reader.IsExperimental70862 || WowBGrindFactions.AllowsPull', policy)
+        self.assertIn('!grindMode || reader.Uses70862Features || WowBGrindFactions.AllowsPull', policy)
 
     def test_nearby_remote_and_handoff_use_defence_policy(self):
         handoff = section('    private static bool TryTakeDefenceHandoff(', '    private static string FightDefenceWithHandoffs(')
@@ -28,21 +28,21 @@ class DefenceScopeTests(unittest.TestCase):
         self.assertIn('DefenceFactionAllowed(reader, grindMode, selected)', near)
         for unit in ('unit', 'fresh', 'readyUnit', 'selected'):
             self.assertIn(f'DefenceFactionAllowed(reader, true, {unit})', remote)
-        self.assertIn('!reader.IsExperimental70862', section('    private static bool RemoteDefenceMovementAllowed(', '    private static bool InRealCombat()'))
+        self.assertIn('!reader.Uses70862Features', section('    private static bool RemoteDefenceMovementAllowed(', '    private static bool InRealCombat()'))
 
     def test_fight_propagates_bypass_only_to_defence(self):
         handoff = section('    private static string FightDefenceWithHandoffs(', '    private static string DefendNearby(')
         fight = section('    private static string Fight(', "    /// <summary>\n    /// A unit's health straight out of its data block")
-        self.assertIn('grindMode && !reader.IsExperimental70862, remoteDefence', handoff)
+        self.assertIn('grindMode && !reader.Uses70862Features, remoteDefence', handoff)
         self.assertIn('(!defenceOnly || defenceFactionFilter) && !FactionPullStillAllowed', fight)
         self.assertEqual(10, fight.count('!defenceOnly || defenceFactionFilter, defenceOnly'))
         self.assertIn('target.UnitAddress != expectedPull.UnitAddress', fight)
         self.assertIn('target.RecordAddress != expectedPull.RecordAddress', fight)
-        self.assertIn('reader.IsExperimental70862) && GrindFactionSettings.Rules.Enabled', fight)
+        self.assertIn('reader.Uses70862Features) && GrindFactionSettings.Rules.Enabled', fight)
 
     def test_damaged_focus_uses_bounded_remote_chase(self):
         near = section('    private static string DefendNearby(', '    // Out-of-melee combat fallback.')
-        self.assertIn('reader.IsExperimental70862 && focusedDistance > GatherDefenceRadius', near)
+        self.assertIn('reader.Uses70862Features && focusedDistance > GatherDefenceRadius', near)
         self.assertIn('!Unreachable(focused.Guid) && !RemoteDefenceBlocked', near)
         self.assertIn('player, focused, focusedRemote)', near)
         fight = section('    private static string Fight(', "    /// <summary>\n    /// A unit's health straight out of its data block")
@@ -88,11 +88,11 @@ class DefenceScopeTests(unittest.TestCase):
         self.assertIn('continue; // never fall through to an unvalidated 70862 selection', near)
         self.assertIn('NearDefenceRetryMs', near)
         self.assertIn('_nearDefenceCursor = (startCandidate + candidates) % nearby.Count', near)
-        self.assertIn('reader.IsExperimental70862 ? 1 : 3', near)
+        self.assertIn('reader.Uses70862Features ? 1 : 3', near)
 
     def test_70862_preserves_damaged_voluntary_pull_and_prioritises_allow_lists(self):
         focus = section('    private static bool IsDamagedVoluntaryFocus(', '    private static bool ShouldYieldRemotePull(')
-        for guard in ('reader.IsExperimental70862', '_damagedVoluntaryTarget.Guid', 'target.UnitAddress == _damagedVoluntaryTarget.UnitAddress',
+        for guard in ('reader.Uses70862Features', '_damagedVoluntaryTarget.Guid', 'target.UnitAddress == _damagedVoluntaryTarget.UnitAddress',
                       'target.RecordAddress == _damagedVoluntaryTarget.RecordAddress', '!Unreachable(target.Guid)'):
             self.assertIn(guard, focus)
         fight = section('    private static string Fight(', "    /// <summary>\n    /// A unit's health straight out of its data block")

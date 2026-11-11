@@ -10,7 +10,7 @@ F = read('Tools/WowBBuffTests/Fixture.cs.txt')
 
 class LightningShield(unittest.TestCase):
     def test_exact_rank_build_and_unknown(self):
-        self.assertIn('reader.IsExperimental70862 && WowBLightningShield.Rank(id) != 0', B)
+        self.assertIn('reader.Uses70862Features && WowBLightningShield.Rank(id) != 0', B)
         for rank in ('324 => 1', '325 => 2', '905 => 3', '945 => 4', '8134 => 5', '10431 => 6', '10432 => 7'):
             self.assertIn(rank, B)
         for cost in ('324 => 60U', '325 => 80U', '905 => 125U', '945 => 180U', '8134 => 240U', '10431 => 305U', '10432 => 370U'):

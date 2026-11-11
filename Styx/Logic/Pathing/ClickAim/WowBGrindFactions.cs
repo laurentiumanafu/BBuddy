@@ -143,7 +143,7 @@ internal static class WowBGrindFactions
     // A test may supply a shorter deadline without changing the live default.
     internal static bool WaitForExperimentalBar(WowBReader reader, Func<bool> stopped, out string reason, int maxWaitMs = -1)
     {
-        int timeout = maxWaitMs >= 0 ? maxWaitMs : reader.IsExperimental70862 ? 60000 : 1200;
+        int timeout = maxWaitMs >= 0 ? maxWaitMs : reader.Uses70862Features ? 60000 : 1200;
         long deadline = Environment.TickCount64 + timeout;
         long nextReport = Environment.TickCount64;
         reason = "stopped or attachment changed";
@@ -153,7 +153,7 @@ internal static class WowBGrindFactions
                 _boundReader != reader || !reader.ExperimentalGrindActive)
             { reason = "stopped, safety checkpoint or attachment changed"; return false; }
             bool matched = ExperimentalBarStatus(reader, out reason);
-            if (matched && reader.IsExperimental70862)
+            if (matched && reader.Uses70862Features)
             {
                 Memory? memory = _boundMemory;
                 try
@@ -174,7 +174,7 @@ internal static class WowBGrindFactions
             if (matched) return true;
             long now = Environment.TickCount64;
             if (now >= deadline) { reason = "timed out waiting for original bar: " + reason; return false; }
-            if (reader.IsExperimental70862 && now >= nextReport)
+            if (reader.Uses70862Features && now >= nextReport)
             {
                 Logging.Write("[" + reader.ExperimentalBuildNumber + "] still holding for the original action bar; " + reason + "; STOP remains available");
                 nextReport = now + 15000;
@@ -192,14 +192,18 @@ internal static class WowBGrindFactions
     private static bool CheckExperimentalBuild(Memory memory, out string report)
     {
         if (!memory.Is64BitTarget) { report = "target is not x64"; return false; }
+        bool build70888 = ObjectManager.Wow == memory && ObjectManager.WowB?.IsExperimental70888 == true;
         bool latest = ObjectManager.Wow == memory && ObjectManager.WowB?.IsExperimental70862 == true;
         bool newest = ObjectManager.Wow == memory && ObjectManager.WowB?.IsExperimental70790 == true;
         bool newer = ObjectManager.Wow == memory && ObjectManager.WowB?.IsExperimental70755 == true;
-        ulong[] rvas = latest ? new ulong[] { 0x1F9298C, 0x1FBCA47, 0x27997E5, 0xA2B9FD }
+        ulong[] rvas = build70888 ? new ulong[] { 0x1F9299C, 0x1FBCA57, 0x2799845, 0xA2BA0D }
+                     : latest ? new ulong[] { 0x1F9298C, 0x1FBCA47, 0x27997E5, 0xA2B9FD }
                      : newest ? new ulong[] { 0x211826C, 0x2142757, 0x2931DA5, 0xA6B06D }
                      : newer ? new ulong[] { 0x1F9163C, 0x1FBB6F7, 0x2797405, 0xA2BA4D }
                              : new ulong[] { 0x2080D2C, 0x20AAF97, 0x2890305, 0xA538FD };
-        string[] expected = latest
+        string[] expected = build70888
+            ? new[] { "488D0D1D29A004E8188552FE8B93541E0000", "F2480F2A83281E0000", "448B8C86C01B0000", "488D0D2C772206488D34C1488B04C1" }
+            : latest
             ? new[] { "488D0D2D29A004E8288552FE8B93541E0000", "F2480F2A83281E0000", "448B8C86C01B0000", "488D0D3C772206488D34C1488B04C1" }
             : newest
             ? new[] { "488D0DCD3FA104E878303AFE8B93541E0000", "F2480F2A83281E0000", "448B8C86C01B0000", "488D0D4CB83706488D34C1488B04C1" }

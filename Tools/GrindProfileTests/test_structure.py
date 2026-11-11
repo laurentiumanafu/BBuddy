@@ -46,7 +46,7 @@ class ProfileIntegration(unittest.TestCase):
     def test_defence_and_unfiltered_safety_unrestricted(self):
         self.assertIn('applyFactionFilter && !ProfileTargetAllowed',r)
         self.assertIn('out near, out nearYd, out live2, out unread2, null, false)',r)
-        self.assertIn('=> !grindMode || reader.IsExperimental70862 || WowBGrindFactions.AllowsPull',r)
+        self.assertIn('=> !grindMode || reader.Uses70862Features || WowBGrindFactions.AllowsPull',r)
         self.assertIn('if (area == null) return true;',r)
         self.assertIn('if (roam == null && !ProfileMapCurrent())',r)
         self.assertIn('map != _profileSessionMap',r)

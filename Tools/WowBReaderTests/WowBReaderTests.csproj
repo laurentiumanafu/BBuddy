@@ -12,6 +12,7 @@
     <Compile Include="../../Styx/Offsets/Wow70755Offsets.cs" Link="Wow70755Offsets.cs" />
     <Compile Include="../../Styx/Offsets/Wow70790Offsets.cs" Link="Wow70790Offsets.cs" />
     <Compile Include="../../Styx/Offsets/Wow70862Offsets.cs" Link="Wow70862Offsets.cs" />
+    <Compile Include="../../Styx/Offsets/Wow70888Offsets.cs" Link="Wow70888Offsets.cs" />
     <Compile Include="../../Styx/Logic/Pathing/ClickAim/GrindFactionSettings.cs" Link="GrindFactionSettings.cs" />
     <Compile Include="../../Styx/Logic/Pathing/ClickAim/GatherBackgroundFocus.cs" Link="GatherBackgroundFocus.cs" />
     <Compile Include="../../Styx/Logic/Pathing/ClickAim/GatherSettings.cs" Link="GatherSettings.cs" />

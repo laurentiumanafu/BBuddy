@@ -117,7 +117,7 @@ namespace CopilotBuddy.UI
                         // The 70707 name is a candidate read, not login validation.
                         // Keep the existing 70291 selector behavior unchanged.
                         characterName = ClientAttachPolicy.IsExperimentalBuild(build)
-                            ? memory.ReadString64(memory.GetAbsolute64(build == ClientAttachPolicy.ExperimentalBuild70862 ? Wow70862Offsets.PlayerNamePrimary : build == ClientAttachPolicy.ExperimentalBuild70790 ? Wow70790Offsets.PlayerNamePrimary : build == ClientAttachPolicy.ExperimentalBuild70755 ? Wow70755Offsets.PlayerNamePrimary : Wow70707Offsets.PlayerNamePrimary), 32)
+                            ? memory.ReadString64(memory.GetAbsolute64(build == ClientAttachPolicy.ExperimentalBuild70888 ? Wow70888Offsets.PlayerNamePrimary : build == ClientAttachPolicy.ExperimentalBuild70862 ? Wow70862Offsets.PlayerNamePrimary : build == ClientAttachPolicy.ExperimentalBuild70790 ? Wow70790Offsets.PlayerNamePrimary : build == ClientAttachPolicy.ExperimentalBuild70755 ? Wow70755Offsets.PlayerNamePrimary : Wow70707Offsets.PlayerNamePrimary), 32)
                             : build == ObjectManager.SupportedBuildWowB &&
                               process.ProcessName.Equals("WowB", StringComparison.OrdinalIgnoreCase)
                                 ? memory.ReadString64(memory.GetAbsolute64(WowBOffsets.PlayerNamePrimary), 48)

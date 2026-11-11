@@ -227,9 +227,9 @@ internal static class WowBCombatResearch
             Memory? memory = ObjectManager.Wow;
             WowBReader? reader = ObjectManager.WowB;
             if (memory == null || reader == null || !memory.Is64BitTarget || !reader.IsExperimental70707)
-                return "Attach to a 70707, 70755, 70790 or 70862 client and enter the world first.";
-            if (includeExternalArray && !reader.IsExperimental70862)
-                return "External aura research is currently limited to 70862; uncheck it for other builds.";
+                return "Attach to a 70707, 70755, 70790, 70862 or 70888 client and enter the world first.";
+            if (includeExternalArray && !reader.Uses70862Features)
+                return "External aura research is currently limited to 70862/70888; uncheck it for other builds.";
             using var uncached = memory.TemporaryCacheState(false);
             if (!WowBGrindFactions.TraceBuild70707(memory, reader) ||
                 !reader.TryCaptureWorldSnapshot(out WowBWorldSnapshot? snapshot) || snapshot == null ||

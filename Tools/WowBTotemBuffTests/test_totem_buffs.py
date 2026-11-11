@@ -24,10 +24,10 @@ class TotemBuffs(unittest.TestCase):
         self.assertIn('{ "Strength of Earth Totem", ClickAimSpellRole.Buff }', C)
         self.assertIn('{ "Healing Stream Totem", ClickAimSpellRole.Buff }', C)
         self.assertIn('{ "Mana Spring Totem", ClickAimSpellRole.Buff }', C)
-        self.assertIn('reader.IsExperimental70862 && WowBTotemAuraCandidate.EffectForCast', B)
+        self.assertIn('reader.Uses70862Features && WowBTotemAuraCandidate.EffectForCast', B)
 
     def test_unknown_absent_and_active_are_distinct(self):
-        for item in ('!reader.IsExperimental70862', 'ReadExternalCandidate(memory, player.UnitAddress',
+        for item in ('!reader.Uses70862Features', 'ReadExternalCandidate(memory, player.UnitAddress',
                      'count != BitConverter.ToUInt32(after, 0)', 'ids.Count == count', '!ids.Add(id)',
                      'count == 0', 'ExternalMaxSlots', 'IdWithinSlot = 0xE8'):
             self.assertIn(item, A)
@@ -62,7 +62,7 @@ class TotemBuffs(unittest.TestCase):
 
     def test_ui_and_docs_are_honest(self):
         ET.fromstring(X)
-        self.assertIn('The supported 70862 totems are combat-only', X)
+        self.assertIn('The supported 70862/70888 totems are combat-only', X)
         self.assertIn('at least 10 seconds between attempts', X)
         doc = read('TOTEM_BUFFS_70862.md')
         self.assertIn('Other ranks and spells are **not** mapped', doc)

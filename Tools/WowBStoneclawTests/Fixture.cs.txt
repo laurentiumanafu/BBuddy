@@ -24,6 +24,7 @@ namespace Styx.WoWInternals {
  sealed class WowBReader {
   public struct WowBUnitFields {public uint Health,MaxHealth,Power,UnitFlags;public int? PlayerPowerTypeCandidate;}
   public bool IsExperimental70862=true, Combat=true, BarSafe=true, Ghost, MapValid=true;
+        public bool Uses70862Features => IsExperimental70862;
   public int Captures; public Action<int>? OnCapture; public uint Map=1;
   public WowBWorldSnapshot Snapshot=new(); public Dictionary<ulong,WowBUnitFields> Fields=new(); public Dictionary<ulong,uint> Factions=new();
   public bool TryReadMapId(out uint m){m=Map;return MapValid;}

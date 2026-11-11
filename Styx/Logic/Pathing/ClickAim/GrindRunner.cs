@@ -682,7 +682,7 @@ internal static class GrindRunner
         { Logging.Write("[Grind] profile faction filter could not start: " + factionError); return false; }
         Logging.Write("[Grind] profile Blackspots, vendor/trainer/mail and other directives are not executed; recorded selling remains separate.");
         Logging.Write("[Grind] profile factions override the manual roaming filter for voluntary pulls; faction IDs and hostility remain unverified. " +
-            (ObjectManager.WowB?.IsExperimental70862 == true ? "70862 combat defence prefers profile/manual allow factions, but can select the wrong NPC, including a friendly." : "Combat defence retains its existing safeguards."));
+            (ObjectManager.WowB?.Uses70862Features == true ? "70862/70888 combat defence prefers profile/manual allow factions, but can select the wrong NPC, including a friendly." : "Combat defence retains its existing safeguards."));
         WowBReader? trialReader = WowBGrindFactions.ExperimentalBoundReader;
 
         double px, py;
@@ -734,7 +734,7 @@ internal static class GrindRunner
         { Logging.Write("[Grind] faction filter could not start: " + factionError); return false; }
         Logging.Write(GrindFactionSettings.Rules.Enabled
             ? "[Grind] faction pull " + GrindFactionSettings.Rules.Mode + " filter ON: " + GrindFactionSettings.Rules.KeyText +
-              (ObjectManager.WowB?.IsExperimental70862 == true
+              (ObjectManager.WowB?.Uses70862Features == true
                   ? "; combat defence prefers allowed factions but can bypass faction and attack the wrong NPC, including a friendly"
                   : "; blocked/unknown NPCs are withheld even in defence; faction is not proof of hostility")
             : "[Grind] faction attack filter OFF; normal targeting remains active");
@@ -790,7 +790,7 @@ internal static class GrindRunner
         int budgetMs = minutes <= 0 ? int.MaxValue : minutes * 60000;
         if (trialReader != null)
             Logging.Write("[Grind] EXPERIMENTAL " + trialReader.ExperimentalBuildNumber + ": continuous faction-filtered Grind. Candidate stats, reaction, flags, hotkeys and movement remain unverified. Monitor closely; use STOP if anything is wrong.");
-        if (trialReader?.IsExperimental70862 == true && ClickAimSettings.PostHealStartAttackVk != 0)
+        if (trialReader?.Uses70862Features == true && ClickAimSettings.PostHealStartAttackVk != 0)
             Logging.Write("[Grind] post-heal Start Attack binding F" + (ClickAimSettings.PostHealStartAttackVk - 0x70 + 1).ToString(CultureInfo.InvariantCulture) +
                 " enabled; its non-toggle behavior and the swing state cannot be verified");
 
@@ -906,12 +906,12 @@ internal static class GrindRunner
                     ClickAimKeySteer.ReleaseHeld();
                     ClickAimKeySteer.ReleaseArrows(hwnd);
                     Logging.Write("[Grind] action bar changed or was unreadable; holding movement and checking the original bar before any more inputs" +
-                        (trialReader.IsExperimental70862 ? " (up to 60 seconds)" : ""));
+                        (trialReader.Uses70862Features ? " (up to 60 seconds)" : ""));
                     int nextBarDeathCheck = Environment.TickCount;
                     bool BarRecoveryStopped()
                     {
                         if (_stop || RouteRunner.StopRequested || ClickAimAbort.Requested || unchecked(Environment.TickCount - started) >= budgetMs) return true;
-                        if (trialReader.IsExperimental70862 && unchecked(Environment.TickCount - nextBarDeathCheck) >= 0)
+                        if (trialReader.Uses70862Features && unchecked(Environment.TickCount - nextBarDeathCheck) >= 0)
                         { nextBarDeathCheck = unchecked(Environment.TickCount + 1000); return CheckDeathCheckpoint(trackerOnly: true); }
                         return false;
                     }
@@ -1129,7 +1129,7 @@ internal static class GrindRunner
                     {
                         lastFightCheck = Environment.TickCount;
                         if (CheckDeathCheckpoint()) return true;
-                        if (trialReader?.IsExperimental70862 == true && !WowBGrindFactions.Experimental70707BarSafe(trialReader))
+                        if (trialReader?.Uses70862Features == true && !WowBGrindFactions.Experimental70707BarSafe(trialReader))
                         { barInterrupt = true; return true; }
                         if (VendorDue()) { vendorInterrupt = true; return true; }
                         if (FightNeeded(hwnd, SearchYd)) return true;
@@ -1520,7 +1520,7 @@ internal static class GrindRunner
         /* Cleared on entry, not only on the scan below: a failed read must not leave a stale
          * "the area is clear" behind for the hotspot loop to act on. */
         _scanWasClear = false;
-        if (trialReader?.IsExperimental70862 == true && !WowBGrindFactions.Experimental70707BarSafe(trialReader))
+        if (trialReader?.Uses70862Features == true && !WowBGrindFactions.Experimental70707BarSafe(trialReader))
         {
             ClickAimKeySteer.ReleaseHeld();
             _combatHold = true;
@@ -2302,8 +2302,8 @@ internal static class GrindRunner
             ? key.ToString(CultureInfo.InvariantCulture) : "unreadable";
         Logging.Write("[Grind] " + (defence ? "defensive" : "voluntary") + " target " + unit.Guid +
             " faction key " + observed + "; filter " + GrindFactionSettings.Rules.Mode + " " + GrindFactionSettings.Rules.KeyText +
-            (defence && reader?.IsExperimental70862 == true
-                ? "; 70862 defence bypasses faction; attacker and hostility unverified"
+            (defence && reader?.Uses70862Features == true
+                ? "; 70862/70888 defence bypasses faction; attacker and hostility unverified"
                 : "; attack checks will re-read identity, selection and key"));
     }
 
@@ -2497,7 +2497,7 @@ internal static class GrindRunner
         while (!_stop && !_vendorDue && unchecked(Environment.TickCount - dwellStart) < HotspotDwellMs)
         {
             WowBReader? barReader = WowBGrindFactions.ExperimentalBoundReader;
-            if (barReader?.IsExperimental70862 == true && !WowBGrindFactions.Experimental70707BarSafe(barReader)) break;
+            if (barReader?.Uses70862Features == true && !WowBGrindFactions.Experimental70707BarSafe(barReader)) break;
             if (VendorDue()) break;
             string report;
             if (TryEngage(hwnd, out report))
@@ -2924,7 +2924,7 @@ internal static class GrindRunner
         {
             if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested || _vendorDue ||
                 ObjectManager.WowB != reader || !reader.ExperimentalGrindActive ||
-                (reader.IsExperimental70862 && !WowBGrindFactions.Experimental70707BarSafe(reader)) ||
+                (reader.Uses70862Features && !WowBGrindFactions.Experimental70707BarSafe(reader)) ||
                 !RecentLoot.Any(Environment.TickCount) || CheckDeathCheckpoint() ||
                 !TryReadGatherCombat(out bool fighting) || fighting || VendorDue()) return;
             string loot = LootNearby(hwnd, 3, recentOnly: true);
@@ -3311,7 +3311,7 @@ internal static class GrindRunner
         WowBGuid routePlayer = _vendorAutoPlayer;
         GreenMagic.Memory? routeMemory = _vendorAutoMemory;
         RouteRunner.ShouldInterrupt = () => !TryReadGatherCombat(out bool fighting) || fighting ||
-            (vendorReader.IsExperimental70862 && !WowBGrindFactions.Experimental70707BarSafe(vendorReader)) ||
+            (vendorReader.Uses70862Features && !WowBGrindFactions.Experimental70707BarSafe(vendorReader)) ||
             ObjectManager.WowB != vendorReader || !vendorReader.TryReadMapId(out uint routeMap) || routeMap != currentMap ||
             (automaticTrip && (!ClickAimSettings.AutoSell || routeMemory == null ||
                 !AutoVendorIdentityMatches(vendorReader, routeMemory, routePlayer)));
@@ -3525,7 +3525,7 @@ internal static class GrindRunner
         if (_stop || ClickAimAbort.Requested || _vendorDue || !TryReadGatherCombat(out bool fighting) || fighting) return false;
         var memory = ObjectManager.Wow; var reader = ObjectManager.WowB;
         if (memory == null || reader == null ||
-            (reader.IsExperimental70862 && !WowBGrindFactions.Experimental70707BarSafe(reader)) ||
+            (reader.Uses70862Features && !WowBGrindFactions.Experimental70707BarSafe(reader)) ||
             !reader.TryReadMapId(out uint map) || point.TownMap != map ||
             !Capture(out WowBWorldSnapshot? snap) || snap == null || !snap.TryGetLocalPlayer(out player) ||
             !snap.TryGetUnit(original.Guid, out npc) || npc.RecordAddress != original.RecordAddress || npc.UnitAddress != original.UnitAddress ||
@@ -3600,7 +3600,7 @@ internal static class GrindRunner
                         out WowBObservedUnit corpse, out WowBObservedUnit player, out double distance)) return false;
                 // Already inside the exact 3D click guard? Do not calibrate turn
                 // keys or walk closer merely to meet the smaller approach target.
-                if (reader.IsExperimental70862 && RecentLootInReach(corpse, player)) return true;
+                if (reader.Uses70862Features && RecentLootInReach(corpse, player)) return true;
                 if (distance <= RecentLootApproachYd)
                 {
                     if (!RecentLootInReach(corpse, player))
@@ -3668,7 +3668,7 @@ internal static class GrindRunner
 
         // 70862 recent corpses first get a short, guarded on-screen probe
         // without turning. Nearby bodies often need no rotation at all.
-        bool fastRecentProbe = recentOnly && lootReader?.IsExperimental70862 == true && recentMemory != null && recentSafe != null;
+        bool fastRecentProbe = recentOnly && lootReader?.Uses70862Features == true && recentMemory != null && recentSafe != null;
         if (!fastRecentProbe)
             ClickAimKeySteer.Face(corpse.Location.X, corpse.Location.Y, hwnd, 30.0, 4);
 
@@ -4197,7 +4197,7 @@ internal static class GrindRunner
         WowBReader? reader = ObjectManager.WowB;
         GreenMagic.Memory? memory = ObjectManager.Wow;
         if (reader == null || memory == null ||
-            (reader.IsExperimental70862 && !WowBGrindFactions.Experimental70707BarSafe(reader))) return false;
+            (reader.Uses70862Features && !WowBGrindFactions.Experimental70707BarSafe(reader))) return false;
         try
         {
             using var uncached = memory.TemporaryCacheState(false);
@@ -4273,7 +4273,7 @@ internal static class GrindRunner
     }
 
     private static bool IsDamagedVoluntaryFocus(WowBReader reader, WowBObservedUnit target)
-        => reader.IsExperimental70862 && !_damagedVoluntaryTarget.Guid.IsEmpty &&
+        => reader.Uses70862Features && !_damagedVoluntaryTarget.Guid.IsEmpty &&
            target.Guid == _damagedVoluntaryTarget.Guid && target.UnitAddress == _damagedVoluntaryTarget.UnitAddress &&
            target.RecordAddress == _damagedVoluntaryTarget.RecordAddress && !Unreachable(target.Guid);
 
@@ -4314,12 +4314,12 @@ internal static class GrindRunner
     // 70862: the user explicitly chose a best-effort defence even for blocked or
     // unreadable faction keys. Combat state and TAB do not identify the attacker.
     private static bool DefenceFactionAllowed(WowBReader reader, bool grindMode, WowBObservedUnit unit)
-        => !grindMode || reader.IsExperimental70862 || WowBGrindFactions.AllowsPull(reader, unit, out _);
+        => !grindMode || reader.Uses70862Features || WowBGrindFactions.AllowsPull(reader, unit, out _);
 
     // Both sources are explicit allow lists. A match is only a priority hint:
     // faction keys cannot establish hostility, ownership or attacker identity.
     private static bool DefencePreferred(WowBReader reader, WowBObservedUnit unit)
-        => reader.IsExperimental70862 && WowBGrindFactions.TryReadBoundKey(reader, unit, out uint key) &&
+        => reader.Uses70862Features && WowBGrindFactions.TryReadBoundKey(reader, unit, out uint key) &&
            (GrindFactionSettings.Rules.ContainsAllowedKey(key) || _defenceManualRules.ContainsAllowedKey(key));
 
     private static List<WowBObservedUnit> PreferredDefenceCandidates(WowBReader reader, WowBWorldSnapshot snap,
@@ -4349,7 +4349,7 @@ internal static class GrindRunner
         WowBObservedUnit player, WowBObservedUnit target)
     {
         if (IsDamagedVoluntaryFocus(reader, target)) return false;
-        if (reader.IsExperimental70862 && DefencePreferred(reader, target))
+        if (reader.Uses70862Features && DefencePreferred(reader, target))
             return PreferredDefenceCandidates(reader, snap, player, target.Guid, GatherDefenceRadius, true).Count > 0;
         return HasNearbyOtherNpc(snap, player, target.Guid, reader);
     }
@@ -4363,7 +4363,7 @@ internal static class GrindRunner
     {
         player = default; selected = default;
         GreenMagic.Memory? memory = ObjectManager.Wow;
-        if (!reader.IsExperimental70862 || memory == null || ObjectManager.WowB != reader ||
+        if (!reader.Uses70862Features || memory == null || ObjectManager.WowB != reader ||
             _stop || ClickAimAbort.Requested || RouteRunner.StopRequested) return false;
         try
         {
@@ -4423,7 +4423,7 @@ internal static class GrindRunner
             !TryReadGatherCombat(out bool fighting) || !fighting ||
             !Capture(out WowBWorldSnapshot? snap) || snap == null ||
             !snap.TryGetLocalPlayer(out player) || !snap.TryGetSelectedTarget(out selected)) return false;
-        if (reader.IsExperimental70862 && !DefencePreferred(reader, selected) &&
+        if (reader.Uses70862Features && !DefencePreferred(reader, selected) &&
             PreferredDefenceCandidates(reader, snap, player, selected.Guid, RemoteDefenceRadius, grindMode).Count > 0) return false;
         bool fieldsValid = reader.TryGetUnitFields(selected.UnitAddress, out WowBReader.WowBUnitFields fields) &&
             DefenceFieldsValid(fields.Health, fields.UnitFlags, grindMode && _notViable.Contains(selected.Guid));
@@ -4444,7 +4444,7 @@ internal static class GrindRunner
         for (int count = 0; count < 8 && !_stop && !ClickAimAbort.Requested; count++)
         {
             report = Fight(hwnd, player.Location.X, player.Location.Y, false, true, target.Guid, target,
-                           grindMode && !reader.IsExperimental70862, remoteDefence);
+                           grindMode && !reader.Uses70862Features, remoteDefence);
             remoteDefence = false; // changed selections must pass the ordinary nearby handoff limit
             if (_defenceHandoffGuid.IsEmpty || _stop || ClickAimAbort.Requested || RouteRunner.StopRequested) return report;
             if (CheckDeathCheckpoint(trackerOnly: true)) return "death/ghost safety check; fight halted for recovery if a checkpoint was captured";
@@ -4479,7 +4479,7 @@ internal static class GrindRunner
         // Check a current nearby selection before scanning or turning, including
         // during the retry delay. Selected/proximity do not establish hostility.
         string selectedReport;
-        if (reader.IsExperimental70862 && TryFightSelectedNearby(hwnd, reader, grindMode, "already-selected", out selectedReport, RemoteDefenceRadius, true))
+        if (reader.Uses70862Features && TryFightSelectedNearby(hwnd, reader, grindMode, "already-selected", out selectedReport, RemoteDefenceRadius, true))
         { engaged = true; return selectedReport; }
         if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested || !TryReadGatherCombat(out fighting) || !fighting)
             return "combat ended or state unreadable";
@@ -4517,8 +4517,8 @@ internal static class GrindRunner
         // radius but outside the current spell's range. On 70862 use the same
         // bounded remote movement guards as the 12–40 yd defence path, rather
         // than entering a near-only fight that immediately rejects and repeats.
-        bool focusedRemote = reader.IsExperimental70862 && focusedDistance > GatherDefenceRadius;
-        if ((!reader.IsExperimental70862 || focusedRemote) &&
+        bool focusedRemote = reader.Uses70862Features && focusedDistance > GatherDefenceRadius;
+        if ((!reader.Uses70862Features || focusedRemote) &&
             _focusedDamageObserved && !_focusedFightGuid.IsEmpty && hasFocused && focused.Guid == _focusedFightGuid &&
             !focused.IsLocalPlayer && !focused.HasPlayerVtable && double.IsFinite(focusedDistance) &&
             focusedDistance <= ClickAimCombat.CasterRangeYd &&
@@ -4526,7 +4526,7 @@ internal static class GrindRunner
             reader.TryGetUnitFields(focused.UnitAddress, out WowBReader.WowBUnitFields focusFields) &&
             DefenceFieldsValid(focusFields.Health, focusFields.UnitFlags, grindMode && _notViable.Contains(focused.Guid)) &&
             DefenceFactionAllowed(reader, grindMode, focused) &&
-            (!reader.IsExperimental70862 || IsDamagedVoluntaryFocus(reader, focused) || DefencePreferred(reader, focused) ||
+            (!reader.Uses70862Features || IsDamagedVoluntaryFocus(reader, focused) || DefencePreferred(reader, focused) ||
              PreferredDefenceCandidates(reader, snap, player, focused.Guid, RemoteDefenceRadius, grindMode).Count == 0))
         {
             Logging.Write("[Grind] continuing the already damaged selected target " + focused.Guid + "; attacker identity remains unknown");
@@ -4536,7 +4536,7 @@ internal static class GrindRunner
             finally { ClickAimKeySteer.ReleaseHeld(); }
         }
         bool preferredSearched = false;
-        if (reader.IsExperimental70862)
+        if (reader.Uses70862Features)
         {
             List<WowBObservedUnit> preferred = PreferredDefenceCandidates(reader, snap, player, default, RemoteDefenceRadius, grindMode);
             if (preferred.Count > 0)
@@ -4578,7 +4578,7 @@ internal static class GrindRunner
         }
         // Let TAB offer a candidate before rotating. Validate its actual
         // selection rather than assuming it corresponds to a pool entry.
-        if (reader.IsExperimental70862)
+        if (reader.Uses70862Features)
         {
             if (nearby.Count > 0)
             {
@@ -4610,22 +4610,22 @@ internal static class GrindRunner
                 inRange, unreadable, dead, flagged, refused, factionBlocked,
                 grindMode && GrindFactionSettings.Rules.Enabled ? "attacker identity is unknown; defence selection is heuristic" : "attacker may be ranged or missing from the snapshot");
         }
-        int candidates = Math.Min(nearby.Count, reader.IsExperimental70862 ? 3 : 6);
-        int startCandidate = reader.IsExperimental70862 ? _nearDefenceCursor % nearby.Count : 0;
-        if (reader.IsExperimental70862) _nearDefenceCursor = (startCandidate + candidates) % nearby.Count;
+        int candidates = Math.Min(nearby.Count, reader.Uses70862Features ? 3 : 6);
+        int startCandidate = reader.Uses70862Features ? _nearDefenceCursor % nearby.Count : 0;
+        if (reader.Uses70862Features) _nearDefenceCursor = (startCandidate + candidates) % nearby.Count;
         for (int i = 0; i < candidates && !_stop && !ClickAimAbort.Requested && !RouteRunner.StopRequested; i++)
         {
-            if ((reader.IsExperimental70862 && (ObjectManager.WowB != reader || ObjectManager.Wow == null)) ||
+            if ((reader.Uses70862Features && (ObjectManager.WowB != reader || ObjectManager.Wow == null)) ||
                 !TryReadGatherCombat(out fighting) || !fighting) return "combat ended or state unreadable";
             WowBObservedUnit candidate = nearby[(startCandidate + i) % nearby.Count];
             // Turning is only an aim for TAB. Pool proximity/flags do NOT prove hostility.
             if (!ClickAimKeySteer.Face(candidate.Location.X, candidate.Location.Y, hwnd, 30.0, 6)) continue;
-            if (reader.IsExperimental70862 && TryFightSelectedNearby(hwnd, reader, grindMode, "already-selected", out string faceReport))
+            if (reader.Uses70862Features && TryFightSelectedNearby(hwnd, reader, grindMode, "already-selected", out string faceReport))
             { engaged = true; return faceReport; }
-            int maxTries = reader.IsExperimental70862 ? 1 : 3;
+            int maxTries = reader.Uses70862Features ? 1 : 3;
             for (int tries = 0; tries < maxTries && !_stop && !ClickAimAbort.Requested && !RouteRunner.StopRequested; tries++)
             {
-                if ((reader.IsExperimental70862 && (ObjectManager.WowB != reader || ObjectManager.Wow == null)) ||
+                if ((reader.Uses70862Features && (ObjectManager.WowB != reader || ObjectManager.Wow == null)) ||
                     !TryReadGatherCombat(out fighting) || !fighting) return "combat ended or state unreadable";
                 WowBGuid before = reader.ReadTargetGuid();
                 // Reuse an already-selected nearby candidate instead of selecting
@@ -4638,7 +4638,7 @@ internal static class GrindRunner
                     if (ClickAimAbort.Wait(TabSettleMs)) return "stopped";
                 }
                 if (!TryReadGatherCombat(out fighting) || !fighting) return "combat ended or state unreadable";
-                if (reader.IsExperimental70862)
+                if (reader.Uses70862Features)
                 {
                     if (TryFightSelectedNearby(hwnd, reader, grindMode, "TAB-selected", out string tabReport))
                     { engaged = true; return tabReport; }
@@ -4664,7 +4664,7 @@ internal static class GrindRunner
                 finally { ClickAimKeySteer.ReleaseHeld(); }
             }
         }
-        if (reader.IsExperimental70862) _nearDefenceLast = Environment.TickCount;
+        if (reader.Uses70862Features) _nearDefenceLast = Environment.TickCount;
         return "no eligible nearby NPC selected by the defensive TAB check; holding position";
     }
 
@@ -4768,7 +4768,7 @@ internal static class GrindRunner
     {
         if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested || ObjectManager.WowB != reader || ObjectManager.Wow != memory ||
             !TryReadGatherCombat(out bool fighting) || !fighting ||
-            !FightAttackInputAllowed(reader, memory, expected.Guid, expected, !reader.IsExperimental70862) ||
+            !FightAttackInputAllowed(reader, memory, expected.Guid, expected, !reader.Uses70862Features) ||
             !Capture(out WowBWorldSnapshot? current) || current == null || !current.TryGetLocalPlayer(out WowBObservedUnit player) ||
             !current.TryGetSelectedTarget(out WowBObservedUnit selected) || selected.Guid != expected.Guid ||
             selected.UnitAddress != expected.UnitAddress || selected.RecordAddress != expected.RecordAddress ||
@@ -4779,7 +4779,7 @@ internal static class GrindRunner
         if (!double.IsFinite(distance) || distance > RemoteDefenceRadius + 3.0 ||
             (distance > GatherDefenceRadius && RemoteDefenceBlocked(reader, current, player, selected))) return false;
         return !_stop && !ClickAimAbort.Requested && !RouteRunner.StopRequested &&
-            TryReadGatherCombat(out fighting) && fighting && FightAttackInputAllowed(reader, memory, expected.Guid, expected, !reader.IsExperimental70862);
+            TryReadGatherCombat(out fighting) && fighting && FightAttackInputAllowed(reader, memory, expected.Guid, expected, !reader.Uses70862Features);
     }
 
     // A damaged voluntary 70862 pull can keep closing in combat, but each
@@ -5404,7 +5404,7 @@ internal static class GrindRunner
         snapshot = null; player = default;
         if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested || CheckDeathCheckpoint(trackerOnly: true) ||
             ObjectManager.Wow != memory || ObjectManager.WowB != reader || memory.WindowHandle != hwnd ||
-            !reader.IsExperimental70862 || !WowBGrindFactions.Experimental70707BarSafe(reader) ||
+            !reader.Uses70862Features || !WowBGrindFactions.Experimental70707BarSafe(reader) ||
             !TryReadGatherCombat(out bool fighting) || !fighting || !targetSafe() ||
             !reader.TryReadMapId(out uint currentMap) || currentMap != map ||
             !reader.TryCaptureWorldSnapshot(out snapshot) || snapshot == null ||
@@ -5427,7 +5427,7 @@ internal static class GrindRunner
     private static bool TryStoneclaw(IntPtr hwnd, WowBReader reader, GreenMagic.Memory memory,
         WowBObservedUnit expectedPlayer, WowBObservedUnit expectedTarget, Func<bool> targetSafe)
     {
-        if (!reader.IsExperimental70862 || _stop || ClickAimAbort.Requested || RouteRunner.StopRequested ||
+        if (!reader.Uses70862Features || _stop || ClickAimAbort.Requested || RouteRunner.StopRequested ||
             Environment.TickCount64 < _stoneclawNextAttempt) return false;
         ProfileGrindArea? area = _activeProfileArea;
         if (area == null || !GrindFactionRules.TryCreate(GrindFactionMode.Allow, area.Factions, "",
@@ -5469,7 +5469,7 @@ internal static class GrindRunner
         WowBObservedUnit expectedPlayer, WowBObservedUnit expectedTarget, uint expectedMap,
         bool defenceOnly, bool defenceFactionFilter, double maxDistance, string reason)
     {
-        if (!reader.IsExperimental70862 || !ClickAimSettings.UseKeyOneStartAttackMacro ||
+        if (!reader.Uses70862Features || !ClickAimSettings.UseKeyOneStartAttackMacro ||
             expectedPlayer.Guid.IsEmpty || expectedTarget.Guid.IsEmpty || expectedMap == uint.MaxValue ||
             CheckDeathCheckpoint(trackerOnly: true)) return false;
         try
@@ -5592,7 +5592,7 @@ internal static class GrindRunner
         Styx.WoWInternals.WowBReader? reader = ObjectManager.WowB;
         GreenMagic.Memory? fightMemory = ObjectManager.Wow;
         if (reader == null || fightMemory == null) return "client attachment unavailable; fight withheld";
-        keyOneMacro = reader.IsExperimental70862 && ClickAimSettings.UseKeyOneStartAttackMacro;
+        keyOneMacro = reader.Uses70862Features && ClickAimSettings.UseKeyOneStartAttackMacro;
         if (keyOneMacro)
         {
             postHealStartKey = 0; // never combine two independently configured start keys
@@ -5653,7 +5653,7 @@ internal static class GrindRunner
         int lastDeathCheck = unchecked(Environment.TickCount - 500);
         while (!_stop && !ClickAimAbort.Requested && unchecked(Environment.TickCount - started) < EngageTimeoutMs)
         {
-            if (reader.IsExperimental70862 && !WowBGrindFactions.Experimental70707BarSafe(reader))
+            if (reader.Uses70862Features && !WowBGrindFactions.Experimental70707BarSafe(reader))
             {
                 ClickAimKeySteer.ReleaseHeld();
                 return "action bar changed or became unreadable during fight; holding for the original bar";
@@ -6107,7 +6107,7 @@ internal static class GrindRunner
                 // user configured a separate Start Attack binding, allow one
                 // guarded attempt after a heal with observed net effect; never
                 // re-press the normal toggling Attack key on that assumption.
-                if (ClickAimHealPolicy.QueuePostHealStartAttack(reader.IsExperimental70862, postHealStartKey,
+                if (ClickAimHealPolicy.QueuePostHealStartAttack(reader.Uses70862Features, postHealStartKey,
                     attackPressed || lastMeleeClickMs != 0, myHealth, afterHealth, powerBeforeHeal, powerAfterHeal))
                 {
                     postHealStartPending = true;
@@ -6160,7 +6160,7 @@ internal static class GrindRunner
 
             // Defensive Stoneclaw has priority over ordinary Earth buffs. The
             // 70862-only proximity heuristic counts active Grind profile factions.
-            if (reader.IsExperimental70862 && unchecked(Environment.TickCount - lastStoneclawCheckMs) >= 1000 &&
+            if (reader.Uses70862Features && unchecked(Environment.TickCount - lastStoneclawCheckMs) >= 1000 &&
                 (lastCastMs == 0 || unchecked(Environment.TickCount - lastCastMs) >= ClickAimCombat.CastSettleMs) &&
                 (lastHealMs == 0 || unchecked(Environment.TickCount - lastHealMs) >= ClickAimCombat.CastSettleMs))
             {
@@ -6181,7 +6181,7 @@ internal static class GrindRunner
             // stopping for a multi-key totem burst at the pull location.
             // Healing and the Stoneclaw safety heuristic above retain priority.
             bool shockAutoPlan = ClickAimClassRotation.ShockAutoPlan(rotation, auto, keyOneMacro);
-            bool closingShockTarget = reader.IsExperimental70862 && shockAutoPlan &&
+            bool closingShockTarget = reader.Uses70862Features && shockAutoPlan &&
                 _focusedFightGuid == target.Guid && _focusedDamageObserved && d > MeleeEngageYd;
 
             // Optional observed-expired self-only buffs. The 70862 path also
@@ -6449,7 +6449,7 @@ internal static class GrindRunner
                         manaAfter = mine.Power;
                     WowBObservedUnit t3;
                     if (afterCast.TryGetSelectedTarget(out t3) && t3.Guid == defenceTarget &&
-                        (!reader.IsExperimental70862 || (t3.UnitAddress == expectedPull.UnitAddress &&
+                        (!reader.Uses70862Features || (t3.UnitAddress == expectedPull.UnitAddress &&
                          t3.RecordAddress == expectedPull.RecordAddress && !t3.IsLocalPlayer && !t3.HasPlayerVtable)))
                         mobAfter = Health(t3);
 
@@ -6473,7 +6473,7 @@ internal static class GrindRunner
                                 ? "[Grind] after {0}, mob health {1} -> {2} (mana {3} -> {4}); damage source and swing state unverified"
                                 : "[Grind] {0} does damage: mob health {1} -> {2} (mana {3} -> {4})",
                             castDamage!.Name, lastHealth, mobAfter, manaBefore, manaAfter));
-                        if (reader.IsExperimental70862 && mobAfter == 0 && mobBeforeHealth > 0)
+                        if (reader.Uses70862Features && mobAfter == 0 && mobBeforeHealth > 0)
                         {
                             if (_focusedFightGuid == defenceTarget) _focusedFightGuid = default;
                             return "killed with " + string.Join(", ", worked.ToArray());
@@ -6685,7 +6685,7 @@ internal static class GrindRunner
                 }
             }
             else if (!keyOneMacro && !swinging && !pressPending && !preserveAttackAfterHeal
-                     && !((!defenceOnly || defenceFactionFilter || reader.IsExperimental70862) && GrindFactionSettings.Rules.Enabled)
+                     && !((!defenceOnly || defenceFactionFilter || reader.Uses70862Features) && GrindFactionSettings.Rules.Enabled)
                      && unchecked(Environment.TickCount - lastMeleeClickMs) >= MeleeClickMs)
             {
                 lastMeleeClickMs = Environment.TickCount;
@@ -6698,7 +6698,7 @@ internal static class GrindRunner
                 }
             }
 
-            if (!keyOneMacro && auto == null && !noSafeAutoLogged && (!defenceOnly || defenceFactionFilter || reader.IsExperimental70862) && GrindFactionSettings.Rules.Enabled)
+            if (!keyOneMacro && auto == null && !noSafeAutoLogged && (!defenceOnly || defenceFactionFilter || reader.Uses70862Features) && GrindFactionSettings.Rules.Enabled)
             {
                 noSafeAutoLogged = true;
                 Logging.Write("[Grind] faction filter: unverified melee right-click withheld; put Attack on an action bar to start auto-attack safely");
@@ -6744,11 +6744,11 @@ internal static class GrindRunner
                     ? "target gone while attacking and nothing had landed"
                     : "killed or fled while attacking; what landed: " + string.Join(", ", worked.ToArray());
 
-            if (reader.IsExperimental70862 && (target.Guid != defenceTarget || target.IsLocalPlayer || target.HasPlayerVtable ||
+            if (reader.Uses70862Features && (target.Guid != defenceTarget || target.IsLocalPlayer || target.HasPlayerVtable ||
                 target.UnitAddress != expectedPull.UnitAddress || target.RecordAddress != expectedPull.RecordAddress))
                 return YieldForTargetChange(reader, fightMemory, defenceTarget);
             health = Health(target);
-            if (reader.IsExperimental70862 && lastHealth > 0 && health == 0)
+            if (reader.Uses70862Features && lastHealth > 0 && health == 0)
             {
                 if (_focusedFightGuid == defenceTarget) _focusedFightGuid = default;
                 return "killed" + (worked.Count == 0 ? "" : " with " + string.Join(", ", worked.ToArray()));

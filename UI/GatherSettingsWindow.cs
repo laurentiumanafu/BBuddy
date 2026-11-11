@@ -22,7 +22,7 @@ namespace CopilotBuddy.UI
         private readonly CheckBox _roam = new CheckBox { Content = "Roam on the mesh when no profile is loaded", Margin = new Thickness(0, 10, 0, 4) };
         private readonly CheckBox _grind = new CheckBox { Content = "Gather nearby resources while grinding", Margin = new Thickness(0, 10, 0, 4) };
         private readonly CheckBox _ignoreMonsters = new CheckBox { Content = "Ignore monsters while travelling; defend at nodes (GatherBuddy)", Margin = new Thickness(0, 10, 0, 4) };
-        private readonly CheckBox _movementSkill = new CheckBox { Content = "Use movement skill when travelling (GatherBuddy, 70862)", Margin = new Thickness(0, 10, 0, 4) };
+        private readonly CheckBox _movementSkill = new CheckBox { Content = "Use movement skill when travelling (GatherBuddy, 70862/70888)", Margin = new Thickness(0, 10, 0, 4) };
         private readonly TextBox _movementSlot = new TextBox { Width = 90, HorizontalAlignment = HorizontalAlignment.Left };
         private readonly TextBox _roamRadius = new TextBox { Width = 90, HorizontalAlignment = HorizontalAlignment.Left };
         private readonly TextBox _miningSkill = new TextBox { Width = 90, HorizontalAlignment = HorizontalAlignment.Left };
@@ -71,7 +71,7 @@ namespace CopilotBuddy.UI
             panel.Children.Add(_roamRadius);
             panel.Children.Add(new TextBlock { Text = "Experimental: zone borders are unknown. Combat, resources and route detours can go beyond this radius or into another zone. Loaded profiles take priority.", TextWrapping = TextWrapping.Wrap });
             panel.Children.Add(_ignoreMonsters);
-            panel.Children.Add(new TextBlock { Text = "Standalone GatherBuddy ignores attackers while travelling. At an eligible node in gathering range it defends until combat ends, then rechecks the node. Combat during gathering also triggers defence. On 70862 the existing defence heuristic may select the wrong NPC. The character can still die; STOP and death recovery still apply. Grind is unchanged.", TextWrapping = TextWrapping.Wrap });
+            panel.Children.Add(new TextBlock { Text = "Standalone GatherBuddy ignores attackers while travelling. At an eligible node in gathering range it defends until combat ends, then rechecks the node. Combat during gathering also triggers defence. On 70862/70888 the existing defence heuristic may select the wrong NPC. The character can still die; STOP and death recovery still apply. Grind is unchanged.", TextWrapping = TextWrapping.Wrap });
             panel.Children.Add(_movementSkill);
             panel.Children.Add(new TextBlock { Text = "First-bar movement skill slot (1–12)" });
             panel.Children.Add(_movementSlot);
@@ -92,7 +92,7 @@ namespace CopilotBuddy.UI
         private void UpdateBeastCount()
         {
             _beastCount.Text = "Confirmed entry candidates: " + WowBSkinning.Count(false) + " for 70291, "
-                + WowBSkinning.Count(true) + " shared by 70707/70755/70790/70862. The entry field is experimental.";
+                + WowBSkinning.Count(true) + " shared by 70707/70755/70790/70862/70888. The entry field is experimental.";
         }
 
         private void RememberBeastClick(object sender, RoutedEventArgs e)

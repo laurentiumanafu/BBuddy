@@ -12,8 +12,8 @@ def sec(text, start, end):
 class NearbyLootTurn(unittest.TestCase):
     def test_nearby_3d_reach_skips_approach_calibration(self):
         a = sec(G, 'private static bool ApproachRecentCorpse(', 'private static int TryLootOne(')
-        self.assertLess(a.index('RecentCorpseCurrent('), a.index('reader.IsExperimental70862 && RecentLootInReach(corpse, player)'))
-        self.assertLess(a.index('reader.IsExperimental70862 && RecentLootInReach(corpse, player)'), a.index('ChaseStep('))
+        self.assertLess(a.index('RecentCorpseCurrent('), a.index('reader.Uses70862Features && RecentLootInReach(corpse, player)'))
+        self.assertLess(a.index('reader.Uses70862Features && RecentLootInReach(corpse, player)'), a.index('ChaseStep('))
         self.assertIn('quickLootTurnCalibration: true', a)
         reach = sec(G, 'private static bool RecentLootInReach(', 'private static bool ApproachRecentCorpse(')
         self.assertIn('Math.Sqrt(dx * dx + dy * dy + dz * dz)', reach)
@@ -21,7 +21,7 @@ class NearbyLootTurn(unittest.TestCase):
 
     def test_quick_probe_before_turn_safe_fallback(self):
         body = sec(G, 'private static int TryLootOne(', '    // Skinning is separate')
-        self.assertIn('recentOnly && lootReader?.IsExperimental70862 == true', body)
+        self.assertIn('recentOnly && lootReader?.Uses70862Features == true', body)
         self.assertIn('if (!fastRecentProbe)\n            ClickAimKeySteer.Face', body)
         self.assertIn('recentSafe, 9, out searchExhausted', body)
         turn = body.index('ClickAimKeySteer.Face(beforeTurnCorpse')
@@ -46,11 +46,11 @@ class NearbyLootTurn(unittest.TestCase):
     def test_dead_target_exits_before_any_more_facing(self):
         after = sec(G, 'WowBWorldSnapshot? afterSwing;', '            if (health >= 0 && lastHealth >= 0 && health < lastHealth)')
         for item in ('target.Guid != defenceTarget', 'target.UnitAddress != expectedPull.UnitAddress', 'target.RecordAddress != expectedPull.RecordAddress',
-                     'reader.IsExperimental70862 && lastHealth > 0 && health == 0', 'return "killed"'):
+                     'reader.Uses70862Features && lastHealth > 0 && health == 0', 'return "killed"'):
             self.assertIn(item, after)
         cast = sec(G, 'WowBObservedUnit t3;', '                        lastHealth = mobAfter;')
         self.assertIn('t3.UnitAddress == expectedPull.UnitAddress', cast)
         self.assertIn('t3.RecordAddress == expectedPull.RecordAddress', cast)
-        self.assertIn('reader.IsExperimental70862 && mobAfter == 0 && mobBeforeHealth > 0', cast)
+        self.assertIn('reader.Uses70862Features && mobAfter == 0 && mobBeforeHealth > 0', cast)
 
 if __name__ == '__main__': unittest.main()

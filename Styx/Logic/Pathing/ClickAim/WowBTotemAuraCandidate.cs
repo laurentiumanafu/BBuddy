@@ -5,7 +5,7 @@ using Styx.WoWInternals;
 
 namespace Styx.Logic.Pathing;
 
-// Experimental 70862 only. This observes effects on the player, not totem
+// Experimental 70862/70888; observed only on 70862. This observes effects on the player, not totem
 // existence. The mappings are limited to the ranks suggested by the user's
 // single-totem/range traces and published spell tables, not all totem ranks.
 internal sealed class WowBTotemAuraCandidate
@@ -46,7 +46,7 @@ internal sealed class WowBTotemAuraCandidate
 
     internal static WowBTotemAuraCandidate? Capture(Memory memory, WowBReader reader, WowBObservedUnit player)
     {
-        if (!reader.IsExperimental70862 || player.Guid.IsEmpty || player.UnitAddress < 0x10000 ||
+        if (!reader.Uses70862Features || player.Guid.IsEmpty || player.UnitAddress < 0x10000 ||
             player.UnitAddress > 0x00007FFFFFFFFFFFUL - (ulong)(ActiveCountOffset + 4)) return null;
         try
         {

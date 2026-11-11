@@ -31,7 +31,7 @@ assert 'remoteDefence = false; // changed selections' in g
 assert chase.count('combatMoveAllowed != null && !combatMoveAllowed()') >= 2
 assert 'RouteRunner.TryCombatMeshPath' in chase and 'no complete validated mesh path' in chase
 assert '(!TryReadGatherCombat(out bool fighting) || !fighting)' in fight
-assert 'grindMode && !reader.IsExperimental70862, remoteDefence' in g
+assert 'grindMode && !reader.Uses70862Features, remoteDefence' in g
 assert 'FactionPullStillAllowed(ObjectManager.WowB, expectedPull, target)' in fight
 assert 'FactionPullStillAllowed(reader, expectedPull, target)' in fight
 assert fight.count('!defenceOnly || defenceFactionFilter, defenceOnly') == 10

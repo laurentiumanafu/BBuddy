@@ -34,6 +34,7 @@ namespace Styx.WoWInternals
     {
         public struct WowBUnitFields { public uint Health; }
         public bool IsExperimental70862=true, MapReadable=true, SnapshotReadable=true, FailChunks; public uint Map=1; public int Reads;
+        public bool Uses70862Features => IsExperimental70862;
         public WowBWorldSnapshot Snapshot=new(); public Dictionary<ulong,uint> Words=new(); public Action? OnRead;
         public bool TryReadMapId(out uint map){map=Map;return MapReadable;}
         public bool TryCaptureWorldSnapshot(out WowBWorldSnapshot? snap){snap=SnapshotReadable?Snapshot:null;return snap!=null;}

@@ -32,7 +32,7 @@ class MacroWiring(unittest.TestCase):
 
     def test_reserved_slot_and_competing_paths(self):
         bar = section(C, 'public static List<ClickAimAction> ReadBar(', '// UI preview')
-        self.assertIn('reader.IsExperimental70862 && ClickAimSettings.UseKeyOneStartAttackMacro', bar)
+        self.assertIn('reader.Uses70862Features && ClickAimSettings.UseKeyOneStartAttackMacro', bar)
         self.assertIn('decoded.RemoveAll(action => action.Slot == 1)', bar)
         self.assertIn('postHealStartKey = 0;', G)
         self.assertIn('if (!keyOneMacro && auto != null)', G)
@@ -42,7 +42,7 @@ class MacroWiring(unittest.TestCase):
     def test_safe_guard_and_identity(self):
         helper = section(G, 'private static bool TryFightKeyOneMacro(', '    /// <summary>\n    /// One fight')
         key = helper.index('ClickAimInput.TapKey(hwnd, 0x31, 40)')
-        for condition in ('reader.IsExperimental70862', 'UseKeyOneStartAttackMacro', 'CheckDeathCheckpoint(trackerOnly: true)',
+        for condition in ('reader.Uses70862Features', 'UseKeyOneStartAttackMacro', 'CheckDeathCheckpoint(trackerOnly: true)',
                           'TryReadMapId', 'map != expectedMap', 'TryReadExperimentalActionSnapshot', 'bar[0] == 0',
                           'FightAttackInputAllowed(', 'player.Guid != expectedPlayer.Guid',
                           'player.UnitAddress != expectedPlayer.UnitAddress', 'player.RecordAddress != expectedPlayer.RecordAddress',
@@ -77,7 +77,7 @@ class MacroWiring(unittest.TestCase):
         self.assertIn('(keyOneMacro || (auto != null', R)
         self.assertIn('PreferShockMelee(shockAutoPlan, shockReady)', G)
         self.assertIn('bool temporaryShockMelee = shockAutoPlan && !melee', G)
-        self.assertIn('reader.IsExperimental70862 && mobAfter == 0 && mobBeforeHealth > 0', G)
+        self.assertIn('reader.Uses70862Features && mobAfter == 0 && mobBeforeHealth > 0', G)
         self.assertIn('return "killed with " + string.Join', G)
         # A denied follow-up must not bypass the normal death/loot accounting.
         shock = section(G, 'ClickAimInput.TapKey(hwnd, castDamage!', '/* Wait for the cast')

@@ -129,7 +129,7 @@ internal static class GatherRunner
                 experimentalReader = WowBGrindFactions.ExperimentalBoundReader;
                 if (experimentalReader == null) return false;
                 Logging.Write("[Gather] EXPERIMENTAL " + experimentalReader.ExperimentalBuildNumber + ": static node vtable candidate; " +
-                    (experimentalReader.IsExperimental70862 ? "defence bypasses faction and may attack the wrong NPC, including a friendly" : "faction-filtered defence") +
+                    (experimentalReader.Uses70862Features ? "defence bypasses faction and may attack the wrong NPC, including a friendly" : "faction-filtered defence") +
                     "; monitor closely and use STOP.");
             }
             started = StartPrepared(profile, generation, experimentalReader);
@@ -271,7 +271,7 @@ internal static class GatherRunner
             _lastCombatCheck = Environment.TickCount;
             if (StopIfDeadOrGhost() || !MapStillCurrent()) return true;
             WowBReader? barReader = WowBGrindFactions.ExperimentalBoundReader;
-            if (barReader?.IsExperimental70862 == true && !WowBGrindFactions.Experimental70707BarSafe(barReader)) return true;
+            if (barReader?.Uses70862Features == true && !WowBGrindFactions.Experimental70707BarSafe(barReader)) return true;
             if (!GrindRunner.TryReadGatherCombat(out bool fighting) || (fighting && !_ignoreMonsters)) return true;
         }
         if (!checkNodes || unchecked(Environment.TickCount - _lastScan) < 1500) return false;
@@ -298,7 +298,7 @@ internal static class GatherRunner
         try
         {
             if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested || ObjectManager.Wow != memory ||
-                ObjectManager.WowB != reader || memory.WindowHandle != hwnd || !reader.IsExperimental70862 ||
+                ObjectManager.WowB != reader || memory.WindowHandle != hwnd || !reader.Uses70862Features ||
                 !WowBGrindFactions.Experimental70707BarSafe(reader) || StopIfDeadOrGhost()) return false;
             using var uncached = memory.TemporaryCacheState(false);
             if (!reader.TryReadMapId(out uint map) || map != _sessionMap ||
@@ -331,10 +331,10 @@ internal static class GatherRunner
         GreenMagic.Memory? memory = ObjectManager.Wow;
         WowBReader? reader = ObjectManager.WowB;
         if (memory == null || reader == null || hwnd == IntPtr.Zero) return false;
-        if (!reader.IsExperimental70862 || _movementSlot < 1 || _movementSlot > 12)
+        if (!reader.Uses70862Features || _movementSlot < 1 || _movementSlot > 12)
         {
             _movementAttempted = true;
-            Logging.Write("[Gather] movement skill requires 70862 and a configured first-bar slot 1–12; no key sent");
+            Logging.Write("[Gather] movement skill requires 70862/70888 and a configured first-bar slot 1–12; no key sent");
             return false;
         }
         try
@@ -775,12 +775,12 @@ internal static class GatherRunner
                     ClickAimKeySteer.ReleaseHeld();
                     ClickAimKeySteer.ReleaseArrows(hwnd);
                     Logging.Write("[Gather] action bar changed or was unreadable; holding movement while checking the original bar" +
-                        (reader.IsExperimental70862 ? " (up to 60 seconds)" : ""));
+                        (reader.Uses70862Features ? " (up to 60 seconds)" : ""));
                     int nextBarDeathCheck = Environment.TickCount;
                     bool BarRecoveryStopped()
                     {
                         if (_stop || RouteRunner.StopRequested || ClickAimAbort.Requested) return true;
-                        if (reader.IsExperimental70862 && unchecked(Environment.TickCount - nextBarDeathCheck) >= 0)
+                        if (reader.Uses70862Features && unchecked(Environment.TickCount - nextBarDeathCheck) >= 0)
                         { nextBarDeathCheck = unchecked(Environment.TickCount + 1000); return StopIfDeadOrGhost(); }
                         return false;
                     }

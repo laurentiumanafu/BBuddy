@@ -47,7 +47,7 @@ class PostHealStartAttack(unittest.TestCase):
             self.assertIn(guard, queue)
         heal = section(G, '            if (ClickAimHealPolicy.ShouldAttemptHeal(', '            // A user-supplied non-toggle Start Attack binding')
         self.assertIn('if (attackPressed || lastMeleeClickMs != 0) preserveAttackAfterHeal = true;', heal)
-        self.assertIn('QueuePostHealStartAttack(reader.IsExperimental70862', heal)
+        self.assertIn('QueuePostHealStartAttack(reader.Uses70862Features', heal)
         self.assertIn('postHealPlayer = me.Guid;', heal)
         self.assertNotIn('TapKey(hwnd, auto.KeyVk', heal)
         self.assertNotIn('TapKey(hwnd, 0x70', heal)

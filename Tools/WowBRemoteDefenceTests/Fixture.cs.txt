@@ -40,6 +40,7 @@ namespace Styx.WoWInternals
         public struct WowBUnitFields { public uint Health, UnitFlags; }
         public Dictionary<ulong,WowBUnitFields> Fields = new(); public Dictionary<ulong,uint> Factions = new();
         public WowBGuid Selected; public bool IsExperimental70707 = true, IsExperimental70862 = false;
+        public bool Uses70862Features => IsExperimental70862;
         public WowBGuid ReadTargetGuid() => Selected;
         public bool TryGetUnitFields(ulong p, out WowBUnitFields f) => Fields.TryGetValue(p, out f);
     }

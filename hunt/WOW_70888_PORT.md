@@ -1,0 +1,23 @@
+# Experimental 1.60.1.70888 port
+
+## Input and status
+
+The user's Drive archive `1VM3hp_fLx5u6BvnLvhO7zlWW14p-OMo_` version 10 has size 34,452,027 and MD5 `a9625f454051d3bfa611116e4ddad74b`. The single decoded x64 PE has image base `0x140000000`, version resource `1.60.1.70888`, size 80,627,920 and SHA-256 `c75ee14d98f7deff9f5067cd58ac48870a70727943f36df6c5a1b3db2f1d7e39`. Neither the image nor archive is committed.
+
+70888 is registered and the preferred/default build; 70862 and older registered builds remain. `IsExperimental70888` is exact-build; `Uses70862Features` selects the 70862/70888 gameplay family, with separate image-specific global offsets and markers. This enables the existing 70862 Grind, Gather, navigation, loot, defence, bag and Shaman paths including subsequent fixes. It does **not** establish that their inherited layouts or behavior actually work on 70888. No live client test or Windows build was performed here. Never interpret successful static checks as gameplay validation.
+
+## Static evidence and limitations
+
+70862's decoded image was unavailable; comparison used documented 70862 markers, the decoded 70291 reference (SHA-256 `8f864e73e73ad67319765063a7c491a420dbe2d0714ce427106e39cd9f109192`), PE data, code-context searches, RIP-relative disassembly, and 70291 vtable-method correlations. `Tools/check_wow70888_image.py` checks the exact image hash, 14 marker sequences, selected relative targets and candidate vtable slots. It does not verify all references, semantics, the running executable, or runtime data.
+
+RVA candidates (image-relative): player GUID `0x4C1A770`, player name `0x4C1A780`, selected target `0x6A32478`, mouseover `0x4CD5F98`, object manager `0x6C349F8`, handle pools `0x4728BE0`, map root `0x6C34978`, camera `0x4A51EB0`, action array `0x6C53140`. Although numerically equal to 70862, each is supported by a 70888 instruction reference. The player and name references occur at `0x1C712E0` and `0x1C712EB`; target at `0x23C76D`; mouseover `0x21C901A`; manager `0x190D4D5`; pools `0x27D38B`; map `0x1F1FCA`; camera `0x5ACFDD`; actions `0xA2BA0D`.
+
+Player / unit / game-object candidate vtables are `0x40E64F8` / `0x40FA570` / `0x40EED10`. Matching methods against the 70291 player and object tables yielded 14 slots each at the top candidate; the unit table matched nine, only one more than multiple alternatives, and is especially weak. Shared methods and compiler transformations can produce false correlations. Identity and gameplay layouts still require live observations.
+
+Inventory handler `0x25D4E70` calls lookup `0x2074710` at `0x25D4F60` on context `+0x9460`; identity helper `0x2473DC0` resolves table `0x6C56180`, index times 16. Container helper references `+0xAC0`, tags `+0x490` in 16-byte steps with high-six-bit extraction, and special range fields `+0x9480`, `+0x7D04`, start `0x23`. Build-specific markers are in the source and image checker. These do not prove completeness, bag type, or accurate subtotals. The 70862 ordinary/specialty classification policy and conservative `MEM_FREE`/whole-header `MEM_RESERVE` checks are reused; classification remains tied to exact character and bag GUIDs.
+
+The four gameplay anchors are `0x1F9299C` (faction candidate `+0x1E54`), `0x1FBCA57` (health `+0x1E28`), `0x2799845` (power `+0x1BC0`), and `0xA2BA0D` (action array). Existing guard requires at least two matching readable anchors with no readable mismatch, plus subsequent identity, map and bar checks. An unreadable anchor is not a match. Inherited movement, combat flags, ghost, aura, object, inventory, cursor and other fields are not established by these markers.
+
+## Supervised validation
+
+On Windows, build x64 (`dotnet build CopilotBuddy.csproj -c Release -p:Platform=x64`). Attach stationary; check build, identity, nearby snapshot, map, action bar and signature logs before using movement. Test STOP, a small movement, selection, combat, gathering, buffs, corpse recovery and loot in safe steps. Defence is the user-approved heuristic: faction or selection does not prove attacker or hostility; fallback can select an unrelated NPC, friendly or totem. Ranged damaged-pull retention and profile/manual faction preference are carried over, not verified on 70888. The external aura and totem effects were observed on 70862, not 70888; casts and macro success are unverified. Test ordinary bag counts in a stopped snapshot against visible slots and a controlled item move before relying on automatic selling. Recorded vendor clicks can sell unintended items and do not prove a sale. If any guard or observed behavior is wrong, stop and capture the log instead of removing guards.

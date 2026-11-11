@@ -55,7 +55,7 @@ class GatherOptionsTests(unittest.TestCase):
             self.assertIn('action.Id == ' + spell, policy)
         self.assertIn('action.Raw == (ulong)action.Id', policy)
         self.assertIn('action.KeyVk == ClickAimCombat.KeyForSlot(slot)', policy)
-        self.assertIn('!reader.IsExperimental70862', runner)
+        self.assertIn('!reader.Uses70862Features', runner)
         self.assertIn('if (!_movementEnabled || _movementAttempted', runner)
         self.assertIn('_movementAttempted = true; // do not blindly toggle', runner)
         self.assertIn('if (clicked && extraSafety == null && _movementEnabled) _movementAttempted = false;', runner)

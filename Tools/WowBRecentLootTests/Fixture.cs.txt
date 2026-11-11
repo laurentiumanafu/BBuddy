@@ -18,6 +18,7 @@ namespace Styx.WoWInternals {
  }
  internal class WowBReader {
   internal bool IsExperimental70707=true, IsExperimental70862=true, ExperimentalGrindActive=true;
+        public bool Uses70862Features => IsExperimental70862;
   internal bool TryReadMapId(out uint m){m=Test.Map;return Test.MapReadable;}
   internal WowBGuid ReadTargetGuid()=>Test.Target;
   internal bool TryReadMouseoverGuidCandidate(out WowBGuid hover){hover=Test.Target;return true;}
