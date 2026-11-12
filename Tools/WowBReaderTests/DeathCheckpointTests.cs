@@ -96,16 +96,21 @@ internal static class DeathCheckpointTests
             Styx.Helpers.Logging.ApplicationPath = folder;
             memory.U64(hp, 148);
             var tracker = new WowBDeathCheckpoint();
-            if (tracker.Poll(out bool observed) || !observed) throw new Exception("70888 alive observation missing");
+            if (tracker.Poll(out bool observed) || !observed || tracker.LastObservation != "alive candidate")
+                throw new Exception("70888 alive observation missing");
+            memory.Remove(hp);
+            if (tracker.Poll(out observed) || observed || tracker.LastObservation != "local position or health bytes unreadable")
+                throw new Exception("70888 unreadable recovery health must be reported, not treated as death");
+            memory.U64(hp, 148);
             memory.U32(manaMax, 0); // plausible source of the original full-vitals failure, not proof of it
             memory.U64(hp, 0);
             if (reader.TryGetUnitFields(unit, out _)) throw new Exception("combat vitals must still reject invalid mana");
             ulong ghostAddress = unit + Wow70707Offsets.GhostFlagsCandidateOffset;
             memory.Bytes(ghostAddress, new byte[] { Wow70707Offsets.GhostFlagCandidate });
-            if (!tracker.Poll(out _) || tracker.Recorded.HasValue)
+            if (!tracker.Poll(out _) || tracker.Recorded.HasValue || tracker.LastObservation != "ghost candidate set")
                 throw new Exception("70888 ghost must not be saved as a corpse location");
             memory.Remove(ghostAddress);
-            if (!tracker.Poll(out _) || tracker.Recorded.HasValue)
+            if (!tracker.Poll(out _) || tracker.Recorded.HasValue || tracker.LastObservation != "ghost flag unavailable or changed")
                 throw new Exception("unreadable 70888 ghost state must not authorize a checkpoint");
             memory.Bytes(ghostAddress, new byte[] { 0 });
             int targetReads = 0, targetChanges = 0;
@@ -115,6 +120,7 @@ internal static class DeathCheckpointTests
                     memory.Guid(target, ++targetChanges % 2 == 0 ? originalTarget : new WowBGuid(777, 888));
             };
             if (!tracker.Poll(out observed) || !observed || !tracker.Recorded.HasValue ||
+                tracker.LastObservation != "zero-health checkpoint recorded" ||
                 tracker.Recorded.Value.Player != player || tracker.Recorded.Value.Map != 7 || targetReads != 0 || targetChanges < 2)
                 throw new Exception("70888 checkpoint must use stable local health, not target or mana");
             memory.OnRead = null;
@@ -122,12 +128,12 @@ internal static class DeathCheckpointTests
             memory.OnRead = (address, count) => {
                 if (address == hp && count == 16 && ++hpReads == 2) memory.U64(hp, 1);
             };
-            if (reader.TryRead70888RecoveryPlayer(out _, out _, out _))
-                throw new Exception("changing recovery health must be rejected");
+            if (reader.TryRead70888RecoveryPlayer(out _, out _, out _, out string changingReason) || changingReason != "local health changed during read")
+                throw new Exception("changing recovery health must be rejected and diagnosed");
             memory.OnRead = null;
             memory.U64(hp, 0);
             memory.U64(unit + Wow70707Offsets.MaxHealthCandidateOffset, 0);
-            if (reader.TryRead70888RecoveryPlayer(out _, out _, out _))
+            if (reader.TryRead70888RecoveryPlayer(out _, out _, out _, out string invalidReason) || invalidReason != "local health or position candidate invalid")
                 throw new Exception("unknown maximum health must not be treated as death");
             memory.U64(unit + Wow70707Offsets.MaxHealthCandidateOffset, 148);
             memory.Guid(memory.ImageBase64 + Wow70888Offsets.PlayerGuid, new WowBGuid(999, 888));

@@ -19,6 +19,8 @@ internal sealed class WowBDeathCheckpoint
         internal Candidate(WowBGuid player, uint map, WoWPoint position) { Player = player; Map = map; Position = position; }
     }
     internal Candidate? Recorded { get; private set; }
+    // Diagnostic only; never authorizes recovery or input.
+    internal string LastObservation { get; private set; } = "not sampled";
 
     private WowBGuid _aliveGuid;
     private uint _aliveMap;
@@ -69,15 +71,21 @@ internal sealed class WowBDeathCheckpoint
     // 70888 recovery must not depend on target selection or mana remaining
     // readable during death. Older builds retain their established path.
     internal static bool ReadRecoveryPlayer(WowBReader reader, out WowBObservedUnit player, out uint health, out uint maxHealth)
+        => ReadRecoveryPlayer(reader, out player, out health, out maxHealth, out _);
+
+    private static bool ReadRecoveryPlayer(WowBReader reader, out WowBObservedUnit player, out uint health, out uint maxHealth, out string reason)
     {
         player = default; health = maxHealth = 0;
         if (reader.IsExperimental70888)
-            return reader.TryRead70888RecoveryPlayer(out player, out health, out maxHealth);
+            return reader.TryRead70888RecoveryPlayer(out player, out health, out maxHealth, out reason);
+        reason = "local snapshot or vitals unavailable";
         if (!reader.TryCaptureWorldSnapshot(out WowBWorldSnapshot? snapshot) || snapshot == null ||
             !snapshot.TryGetLocalPlayer(out player) ||
             !reader.TryGetUnitFields(player.UnitAddress, out WowBReader.WowBUnitFields fields)) return false;
         health = fields.Health; maxHealth = fields.MaxHealth;
-        return maxHealth != 0 && health <= maxHealth;
+        if (maxHealth == 0 || health > maxHealth) return false;
+        reason = "";
+        return true;
     }
 
     // False means either alive or unreadable, never proof of life. True vetoes
@@ -86,27 +94,33 @@ internal sealed class WowBDeathCheckpoint
     internal bool Poll(out bool observed)
     {
         observed = false;
+        LastObservation = "attachment unavailable";
         Memory? memory = ObjectManager.Wow;
         WowBReader? reader = ObjectManager.WowB;
         if (memory == null || reader == null) return false;
         try
         {
             using var uncached = memory.TemporaryCacheState(false);
-            if (!reader.TryReadMapId(out uint map) ||
-                !ReadRecoveryPlayer(reader, out WowBObservedUnit player, out uint health, out uint maxHealth) ||
-                player.Guid.IsEmpty || maxHealth == 0 || health > maxHealth ||
+            LastObservation = "map unavailable or unstable";
+            if (!reader.TryReadMapId(out uint map)) return false;
+            if (!ReadRecoveryPlayer(reader, out WowBObservedUnit player, out uint health, out uint maxHealth, out string readReason))
+            { LastObservation = readReason; return false; }
+            LastObservation = "invalid player or attachment changed";
+            if (player.Guid.IsEmpty || maxHealth == 0 || health > maxHealth ||
                 ObjectManager.Wow != memory || ObjectManager.WowB != reader) return false;
             if (reader.IsExperimental70707)
             {
                 if (!WowBGrindFactions.TryReadGhostFlagCandidate(memory, reader, player, out bool ghostFlag))
                 {
                     WarnGhost("[Corpse] " + reader.ExperimentalBuildNumber + " ghost flag candidate unavailable or changed; gameplay remains stopped rather than guessing");
+                    LastObservation = "ghost flag unavailable or changed";
                     observed = true;
                     return true;
                 }
                 if (ghostFlag)
                 {
                     WarnGhost("[Corpse] " + reader.ExperimentalBuildNumber + " ghost flag candidate is set; no new corpse position will be inferred");
+                    LastObservation = "ghost candidate set";
                     observed = true;
                     return true;
                 }
@@ -114,9 +128,11 @@ internal sealed class WowBDeathCheckpoint
             if (health > 0)
             {
                 _aliveGuid = player.Guid; _aliveMap = map; _aliveAt = Environment.TickCount; _hasAlive = true;
+                LastObservation = "alive candidate";
                 observed = true;
                 return false;
             }
+            LastObservation = "zero-health revalidation unavailable or changed";
             if (!ReadRecoveryPlayer(reader, out WowBObservedUnit current, out uint healthAfter, out uint maxAfter) ||
                 maxAfter != maxHealth || healthAfter != health || current.Guid != player.Guid ||
                 current.RecordAddress != player.RecordAddress || current.UnitAddress != player.UnitAddress ||
@@ -126,6 +142,7 @@ internal sealed class WowBDeathCheckpoint
                 (!WowBGrindFactions.TryReadGhostFlagCandidate(memory, reader, current, out bool ghostAfter) || ghostAfter))
             {
                 WarnGhost("[Corpse] ghost candidate changed or became unavailable during 0-health observation; not saving a location");
+                LastObservation = "ghost changed during zero-health revalidation";
                 observed = true;
                 return true;
             }
@@ -138,17 +155,20 @@ internal sealed class WowBDeathCheckpoint
                 // One write per run; never overwrite an earlier candidate at a graveyard.
                 _saved = true;
                 Recorded = new Candidate(current.Guid, map, position);
+                LastObservation = "zero-health checkpoint recorded";
                 Save(current.Guid, map, reader.ExperimentalBuildNumber, position);
             }
             else if (!_saved)
             {
                 _saved = true;
+                LastObservation = "zero-health without eligible alive history or position";
                 Logging.Write("[Corpse] 0-health candidate but no recent matching alive observation; no checkpoint saved");
             }
+            else LastObservation = "zero-health checkpoint already handled";
             observed = true;
             return true;
         }
-        catch (Exception ex) { Logging.Write("[Corpse] checkpoint observation failed: " + ex.Message); return false; }
+        catch (Exception ex) { LastObservation = "checkpoint observation exception"; Logging.Write("[Corpse] checkpoint observation failed: " + ex.Message); return false; }
     }
 
     private static void Save(WowBGuid player, uint map, int experimentalBuild, WoWPoint position)

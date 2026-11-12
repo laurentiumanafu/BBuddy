@@ -500,27 +500,37 @@ namespace Styx.WoWInternals
         // It is not permission to cast, move, or click: callers must separately
         // check map, ghost state, session, STOP, and the recovery UI.
         internal bool TryRead70888RecoveryPlayer(out WowBObservedUnit player, out uint health, out uint maxHealth)
+            => TryRead70888RecoveryPlayer(out player, out health, out maxHealth, out _);
+
+        internal bool TryRead70888RecoveryPlayer(out WowBObservedUnit player, out uint health, out uint maxHealth, out string reason)
         {
             player = default; health = maxHealth = 0;
+            reason = "70888 session inactive";
             if (!IsExperimental70888 || !ExperimentalGrindActive) return false;
             using var uncached = _memory.TemporaryCacheState(false);
+            reason = "local player record or identity unavailable";
             if (!TryGetPlayerObject(out WowBPoolObject record) || record.Guid.IsEmpty ||
                 !TryGetUnitObject(record.RecordPtr, out ulong unit, out ulong vtable, out bool isPlayer) || !isPlayer) return false;
             byte[]? position = _memory.ReadBytes64(record.RecordPtr + WowBOffsets.RecordPositionOffset, 20);
             byte[]? first = _memory.ReadBytes64(unit + Wow70707Offsets.HealthCandidateOffset, 16);
             byte[]? second = _memory.ReadBytes64(unit + Wow70707Offsets.HealthCandidateOffset, 16);
-            if (position == null || position.Length != 20 || first == null || first.Length != 16 ||
-                second == null || second.Length != 16 || !first.AsSpan().SequenceEqual(second)) return false;
+            reason = "local position or health bytes unreadable";
+            if (position == null || position.Length != 20 || first == null || first.Length != 16 || second == null || second.Length != 16) return false;
+            reason = "local health changed during read";
+            if (!first.AsSpan().SequenceEqual(second)) return false;
             ulong hp = BitConverter.ToUInt64(first, 0), max = BitConverter.ToUInt64(first, 8);
             float x = BitConverter.ToSingle(position, 0), y = BitConverter.ToSingle(position, 4),
                 z = BitConverter.ToSingle(position, 8), facing = BitConverter.ToSingle(position, 16);
+            reason = "local health or position candidate invalid";
             if (max == 0 || max > uint.MaxValue || hp > max || !float.IsFinite(x) || !float.IsFinite(y) ||
                 !float.IsFinite(z) || !float.IsFinite(facing) || Math.Abs(x) >= 100000f ||
-                Math.Abs(y) >= 100000f || Math.Abs(z) >= 100000f ||
-                !IsPoolRecordCurrent(record) || !TryReadGuid(record.RecordPtr + WowBOffsets.RecordGuidLoOffset, out WowBGuid recordGuid) ||
+                Math.Abs(y) >= 100000f || Math.Abs(z) >= 100000f) return false;
+            reason = "local player identity or session changed during read";
+            if (!IsPoolRecordCurrent(record) || !TryReadGuid(record.RecordPtr + WowBOffsets.RecordGuidLoOffset, out WowBGuid recordGuid) ||
                 recordGuid != record.Guid || !TryGetUnitObject(record.RecordPtr, out ulong unitAfter, out ulong vtAfter, out bool playerAfter) ||
                 unitAfter != unit || vtAfter != vtable || !playerAfter || !TryReadTraceLocalGuid(out WowBGuid guidAfter) ||
                 guidAfter != record.Guid || !ExperimentalGrindActive) return false;
+            reason = "";
             health = (uint)hp; maxHealth = (uint)max;
             player = new WowBObservedUnit(record.Guid, record.RecordPtr, unit, true, true,
                 new Styx.Logic.Pathing.WoWPoint(x, y, z), facing, null);

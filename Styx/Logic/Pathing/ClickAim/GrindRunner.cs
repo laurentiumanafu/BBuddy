@@ -366,12 +366,30 @@ internal static class GrindRunner
         bool extended = safetyReader?.IsExperimental70888 == true && _deathCheckpoint != null;
         Logging.Write("[Grind] " + reason + "; pausing input to check for a death/ghost transition" +
             (extended ? " (70888: up to 20 seconds plus read time)" : " before stopping"));
+        var observations = new Dictionary<string, int>();
         bool veto = WowBDeathCheckpoint.ObserveSafetyExit(
-            () => CheckDeathCheckpoint(trackerOnly: true, deferUnconfirmed: extended),
+            () =>
+            {
+                bool result = CheckDeathCheckpoint(trackerOnly: true, deferUnconfirmed: extended);
+                if (extended && _deathCheckpoint != null)
+                {
+                    string state = _deathCheckpoint.LastObservation;
+                    observations.TryGetValue(state, out int count);
+                    observations[state] = count + 1;
+                }
+                return result;
+            },
             () => ClickAimAbort.Requested || RouteRunner.StopRequested ||
                   ObjectManager.Wow != safetyMemory || ObjectManager.WowB != safetyReader,
             ClickAimAbort.Wait, extended ? 200 : 20);
         if (veto) return "death/ghost safety check; fight halted for recovery if a checkpoint was captured";
+        if (extended)
+        {
+            var counts = new List<string>();
+            foreach (var entry in observations) counts.Add(entry.Key + "=" + entry.Value);
+            Logging.Write("[Grind] 70888 safety pause observations: " + (counts.Count == 0 ? "none" : string.Join("; ", counts)) +
+                "; diagnostic only, unknown is not death");
+        }
         _stop = true;
         ClickAimAbort.Request();
         return reason + "; no death/ghost transition confirmed during safety pause";
@@ -2307,6 +2325,34 @@ internal static class GrindRunner
             return "target changed; checking the new selection for defence";
         }
         return "selected target or faction changed; attack input withheld; defence will recheck";
+    }
+
+    // A world snapshot can fail merely because its selected target changes
+    // during the scan. Only yield the old fight when two target reads agree
+    // on a different GUID and the same local player is independently alive,
+    // non-ghost and on a stable map. This sends no key or new attack.
+    private static bool TryYieldHealSnapshotTargetChange(WowBReader reader, GreenMagic.Memory memory,
+        WowBObservedUnit expectedPlayer, WowBGuid expectedTarget, out string report)
+    {
+        report = "";
+        if (!reader.IsExperimental70888 || _deathCheckpoint == null || _stop || ClickAimAbort.Requested || RouteRunner.StopRequested ||
+            ObjectManager.Wow != memory || ObjectManager.WowB != reader ||
+            !reader.TryReadTraceTargetGuid(out WowBGuid firstTarget) || firstTarget == expectedTarget) return false;
+        if (CheckDeathCheckpoint(trackerOnly: true))
+        { report = "death/ghost safety check; fight halted for recovery if a checkpoint was captured"; return true; }
+        if (_deathCheckpoint?.LastObservation != "alive candidate" ||
+            !reader.TryReadMapId(out uint map) ||
+            !WowBDeathCheckpoint.ReadRecoveryPlayer(reader, out WowBObservedUnit current, out uint hp, out uint maxHp) ||
+            current.Guid != expectedPlayer.Guid || current.UnitAddress != expectedPlayer.UnitAddress ||
+            current.RecordAddress != expectedPlayer.RecordAddress || hp == 0 || hp > maxHp ||
+            !WowBGrindFactions.TryReadGhostFlagCandidate(memory, reader, current, out bool ghost) || ghost ||
+            !reader.TryReadMapId(out uint mapAfter) || mapAfter != map ||
+            !reader.TryReadTraceTargetGuid(out WowBGuid secondTarget) || firstTarget != secondTarget ||
+            _stop || ClickAimAbort.Requested || RouteRunner.StopRequested || ObjectManager.Wow != memory || ObjectManager.WowB != reader)
+            return false;
+        Logging.Write("[Grind] heal snapshot failed while target changed; local alive candidate confirmed, withholding heal and rechecking defence");
+        report = YieldForTargetChange(reader, memory, expectedTarget);
+        return true;
     }
 
     private static void LogFactionFight(WowBReader? reader, WowBObservedUnit unit, bool defence)
@@ -6012,11 +6058,15 @@ internal static class GrindRunner
                         return "action bar changed; heal withheld";
                     if (!ClickAimHealPolicy.StillOnBar(heal, ClickAimCombat.ReadBar(reader)))
                     { heal = null; continue; }
-                    if (!Capture(out WowBWorldSnapshot? healSnapshot) || healSnapshot == null ||
-                        !healSnapshot.TryGetLocalPlayer(out WowBObservedUnit healPlayer) ||
-                        healPlayer.Guid != me.Guid || healPlayer.UnitAddress != me.UnitAddress ||
-                        healPlayer.RecordAddress != me.RecordAddress ||
-                        !reader.TryGetUnitFields(healPlayer.UnitAddress, out WowBReader.WowBUnitFields freshHeal))
+                    if (!Capture(out WowBWorldSnapshot? healSnapshot) || healSnapshot == null)
+                    {
+                        if (TryYieldHealSnapshotTargetChange(reader, fightMemory, me, defenceTarget, out string yieldReport)) return yieldReport;
+                        return reader.IsExperimental70707 ? StopFightForSafety("heal world snapshot unreadable or changed; stopping") : "heal snapshot unreadable; heal withheld";
+                    }
+                    if (!healSnapshot.TryGetLocalPlayer(out WowBObservedUnit healPlayer) || healPlayer.Guid != me.Guid ||
+                        healPlayer.UnitAddress != me.UnitAddress || healPlayer.RecordAddress != me.RecordAddress)
+                        return reader.IsExperimental70707 ? StopFightForSafety("heal player identity unavailable or changed; stopping") : "heal player identity unavailable; heal withheld";
+                    if (!reader.TryGetUnitFields(healPlayer.UnitAddress, out WowBReader.WowBUnitFields freshHeal))
                         return reader.IsExperimental70707 ? StopFightForSafety("heal player vitals unreadable; stopping") : "heal player vitals unreadable; heal withheld";
                     if (freshHeal.MaxHealth > 0 && freshHeal.Health == 0)
                         return reader.IsExperimental70707 ? StopFightForSafety("the character died before the heal; stopping") : "the character died before the heal; stopping the fight";

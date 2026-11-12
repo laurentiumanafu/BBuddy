@@ -21,6 +21,9 @@ class PlayerDeathRecovery(unittest.TestCase):
         self.assertIn('TryRead70888RecoveryPlayer', tracker)
         self.assertIn('MayRecord(_hasAlive, _saved', tracker)
         self.assertIn('TryReadGhostFlagCandidate', tracker)
+        for status in ('alive candidate', 'ghost candidate set', 'local position or health bytes unreadable',
+                       'local health changed during read', 'zero-health checkpoint recorded'):
+            self.assertIn(status, tracker + reader)
         recovery = read('Styx/Logic/Pathing/ClickAim/WowBCorpseRecovery.cs')
         self.assertIn('WowBDeathCheckpoint.ReadRecoveryPlayer(reader', recovery)
         self.assertIn('player.Guid != checkpoint.Player', recovery)
@@ -35,6 +38,8 @@ class PlayerDeathRecovery(unittest.TestCase):
         self.assertIn('extended ? 200 : 20', wait)
         self.assertIn('ClickAimAbort.Requested || RouteRunner.StopRequested', wait)
         self.assertIn('ObjectManager.Wow != safetyMemory || ObjectManager.WowB != safetyReader', wait)
+        self.assertIn('_deathCheckpoint.LastObservation', wait)
+        self.assertIn('70888 safety pause observations:', wait)
         self.assertNotIn('TapKey', wait)
         check = section(grind, 'private static bool CheckDeathCheckpoint(', '    // These 70707 combat exits')
         self.assertIn('!_deathCheckpoint.Recorded.HasValue', check)
@@ -43,5 +48,22 @@ class PlayerDeathRecovery(unittest.TestCase):
         self.assertIn('MayBeginRecovery', recovery)
         self.assertIn('_deathStopGeneration, _stopGeneration', recovery)
         self.assertIn('WowBCorpseRecovery.TryRecover', recovery)
+
+    def test_heal_snapshot_target_change_yields_without_input(self):
+        grind = read('Styx/Logic/Pathing/ClickAim/GrindRunner.cs')
+        helper = section(grind, 'private static bool TryYieldHealSnapshotTargetChange(', '    private static void LogFactionFight(')
+        for text in ('reader.IsExperimental70888', 'firstTarget == expectedTarget', 'firstTarget != secondTarget',
+                     'CheckDeathCheckpoint(trackerOnly: true)', 'LastObservation != "alive candidate"',
+                     'ReadRecoveryPlayer(reader', 'current.Guid != expectedPlayer.Guid',
+                     'current.UnitAddress != expectedPlayer.UnitAddress', 'current.RecordAddress != expectedPlayer.RecordAddress',
+                     'hp == 0', 'TryReadGhostFlagCandidate', 'mapAfter != map',
+                     'ClickAimAbort.Requested', 'RouteRunner.StopRequested', 'YieldForTargetChange('):
+            self.assertIn(text, helper)
+        self.assertNotIn('TapKey(', helper)
+        heal = section(grind, 'if (!Capture(out WowBWorldSnapshot? healSnapshot)', 'if (freshHeal.MaxHealth > 0')
+        self.assertIn('TryYieldHealSnapshotTargetChange', heal)
+        self.assertIn('heal world snapshot unreadable or changed', heal)
+        self.assertIn('heal player identity unavailable or changed', heal)
+        self.assertIn('heal player vitals unreadable', heal)
 
 if __name__ == '__main__': unittest.main()
