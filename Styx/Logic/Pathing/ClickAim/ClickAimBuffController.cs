@@ -23,12 +23,35 @@ internal sealed class ClickAimBuffController
     private readonly Dictionary<int, string> _reportedAuraState = new Dictionary<int, string>();
     private long _nextScan, _earthReservedUntil, _macroRetryAt, _macroNextPressAt;
     private int _macroRemaining;
+    private string? _macroReportedState;
+    private long _macroReportAt;
 
     internal ClickAimBuffController() : this(() => Environment.TickCount64) { }
     internal ClickAimBuffController(Func<long> clock) { _clock = clock; }
 
     // New run or confirmed resurrection: the next quiet opportunity starts fresh.
-    internal void Reset() { _schedule.Reset(); _reportedAuraState.Clear(); _nextScan = 0; _earthReservedUntil = 0; _macroRetryAt = 0; _macroNextPressAt = 0; _macroRemaining = 0; }
+    internal void Reset() { _schedule.Reset(); _reportedAuraState.Clear(); _nextScan = 0; _earthReservedUntil = 0; _macroRetryAt = 0; _macroNextPressAt = 0; _macroRemaining = 0; _macroReportedState = null; _macroReportAt = 0; }
+
+    internal static void ReportMacroSettings()
+    {
+        Logging.Write("[Buff] Shaman totem macro settings: enabled=" + ClickAimSettings.UseShamanTotemMacro +
+            "; buffs=" + ClickAimSettings.UseBuffs + "; combat buffs=" + ClickAimSettings.UseBuffsInCombat +
+            "; key=" + ClickAimSettings.ShamanTotemMacroKey + "; presses=" + ClickAimSettings.ShamanTotemMacroPresses +
+            "; Earth=" + ClickAimSettings.ShamanTotemEarth + "; Healing Stream=" + ClickAimSettings.ShamanTotemHealing +
+            "; Mana Spring=" + ClickAimSettings.ShamanTotemMana + "; key 1 attack=" + ClickAimSettings.UseKeyOneStartAttackMacro +
+            "; valid=" + ClickAimSettings.ShamanTotemMacroValid() + " (binding and macro contents unverified)");
+    }
+
+    // Coalesce rapidly changing guards; repeat a persistent state occasionally
+    // so a short captured log still has a reason without logging every tick.
+    internal void ReportMacroState(string state)
+    {
+        if (!ClickAimSettings.UseShamanTotemMacro) return;
+        long now = _clock();
+        if (_macroReportedState != null && now < _macroReportAt + (state == _macroReportedState ? 15000 : 5000)) return;
+        _macroReportedState = state; _macroReportAt = now;
+        Logging.Write("[Buff] Shaman totem macro waiting: " + state);
+    }
 
     private void ReportAura(ClickAimAction action, int? remaining)
     {
@@ -215,32 +238,49 @@ internal sealed class ClickAimBuffController
         int mask = MacroMask(), key = ClickAimSettings.ShamanTotemMacroKey, count = ClickAimSettings.ShamanTotemMacroPresses;
         long now = _clock();
         if (!reader.Uses70862Features || mask == 0 || now < _earthReservedUntil)
-        { _macroRemaining = 0; return false; }
+        {
+            _macroRemaining = 0;
+            ReportMacroState(!reader.Uses70862Features ? "unsupported client" : mask == 0 ? "disabled or invalid macro settings" : "Stoneclaw Earth reservation");
+            return false;
+        }
         // A long interruption ends the incomplete burst rather than carrying it
         // indefinitely into a later fight. The retry delay starts at the last key.
         if (_macroRemaining > 0 && now >= _macroRetryAt) _macroRemaining = 0;
         bool starting = _macroRemaining == 0;
-        if (starting ? now < _macroRetryAt : now < _macroNextPressAt) return false;
+        if (starting ? now < _macroRetryAt : now < _macroNextPressAt)
+        { ReportMacroState(starting ? "10-second retry delay" : "burst spacing"); return false; }
         uint minimumMana = (mask & 1) != 0 ? 65U : 40U; // most expensive configured rank; next step is unknown
-        if (!CombatPlayerSafe(memory, reader, hwnd, stopped, player, out uint map, out uint mana) || mana < minimumMana ||
-            !targetSafe() || !reader.TryGetUnitFields(player.UnitAddress, out WowBReader.WowBUnitFields fields) ||
-            fields.PlayerPowerTypeCandidate != 0 || fields.Power < minimumMana ||
-            !reader.TryReadExperimentalActionSnapshot(out ulong[] bar) || bar.Length != 12 || bar[key - 1] == 0) return false;
-        WowBTotemAuraCandidate? aura = WowBTotemAuraCandidate.Capture(memory, reader, player);
-        if (aura == null || (starting && !MacroMissing(aura, mask))) return false;
+        if (!CombatPlayerSafe(memory, reader, hwnd, stopped, player, out uint map, out uint mana))
+        { ReportMacroState("player/combat/health/ghost/map or session guard not confirmed"); return false; }
+        if (mana < minimumMana)
+        { ReportMacroState("mana below estimated minimum " + minimumMana); return false; }
+        if (!targetSafe()) { ReportMacroState("combat target safety not confirmed"); return false; }
+        if (!reader.TryGetUnitFields(player.UnitAddress, out WowBReader.WowBUnitFields fields))
+        { ReportMacroState("player power fields unreadable"); return false; }
+        if (fields.PlayerPowerTypeCandidate != 0 || fields.Power < minimumMana)
+        { ReportMacroState("mana type or estimated minimum not confirmed"); return false; }
+        if (!reader.TryReadExperimentalActionSnapshot(out ulong[] bar) || bar.Length != 12)
+        { ReportMacroState("action bar unreadable or unstable"); return false; }
+        if (bar[key - 1] == 0) { ReportMacroState("configured action slot is empty"); return false; }
+        WowBTotemAuraCandidate? aura = WowBTotemAuraCandidate.Capture(memory, reader, player, out string auraReason);
+        if (aura == null) { ReportMacroState("aura unknown: " + auraReason); return false; }
+        if (starting && !MacroMissing(aura, mask))
+        { ReportMacroState("all selected effects present in " + auraReason + " (unverified)"); return false; }
         // Stop any held chase movement only after an attempt is actually due;
         // revalidate combat, target, bar and aura after releasing the key.
         beforeAttempt?.Invoke();
         if (!CombatPlayerSafe(memory, reader, hwnd, stopped, player, out uint afterMap, out mana) || map != afterMap || mana < minimumMana ||
             !reader.TryGetUnitFields(player.UnitAddress, out fields) || fields.PlayerPowerTypeCandidate != 0 || fields.Power < minimumMana ||
-            !targetSafe() || !reader.TryReadExperimentalActionSnapshot(out ulong[] afterBar) || afterBar.Length != 12 || afterBar[key - 1] != bar[key - 1]) return false;
+            !targetSafe() || !reader.TryReadExperimentalActionSnapshot(out ulong[] afterBar) || afterBar.Length != 12 || afterBar[key - 1] != bar[key - 1])
+        { ReportMacroState("player, mana, target, map or action slot failed revalidation"); return false; }
         aura = WowBTotemAuraCandidate.Capture(memory, reader, player);
         if (aura == null || (starting && !MacroMissing(aura, mask)) ||
             !CombatPlayerSafe(memory, reader, hwnd, stopped, player, out afterMap, out mana) || map != afterMap || mana < minimumMana ||
             !reader.TryGetUnitFields(player.UnitAddress, out fields) || fields.PlayerPowerTypeCandidate != 0 || fields.Power < minimumMana ||
             !targetSafe() || !Allowed(memory, reader, hwnd, stopped) || !ClickAimSettings.UseBuffsInCombat ||
             mask != MacroMask() || key != ClickAimSettings.ShamanTotemMacroKey || count != ClickAimSettings.ShamanTotemMacroPresses ||
-            _clock() < _earthReservedUntil) return false;
+            _clock() < _earthReservedUntil)
+        { ReportMacroState("aura, player, target, settings or Earth reservation failed final revalidation"); return false; }
         // Record before input: delivery, macro contents and actual cast cannot be verified.
         now = _clock();
         if (starting) _macroRemaining = count;
@@ -259,7 +299,8 @@ internal sealed class ClickAimBuffController
         Memory? memory = ObjectManager.Wow;
         WowBReader? reader = ObjectManager.WowB;
         if (memory == null || reader == null || hwnd == IntPtr.Zero || !reader.IsExperimental70707 ||
-            !ClickAimSettings.UseBuffsInCombat || !Allowed(memory, reader, hwnd, stopped)) return false;
+            !ClickAimSettings.UseBuffsInCombat || !Allowed(memory, reader, hwnd, stopped))
+        { ReportMacroState("combat buffs, session, action bar or STOP guard not confirmed"); return false; }
         try
         {
             using var uncached = memory.TemporaryCacheState(false);
@@ -324,7 +365,7 @@ internal sealed class ClickAimBuffController
             Logging.Write("[Buff] attempted " + buff.Name + " in combat; candidate expired/missing, mana gate is an estimate; success unverified");
             return true;
         }
-        catch { return false; }
+        catch { ReportMacroState("combat buff check failed unexpectedly"); return false; }
     }
 
     // Returns true only if at least one buff key was attempted. Leave the
@@ -469,6 +510,10 @@ internal sealed class WowBInlineAuraCandidate
         foreach (uint id in _id) if (id <= int.MaxValue && WowBLightningShield.Rank((int)id) != 0) return true;
         return false;
     }
+
+    // IDs were already validated as unique with stable occupied-count/header.
+    // A defensive copy keeps callers from mutating this observation.
+    internal uint[] CopyIds() => (uint[])_id.Clone();
 
     // Null means unknown; -1 means missing in this bounded candidate layout.
     // The exact ID relation, clock and capacity remain experimental. A bad or

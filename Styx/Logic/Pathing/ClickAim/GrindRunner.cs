@@ -1295,6 +1295,7 @@ internal static class GrindRunner
         _healCostSpellId = 0;
         _castCosts.Clear();
         Logging.Write("[Grind] combat settings: " + ClickAimSettings.Describe() + "; rotation " + ClickAimSettings.RotationClass);
+        ClickAimBuffController.ReportMacroSettings();
 
         int level = reader.ReadPlayerLevel();
         ulong levelOffset = reader.IsExperimental70707 ? Styx.Offsets.Wow70707Offsets.LevelCandidateOffset : Styx.Offsets.WowBOffsets.UnitDataLevelOffset;
@@ -4257,6 +4258,7 @@ internal static class GrindRunner
         _gaveUpAt = 0;
         ClickAimSettings.Load();
         Buffs.Reset(); _stoneclawNextAttempt = 0;
+        ClickAimBuffController.ReportMacroSettings();
         _manaPeak = 0;
         _healthPeak = 0;
         _healCostGuess = 0;
@@ -6201,6 +6203,8 @@ internal static class GrindRunner
             // checks observed missing totem effects. The shared controller
             // retains the enemy selection, checks the experimental aura,
             // identity, mana estimate, combat and STOP, and revalidates before input.
+            if (ClickAimSettings.UseBuffs && ClickAimSettings.UseBuffsInCombat && closingShockTarget)
+                Buffs.ReportMacroState("optional buffs deferred while closing on damaged Shock/Attack target");
             if (!closingShockTarget && ClickAimSettings.UseBuffsInCombat && unchecked(Environment.TickCount - lastCombatBuffCheckMs) >= 1000 &&
                 (lastCastMs == 0 || unchecked(Environment.TickCount - lastCastMs) >= ClickAimCombat.CastSettleMs))
             {

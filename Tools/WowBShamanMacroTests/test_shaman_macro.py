@@ -32,6 +32,19 @@ class Macro(unittest.TestCase):
    self.assertIn(t,body)
   self.assertLess(body.index('_macroRetryAt = now + TotemRetryMs'),body.index('ClickAimInput.TapKey'))
   self.assertIn('MacroHandles(macroMask, action.Id)',B);self.assertIn('ConflictingWater(bar)',B)
+ def test_inline_and_diagnostics_wiring(self):
+  T=get('Styx/Logic/Pathing/ClickAim/WowBTotemAuraCandidate.cs')
+  G=get('Styx/Logic/Pathing/ClickAim/GrindRunner.cs')
+  self.assertIn('WowBInlineAuraCandidate.Capture(memory, player)',T)
+  self.assertIn('inline.CopyIds()',T); self.assertIn('ids.Count != 0',T)
+  self.assertIn('ReadExternalCandidate(memory, player.UnitAddress',T)
+  self.assertIn('Word(first, ActiveCount) != (uint)occupied',B)
+  self.assertIn('!seen.Add(id[i])',B)
+  self.assertEqual(G.count('ClickAimBuffController.ReportMacroSettings();'),2)
+  for msg in ('aura unknown:', 'combat target safety not confirmed', 'action bar unreadable or unstable',
+              'Stoneclaw Earth reservation', 'failed final revalidation', '15000 : 5000'):
+   self.assertIn(msg,B)
+  self.assertIn('optional buffs deferred while closing',G)
  def test_only_selected_effects(self):
   for t in ('(mask & 1) != 0 && aura.Active(8160) == false','(mask & 2) != 0 && aura.Active(5394) == false',
             '(mask & 4) != 0 && aura.Active(5675) == false'):

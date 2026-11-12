@@ -26,7 +26,7 @@ namespace GreenMagic
         private sealed class Scope : IDisposable { public void Dispose() { } }
     }
 }
-namespace Styx.Helpers { static class Logging { public static void Write(string line) { } } }
+namespace Styx.Helpers { static class Logging { public static readonly List<string> Lines = new(); public static void Write(string line) { Lines.Add(line); } } }
 namespace Styx.WoWInternals
 {
     readonly struct WowBGuid : IEquatable<WowBGuid>
@@ -49,8 +49,8 @@ namespace Styx.WoWInternals
     sealed class WowBReader
     {
         public struct WowBUnitFields { public uint Health, MaxHealth, Power; public int PlayerPowerTypeCandidate; }
-        public bool IsExperimental70707 = true, IsExperimental70862, Readable = true;
-        public bool Uses70862Features => IsExperimental70862;
+        public bool IsExperimental70707 = true, IsExperimental70862, IsExperimental70888, Readable = true;
+        public bool Uses70862Features => IsExperimental70862 || IsExperimental70888;
         public uint Map = 0, Health = 100, MaxHealth = 100, Power = 100;
         public int PowerType;
         public WowBGuid Selected;
@@ -167,7 +167,7 @@ namespace Styx.Logic.Pathing
         {
             ObjectManager.Wow = new Memory(); ObjectManager.WowB = new WowBReader { Selected = new WowBGuid(8) };
             ClickAimCombat.Bar = new List<ClickAimAction> { Action(1, 1), Action(2, 2), Action(3, 3) };
-            ClickAimCombat.Overrides.Clear(); ClickAimInput.Keys.Clear();
+            ClickAimCombat.Overrides.Clear(); ClickAimInput.Keys.Clear(); Styx.Helpers.Logging.Lines.Clear();
             WowBCombatResearch.Data = null; WowBCombatResearch.OnRead = null; WowBCombatResearch.StopDuringRead = WowBCombatResearch.CombatEndsDuringRead = false;
             ClickAimSettings.UseBuffs = true; ClickAimSettings.UseBuffsInCombat = false; ClickAimSettings.RotationClass = ClickAimRotationClass.Auto;
             ClickAimSettings.UseShamanTotemMacro = ClickAimSettings.UseKeyOneStartAttackMacro = false;
@@ -584,6 +584,41 @@ namespace Styx.Logic.Pathing
             ClickAimSettings.UseKeyOneStartAttackMacro = false; ClickAimSettings.ShamanTotemMacroKey = 2;
             WowBCombatResearch.StopDuringRead = true;
             Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "STOP during macro aura capture");
+
+            // Synthetic inline layout, same ID position and count checks as the
+            // existing inline reader. It does not validate real 70888 data.
+            Reset(); controller.Reset(); now = 0; ObjectManager.WowB!.IsExperimental70888 = true;
+            ClickAimSettings.UseBuffsInCombat = ClickAimSettings.UseShamanTotemMacro = true;
+            ClickAimSettings.ShamanTotemEarth = true; ObjectManager.WowB.RawBar[1] = 123;
+            GrindRunner.Combat = true; combatPlayer = ObjectManager.WowB.Player;
+            ObjectManager.Wow!.AuraBytes = ShamanCandidate();
+            var inlineTotem = WowBTotemAuraCandidate.Capture(ObjectManager.Wow, ObjectManager.WowB, combatPlayer, out string layout);
+            Check(inlineTotem != null && layout == "inline candidate" && inlineTotem.Active(8160) == false, "validated inline missing effect");
+            Check(controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe) && ClickAimInput.Keys.Count == 1, "inline missing effect permits guarded macro");
+            controller.Reset(); ClickAimInput.Keys.Clear();
+            Write32(ObjectManager.Wow.AuraBytes!, 0x6F0 + 4 * 0x128, 8162); Write32(ObjectManager.Wow.AuraBytes!, 0x1A60, 11);
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe) && ClickAimInput.Keys.Count == 0, "inline present effect suppresses macro");
+            Write32(ObjectManager.Wow.AuraBytes!, 0x1A60, 10);
+            Check(WowBTotemAuraCandidate.Capture(ObjectManager.Wow, ObjectManager.WowB, combatPlayer) == null, "inline count mismatch remains unknown");
+            Write32(ObjectManager.Wow.AuraBytes!, 0x1A60, 11); Write32(ObjectManager.Wow.AuraBytes!, 0x6F0, 8162);
+            Check(WowBTotemAuraCandidate.Capture(ObjectManager.Wow, ObjectManager.WowB, combatPlayer) == null, "duplicate inline IDs remain unknown");
+            ObjectManager.Wow.AuraBytes = ShamanCandidate(); Write64(ObjectManager.Wow.AuraBytes, 0x5F8, 10);
+            Check(WowBTotemAuraCandidate.Capture(ObjectManager.Wow, ObjectManager.WowB, combatPlayer) == null, "unsupported inline length remains unknown");
+            ObjectManager.Wow.AuraBytes = new byte[0x1624];
+            Write64(ObjectManager.Wow.AuraBytes, 0x5F0, 0x20608); Write64(ObjectManager.Wow.AuraBytes, 0x5F8, 11);
+            Write64(ObjectManager.Wow.AuraBytes, 0x600, 0x8000000000000010UL); Write32(ObjectManager.Wow.AuraBytes, 0x1C10, 1000);
+            Check(WowBTotemAuraCandidate.Capture(ObjectManager.Wow, ObjectManager.WowB, combatPlayer) == null, "empty inline remains unknown");
+            ObjectManager.Wow.AuraBytes = ShamanCandidate(); ObjectManager.Wow.ChangeSecondRead = true;
+            Check(WowBTotemAuraCandidate.Capture(ObjectManager.Wow, ObjectManager.WowB, combatPlayer) == null, "unstable inline snapshot remains unknown");
+            ObjectManager.Wow.ChangeSecondRead = false; ObjectManager.Wow.AuraBytes = null;
+            controller.Reset(); Styx.Helpers.Logging.Lines.Clear(); now = 0;
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "unknown aura withholds macro");
+            Check(Styx.Helpers.Logging.Lines.Exists(line => line.Contains("aura unknown")), "unknown aura reason logged");
+            int lines = Styx.Helpers.Logging.Lines.Count;
+            for (int i = 0; i < 10; i++) controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe);
+            Check(Styx.Helpers.Logging.Lines.Count == lines, "repeated guard reason is rate limited");
+            now = 15000; controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe);
+            Check(Styx.Helpers.Logging.Lines.Count == lines + 1, "persistent guard reason eventually repeats");
             Console.WriteLine("Buff scheduling and safety fixtures passed (synthetic only; no real cast or aura validation).");
         }
     }

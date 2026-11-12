@@ -5,7 +5,7 @@ using Styx.WoWInternals;
 
 namespace Styx.Logic.Pathing;
 
-// Experimental 70862/70888; observed only on 70862. This observes effects on the player, not totem
+// Experimental 70862/70888; effect mapping observed only on 70862. This observes effects on the player, not totem
 // existence. The mappings are limited to the ranks suggested by the user's
 // single-totem/range traces and published spell tables, not all totem ranks.
 internal sealed class WowBTotemAuraCandidate
@@ -45,20 +45,37 @@ internal sealed class WowBTotemAuraCandidate
     }
 
     internal static WowBTotemAuraCandidate? Capture(Memory memory, WowBReader reader, WowBObservedUnit player)
+        => Capture(memory, reader, player, out _);
+
+    internal static WowBTotemAuraCandidate? Capture(Memory memory, WowBReader reader, WowBObservedUnit player, out string reason)
     {
+        reason = "unsupported reader or player identity";
         if (!reader.Uses70862Features || player.Guid.IsEmpty || player.UnitAddress < 0x10000 ||
             player.UnitAddress > 0x00007FFFFFFFFFFFUL - (ulong)(ActiveCountOffset + 4)) return null;
         try
         {
             using var uncached = memory.TemporaryCacheState(false);
+            // Inline slots use the same stride and +0xE8 ID position as the
+            // grown array. Accept only the existing strictly validated inline
+            // snapshot and a nonzero count, just as for the external layout.
+            WowBInlineAuraCandidate? inline = WowBInlineAuraCandidate.Capture(memory, player);
+            if (inline != null)
+            {
+                var ids = new HashSet<uint>();
+                foreach (uint id in inline.CopyIds()) if (id != 0) ids.Add(id);
+                if (ids.Count != 0) { reason = "inline candidate"; return new WowBTotemAuraCandidate(ids); }
+            }
             byte[]? before = memory.ReadBytes64(player.UnitAddress + ActiveCountOffset, 4);
-            WowBCombatResearch.ExternalCandidateSample? sample = WowBCombatResearch.ReadExternalCandidate(memory, player.UnitAddress, out _);
+            WowBCombatResearch.ExternalCandidateSample? sample = WowBCombatResearch.ReadExternalCandidate(memory, player.UnitAddress, out string externalReason);
             byte[]? after = memory.ReadBytes64(player.UnitAddress + ActiveCountOffset, 4);
+            reason = "inline unavailable; external " + (sample == null ? externalReason : "count/slot validation failed");
             if (before == null || after == null || before.Length != 4 || after.Length != 4 || sample == null) return null;
             uint count = BitConverter.ToUInt32(before, 0);
             if (count != BitConverter.ToUInt32(after, 0)) return null;
-            return FromBytes(sample.Bytes, count);
+            WowBTotemAuraCandidate? result = FromBytes(sample.Bytes, count);
+            if (result != null) reason = "external candidate";
+            return result;
         }
-        catch { return null; }
+        catch { reason = "aura candidate read failed"; return null; }
     }
 }
