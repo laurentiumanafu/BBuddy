@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Summarize experimental 70862 external-candidate traces; never infer verified auras."""
+"""Summarize experimental 70862/70888 external-candidate traces; never infer verified auras."""
 import argparse
 import re
 import struct
@@ -7,14 +7,15 @@ from pathlib import Path
 
 STRIDE = 0x128  # hypothesis inherited from the old inline observation
 MAX_SLOTS = 24
+MAX_SLOTS_70888 = 28
 ID_WITHIN_SLOT = 0xE8
 SAMPLE = re.compile(r'^sample=(\d+) startMs=(\d+)')
 BASELINE = re.compile(r'^external baseline pointer=0x([0-9A-F]+) length=(\d+) capacity=(\d+) bytes=([0-9A-F]+)$')
 CHANGE = re.compile(r' \+0x([0-9A-F]{4}):([0-9A-F]{8})>([0-9A-F]{8})')
 
 
-def candidate_slots(raw):
-    if len(raw) % STRIDE or len(raw) > MAX_SLOTS * STRIDE:
+def candidate_slots(raw, max_slots=MAX_SLOTS):
+    if len(raw) % STRIDE or len(raw) > max_slots * STRIDE:
         raise ValueError('candidate buffer outside expected bounds')
     slots = []
     for i in range(len(raw) // STRIDE):
@@ -30,8 +31,13 @@ def read_trace(path):
     events, raw, last, samples, status = [], None, None, 0, 'missing end status'
     at = None
     with Path(path).open(encoding='utf-8-sig') as f:
-        if not f.readline().startswith('70862 COMBAT RESEARCH v1:'):
-            raise ValueError('not a 70862 Combat Research v1 trace')
+        header = f.readline()
+        if header.startswith('70862 COMBAT RESEARCH v1:'):
+            max_slots, max_capacity = MAX_SLOTS, 32
+        elif header.startswith('70888 COMBAT RESEARCH v1:'):
+            max_slots, max_capacity = MAX_SLOTS_70888, 36
+        else:
+            raise ValueError('not a 70862/70888 Combat Research v1 trace')
         for line in f:
             line = line.rstrip('\r\n')
             m = SAMPLE.match(line)
@@ -50,10 +56,10 @@ def read_trace(path):
             if m:
                 length, capacity = int(m.group(2)), int(m.group(3))
                 data = bytes.fromhex(m.group(4))
-                if not (1 <= length <= MAX_SLOTS and length <= capacity <= 32 and len(data) == length * STRIDE):
+                if not (1 <= length <= max_slots and length <= capacity <= max_capacity and len(data) == length * STRIDE):
                     raise ValueError('external baseline outside bounds')
                 raw = bytearray(data)
-                last = candidate_slots(raw)
+                last = candidate_slots(raw, max_slots)
                 events.append((at, 'baseline', last))
                 continue
             if line.startswith('external changes'):
@@ -74,7 +80,7 @@ def read_trace(path):
                     raw, last = None, None
                     events.append((at, 'inconsistent change; baseline invalidated', None))
                     continue
-                slots = candidate_slots(raw)
+                slots = candidate_slots(raw, max_slots)
                 if slots != last:
                     events.append((at, 'candidate fields changed', slots))
                     last = slots

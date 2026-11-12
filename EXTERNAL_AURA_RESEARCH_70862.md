@@ -1,5 +1,11 @@
 # 70862 external aura candidate: read-only research
 
+## 70888 larger candidate header (2026-11-12)
+
+The two labelled recordings (`no mana spring totem`, `mana spring totem active`) each completed 100 samples on the same player. Their player-window header at `+0x5F0` reports an external pointer, length 28 and capacity 36 throughout; the old 24-slot/32-capacity bounds rejected it before reading its contents. In the second trace, the count candidate at `+0x1A60` rose from 19 to 20 at approximately 1.5 seconds. This is correlated with the labelled recording, not proof of the effect ID, cast, or complete layout. No external array bytes were captured; the rank-2 effect ID 10491 is still inferred, not verified on this client.
+
+The 70888-only maximum is now 28 slots and capacity 36, matching that observed header; 70862 retains its previous maximum. Region readability, stable header/data, non-overlap, count agreement, unique IDs and combat safety checks are unchanged. Even if the expanded read succeeds, the candidate stride and meaning remain unproven. Capture new controlled no-totem and cast traces to observe the external bytes and validate the hypothesis; unknown or inconsistent data remains unavailable. Gameplay effects, including macro and individual totem/shield checks, remain experimental.
+
 The three 2026-11-08 traces showed a candidate count changing 12 → 14 when the recordings were labeled with Strength of Earth and Healing Stream, and 14 → 12 → 14 during the in/out-of-range recording. The player header candidate at `+0x5F0` pointed outside the player window, with candidate length 17 and capacity 24. This is a lead, not proof of a complete aura list, pointer semantics, effect IDs, or totem activity.
 
 ## How to record
@@ -13,7 +19,7 @@ The three 2026-11-08 traces showed a candidate count changing 12 → 14 when the
 
 ## What is bounded
 
-This optional diagnostic is gated to 70862 and reads no pointer graph. It double-reads the 24-byte candidate header at `player+0x5F0`, checks a plausible aligned external pointer and candidate length/capacity (maximum 24 slots, maximum capacity 32), limits the read to `length × 0x128` bytes (at most 7,104), and requires one committed readable non-guard memory region. It reads the candidate bytes twice and rechecks the header and memory region; if these change or cannot be read, the sample is unavailable and the previous baseline is discarded. Player, attachment, target and bar are checked before and after each sample. The recorder is read-only, but these checks are not atomic and cannot prevent ABA changes, pointer reuse, unrelated content or all process-read risks.
+This optional diagnostic is gated to 70862/70888 and reads no pointer graph. It double-reads the 24-byte candidate header at `player+0x5F0`, checks a plausible aligned external pointer and candidate length/capacity (70862: maximum 24 slots, capacity 32; 70888: maximum 28 slots, capacity 36), limits the read to `length × 0x128` bytes (at most 8,288 on 70888), and requires one committed readable non-guard memory region. It reads the candidate bytes twice and rechecks the header and memory region; if these change or cannot be read, the sample is unavailable and the previous baseline is discarded. Player, attachment, target and bar are checked before and after each sample. The recorder is read-only, but these checks are not atomic and cannot prevent ABA changes, pointer reuse, unrelated content or all process-read risks.
 
 The old candidate's inline ID position is `0xE8` relative to the candidate base, with a `0x128` stride; the external representation is **not established**. The trace writes the raw bounded bytes and subsequent dword changes. `python Tools/analyze_external_aura_trace.py <trace>` reconstructs candidate triples as a research aid only. A failed read or missing candidate is not proof that an effect is absent. The optional recorder itself does not press keys or make gameplay decisions. The separately implemented 70862 totem buff feature uses this bounded read to check two observed player-effect candidates; see `TOTEM_BUFFS_70862.md`.
 

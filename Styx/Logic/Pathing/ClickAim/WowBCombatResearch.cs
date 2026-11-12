@@ -132,11 +132,11 @@ internal static class WowBCombatResearch
         return text.ToString();
     }
 
-    // Candidate header observed on one 70862 player. Its meanings and the
-    // 0x128 stride are hypotheses, not a verified general aura container.
+    // The 70888 trace shows a stable header of length 28, capacity 36; no
+    // external bytes were captured. Stride and completeness remain hypotheses.
     private const int ExternalHeaderOffset = 0x5F0, ExternalHeaderSize = 24;
-    internal const int ExternalCandidateStride = 0x128, ExternalMaxSlots = 24;
-    private const ulong ExternalMaxCapacity = 32;
+    internal const int ExternalCandidateStride = 0x128, ExternalMaxSlots = 24, External70888MaxSlots = 28;
+    private const ulong ExternalMaxCapacity = 32, External70888MaxCapacity = 36;
 
     internal sealed class ExternalCandidateSample
     {
@@ -153,10 +153,10 @@ internal static class WowBCombatResearch
         return true;
     }
 
-    // Shared by the opt-in research trace and experimental 70862 totem-effect
+    // Shared by the opt-in research trace and experimental totem-effect
     // checks. Reads one candidate pointer, not a pointer graph. A readable region and identical
     // pre/post headers and data reduce risk, but cannot exclude ABA/reuse.
-    internal static ExternalCandidateSample? ReadExternalCandidate(Memory memory, ulong playerUnit, out string reason)
+    internal static ExternalCandidateSample? ReadExternalCandidate(Memory memory, ulong playerUnit, out string reason, bool allow70888Extended = false)
     {
         reason = "header unreadable or unstable";
         try
@@ -169,7 +169,9 @@ internal static class WowBCombatResearch
             ulong length = BitConverter.ToUInt64(header1, 8);
             ulong capacity = BitConverter.ToUInt64(header1, 16);
             reason = "candidate header outside external research bounds";
-            if (length == 0 || length > ExternalMaxSlots || capacity == 0 || capacity > ExternalMaxCapacity ||
+            ulong maxSlots = (ulong)(allow70888Extended ? External70888MaxSlots : ExternalMaxSlots);
+            ulong maxCapacity = allow70888Extended ? External70888MaxCapacity : ExternalMaxCapacity;
+            if (length == 0 || length > maxSlots || capacity == 0 || capacity > maxCapacity ||
                 length > capacity || address < 0x10000 || (address & 7) != 0) return null;
             int size = (int)length * ExternalCandidateStride;
             if (address > UserLimit - (ulong)size ||
@@ -280,7 +282,7 @@ internal static class WowBCombatResearch
                     byte[]?[]? targetBytes = target.HasValue ? ReadWindow(memory, target.Value.UnitAddress) : null;
                     string externalReason = "";
                     ExternalCandidateSample? external = includeExternalArray && !cancel.IsCancellationRequested
-                        ? ReadExternalCandidate(memory, player.UnitAddress, out externalReason) : null;
+                        ? ReadExternalCandidate(memory, player.UnitAddress, out externalReason, reader.IsExperimental70888) : null;
                     if (cancel.IsCancellationRequested) { reason = "cancelled during read; last sample discarded"; break; }
                     if (!StableWithBar(memory, reader, player, target, snapshot.TargetGuid, bar, out why))
                     { reason = "state changed during read (" + why + "); last sample discarded"; break; }

@@ -99,13 +99,13 @@ namespace Styx.Logic.Pathing
     }
     static class WowBCombatResearch
     {
-        internal const int ExternalCandidateStride = 0x128, ExternalMaxSlots = 24;
+        internal const int ExternalCandidateStride = 0x128, ExternalMaxSlots = 24, External70888MaxSlots = 28;
         internal static byte[]? Data;
         internal static bool StopDuringRead, CombatEndsDuringRead;
         internal static Action? OnRead;
         internal sealed class ExternalCandidateSample { internal readonly byte[] Bytes; internal ExternalCandidateSample(byte[] b) { Bytes = b; } }
-        internal static ExternalCandidateSample? ReadExternalCandidate(Memory memory, ulong unit, out string reason)
-        { reason = "fixture"; OnRead?.Invoke(); if (StopDuringRead) ClickAimAbort.Requested = true; if (CombatEndsDuringRead) GrindRunner.Combat = false; return Data == null ? null : new ExternalCandidateSample((byte[])Data.Clone()); }
+        internal static ExternalCandidateSample? ReadExternalCandidate(Memory memory, ulong unit, out string reason, bool allow70888Extended = false)
+        { reason = "fixture"; OnRead?.Invoke(); if (StopDuringRead) ClickAimAbort.Requested = true; if (CombatEndsDuringRead) GrindRunner.Combat = false; return Data == null || (!allow70888Extended && Data.Length > ExternalMaxSlots * ExternalCandidateStride) ? null : new ExternalCandidateSample((byte[])Data.Clone()); }
     }
     static class WowBGrindFactions
     {
@@ -598,6 +598,25 @@ namespace Styx.Logic.Pathing
             WowBCombatResearch.StopDuringRead = true;
             Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "STOP during macro aura capture");
 
+            // Synthetic 28-slot grown layout; trace supplied only a header,
+            // not these made-up contents or proof of the actual effect ID.
+            Reset(); controller.Reset(); now = 0; ObjectManager.WowB!.IsExperimental70888 = true; GrindRunner.Combat = true;
+            ClickAimSettings.UseBuffsInCombat = ClickAimSettings.UseShamanTotemMacro = ClickAimSettings.ShamanTotemMana = true;
+            combatPlayer = ObjectManager.WowB.Player; ObjectManager.WowB.RawBar[1] = 123; ClickAimCombat.Bar.Clear();
+            byte[] grown = new byte[28 * 0x128];
+            for (int i = 0; i < 18; i++) BitConverter.GetBytes((uint)(20000 + i)).CopyTo(grown, i * 0x128 + 0xE8);
+            BitConverter.GetBytes(10491U).CopyTo(grown, 27 * 0x128 + 0xE8);
+            WowBCombatResearch.Data = grown; ObjectManager.Wow!.TotemCount = 19;
+            Check(WowBTotemAuraCandidate.FromBytes(grown, 19) == null, "older build retains 24-slot limit");
+            Check(WowBTotemAuraCandidate.FromBytes(grown, 19, true)?.ManaSpringActive() == true, "last grown slot read for 70888");
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "28-slot higher-rank effect suppresses macro");
+            BitConverter.GetBytes(20000U).CopyTo(grown, 27 * 0x128 + 0xE8);
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "28-slot duplicate remains unknown");
+            BitConverter.GetBytes(0U).CopyTo(grown, 27 * 0x128 + 0xE8);
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "28-slot count mismatch withholds macro");
+            ObjectManager.Wow.TotemCount = 18;
+            Check(controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "28-slot missing effect permits guarded macro");
+            Check(WowBTotemAuraCandidate.FromBytes(new byte[29 * 0x128], 1, true) == null, "29 slots remain unsupported");
             // Synthetic inline layout, same ID position and count checks as the
             // existing inline reader. It does not validate real 70888 data.
             Reset(); controller.Reset(); now = 0; ObjectManager.WowB!.IsExperimental70888 = true;

@@ -26,9 +26,12 @@ class ExternalResearch(unittest.TestCase):
 
     def test_bounded_and_stable_read(self):
         fn = part(S, 'internal static ExternalCandidateSample? ReadExternalCandidate', '    // A new pointer/header')
-        for text in ('ExternalMaxSlots = 24', 'ExternalMaxCapacity = 32', 'ExternalCandidateStride = 0x128'):
+        for text in ('ExternalMaxSlots = 24', 'ExternalMaxCapacity = 32', 'ExternalCandidateStride = 0x128',
+                     'External70888MaxSlots = 28', 'External70888MaxCapacity = 36'):
             self.assertIn(text, S)
-        for text in ('length > ExternalMaxSlots', 'capacity > ExternalMaxCapacity', 'length > capacity',
+        for text in ('allow70888Extended ? External70888MaxSlots : ExternalMaxSlots',
+                     'allow70888Extended ? External70888MaxCapacity : ExternalMaxCapacity',
+                     'length > maxSlots', 'capacity > maxCapacity', 'length > capacity',
                      '(address & 7) != 0', 'address > UserLimit - (ulong)size',
                      'address < playerUnit + WindowSize', 'IsCommittedReadableRange64(address, size)',
                      'SameBytes(header1, header2)', 'SameBytes(first, second)',
@@ -36,6 +39,10 @@ class ExternalResearch(unittest.TestCase):
             self.assertIn(text, fn)
         self.assertEqual(fn.count('ReadBytes64(address, size)'), 2)
         self.assertEqual(fn.count('IsCommittedReadableRange64(address, size)'), 2)
+        self.assertIn('out externalReason, reader.IsExperimental70888', S)
+        totem = read('Styx/Logic/Pathing/ClickAim/WowBTotemAuraCandidate.cs')
+        self.assertIn('out string externalReason, reader.IsExperimental70888', totem)
+        self.assertIn('FromBytes(sample.Bytes, count, reader.IsExperimental70888)', totem)
         region = part(M, 'public bool IsCommittedReadableRange64(', '        /// <summary>\n        /// True only when VirtualQueryEx')
         for text in ('VirtualQueryEx64', 'info.State != 0x1000', 'info.Protect & 0x100', 'info.RegionSize', 'info.BaseAddress'):
             self.assertIn(text, region)
