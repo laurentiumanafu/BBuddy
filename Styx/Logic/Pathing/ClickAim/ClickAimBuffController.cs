@@ -225,7 +225,7 @@ internal sealed class ClickAimBuffController
     private static bool MacroMissing(WowBTotemAuraCandidate aura, int mask)
         => ((mask & 1) != 0 && aura.Active(8160) == false) ||
            ((mask & 2) != 0 && aura.Active(5394) == false) ||
-           ((mask & 4) != 0 && aura.Active(5675) == false);
+           ((mask & 4) != 0 && !aura.ManaSpringActive());
     private static bool MacroHandles(int mask, int id)
         => (id == 8160 && (mask & 1) != 0) ||
            ((id == 5394 || id == 5675) && (mask & 6) != 0);
@@ -249,7 +249,9 @@ internal sealed class ClickAimBuffController
         bool starting = _macroRemaining == 0;
         if (starting ? now < _macroRetryAt : now < _macroNextPressAt)
         { ReportMacroState(starting ? "10-second retry delay" : "burst spacing"); return false; }
-        uint minimumMana = (mask & 1) != 0 ? 65U : 40U; // most expensive configured rank; next step is unknown
+        // The macro's rank and next step are opaque. Mana Spring's known
+        // Forever ranks cost up to 100; use that conservative estimate if selected.
+        uint minimumMana = (mask & 4) != 0 ? 100U : (mask & 1) != 0 ? 65U : 40U;
         if (!CombatPlayerSafe(memory, reader, hwnd, stopped, player, out uint map, out uint mana))
         { ReportMacroState("player/combat/health/ghost/map or session guard not confirmed"); return false; }
         if (mana < minimumMana)
@@ -468,7 +470,11 @@ internal sealed class WowBInlineAuraCandidate
     internal static bool Supported(int id) => id == 168 || id == 1459 || id == 324;
 
     internal static WowBInlineAuraCandidate? Capture(Memory memory, WowBObservedUnit player)
+        => Capture(memory, player, out _);
+
+    internal static WowBInlineAuraCandidate? Capture(Memory memory, WowBObservedUnit player, out string reason)
     {
+        reason = "player identity invalid";
         try
         {
             if (player.Guid.IsEmpty || player.UnitAddress < 0x10000 ||
@@ -476,17 +482,26 @@ internal sealed class WowBInlineAuraCandidate
             using var uncached = memory.TemporaryCacheState(false);
             byte[]? first = memory.ReadBytes64(player.UnitAddress + Header, DataSize);
             byte[]? second = memory.ReadBytes64(player.UnitAddress + Header, DataSize);
+            reason = "inline window unreadable";
             if (first == null || second == null || first.Length != DataSize || second.Length != DataSize) return null;
             // The inline pointer, 16-tagged capacity word and lengths 11/12
             // were observed in two sessions. The length's meaning is not
             // proven. Scan only that bounded range and require active-count
             // agreement. External/grown arrays are never chased.
             ulong inline = player.UnitAddress + DataPointer;
-            ulong length = Qword(first, 0x5F8);
-            if (Qword(first, 0x5F0) != inline || Qword(second, 0x5F0) != inline ||
-                (length != 11 && length != Slots) || Qword(second, 0x5F8) != length ||
-                Qword(first, 0x600) != 0x8000000000000010UL || Qword(second, 0x600) != 0x8000000000000010UL) return null;
+            ulong length = Qword(first, 0x5F8), capacity = Qword(first, 0x600);
+            if (Qword(first, 0x5F0) != Qword(second, 0x5F0) || Qword(second, 0x5F8) != length || Qword(second, 0x600) != capacity)
+            { reason = "inline header changed during read"; return null; }
+            if (Qword(first, 0x5F0) != inline || (length != 11 && length != Slots) || capacity != 0x8000000000000010UL)
+            {
+                // No raw pointer is logged; these words help distinguish an
+                // unsupported inline shape from a grown-array header.
+                reason = "inline header rejected (pointer=" + (Qword(first, 0x5F0) == inline ? "inline" : "other") +
+                    ", length=" + length + ", capacity=0x" + capacity.ToString("X") + ")";
+                return null;
+            }
             uint clock1 = Word(first, ClientClock), clock2 = Word(second, ClientClock);
+            reason = "inline clock unavailable or unstable";
             if (clock1 == 0 || clock2 == 0 || unchecked(clock2 - clock1) > 5000) return null;
             int slotCount = (int)length;
             uint[] id = new uint[slotCount], duration = new uint[slotCount], expiry = new uint[slotCount];
@@ -496,13 +511,16 @@ internal sealed class WowBInlineAuraCandidate
             {
                 int offset = FirstId + i * Stride;
                 id[i] = Word(second, offset); duration[i] = Word(second, offset + 12); expiry[i] = Word(second, offset + 16);
-                if (id[i] != Word(first, offset) || duration[i] != Word(first, offset + 12) || expiry[i] != Word(first, offset + 16)) return null;
-                if (id[i] != 0) { occupied++; if (!seen.Add(id[i])) return null; }
+                if (id[i] != Word(first, offset) || duration[i] != Word(first, offset + 12) || expiry[i] != Word(first, offset + 16))
+                { reason = "inline slots changed during read"; return null; }
+                if (id[i] != 0) { occupied++; if (!seen.Add(id[i])) { reason = "inline duplicate IDs"; return null; } }
             }
-            if (Word(first, ActiveCount) != (uint)occupied || Word(second, ActiveCount) != (uint)occupied) return null;
+            if (Word(first, ActiveCount) != (uint)occupied || Word(second, ActiveCount) != (uint)occupied)
+            { reason = "inline count mismatch (count=" + Word(first, ActiveCount) + "/" + Word(second, ActiveCount) + ", occupied=" + occupied + ")"; return null; }
+            reason = "inline candidate";
             return new WowBInlineAuraCandidate(clock2, id, duration, expiry);
         }
-        catch { return null; }
+        catch { reason = "inline read failed"; return null; }
     }
 
     internal bool LightningShieldActive()

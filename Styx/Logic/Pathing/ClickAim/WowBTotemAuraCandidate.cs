@@ -29,6 +29,13 @@ internal sealed class WowBTotemAuraCandidate
         return effect == 0 ? (bool?)null : _ids.Contains((uint)effect);
     }
 
+    // Macro contents/rank are opaque. Treat any known Mana Spring candidate
+    // as present, rather than repeatedly replacing a higher rank. Only 5677
+    // has been observed in the user's traces; the others are Classic IDs and
+    // their 70888 representation remains unverified.
+    internal bool ManaSpringActive() => _ids.Contains(5677) || _ids.Contains(10491) ||
+        _ids.Contains(10493) || _ids.Contains(10494);
+
     // Validate completeness using the separately observed player count. A bad
     // count, duplicate, changed buffer or unsupported header is unknown, not absent.
     internal static WowBTotemAuraCandidate? FromBytes(byte[]? bytes, uint count)
@@ -58,17 +65,18 @@ internal sealed class WowBTotemAuraCandidate
             // Inline slots use the same stride and +0xE8 ID position as the
             // grown array. Accept only the existing strictly validated inline
             // snapshot and a nonzero count, just as for the external layout.
-            WowBInlineAuraCandidate? inline = WowBInlineAuraCandidate.Capture(memory, player);
+            WowBInlineAuraCandidate? inline = WowBInlineAuraCandidate.Capture(memory, player, out string inlineReason);
             if (inline != null)
             {
                 var ids = new HashSet<uint>();
                 foreach (uint id in inline.CopyIds()) if (id != 0) ids.Add(id);
                 if (ids.Count != 0) { reason = "inline candidate"; return new WowBTotemAuraCandidate(ids); }
+                inlineReason = "inline candidate empty";
             }
             byte[]? before = memory.ReadBytes64(player.UnitAddress + ActiveCountOffset, 4);
             WowBCombatResearch.ExternalCandidateSample? sample = WowBCombatResearch.ReadExternalCandidate(memory, player.UnitAddress, out string externalReason);
             byte[]? after = memory.ReadBytes64(player.UnitAddress + ActiveCountOffset, 4);
-            reason = "inline unavailable; external " + (sample == null ? externalReason : "count/slot validation failed");
+            reason = inlineReason + "; external " + (sample == null ? externalReason : "count/slot validation failed");
             if (before == null || after == null || before.Length != 4 || after.Length != 4 || sample == null) return null;
             uint count = BitConverter.ToUInt32(before, 0);
             if (count != BitConverter.ToUInt32(after, 0)) return null;

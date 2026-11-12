@@ -35,7 +35,7 @@ class Macro(unittest.TestCase):
  def test_inline_and_diagnostics_wiring(self):
   T=get('Styx/Logic/Pathing/ClickAim/WowBTotemAuraCandidate.cs')
   G=get('Styx/Logic/Pathing/ClickAim/GrindRunner.cs')
-  self.assertIn('WowBInlineAuraCandidate.Capture(memory, player)',T)
+  self.assertIn('WowBInlineAuraCandidate.Capture(memory, player, out string inlineReason)',T)
   self.assertIn('inline.CopyIds()',T); self.assertIn('ids.Count != 0',T)
   self.assertIn('ReadExternalCandidate(memory, player.UnitAddress',T)
   self.assertIn('Word(first, ActiveCount) != (uint)occupied',B)
@@ -47,8 +47,12 @@ class Macro(unittest.TestCase):
   self.assertIn('optional buffs deferred while closing',G)
  def test_only_selected_effects(self):
   for t in ('(mask & 1) != 0 && aura.Active(8160) == false','(mask & 2) != 0 && aura.Active(5394) == false',
-            '(mask & 4) != 0 && aura.Active(5675) == false'):
+            '(mask & 4) != 0 && !aura.ManaSpringActive()'):
    self.assertIn(t,B)
+  T=get('Styx/Logic/Pathing/ClickAim/WowBTotemAuraCandidate.cs')
+  for effect in ('5677','10491','10493','10494'): self.assertIn('_ids.Contains('+effect+')',T)
+  self.assertIn('(mask & 4) != 0 ? 100U',B)
+  self.assertIn('inline header rejected (pointer=',B)
   doc=get('TOTEM_BUFFS_70862.md')
   for t in ('both Water totems','at least 10 seconds after the last press','not** establish','cannot skip','only during combat'):
    self.assertIn(t,doc)
