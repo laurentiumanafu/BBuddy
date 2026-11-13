@@ -138,6 +138,58 @@ def main():
     check("TrinityCore-style names route as well",
           length is not None and length > STRAIGHT + 50.0, result.stdout)
 
+    # Newer map-level header: MMAP + version 16 + the same 28-byte
+    # dtNavMeshParams; captured files also have four trailing bytes. This uses
+    # the production reader shared by the checker and the Windows DLL.
+    store = make_store(work, "version16-map-params")
+    rename_to_trinity(store)
+    params_path = os.path.join(store, "0001.mmap")
+    with open(params_path, "rb") as f:
+        raw_params = f.read()
+    assert len(raw_params) == 28
+    with open(params_path, "wb") as f:
+        f.write(struct.pack("<II", 0x4d4d4150, 16) + raw_params + bytes(4))
+    result = run(store)
+    check("version-16 map parameters load the stock tile and route",
+          result.returncode == 0 and path_length(result.stdout) is not None
+          and path_length(result.stdout) > STRAIGHT + 50.0,
+          result.stdout + result.stderr)
+    # The captured v16 map uses 0x80000000 in maxPolys. Our 64-bit Detour
+    # reference layout ignores maxPolys at init and still loads the tile.
+    with open(params_path, "r+b") as f:
+        f.seek(8 + 24); f.write(struct.pack("<I", 0x80000000))
+    result = run(store)
+    check("version-16 maxPolys sentinel works with 64-bit Detour",
+          result.returncode == 0 and path_length(result.stdout) is not None,
+          result.stdout + result.stderr)
+    with open(params_path, "r+b") as f:
+        f.seek(4); f.write(struct.pack("<I", 17))
+    result = run(store, query=False)
+    check("unknown map header version fails closed", result.returncode != 0
+          and "invalid, unsupported or truncated" in result.stderr, result.stdout + result.stderr)
+    with open(params_path, "wb") as f:
+        f.write(struct.pack("<II", 0x4d4d4150, 16) + raw_params[:10])
+    result = run(store, query=False)
+    check("truncated version-16 parameters fail closed", result.returncode != 0
+          and "invalid, unsupported or truncated" in result.stderr, result.stdout + result.stderr)
+    with open(params_path, "wb") as f:
+        f.write(raw_params[:12])
+    result = run(store, query=False)
+    check("truncated legacy parameters fail closed", result.returncode != 0
+          and "invalid, unsupported or truncated" in result.stderr, result.stdout + result.stderr)
+    bad = bytearray(raw_params); struct.pack_into("<i", bad, 20, 0x7fffffff)
+    with open(params_path, "wb") as f:
+        f.write(struct.pack("<II", 0x4d4d4150, 16) + bad)
+    result = run(store, query=False)
+    check("unbounded tile allocation is refused before Detour init", result.returncode != 0
+          and "invalid, unsupported or truncated" in result.stderr, result.stdout + result.stderr)
+    bad = bytearray(raw_params); struct.pack_into("<f", bad, 12, float("nan"))
+    with open(params_path, "wb") as f:
+        f.write(struct.pack("<II", 0x4d4d4150, 16) + bad)
+    result = run(store, query=False)
+    check("nonfinite tile dimensions are refused", result.returncode != 0
+          and "invalid, unsupported or truncated" in result.stderr, result.stdout + result.stderr)
+
     # The 4x4 container this project wrote before, spelled version 5.
     store = make_store(work, "multi5")
     wrap_as_multi_tile(store, 5)

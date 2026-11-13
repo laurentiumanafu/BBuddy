@@ -1,0 +1,15 @@
+diff --git a/Navigation/MoveMap.cpp b/Navigation/MoveMap.cpp
+index 717ce99..951f75d 100644
+--- a/Navigation/MoveMap.cpp
++++ b/Navigation/MoveMap.cpp
+@@ -27,0 +28 @@
++#include "MmapParams.h"
+@@ -269,2 +270,2 @@ namespace MMAP
+-		dtNavMeshParams params;
+-		size_t file_read = fread(&params, sizeof(dtNavMeshParams), 1, file);
++		dtNavMeshParams params{};
++		const bool paramsOk = ReadMmapParams(file, params);
+@@ -271,0 +273 @@ namespace MMAP
++		if (!paramsOk) return false;
+@@ -273,0 +276 @@ namespace MMAP
++		if (!mesh) return false;

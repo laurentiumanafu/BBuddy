@@ -42,8 +42,17 @@ Tools\NavMeshBuilder\make-mmaps.cmd C:\export\kalimdor 1 C:\CopilotBuddy
 
 ## Format written (what the loader demands)
 
-`<map>.mmap` is a bare `dtNavMeshParams` dump (28 bytes with `DT_POLYREF64` off,
-40 with it — this build uses the 64-bit polyref layout):
+This builder writes `<map>.mmap` as a bare 28-byte `dtNavMeshParams` dump;
+`DT_POLYREF64` changes polygon references, not the size of this struct. The
+loader and `mmapcheck` also accept an observed version-16 map-level header:
+`u32 MMAP_MAGIC`, `u32 16`, then those same 28-byte parameters (the captured
+file has four additional trailing bytes). Unknown header versions and malformed
+or unreasonable dimensions/tile counts are rejected before Detour allocation.
+This is separate from the `.mmtile` header below. The sample v16 parameters use
+`maxPolys=0x80000000`; this x64 Detour build does not use that field to generate
+references. Unknown variants and other Detour layouts have not been validated.
+
+The builder's parameters are:
 
 ```
 orig  (-17066.7, 0, -17066.7)
@@ -238,3 +247,17 @@ plus WMO/doodad collision, built by an extractor that read a real client. Genera
 our own set from 70291 (ADT -> `.navtile` -> mmaps) is **postponed** - it needs the
 CASC extractor, and it would still lack WMO collision because `cascdump`/`mapdump`
 only read terrain.
+
+
+## Riverglades version-16 map parameters
+
+A 70938 client log showed map 0 tile files present but zero loaded. The user's
+`0000.mmap` begins with an 8-byte `PAMM` / version-16 header, which the old
+loader misinterpreted as raw parameters. The native loader and checker now use
+the same checked reader; the bare-parameter format remains supported. In a
+local Detour test the supplied map 0 tiles `(49,40)` and `(49,41)` both loaded,
+and the logged positions snapped to nearby polygons. An on-demand route across
+those two captured files also returned a complete path. This does not validate
+other tiles, the current live game geometry, or Windows runtime behavior.
+Rebuild the application so the updated x64 `Navigation.dll` is copied beside
+the executable. Do not modify or mix the user's mmap files.

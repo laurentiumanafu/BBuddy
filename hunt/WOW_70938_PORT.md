@@ -189,3 +189,34 @@ map parameter filenames and lengths, 3x3 tile filenames and lengths, and
 native loaded flags/counts. Existence or loading still does not prove correct
 or walkable geometry. These changes diagnose but do not create or repair a
 mesh, and require a Windows build and live verification.
+
+
+### Supplied Riverglades mesh: version-16 map header
+
+Drive `1MgVb1dK3WA0U2x8ZK7YiUKcDwFn_l8yw` ZIP MD5
+`4fae3da57f49eba61bd6411170b293a0` contains `0000.mmap` and two tiles matching
+the recorded lengths. SHA-256: map params
+`11f29fcf6940331baab4221832dd3c60cafd7b8946d3f7503bbfaffc66695226`, tile
+`49,40` `f68c358b03d0854c0b3f043553d6fd95afbde49487deded1fbad314f0b3c906e`,
+tile `49,41` `9a0c340ee409cad9b78d74af5fdaefbd7c15e5b5d440b9e7a1f5b4c9fd357eb2`.
+The 40-byte map file begins with MMAP magic and version 16 before the 28-byte
+Detour parameters, with four extra trailing bytes. The prior loader read the
+header as parameters and did not check the read or bound the allocation.
+
+A common bounded parser now handles the old bare params or this observed v16
+header, validates finite dimensions and tile count, and rejects unknown versions
+or truncated data before initialization. Detour uses 64-bit refs and ignores
+the captured maxPolys sentinel `0x80000000`. The updated x64 Navigation DLL is
+cross-compiled and export-checked; it has not been exercised on Windows here.
+The user's original files were not changed. The Linux checker built from the
+same Detour and parser accepted both supplied tiles and snapped the 19:22 and
+19:30 player coordinates to nearby polygons. On-demand query between the two
+positions returned a complete 45-polygon, 241.4 yd path; this is an offline
+mesh result, not proof of live movement. Legacy and versioned synthetic fixture
+coverage is separate from Windows/client validation.
+
+Separate audit note: the native optional sliced-path API treats map ID 0 as an
+inactive sentinel in update/finalize. No callers of that API were found outside
+its managed wrapper. This is not evidence for the nearest-poly failure and was
+not changed by the map-header fix; if a future feature uses sliced paths on map
+0, it needs a separate active-state fix and tests.

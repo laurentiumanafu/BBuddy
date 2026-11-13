@@ -2,11 +2,11 @@
 # Builds Navigation.dll for x64 (and optionally x86) from Likon69/Navigation-C-.
 #
 # Why: Lib\Navigation.dll is a 32-bit build. The bot is x64 now, so it needs an
-# x64 DLL with the same C ABI. The upstream source compiles for MSVC only, so four
-# one-line portability fixes are applied first (patches/navigation-x64-port.patch).
+# x64 DLL with the same C ABI. The upstream portability and mmap-format patches
+# are applied in order to the pinned upstream source before compilation.
 #
 # Requirements: git, zig (any recent version; zig carries a clang + lld that target
-# Windows). On Windows use build-navigation.ps1 with MSVC instead.
+# Windows). Run this script in a bash environment with Zig available.
 #
 #   ./build-navigation.sh              # x64 only, into Lib/x64/
 #   ./build-navigation.sh --both       # x64 + x86, into Lib/x64/ and Lib/
@@ -44,7 +44,7 @@ DEFINES=(
   -D_WINDOWS -D_WIN32 -D_CRT_SECURE_NO_WARNINGS -DNAVIGATION_EXPORTS
   -include windows.h
 )
-INCLUDES=(-I . -I Detour/Include -I DetourCrowd/Include -I g3dlite/Include -I Utilities)
+INCLUDES=(-I . -I "$REPO_ROOT/Tools/Navigation" -I Detour/Include -I DetourCrowd/Include -I g3dlite/Include -I Utilities)
 
 command -v zig >/dev/null || { echo "zig not found (pip install ziglang, or use build-navigation.ps1 on Windows)"; exit 1; }
 
@@ -60,6 +60,9 @@ if ! git apply --check "$PATCH" 2>/dev/null; then
   exit 1
 fi
 git apply "$PATCH"
+V16_PATCH="$REPO_ROOT/Tools/Navigation/patches/navigation-mmap-v16.patch"
+git apply --unidiff-zero --check "$V16_PATCH"
+git apply --unidiff-zero "$V16_PATCH"
 
 build() {
   local target="$1" out="$2"

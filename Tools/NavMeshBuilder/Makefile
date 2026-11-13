@@ -21,7 +21,7 @@ all: mmapbuild mmapcheck legacyfixture
 mmapbuild: mmapbuild.cpp ../NavGrid/navgrid.o
 	$(CXX) $(CFLAGS) $(INCLUDES) -o $@ mmapbuild.cpp $(SOURCES) ../NavGrid/navgrid.o
 
-mmapcheck: mmapcheck.cpp
+mmapcheck: mmapcheck.cpp ../Navigation/MmapParams.h
 	$(CXX) $(CFLAGS) $(INCLUDES) -o $@ mmapcheck.cpp $(SOURCES)
 
 legacyfixture: legacyfixture.cpp
@@ -47,7 +47,7 @@ bin-x64/mmapbuild.exe: mmapbuild.cpp ../NavGrid/navgrid-win.o
 	$(ZIG) c++ -target x86_64-windows-gnu $(CFLAGS) -static-libgcc -static-libstdc++ \
 		$(INCLUDES) -o $@ mmapbuild.cpp $(SOURCES) ../NavGrid/navgrid-win.o -lm
 
-bin-x64/mmapcheck.exe: mmapcheck.cpp
+bin-x64/mmapcheck.exe: mmapcheck.cpp ../Navigation/MmapParams.h
 	mkdir -p bin-x64
 	$(ZIG) c++ -target x86_64-windows-gnu $(CFLAGS) -static-libgcc -static-libstdc++ \
 		$(INCLUDES) -o $@ mmapcheck.cpp $(SOURCES) -lm

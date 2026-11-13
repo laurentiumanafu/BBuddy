@@ -13,6 +13,7 @@
 #include "DetourNavMeshQuery.h"
 #include "DetourCommon.h"
 #include "DetourNavMeshBuilder.h"
+#include "../Navigation/MmapParams.h"
 
 #include <cmath>
 #include <cstdio>
@@ -352,14 +353,14 @@ int main(int argc, char** argv)
             return 1;
         }
     }
-    dtNavMeshParams params;
-    if (fread(&params, sizeof(params), 1, mf) != 1)
+    dtNavMeshParams params{};
+    const bool paramsOk = ReadMmapParams(mf, params);
+    fclose(mf);
+    if (!paramsOk)
     {
-        fclose(mf);
-        fprintf(stderr, "mmapcheck: %s is truncated\n", mapPath);
+        fprintf(stderr, "mmapcheck: invalid, unsupported or truncated map parameters\n");
         return 1;
     }
-    fclose(mf);
 
     printf("params: orig (%.1f, %.1f, %.1f) tile %.2f x %.2f maxTiles %d maxPolys %d\n",
            params.orig[0], params.orig[1], params.orig[2], params.tileWidth,
