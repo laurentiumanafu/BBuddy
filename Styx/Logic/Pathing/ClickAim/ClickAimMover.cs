@@ -363,6 +363,7 @@ public sealed class ClickAimMover : IPlayerMover
 
     internal void EndRecoveryKeySteering() { _keyMode = false; }
     internal bool RequireFacingForKeyMode { get; set; }
+    internal bool TurnInPlaceForKeyMode { get; set; }
 
     // Gather uses only key steering. Its stops must not click the centre or tap W:
     // either input can start/interfere with an interaction at the character's feet.
@@ -382,7 +383,7 @@ public sealed class ClickAimMover : IPlayerMover
                  * at the waypoint instead of overshooting it. */
                 IntPtr hwnd = Handle();
                 double rem;
-                if (!ClickAimKeySteer.Steer(location.X, location.Y, hwnd, true, out rem, RequireFacingForKeyMode))
+                if (!ClickAimKeySteer.Steer(location.X, location.Y, hwnd, true, out rem, RequireFacingForKeyMode, TurnInPlaceForKeyMode))
                 {
                     Blocked = true;
                     return;

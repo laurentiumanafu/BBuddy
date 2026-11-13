@@ -552,7 +552,7 @@ internal static class ClickAimKeySteer
     /// combination oscillated for 60 ticks in a model of it). So the step size is adapted:
     /// if the error grew or changed sign, the tap was too long and is halved.
     /// </summary>
-    public static bool Steer(double tx, double ty, IntPtr hwnd, bool forward, out double remaining, bool requireFacing = false)
+    public static bool Steer(double tx, double ty, IntPtr hwnd, bool forward, out double remaining, bool requireFacing = false, bool turnInPlace = false)
     {
         remaining = 0;
 
@@ -603,7 +603,7 @@ internal static class ClickAimKeySteer
              * does not depend on movement, so a 20 deg correction is a 0.1 s arc of about
              * 2 yd. Only a big error (a new leg pointing back the way we came) is worth
              * standing still for. */
-            if (!forward || Math.Abs(error) > TurnWhileRunningDeg) SetForward(hwnd, false);
+            if (turnInPlace || !forward || Math.Abs(error) > TurnWhileRunningDeg) SetForward(hwnd, false);
 
             /* Learn the turn rate instead of trusting the calibration.
              *

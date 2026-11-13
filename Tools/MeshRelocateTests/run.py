@@ -13,6 +13,9 @@ loop = gather[gather.index('                    bool walked = Walk(mover, next, 
 assert 'if (!walked && roam == null)' in loop and 'RelocateAndRetry(mover, next)' in loop
 assert 'if (++failures >= 3)' in loop  # unchanged roam failure handling
 assert 'RouteRunner.LastRunInterrupted' in loop
+node = gather[gather.index('                    bool reached = Walk(mover, destination, false);'):gather.index('                ClickAimKeySteer.ReleaseHeld();', gather.index('                    bool reached = Walk(mover, destination, false);'))]
+assert 'RelocateAndRetry(mover, destination, false, NodeStillValid)' in node
+assert 'stationaryNodeFailures >= 3' in node and 'RouteRunner.LastRunInterrupted' in node
 project = '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><Nullable>enable</Nullable></PropertyGroup></Project>'
 with tempfile.TemporaryDirectory(prefix='mesh-relocate-tests-') as folder:
     folder = Path(folder)

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Threading;
 using Styx.Helpers;
@@ -70,6 +71,7 @@ public static class ClickAimPilot
         double bestRemaining = double.MaxValue;
         int lastProgressMs = started;
         int sidesteps = 0;
+        var attemptedEscapes = new List<WoWPoint>();
         const double ProgressYd = 2.0;
         const int StallMs = 25000;
 
@@ -161,7 +163,7 @@ public static class ClickAimPilot
              * has already refused to aim for another twenty-five seconds. */
             if (mover.Blocked && !stopWhenBlocked)
             {
-                if (TrySidestep(mover, goal, ref sidesteps, verbose, interrupt))
+                if (TrySidestep(mover, goal, ref sidesteps, attemptedEscapes, verbose, interrupt))
                 {
                     lastProgressMs = Environment.TickCount;
                     continue;
@@ -184,12 +186,14 @@ public static class ClickAimPilot
                 lastProgressMs = Environment.TickCount;
             }
             else if (unchecked(Environment.TickCount - lastProgressMs) > SidestepAfterMs
-                     && TrySidestep(mover, goal, ref sidesteps, verbose, interrupt))
+                     && TrySidestep(mover, goal, ref sidesteps, attemptedEscapes, verbose, interrupt))
             {
                 lastProgressMs = Environment.TickCount;
                 continue;
             }
-            else if (unchecked(Environment.TickCount - lastProgressMs) > StallMs)
+            else if (unchecked(Environment.TickCount - lastProgressMs) > StallMs ||
+                     (RouteRunner.RequireMeshDuringSession && sidesteps >= MaxSidesteps &&
+                      unchecked(Environment.TickCount - lastProgressMs) > SidestepAfterMs))
             {
                 mover.MoveStop();
                 if (verbose)
@@ -247,11 +251,8 @@ public static class ClickAimPilot
     /// <summary>How long without two yards of progress before a sidestep is tried.</summary>
     private const int SidestepAfterMs = 8000;
 
-    /// <summary>Sidesteps allowed per walk: right, left, right, and then it is a wall.</summary>
+    /// <summary>Three bounded escape searches per walk; exhaustion does not prove a wall.</summary>
     private const int MaxSidesteps = 3;
-
-    /// <summary>How far to the side a sidestep aims, in yards.</summary>
-    private const double SidestepYd = 7.0;
 
     /// <summary>How long one sidestep may take before the walk resumes toward the goal.</summary>
     private const int SidestepMs = 5000;
@@ -260,103 +261,150 @@ public static class ClickAimPilot
     private const int JumpVk = 0x20;
 
     /// <summary>
-    /// Steps around whatever is between the character and the goal: aims at a point
-    /// <see cref="SidestepYd"/> yards off the straight line, on alternating sides, walks it, and
+    /// Tries bounded escape candidates on alternating sides and behind the player,
+    /// validating every candidate against the mesh during a mesh-owned session, and
     /// leaves the mover ready to dispatch toward the real goal again. Returns false (and says so
     /// in <c>report</c>) when there is nothing to step from or the sidestep budget is spent.
     /// </summary>
-    private static bool TrySidestep(ClickAimMover mover, WoWPoint goal, ref int sidesteps, bool verbose, Func<bool>? interrupt)
+    private static bool TrySidestep(ClickAimMover mover, WoWPoint goal, ref int sidesteps,
+                                    List<WoWPoint> attemptedEscapes, bool verbose, Func<bool>? interrupt)
     {
         if (sidesteps >= MaxSidesteps) return false;
         sidesteps++;
 
         string report;
-        bool ok = Sidestep(mover, goal, sidesteps, interrupt, out report);
+        bool ok = Sidestep(mover, goal, sidesteps, attemptedEscapes, interrupt, out report);
         if (verbose || RouteRunner.RequireMeshDuringSession) Logging.Write("[ClickAim] " + report);
         return ok;
     }
 
-    private static bool Sidestep(ClickAimMover mover, WoWPoint goal, int attempt, Func<bool>? interrupt, out string report)
+    private static bool Sidestep(ClickAimMover mover, WoWPoint goal, int attempt,
+                                 List<WoWPoint> attemptedEscapes, Func<bool>? interrupt, out string report)
     {
         report = "";
-        double px, py;
-        if (!ClickAimPositions.TryRead(out px, out py))
+        // Stop before sampling: a held forward key must not move the player
+        // while a ray for their previous position is being checked.
+        mover.MoveStop();
+        ClickAimKeySteer.ReleaseHeld();
+        var sessionMemory = Styx.WoWInternals.ObjectManager.Wow;
+        var sessionReader = Styx.WoWInternals.ObjectManager.WowB;
+        bool SessionChanged() => RouteRunner.RequireMeshDuringSession &&
+            (sessionMemory == null || sessionReader == null || Styx.WoWInternals.ObjectManager.Wow != sessionMemory ||
+             Styx.WoWInternals.ObjectManager.WowB != sessionReader);
+        if (ClickAimAbort.Requested || RouteRunner.StopRequested || SessionChanged() || (interrupt != null && interrupt()))
+        { report = "sidestep interrupted before sampling"; return false; }
+        if (!ClickAimPositions.TryRead(out double px, out double py))
+        { report = "sidestep withheld: player position unreadable"; return false; }
+        double z = ClickAimPositions.Z();
+        if (!double.IsFinite(z))
         {
-            report = "a sidestep was wanted but there is no player position to take it from";
-            return false;
+            if (RouteRunner.RequireMeshDuringSession || !float.IsFinite(goal.Z))
+            { report = "sidestep withheld: player height unreadable"; return false; }
+            z = goal.Z;
         }
 
-        double dx = goal.X - px;
-        double dy = goal.Y - py;
-        double len = ClickAimMath.Len(dx, dy);
-        if (len < 1.0)
+        var candidates = ClickAimEscape.Candidates(px, py, goal.X, goal.Y, (float)z, attempt);
+        WoWPoint to = default;
+        bool found = false;
+        int checkedCount = 0;
+        foreach (WoWPoint candidate in candidates)
         {
-            report = "a sidestep was wanted but the goal is on top of the character";
+            if (ClickAimAbort.Requested || RouteRunner.StopRequested || SessionChanged() || (interrupt != null && interrupt()))
+            { report = "sidestep interrupted during mesh checks"; return false; }
+            bool tried = false;
+            foreach (WoWPoint prior in attemptedEscapes)
+                if (ClickAimMath.Len(candidate.X - prior.X, candidate.Y - prior.Y) < 0.75) { tried = true; break; }
+            if (tried) continue;
+            checkedCount++;
+            if (!RouteRunner.RequireMeshDuringSession || RouteRunner.ValidateGatherSidestep(px, py, candidate))
+            { to = candidate; found = true; break; }
+        }
+        if (!found)
+        {
+            report = "sidestep " + attempt + " withheld: none of " + checkedCount +
+                " bounded escape segments was validated on the current mesh";
             return false;
         }
-        dx /= len;
-        dy /= len;
+        // The owner callback can take time. Do not use a ray from an old
+        // position, an altered map/session, or a cancelled walk.
+        if (ClickAimAbort.Requested || RouteRunner.StopRequested || SessionChanged() || (interrupt != null && interrupt()) ||
+            !ClickAimPositions.TryRead(out double nowX, out double nowY) ||
+            ClickAimMath.Len(nowX - px, nowY - py) > 0.5 ||
+            (RouteRunner.RequireMeshDuringSession && !RouteRunner.ValidateGatherSidestep(nowX, nowY, to)))
+        { report = "sidestep withheld: session, position or mesh validation changed"; return false; }
+        if (ClickAimAbort.Requested || RouteRunner.StopRequested || SessionChanged() || (interrupt != null && interrupt()))
+        { report = "sidestep interrupted after mesh validation"; return false; }
 
-        double side = (attempt % 2 == 1) ? 1.0 : -1.0;   // right first, then left
-        var to = new WoWPoint((float)(px - dy * side * SidestepYd),
-                              (float)(py + dx * side * SidestepYd),
-                              goal.Z);
-
-        if (RouteRunner.RequireMeshDuringSession && !RouteRunner.ValidateGatherSidestep(px, py, to))
+        attemptedEscapes.Add(to);
+        mover.ClearBlock();
+        IntPtr hwnd = IntPtr.Zero;
+        try { hwnd = Styx.WoWInternals.ObjectManager.Wow.WindowHandle; } catch { }
+        bool jumped = false;
+        if (mover.KeyMode) ClickAimKeySteer.BeginMeshPoint();
+        else if (hwnd != IntPtr.Zero) { ClickAimInput.TapKey(hwnd, JumpVk, 40); jumped = true; }
+        double requested = ClickAimMath.Len(to.X - px, to.Y - py);
+        double tolerance = Math.Max(0.6, Math.Min(1.5, requested * 0.3));
+        int started = Environment.TickCount;
+        bool oldRequireFacing = mover.RequireFacingForKeyMode;
+        bool oldTurnInPlace = mover.TurnInPlaceForKeyMode;
+        if (RouteRunner.RequireMeshDuringSession)
         {
-            report = "sidestep " + attempt + " refused: the short segment was not validated on the current mesh";
-            return false;
+            mover.RequireFacingForKeyMode = true;
+            mover.TurnInPlaceForKeyMode = true;
         }
-
-        if (ClickAimAbort.Requested || (interrupt != null && interrupt()))
+        try
+        {
+            while (unchecked(Environment.TickCount - started) < SidestepMs)
+            {
+                if (ClickAimAbort.Requested || RouteRunner.StopRequested || SessionChanged() || (interrupt != null && interrupt()))
+                {
+                    mover.MoveStop();
+                    ClickAimKeySteer.ReleaseHeld();
+                    report = "sidestep interrupted during movement";
+                    return false;
+                }
+                if (!ClickAimPositions.TryRead(out double sx, out double sy))
+                { mover.MoveStop(); report = "sidestep stopped: player position unreadable"; return false; }
+                if (RouteRunner.RequireMeshDuringSession)
+                {
+                    // A validated ray is not a license to follow an arbitrary
+                    // steering arc. Stop if the actual path leaves its corridor.
+                    double cross = Math.Abs((sx - px) * (to.Y - py) - (sy - py) * (to.X - px)) / requested;
+                    if (!double.IsFinite(cross) || cross > 0.75)
+                    { report = "sidestep stopped: movement deviated from the validated segment"; return false; }
+                }
+                if (ClickAimMath.Len(to.X - sx, to.Y - sy) <= tolerance) break;
+                mover.MoveTowards(to);
+                if (mover.Blocked) break;
+                // Wait until steering has actually held forward; a stationary jump
+                // before the turn cannot help clear a lip in the escape direction.
+                if (!jumped && mover.KeyMode && ClickAimKeySteer.KeyDown && hwnd != IntPtr.Zero)
+                {
+                    if (ClickAimAbort.Requested || RouteRunner.StopRequested || SessionChanged() || (interrupt != null && interrupt()))
+                    { mover.MoveStop(); ClickAimKeySteer.ReleaseHeld(); report = "sidestep interrupted before jump"; return false; }
+                    ClickAimInput.TapKey(hwnd, JumpVk, 40);
+                    jumped = true;
+                }
+                Thread.Sleep(60);
+            }
+        }
+        finally
         {
             mover.MoveStop();
             ClickAimKeySteer.ReleaseHeld();
-            report = "sidestep interrupted before movement";
-            return false;
+            mover.RequireFacingForKeyMode = oldRequireFacing;
+            mover.TurnInPlaceForKeyMode = oldTurnInPlace;
         }
-
-        /* "Cannot get there" was about the last position: forget it, or the mover will not
-         * dispatch a click at all. */
-        mover.ClearBlock();
-
-        /* A jump is free and it clears the small things a click-walk trips on - a kerb, a
-         * stump, the lip of a hill. It is also what a player presses when they are stuck. */
-        IntPtr hwnd = IntPtr.Zero;
-        try { hwnd = Styx.WoWInternals.ObjectManager.Wow.WindowHandle; } catch { }
-        if (hwnd != IntPtr.Zero) ClickAimInput.TapKey(hwnd, JumpVk, 40);
-
-        int started = Environment.TickCount;
-        while (unchecked(Environment.TickCount - started) < SidestepMs)
-        {
-            if (ClickAimAbort.Requested)
-            {
-                mover.MoveStop();
-                ClickAimKeySteer.ReleaseHeld();
-                break;
-            }
-            if (interrupt != null && interrupt())
-            {
-                mover.MoveStop();
-                ClickAimKeySteer.ReleaseHeld();
-                report = "sidestep interrupted by route owner";
-                return false;
-            }
-            // Do not steer back to a sidestep point already reached.
-            if (RouteRunner.RequireMeshDuringSession && ClickAimPositions.TryRead(out double sx, out double sy)
-                && ClickAimMath.Len(to.X - sx, to.Y - sy) <= 2.5) break;
-            mover.MoveTowards(to);
-            if (mover.Blocked) break;
-            Thread.Sleep(60);
-        }
-
-        double left = mover.LastRemaining;
-        if (RouteRunner.RequireMeshDuringSession) mover.MoveStop();
+        if (ClickAimAbort.Requested || RouteRunner.StopRequested || SessionChanged() || (interrupt != null && interrupt()))
+        { report = "sidestep interrupted after movement"; return false; }
+        if (!ClickAimPositions.TryRead(out double endX, out double endY))
+        { report = "sidestep stopped: final position unreadable"; return false; }
+        double moved = ClickAimMath.Len(endX - px, endY - py);
         mover.ClearBlock();
         report = string.Format(CultureInfo.InvariantCulture,
-            "sidestep aimed {0:F0} yd to the {1} around something in the way (attempt {2}, {3:F1} yd left of it)",
-            SidestepYd, side > 0 ? "right" : "left", attempt, left);
-        return true;
+            "sidestep {0}: {1} candidate ({2:F1}, {3:F1}), requested {4:F1} yd, moved {5:F1} yd; physical clearance is unverified",
+            attempt, RouteRunner.RequireMeshDuringSession ? "mesh-validated" : "unvalidated", to.X, to.Y, requested, moved);
+        return double.IsFinite(moved) && moved >= 0.75;
     }
 
     /// <summary>The 26-check report belongs in the log once per process, not once per leg.</summary>

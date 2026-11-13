@@ -385,13 +385,14 @@ internal static class GatherRunner
     }
 
     /// <summary>
-    /// A hotspot leg failed. Try up to <see cref="MeshRelocate.Attempts"/> other mesh-valid
+    /// A gather leg failed. Try up to <see cref="MeshRelocate.Attempts"/> other mesh-valid
     /// locations within <see cref="MeshRelocate.RadiusYd"/> of the initial stuck position:
-    /// walk to each over the mesh and, once there, ask for the hotspot again.
+    /// walk to each over the mesh and, once there, ask for the destination again.
     /// Returns true when reached. On interruption, the caller returns to the main loop
     /// for combat, death, map, node or user-stop handling.
     /// </summary>
-    private static bool RelocateAndRetry(ClickAimMover mover, RoutePoint original)
+    private static bool RelocateAndRetry(ClickAimMover mover, RoutePoint original,
+                                         bool checkNodes = true, Func<bool>? targetStillValid = null)
     {
         if (!ClickAimPositions.TryRead(out double originX, out double originY))
         {
@@ -427,7 +428,7 @@ internal static class GatherRunner
             Logging.Write(string.Format(CultureInfo.InvariantCulture,
                 "[Gather] relocation {0}/{1}: walking to ({2:F1}, {3:F1}) over the mesh",
                 attempt, MeshRelocate.Attempts, alternate.X, alternate.Y));
-            bool there = Walk(mover, alternate, true);
+            bool there = Walk(mover, alternate, checkNodes);
             if (_stop || ClickAimAbort.Requested || RouteRunner.LastRunInterrupted) return false;
             if (!there)
             {
@@ -436,18 +437,26 @@ internal static class GatherRunner
                 continue;
             }
 
+            // A resource may disappear while we relocate. Do not walk back to
+            // its stale coordinates unless it is still the same eligible node.
+            if (targetStillValid != null && !targetStillValid())
+            {
+                Logging.Write("[Gather] relocation: resource is no longer a fresh eligible observation; not retrying its old position");
+                return false;
+            }
+            if (_stop || ClickAimAbort.Requested || RouteRunner.LastRunInterrupted || !MapStillCurrent() || Interrupted()) return false;
             Logging.Write(string.Format(CultureInfo.InvariantCulture,
                 "[Gather] relocation {0}/{1}: arrived; asking for ({2:F1}, {3:F1}) again from here",
                 attempt, MeshRelocate.Attempts, original.X, original.Y));
-            if (Walk(mover, original, true))
+            if (Walk(mover, original, checkNodes))
             {
-                Logging.Write("[Gather] reached the hotspot after relocation " + attempt + "/" + MeshRelocate.Attempts);
+                Logging.Write("[Gather] reached the destination after relocation " + attempt + "/" + MeshRelocate.Attempts);
                 return true;
             }
             if (_stop || ClickAimAbort.Requested || RouteRunner.LastRunInterrupted) return false;
         }
 
-        Logging.Write("[Gather] all " + MeshRelocate.Attempts + " alternate mesh locations were tried without reaching the hotspot");
+        Logging.Write("[Gather] all " + MeshRelocate.Attempts + " alternate mesh locations were tried without reaching the destination");
         return false;
     }
 
@@ -741,6 +750,8 @@ internal static class GatherRunner
         _recoveryReady = false;
         var mover = new ClickAimMover { QuietKeyStop = true };
         int index = 0, failures = 0, fastHotspots = 0, sampleFailures = 0;
+        int stationaryNodeFailures = 0;
+        double lastFailureX = double.NaN, lastFailureY = double.NaN;
         try
         {
             IntPtr hwnd = ObjectManager.Wow?.WindowHandle ?? IntPtr.Zero;
@@ -868,6 +879,7 @@ internal static class GatherRunner
                     }
                     if (walked)
                     {
+                        stationaryNodeFailures = 0;
                         if (roam == null) index = (index + 1) % points.Count;
                         failures = 0;
                         if (roam == null && unchecked(Environment.TickCount - startedHotspot) < FastHotspotMs)
@@ -901,7 +913,49 @@ internal static class GatherRunner
                     bool reached = Walk(mover, destination, false);
                     if (_stop || ClickAimAbort.Requested) break;
                     if (RouteRunner.LastRunInterrupted) { _pending = node; continue; }
-                    if (!reached) { Retry[node.Guid] = unchecked(Environment.TickCount + RetryMs); continue; }
+                    if (!reached)
+                    {
+                        Logging.Write("[Gather] resource approach did not arrive; trying bounded mesh relocation before another resource");
+                        WowBGuid requestedGuid = node.Guid;
+                        WoWPoint requestedPosition = node.Position;
+                        bool nodeLost = false;
+                        bool NodeStillValid()
+                        {
+                            if (GatherNodeScanner.TryCapture(SearchYd, out List<GatherNodeScanner.Node> snapshot))
+                                foreach (var fresh in snapshot)
+                                    if (fresh.Guid == requestedGuid && Ready(fresh) &&
+                                        GatherNodeScanner.IsEligible(fresh, GatherSettings.Mining, GatherSettings.MiningSkill,
+                                                                     GatherSettings.Herbalism, GatherSettings.HerbalismSkill) &&
+                                        !IsBlackspot(fresh.Position.X, fresh.Position.Y) &&
+                                        ClickAimMath.Len(fresh.Position.X - requestedPosition.X, fresh.Position.Y - requestedPosition.Y) <= 3.0 &&
+                                        Math.Abs(fresh.Position.Z - requestedPosition.Z) <= 3.0) return true;
+                            nodeLost = true; // includes unreadable scans: do not infer a movement failure
+                            return false;
+                        }
+                        // The current resource would otherwise immediately interrupt
+                        // relocation as a newly discovered node. Safety polling stays on.
+                        reached = RelocateAndRetry(mover, destination, false, NodeStillValid);
+                        if (_stop || ClickAimAbort.Requested) break;
+                        if (RouteRunner.LastRunInterrupted) { _pending = node; continue; }
+                        if (!reached)
+                        {
+                            if (nodeLost) { Retry[node.Guid] = unchecked(Environment.TickCount + RetryMs); continue; }
+                            Retry[node.Guid] = unchecked(Environment.TickCount + RetryMs);
+                            if (!ClickAimPositions.TryRead(out double failedX, out double failedY))
+                            { Logging.Write("[Gather] player position unreadable after recovery; stopping"); break; }
+                            if (!double.IsFinite(lastFailureX) || ClickAimMath.Len(failedX - lastFailureX, failedY - lastFailureY) >= 3.0)
+                                stationaryNodeFailures = 1;
+                            else stationaryNodeFailures++;
+                            lastFailureX = failedX; lastFailureY = failedY;
+                            if (stationaryNodeFailures >= 3)
+                            {
+                                Logging.Write("[Gather] three resource approaches and relocation attempts failed near the same position; stopping instead of repeatedly cycling nodes");
+                                break;
+                            }
+                            continue;
+                        }
+                    }
+                    stationaryNodeFailures = 0;
                 }
                 ClickAimKeySteer.ReleaseHeld();
                 try { mover.MoveStop(); } catch { }
@@ -910,6 +964,7 @@ internal static class GatherRunner
                 bool stillHere = false;
                 foreach (var fresh in nearby) if (fresh.Guid == node.Guid && Ready(fresh)) { node = fresh; stillHere = true; break; }
                 if (!stillHere) { Logging.Write("[Gather] node not observed in reach; no click sent"); Retry[node.Guid] = unchecked(Environment.TickCount + RetryMs); continue; }
+                stationaryNodeFailures = 0;
                 if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested) break;
                 if (_ignoreMonsters && (StopIfDeadOrGhost() || !MapStillCurrent() || ObjectManager.WowB != reader ||
                     (reader.IsExperimental70707 && !WowBGrindFactions.Experimental70707BarSafe(reader)))) continue;

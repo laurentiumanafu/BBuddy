@@ -447,10 +447,14 @@ public static class RouteRunner
              * blackspots from it put 52 polygons out of bounds on 2026-10-29 while the
              * character stood still, and the two re-plans then detoured around a place
              * nothing was ever in the way of. */
-            if (mover.Clicks == 0)
+            if (mover.KeyMode || mover.Clicks == 0)
             {
-                Logging.Write("[Route] stopping: no click was ever dispatched, so nothing here says "
-                    + "the ground is blocked. Nothing was blacklisted.");
+                // Key-steered movement never dispatches clicks. A stalled steering
+                // attempt is not evidence that a mesh polygon is impassable, so do
+                // not poison the mesh; let the owner try a validated relocation.
+                Logging.Write(mover.KeyMode
+                    ? "[Route] key-steered mesh point did not arrive; no polygon blacklisted. Returning to the route owner for recovery."
+                    : "[Route] stopping: no click was ever dispatched, so nothing here says the ground is blocked. Nothing was blacklisted.");
                 return false;
             }
 
@@ -617,20 +621,20 @@ public static class RouteRunner
     }
 
     private static bool ValidateStraightMeshSegment(Tripper.Navigation.Navigator nav, uint mapId,
-                                                     System.Numerics.Vector3 start, System.Numerics.Vector3 end)
+                                                     System.Numerics.Vector3 start, System.Numerics.Vector3 end, bool logFailure = true)
     {
         // A successful 2-point result may be straight ground or a synthetic failure.
         // Independently require a clear mesh ray reaching the goal polygon. This is
         // still only a terrain check, not proof that dynamic obstacles are absent.
         if (!nav.FindNearestPolyRef(mapId, end, 0.5f, 2.0f, out Tripper.Navigation.PolygonReference goal, out System.Numerics.Vector3 nearest)
             || !goal.IsValid || !EndpointNear(nearest, end, 0.25, 1.0))
-        { Logging.Write("[Route] straight validation could not resolve the goal polygon"); return false; }
+        { if (logFailure) Logging.Write("[Route] straight validation could not resolve the goal polygon"); return false; }
         var status = nav.RaycastWithExtents(mapId, start, end, new System.Numerics.Vector3(0.5f, 0.5f, 2.0f),
                                            out float hit, out _, out ulong[] visited, out int count);
         if (!ValidRayResult(status, hit, visited, count, goal.Id))
         {
             ulong last = count > 0 && count <= visited.Length ? visited[count - 1] : 0UL;
-            Logging.Write("[Route] straight validation: status=0x" + status.Value.ToString("X8")
+            if (logFailure) Logging.Write("[Route] straight validation: status=0x" + status.Value.ToString("X8")
                 + " hit=" + hit.ToString("G", CultureInfo.InvariantCulture) + " polygons=" + count
                 + " last=" + last + " goal=" + goal.Id);
             return false;
@@ -661,7 +665,7 @@ public static class RouteRunner
                 || !startPoly.IsValid || !EndpointNear(startSnap, start, 0.5, 2.0)
                 || !nav.FindNearestPolyRef(map, end, 0.5f, 2.0f, out Tripper.Navigation.PolygonReference endPoly, out System.Numerics.Vector3 endSnap)
                 || !endPoly.IsValid || !EndpointNear(endSnap, end, 0.5, 2.0)) return false;
-            if (!ValidateStraightMeshSegment(nav, map, startSnap, endSnap)) return false;
+            if (!ValidateStraightMeshSegment(nav, map, startSnap, endSnap, false)) return false;
             return ClickAimDiagnostics.ResolveMap((uint)NavGridStore.MapId, px, py) == map;
         }
         catch { return false; }

@@ -64,7 +64,7 @@ namespace Styx.Logic.Pathing
     {
         private static bool _stop;
         private static uint _sessionMap = 1;
-        internal static bool Combat, MapOk = true, Exclude;
+        internal static bool Combat, MapOk = true, Exclude, ExpectedCheckNodes = true;
         internal static int InterruptCalls, InterruptAt = int.MaxValue;
         internal static readonly List<RoutePoint> Walks = new List<RoutePoint>();
         internal static readonly Queue<string> WalkResults = new Queue<string>();
@@ -78,7 +78,7 @@ namespace Styx.Logic.Pathing
         }
         private static bool Walk(ClickAimMover mover, RoutePoint point, bool checkNodes)
         {
-            if (!checkNodes) throw new Exception("node interruption disabled");
+            if (checkNodes != ExpectedCheckNodes) throw new Exception("unexpected node interruption mode");
             RouteRunner.LastRunInterrupted = false;
             Walks.Add(point);
             string result = WalkResults.Count == 0 ? "fail" : WalkResults.Dequeue();
@@ -87,9 +87,10 @@ namespace Styx.Logic.Pathing
             return result == "ok";
         }
         internal static bool Run() => RelocateAndRetry(new ClickAimMover(), new RoutePoint { X = 40, Y = 0, Kind = "Hotspot" });
+        internal static bool RunNode(bool valid) => RelocateAndRetry(new ClickAimMover(), new RoutePoint { X = 40, Y = 0, Kind = "Resource" }, false, () => valid);
         internal static void Reset()
         {
-            _stop = false; ClickAimAbort.Requested = false; Combat = false; MapOk = true; Exclude = false;
+            _stop = false; ClickAimAbort.Requested = false; Combat = false; MapOk = true; Exclude = false; ExpectedCheckNodes = true;
             RouteRunner.LastRunInterrupted = false; RouteRunner.PathValid = true;
             ClickAimPositions.X = 0; ClickAimPositions.Y = 0; ClickAimPositions.Readable = true;
             Navigator.TripperNavigator = new Tripper.Navigation.FakeNav();
@@ -140,7 +141,14 @@ namespace Styx.Logic.Pathing
             Check(!GatherRunner.Run() && GatherRunner.Walks.Count == 0, "no candidate");
             GatherRunner.Reset(); ClickAimPositions.Readable = false;
             Check(!GatherRunner.Run() && GatherRunner.Walks.Count == 0, "unreadable position");
-            Console.WriteLine("15 synthetic relocation cases passed (no live game or real mesh)");
+            GatherRunner.Reset(); GatherRunner.ExpectedCheckNodes = false;
+            GatherRunner.WalkResults.Enqueue("ok"); GatherRunner.WalkResults.Enqueue("ok");
+            Check(GatherRunner.RunNode(true) && GatherRunner.Walks.Count == 2 && GatherRunner.Walks[1].Kind == "Resource", "valid resource retried without self-interruption");
+            GatherRunner.Reset(); GatherRunner.ExpectedCheckNodes = false; GatherRunner.WalkResults.Enqueue("ok");
+            Check(!GatherRunner.RunNode(false) && GatherRunner.Walks.Count == 1, "stale resource not retried");
+            GatherRunner.Reset(); GatherRunner.ExpectedCheckNodes = false; GatherRunner.WalkResults.Enqueue("interrupt");
+            Check(!GatherRunner.RunNode(true) && RouteRunner.LastRunInterrupted && GatherRunner.Walks.Count == 1, "node relocation interrupted safely");
+            Console.WriteLine("18 synthetic relocation cases passed (no live game or real mesh)");
         }
     }
 }

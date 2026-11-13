@@ -1,0 +1,91 @@
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Threading;
+
+namespace Styx.WoWInternals
+{
+    internal sealed class Memory { public IntPtr WindowHandle = (IntPtr)1; }
+    internal static class ObjectManager { public static Memory? Wow = new Memory(); public static object? WowB = new object(); }
+}
+namespace Styx.Logic.Pathing
+{
+    public struct WoWPoint { public float X, Y, Z; public WoWPoint(float x, float y, float z) { X=x; Y=y; Z=z; } }
+    internal static class ClickAimAbort { internal static bool Requested; }
+    internal static class RouteRunner
+    {
+        internal static bool StopRequested, RequireMeshDuringSession = true;
+        internal static Func<double,double,WoWPoint,bool> Validate = (x,y,p) => false;
+        internal static bool ValidateGatherSidestep(double x, double y, WoWPoint p) => Validate(x,y,p);
+    }
+    internal static class ClickAimMath { internal static double Len(double x, double y) => Math.Sqrt(x*x + y*y); }
+    internal static class ClickAimPositions
+    {
+        internal static double X, Y; internal static bool Readable = true;
+        internal static bool TryRead(out double x, out double y) { x=X; y=Y; return Readable; }
+        internal static double Z() => 4;
+    }
+    internal static class ClickAimKeySteer
+    {
+        internal static bool KeyDown;
+        internal static void ReleaseHeld() { KeyDown=false; }
+        internal static void BeginMeshPoint() { }
+    }
+    internal static class ClickAimInput { internal static int Jumps; internal static void TapKey(IntPtr h, int key, int ms) { Jumps++; } }
+    internal sealed class ClickAimMover
+    {
+        internal bool Blocked, NoMovement, RequireFacingForKeyMode, TurnInPlaceForKeyMode; internal bool KeyMode=true; internal int Moves, Stops; internal WoWPoint LastTarget;
+        internal void MoveStop() { Stops++; }
+        internal void ClearBlock() { Blocked = false; }
+        internal void MoveTowards(WoWPoint p) { Moves++; LastTarget=p; if (NoMovement) { Blocked = true; return; } ClickAimKeySteer.KeyDown=true; ClickAimPositions.X = p.X; ClickAimPositions.Y = p.Y; }
+    }
+    internal static class ClickAimPilot
+    {
+        private const int SidestepMs = 5000, JumpVk = 0x20;
+        // SIDESTEP_METHOD
+        internal static bool Run(ClickAimMover mover, int attempt, Func<bool>? interrupt, out string report)
+            => RunWithHistory(mover, attempt, new List<WoWPoint>(), interrupt, out report);
+        internal static bool RunWithHistory(ClickAimMover mover, int attempt, List<WoWPoint> history, Func<bool>? interrupt, out string report)
+            => Sidestep(mover, new WoWPoint(20, 0, 4), attempt, history, interrupt, out report);
+    }
+    public static class Program
+    {
+        private static void Check(bool ok, string reason) { if (!ok) throw new Exception(reason); }
+        private static void Reset()
+        {
+            ClickAimPositions.X=ClickAimPositions.Y=0; ClickAimPositions.Readable=true;
+            ClickAimAbort.Requested=false; RouteRunner.StopRequested=false; RouteRunner.RequireMeshDuringSession=true;
+            Styx.WoWInternals.ObjectManager.Wow = new Styx.WoWInternals.Memory();
+            Styx.WoWInternals.ObjectManager.WowB = new object(); ClickAimInput.Jumps=0; ClickAimKeySteer.KeyDown=false;
+            RouteRunner.Validate=(x,y,p)=>false;
+        }
+        public static void Main()
+        {
+            var one=ClickAimEscape.Candidates(0,0,20,0,4,1); var two=ClickAimEscape.Candidates(0,0,20,0,4,2); var three=ClickAimEscape.Candidates(0,0,20,0,4,3);
+            Check(one.Count==12 && two.Count==12 && three.Count==15, "bounded candidate counts");
+            Check(one[0].Y > 6.9 && two[0].Y < -6.9 && three[0].X < -6.9, "different first bearings");
+            Check(Math.Abs(one[1].Y-4) < 0.001 && Math.Abs(one[2].Y-2.5) < 0.001, "short escape options");
+            Check(ClickAimEscape.Candidates(double.NaN,0,20,0,4,1).Count==0 && ClickAimEscape.Candidates(0,0,0,0,4,1).Count==0, "invalid input fails closed");
+            Reset(); var m=new ClickAimMover();
+            Check(!ClickAimPilot.Run(m,1,null,out _) && m.Moves==0 && ClickAimInput.Jumps==0, "all rays rejected: no input");
+            Reset(); m=new ClickAimMover(); RouteRunner.Validate=(x,y,p)=>p.Y>2 && p.Y<5 && Math.Abs(p.X)<0.01;
+            Check(ClickAimPilot.Run(m,1,null,out _) && m.Moves==1 && Math.Abs(ClickAimPositions.Y-4)<0.01, "short validated ray moved");
+            Reset(); m=new ClickAimMover { NoMovement=true }; RouteRunner.Validate=(x,y,p)=>true;
+            Check(!ClickAimPilot.Run(m,1,null,out _) && m.Moves==1, "no displacement is not success");
+            Reset(); m=new ClickAimMover { NoMovement=true }; RouteRunner.Validate=(x,y,p)=>p.X < -2 && Math.Abs(p.Y) < 0.01;
+            var history=new List<WoWPoint>();
+            Check(!ClickAimPilot.RunWithHistory(m,1,history,null,out _) && history.Count==1, "record failed escape");
+            float oldX=m.LastTarget.X;
+            Check(!ClickAimPilot.RunWithHistory(m,2,history,null,out _) && history.Count==2 && Math.Abs(m.LastTarget.X-oldX)>1, "do not repeat failed point");
+            Reset(); m=new ClickAimMover(); int calls=0;
+            Check(!ClickAimPilot.Run(m,1,()=>++calls>=3,out _) && m.Moves==0 && ClickAimInput.Jumps==0, "interrupt during search");
+            Reset(); m=new ClickAimMover(); calls=0; RouteRunner.Validate=(x,y,p)=> { calls++; if(calls==1) ClickAimPositions.X=1; return true; };
+            Check(!ClickAimPilot.Run(m,1,null,out _) && m.Moves==0 && ClickAimInput.Jumps==0, "changed position invalidates ray");
+            Reset(); m=new ClickAimMover(); RouteRunner.Validate=(x,y,p)=> { Styx.WoWInternals.ObjectManager.WowB=new object(); return true; };
+            Check(!ClickAimPilot.Run(m,1,null,out _) && m.Moves==0 && ClickAimInput.Jumps==0, "attachment change withheld");
+            Reset(); m=new ClickAimMover(); ClickAimAbort.Requested=true;
+            Check(!ClickAimPilot.Run(m,1,null,out _) && m.Moves==0 && ClickAimInput.Jumps==0, "STOP");
+            Console.WriteLine("synthetic escape fixtures passed (no live game or real mesh)");
+        }
+    }
+}
