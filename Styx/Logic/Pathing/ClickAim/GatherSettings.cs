@@ -18,7 +18,7 @@ internal static class GatherSettings
     public static bool GatherWhileGrinding;
     // Standalone GatherBuddy only. The player may be attacked or killed.
     public static bool IgnoreMonsters;
-    // A recognized movement spell on the first hotbar, also standalone only.
+    // First-bar travel skill: standalone Gather; 70938 Ghost Wolf also in Grind.
     public static bool UseMovementSkill;
     public static int MovementSkillSlot;
     // Opt-in only when no profile is loaded; normal profiles always take precedence.

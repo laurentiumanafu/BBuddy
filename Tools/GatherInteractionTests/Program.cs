@@ -130,6 +130,9 @@ internal static class Program
                 ClickAimInput.DownCount == 0, "extra Grind safety veto prevents click");
         var movement = new ClickAimAction { Slot = 10, Kind = ClickAimActionKind.Spell, Id = 2645, Raw = 2645, KeyVk = 0x30 };
         Require(GatherMovementSkill.IsSupported(movement, 10), "Ghost Wolf in selected first-bar slot");
+        movement.Id = 1238640; movement.Raw = 1238640;
+        Require(GatherMovementSkill.IsSupported(movement, 10, true) && !GatherMovementSkill.IsSupported(movement, 10), "70938-only Ghost Wolf effect action candidate");
+        movement.Id = 2645; movement.Raw = 2645;
         Require(!GatherMovementSkill.IsSupported(movement, 1) && !GatherMovementSkill.IsSupported(movement, 0), "wrong or unset slot withheld");
         movement.Id = 783; movement.Raw = 783;
         Require(GatherMovementSkill.IsSupported(movement, 10), "Travel Form supported");

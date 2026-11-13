@@ -65,6 +65,7 @@ internal static class GatherRunner
     // Frozen when standalone GatherBuddy starts; Grind's gathering never reads these.
     private static bool _ignoreMonsters, _movementEnabled, _movementAttempted, _nodeDefence;
     private static int _movementSlot;
+    private static WowBGhostWolfTravel? _ghostWolfTravel;
     private static WowBDeathCheckpoint? _deathCheckpoint;
     private static bool _recoveryReady;
     private static int _deathStopGeneration;
@@ -193,6 +194,7 @@ internal static class GatherRunner
             _ignoreMonsters = GatherSettings.IgnoreMonsters;
             _movementEnabled = GatherSettings.UseMovementSkill;
             _movementSlot = GatherSettings.MovementSkillSlot;
+            _ghostWolfTravel = new WowBGhostWolfTravel(_movementEnabled, _movementSlot);
             _movementAttempted = false;
             _nodeDefence = false;
             Retry.Clear();
@@ -333,7 +335,7 @@ internal static class GatherRunner
     private static ClickAimAction? FindMovementAction(WowBReader reader, int slot)
     {
         foreach (ClickAimAction candidate in ClickAimCombat.ReadBar(reader))
-            if (GatherMovementSkill.IsSupported(candidate, slot)) return candidate;
+            if (GatherMovementSkill.IsSupported(candidate, slot, reader.IsExperimental70938)) return candidate;
         return null;
     }
 
@@ -341,10 +343,24 @@ internal static class GatherRunner
     // before travelling. We cannot prove whether the form is active or cast.
     private static bool TryMovementSkill(IntPtr hwnd, ClickAimMover mover, double distance)
     {
-        if (!_movementEnabled || _movementAttempted || !double.IsFinite(distance) || distance < 15) return false;
+        if (!_movementEnabled || !double.IsFinite(distance) || distance <= InteractYd) return false;
         GreenMagic.Memory? memory = ObjectManager.Wow;
         WowBReader? reader = ObjectManager.WowB;
         if (memory == null || reader == null || hwnd == IntPtr.Zero) return false;
+        if (reader.IsExperimental70938)
+        {
+            ClickAimAction? slotAction;
+            try { slotAction = FindMovementAction(reader, _movementSlot); }
+            catch { return false; }
+            if (slotAction == null)
+            {
+                if (!_movementAttempted) { _movementAttempted = true; Logging.Write("[Gather] configured movement slot is unavailable or unsupported; no form key sent"); }
+                return false;
+            }
+            if (WowBGhostWolfTravel.IsGhostWolfSpell(slotAction.Id))
+                return _ghostWolfTravel?.TryEnsure(hwnd, mover, TravelFormSafe) == true;
+        }
+        if (_movementAttempted || distance < 15) return false;
         if (!reader.Uses70862Features || _movementSlot < 1 || _movementSlot > 12)
         {
             _movementAttempted = true;
@@ -387,11 +403,15 @@ internal static class GatherRunner
         catch (Exception ex) { Logging.Write("[Gather] movement skill withheld: " + ex.Message); return false; }
     }
 
+    private static bool TravelFormSafe()
+        => !_stop && !ClickAimAbort.Requested && !RouteRunner.StopRequested && !StopIfDeadOrGhost() && MapStillCurrent();
+
     private static bool Walk(ClickAimMover mover, RoutePoint point, bool checkNodes)
     {
         if (_stop || ClickAimAbort.Requested) return false;
         if (!RouteRunner.MeshReady()) { Logging.Write("[Gather] mesh navigation lost; refusing the leg"); return false; }
-        RouteRunner.ShouldInterrupt = () => Interrupt(checkNodes);
+        RouteRunner.ShouldInterrupt = () => Interrupt(checkNodes) ||
+            (_ghostWolfTravel?.ShouldPauseTravel(ObjectManager.Wow?.WindowHandle ?? IntPtr.Zero, TravelFormSafe) == true);
         RouteRunner.PollInterruptDuringWalk = true;
         RouteRunner.RequireMeshDuringSession = true;
         try { return RouteRunner.RunWithinSession(mover, new List<RoutePoint> { point }, 1); }

@@ -1,0 +1,115 @@
+using System;
+using System.Collections.Generic;
+using GreenMagic;
+using Styx.WoWInternals;
+using Styx.Logic.Pathing;
+namespace GreenMagic
+{
+    sealed class Memory
+    {
+        public IntPtr WindowHandle=(IntPtr)1;
+        public IDisposable TemporaryCacheState(bool b)=>new Scope();
+        sealed class Scope:IDisposable { public void Dispose() {} }
+    }
+}
+namespace Styx.Helpers { static class Logging { public static void Write(string text) {} } }
+namespace Styx.WoWInternals
+{
+    readonly struct WowBGuid
+    {
+        readonly int id; public WowBGuid(int i){id=i;} public bool IsEmpty=>id==0;
+        public static bool operator ==(WowBGuid a,WowBGuid b)=>a.id==b.id;
+        public static bool operator !=(WowBGuid a,WowBGuid b)=>a.id!=b.id;
+        public override bool Equals(object? o)=>o is WowBGuid g && g==this;
+        public override int GetHashCode()=>id;
+    }
+    struct WowBObservedUnit { public WowBGuid Guid; public ulong UnitAddress, RecordAddress; }
+    sealed class WowBWorldSnapshot { public WowBObservedUnit Player; public bool TryGetLocalPlayer(out WowBObservedUnit p){p=Player;return true;} }
+    sealed class WowBReader
+    {
+        public struct WowBUnitFields { public uint Health,MaxHealth,Power; public int PlayerPowerTypeCandidate; }
+        public bool IsExperimental70938=true, ExperimentalGrindActive=true, Readable=true; public uint Power=200;
+        public WowBObservedUnit Player=new(){Guid=new WowBGuid(1), UnitAddress=0x20000, RecordAddress=0x30000};
+        public bool TryReadMapId(out uint map){map=1;return Readable;}
+        public bool TryCaptureWorldSnapshot(out WowBWorldSnapshot? snap){snap=Readable?new WowBWorldSnapshot{Player=Player}:null;return Readable;}
+        public bool TryGetUnitFields(ulong unit,out WowBUnitFields fields){fields=new(){Health=100,MaxHealth=100,Power=Power};return Readable;}
+    }
+    static class ObjectManager { public static Memory? Wow; public static WowBReader? WowB; }
+}
+namespace Styx.Logic.Pathing
+{
+    enum ClickAimActionKind { Spell, Item }
+    sealed class ClickAimAction { public int Id,Slot,KeyVk; public ulong Raw; public ClickAimActionKind Kind; }
+    static class ClickAimCombat
+    {
+        public static List<ClickAimAction> Actions=new(); public static List<ClickAimAction> ReadBar(WowBReader r)=>Actions;
+        public static int KeyForSlot(int slot)=>slot;
+    }
+    static class ClickAimAbort { public static bool Requested; public static Action? OnWait; public static bool Wait(int n){OnWait?.Invoke();return Requested;} }
+    static class RouteRunner { public static bool StopRequested; }
+    static class ClickAimKeySteer { public static void ReleaseHeld(){} public static void ReleaseArrows(IntPtr h){} }
+    sealed class ClickAimMover { public void MoveStop(){} }
+    static class ClickAimInput
+    {
+        public static int Count; public static bool Apply=true;
+        public static void TapKey(IntPtr h,int k,int ms) { Count++; if(Apply) WowBTotemAuraCandidate.Active=true; }
+    }
+    static class WowBGatherCastResearch
+    {
+        public enum Observation { Unknown, Idle, Mining }
+        public static Observation State = Observation.Idle;
+        public static Observation Observe(Memory m, WowBReader r, WowBObservedUnit p)=>State;
+    }
+    static class GrindRunner { public static bool Combat,Readable=true; public static bool TryReadGatherCombat(out bool f){f=Combat;return Readable;} }
+    static class WowBGrindFactions
+    {
+        public static bool Stable=true, Ghost;
+        public static bool Experimental70707BarSafe(WowBReader r)=>Stable;
+        public static bool TraceIdentity70707(Memory m,WowBReader r,WowBObservedUnit p,bool local)=>Stable;
+        public static bool TryReadGhostFlagCandidate(Memory m,WowBReader r,WowBObservedUnit p,out bool g){g=Ghost;return Stable;}
+    }
+    sealed class WowBTotemAuraCandidate
+    {
+        public static bool Active, Unknown; readonly bool value;
+        WowBTotemAuraCandidate(bool b){value=b;}
+        public static WowBTotemAuraCandidate? Capture(Memory m,WowBReader r,WowBObservedUnit p)=>Unknown?null:new WowBTotemAuraCandidate(Active);
+        public bool GhostWolf70938Active()=>value;
+    }
+}
+static class Program
+{
+    static void Check(bool b,string message){if(!b)throw new Exception(message);}
+    static void Reset()
+    {
+        ObjectManager.Wow=new Memory();ObjectManager.WowB=new WowBReader();
+        ClickAimCombat.Actions=new(){new ClickAimAction{Slot=9,Id=2645,Raw=2645,KeyVk=9,Kind=ClickAimActionKind.Spell}};
+        ClickAimAbort.Requested=false;ClickAimAbort.OnWait=null;RouteRunner.StopRequested=false;
+        WowBGrindFactions.Stable=true;WowBGrindFactions.Ghost=false;GrindRunner.Combat=false;GrindRunner.Readable=true;
+        WowBTotemAuraCandidate.Active=false;WowBTotemAuraCandidate.Unknown=false;WowBGatherCastResearch.State=WowBGatherCastResearch.Observation.Idle;ClickAimInput.Count=0;ClickAimInput.Apply=true;
+    }
+    static void Main()
+    {
+        var mover=new ClickAimMover();IntPtr h=(IntPtr)1;
+        Reset();var form=new WowBGhostWolfTravel(true,9);WowBTotemAuraCandidate.Active=true;
+        Check(!form.TryEnsure(h,mover,()=>true) && ClickAimInput.Count==0,"active never toggles");
+        Reset();form=new WowBGhostWolfTravel(true,9);
+        Check(form.ShouldPauseTravel(h,()=>true),"known absence pauses travel");
+        Check(form.TryEnsure(h,mover,()=>true) && ClickAimInput.Count==1 && WowBTotemAuraCandidate.Active,"absent candidate permits one key");
+        Check(!form.TryEnsure(h,mover,()=>true) && ClickAimInput.Count==1,"no immediate retoggle");
+        Reset();form=new WowBGhostWolfTravel(true,9);WowBTotemAuraCandidate.Unknown=true;
+        Check(!form.TryEnsure(h,mover,()=>true) && !form.ShouldPauseTravel(h,()=>true) && ClickAimInput.Count==0,"unknown withholds");
+        Reset();form=new WowBGhostWolfTravel(true,9);ObjectManager.WowB!.Power=99;
+        Check(!form.TryEnsure(h,mover,()=>true) && ClickAimInput.Count==0,"low mana withholds");
+        Reset();form=new WowBGhostWolfTravel(false,9);Check(!form.TryEnsure(h,mover,()=>true) && ClickAimInput.Count==0,"checkbox off");
+        Reset();form=new WowBGhostWolfTravel(true,9);WowBGatherCastResearch.State=WowBGatherCastResearch.Observation.Unknown;
+        Check(!form.TryEnsure(h,mover,()=>true) && ClickAimInput.Count==0,"unknown or other cast cluster veto");
+        Reset();form=new WowBGhostWolfTravel(true,9);GrindRunner.Combat=true;Check(!form.TryEnsure(h,mover,()=>true),"combat veto");
+        Reset();form=new WowBGhostWolfTravel(true,9);ClickAimAbort.OnWait=()=>ClickAimAbort.Requested=true;
+        Check(!form.TryEnsure(h,mover,()=>true) && ClickAimInput.Count==0,"STOP during settling vetoes key");
+        Reset();form=new WowBGhostWolfTravel(true,9);ObjectManager.WowB!.IsExperimental70938=false;
+        Check(!form.TryEnsure(h,mover,()=>true) && ClickAimInput.Count==0,"other builds excluded");
+        Reset();form=new WowBGhostWolfTravel(true,9);WowBGrindFactions.Stable=false;
+        Check(!form.TryEnsure(h,mover,()=>true) && ClickAimInput.Count==0,"identity and bar veto");
+        Console.WriteLine("Synthetic Ghost Wolf travel fixtures passed; no live-client validation.");
+    }
+}

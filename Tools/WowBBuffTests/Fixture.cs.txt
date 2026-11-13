@@ -379,6 +379,17 @@ namespace Styx.Logic.Pathing
             Check(!controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 0, "implicit druid forms and passive racial excluded");
             controller.Reset(); now = 0; ClickAimSettings.RotationClass = ClickAimRotationClass.Generic;
             Check(!controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 0, "forms excluded even if class is Generic");
+            Reset(); controller.Reset(); now = 0; ObjectManager.WowB!.IsExperimental70938 = true;
+            ClickAimCombat.Bar = new List<ClickAimAction> { Action(2645, 9), Action(1238640, 10), Action(3, 3) };
+            ClickAimCombat.Overrides[2645] = ClickAimSpellRole.Buff;
+            ClickAimCombat.Overrides[1238640] = ClickAimSpellRole.Buff;
+            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 1 && ClickAimInput.Keys[0] == 0x33,
+                  "70938 Ghost Wolf is never pressed by generic buff scheduler, including explicit Buff role");
+            Reset(); controller.Reset(); now = 0;
+            ClickAimCombat.Bar = new List<ClickAimAction> { Action(2645, 9) };
+            ClickAimCombat.Overrides[2645] = ClickAimSpellRole.Buff;
+            Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 1,
+                  "other builds retain explicit Ghost Wolf buff role");
             // The observed 70862 rank-3 shield uses a grown external candidate
             // array, not the 70707 inline layout; candidate 905 is presence only.
             Reset(); controller.Reset(); now = 0; ObjectManager.WowB!.IsExperimental70862 = true;

@@ -33,6 +33,10 @@ internal sealed class WowBTotemAuraCandidate
     // as present, rather than repeatedly replacing a higher rank. Only 5677
     // has been observed in the user's traces; the others are Classic IDs and
     // their 70888/70938 representation remains unverified.
+    // ID 1238640 populated in the user's 70938 Ghost Wolf trace; absence,
+    // layout completeness and other builds remain experimental.
+    internal bool GhostWolf70938Active() => _ids.Contains(1238640);
+
     internal bool ManaSpringActive() => _ids.Contains(5677) || _ids.Contains(10491) ||
         _ids.Contains(10493) || _ids.Contains(10494);
 

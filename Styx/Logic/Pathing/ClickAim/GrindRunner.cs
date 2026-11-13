@@ -883,6 +883,7 @@ internal static class GrindRunner
         _unreachableUntil.Clear();
         _realCombatQuietAt = 0;
         bool gatherDuringGrind = !_stop && !ClickAimAbort.Requested && GatherRunner.PrepareForGrind(profilePath);
+        var ghostWolfTravel = new WowBGhostWolfTravel(GatherSettings.UseMovementSkill, GatherSettings.MovementSkillSlot);
         if (GatherSettings.SkinNearby && ObjectManager.WowB is WowBReader skinReader)
             Logging.Write("[Skin] nearby scanning enabled (18 yd); " + WowBSkinning.Count(skinReader.IsExperimental70707) +
                 " confirmed beast entry candidate(s). Ownership and skinning readiness are not readable.");
@@ -1135,6 +1136,21 @@ internal static class GrindRunner
                 }
                 else { next = area.Hotspots[index % area.Hotspots.Count]; index++; }
 
+                bool TravelFormSafe()
+                    => !_stop && !ClickAimAbort.Requested && !RouteRunner.StopRequested && !_vendorDue && !AutoVendorPending() &&
+                       !CheckDeathCheckpoint() && (roam != null ? roam.MapCurrent() : ProfileMapCurrent()) &&
+                       !FightNeeded(hwnd, SearchYd);
+                if (trialReader?.IsExperimental70938 == true && ghostWolfTravel.Handles(trialReader) &&
+                    ClickAimPositions.TryRead(out double travelX, out double travelY) &&
+                    ClickAimMath.Len(next.X - travelX, next.Y - travelY) > 5.0)
+                {
+                    bool attemptedForm = ghostWolfTravel.TryEnsure(hwnd, mover, TravelFormSafe);
+                    if (attemptedForm || !TravelFormSafe())
+                    {
+                        if (roam == null) index--;
+                        continue;
+                    }
+                }
                 var one = new List<RoutePoint> { next };
 
                 /* While walking, look for a fight every few seconds instead of only at the
@@ -1145,7 +1161,7 @@ internal static class GrindRunner
                  * circle a hotspot is cleared in, so "monsters between hotspots" are monsters
                  * this stops for. */
                 bool resourceInterrupt = false, vendorInterrupt = false;
-                bool skinInterrupt = false, barInterrupt = false;
+                bool skinInterrupt = false, barInterrupt = false, formInterrupt = false;
                 int lastFightCheck = unchecked(Environment.TickCount - 500);
                 int lastRoamMapCheck = unchecked(Environment.TickCount - 500);
                 int lastSkinCheck = unchecked(Environment.TickCount - 1000);
@@ -1172,6 +1188,8 @@ internal static class GrindRunner
                         lastSkinCheck = Environment.TickCount;
                         if (HasNearbySkin()) { skinInterrupt = true; return true; }
                     }
+                    if (ghostWolfTravel.ShouldPauseTravel(hwnd, TravelFormSafe))
+                    { formInterrupt = true; return true; }
                     return false;
                 };
                 RouteRunner.PollInterruptDuringWalk = true;
@@ -1202,6 +1220,12 @@ internal static class GrindRunner
                     {
                         if (roam == null) index--; // resume the same profile hotspot after the detour
                         Logging.Write("[Grind] resource in range; pausing the hotspot leg to reconsider combat and gathering");
+                        continue;
+                    }
+                    if (formInterrupt)
+                    {
+                        if (roam == null) index--;
+                        Logging.Write("[Grind] Ghost Wolf candidate absent; pausing the hotspot leg to recheck travel form");
                         continue;
                     }
                     if (skinInterrupt)

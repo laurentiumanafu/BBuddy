@@ -390,6 +390,9 @@ internal sealed class ClickAimBuffController
         foreach (ClickAimAction action in bar)
         {
             if (!Eligible(action) || !seen.Add(action.Id)) continue;
+            // On 70938 this toggle-like form belongs exclusively to the
+            // movement checkbox, never the unrelated 30-minute buff timer.
+            if (reader.IsExperimental70938 && (action.Id == 2645 || action.Id == 1238640)) continue;
             // These exact totem spells are combat-only, even when their
             // role was manually set to Buff. Never fall back to the quiet timer.
             if (WowBTotemAuraCandidate.EffectForCast(action.Id) != 0) continue;
@@ -422,6 +425,7 @@ internal sealed class ClickAimBuffController
                 // Re-read between keys; unknown inline candidates retain their
                 // existing timer fallback. Totems remain combat-only.
                 if (WowBTotemAuraCandidate.EffectForCast(action.Id) != 0) continue;
+                if (reader.IsExperimental70938 && (action.Id == 2645 || action.Id == 1238640)) continue;
                 aura = reader.IsExperimental70707 && WowBInlineAuraCandidate.Supported(action.Id)
                     ? WowBInlineAuraCandidate.Capture(memory, player) : null;
                 int? remaining = ShieldSupported(reader, action.Id) ? ReadShield(memory, reader, player) : aura?.Remaining(action.Id);

@@ -22,7 +22,7 @@ namespace CopilotBuddy.UI
         private readonly CheckBox _roam = new CheckBox { Content = "Roam on the mesh when no profile is loaded", Margin = new Thickness(0, 10, 0, 4) };
         private readonly CheckBox _grind = new CheckBox { Content = "Gather nearby resources while grinding", Margin = new Thickness(0, 10, 0, 4) };
         private readonly CheckBox _ignoreMonsters = new CheckBox { Content = "Ignore monsters while travelling; defend at nodes (GatherBuddy)", Margin = new Thickness(0, 10, 0, 4) };
-        private readonly CheckBox _movementSkill = new CheckBox { Content = "Use movement skill when travelling (GatherBuddy, 70862/70888/70938)", Margin = new Thickness(0, 10, 0, 4) };
+        private readonly CheckBox _movementSkill = new CheckBox { Content = "Use movement skill when travelling (GatherBuddy; 70938 Grind Ghost Wolf)", Margin = new Thickness(0, 10, 0, 4) };
         private readonly TextBox _movementSlot = new TextBox { Width = 90, HorizontalAlignment = HorizontalAlignment.Left };
         private readonly TextBox _roamRadius = new TextBox { Width = 90, HorizontalAlignment = HorizontalAlignment.Left };
         private readonly TextBox _miningSkill = new TextBox { Width = 90, HorizontalAlignment = HorizontalAlignment.Left };
@@ -75,7 +75,7 @@ namespace CopilotBuddy.UI
             panel.Children.Add(_movementSkill);
             panel.Children.Add(new TextBlock { Text = "First-bar movement skill slot (1–12)" });
             panel.Children.Add(_movementSlot);
-            panel.Children.Add(new TextBlock { Text = "Supported: Ghost Wolf, Travel Form and Aspect of the Cheetah on the first action bar. Put the spell on the first bar with the default 1–9, 0, - or = key binding. The bot tries once before travel and again after a node interaction; it cannot verify the form or success, and a repeat may toggle a form off. If a form changes the action bar, the existing safety guard may pause or stop the bot.", TextWrapping = TextWrapping.Wrap });
+            panel.Children.Add(new TextBlock { Text = "Put the movement spell on the first bar with the default 1–9, 0, - or = key binding. On 70938, Ghost Wolf is checked before Grind hotspot travel and GatherBuddy travel; the experimental aura candidate can be unknown or wrong. No form key is sent when it is unknown, in combat, or with insufficient mana. Travel Form and Aspect of the Cheetah use the earlier GatherBuddy-only attempt behavior and can toggle off. Form-related action-bar changes can still pause or stop the bot. Restart the bot after changing this setting.", TextWrapping = TextWrapping.Wrap });
             panel.Children.Add(_grind);
             panel.Children.Add(new TextBlock { Text = "Grind fights first. Gathering waits if combat or a nearby living NPC is detected; friendly NPCs can also block it because hostility is not known (100 yd).", TextWrapping = TextWrapping.Wrap });
             panel.Children.Add(new TextBlock { Text = "Gathering works with WoW in the foreground or background. Moving the mouse in the foreground can interrupt a hover; the bot retries automatically.", TextWrapping = TextWrapping.Wrap });
