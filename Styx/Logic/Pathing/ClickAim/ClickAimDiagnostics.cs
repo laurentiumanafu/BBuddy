@@ -476,24 +476,22 @@ public static class ClickAimDiagnostics
         Logging.Write("[NavMesh] Navigation.dll loaded: " + (mesh ? "yes" : "no")
                       + " - mmaps read from " + mmapsDir);
         Logging.Write("[NavMesh] " + mmtiles + " tile files in the folder (" + paramsFiles
-                      + " params files), " + thisMap + " for map " + currentMap
-                      + "; params for this map: " + paramsForMap);
+                      + " params files), " + thisMap + " for configured NavGrid map " + currentMap
+                      + "; params for configured map: " + paramsForMap + " (not a live client map read)");
         if (!mesh)
         {
             Logging.Write("[NavMesh] without it, routing falls back to the baked navgrid tiles "
-                          + "(Tools/NavGrid) and then to straight-line walking");
+                          + "(Tools/NavGrid) where permitted; mesh-required Grind and Gather cannot start.");
         }
         else if (thisMap == 0)
         {
             Logging.Write("[NavMesh] the library loaded, but no tile file in " + mmapsDir
-                          + " belongs to map " + currentMap + " - FindPath will return nothing "
-                          + "for this map. Run Tools\\UseExistingMmaps.cmd against your mmaps "
-                          + "set, or bake this map with make-mmaps.cmd");
+                          + " belongs to configured NavGrid map " + currentMap + " - this is not a live map read. "
+                          + "Check the live-map tile diagnostics before changing your mesh files.");
         }
         else
         {
-            Logging.Write("[MeshProbe] asking Detour for a path from where the player stands; "
-                          + "the answer follows in a few seconds");
+            Logging.Write("[MeshProbe] starting a read-only mesh check at the player position; the answer follows in a few seconds");
         }
 
         Logging.Write("[ClickAim] pilot armed. Write \"x,y\" into " + RequestPath
@@ -550,6 +548,52 @@ public static class ClickAimDiagnostics
                                        mapId, tileX, tileY);
         return System.IO.File.Exists(System.IO.Path.Combine(mmapsDir, classic))
             || System.IO.File.Exists(System.IO.Path.Combine(mmapsDir, trinity));
+    }
+
+    // Diagnostics only: reports precisely what this map/tile lookup can see.
+    // A file's existence is not evidence it loaded or contains usable terrain.
+    internal static void ReportMeshTileDiagnostics(uint map, System.Numerics.Vector3 at,
+                                                   Tripper.Navigation.Navigator nav, string context)
+    {
+        try
+        {
+            var tile = Tripper.Navigation.TileIdentifier.GetByPosition(at.X, at.Y);
+            string directory = Path.Combine(AppContext.BaseDirectory, "mmaps");
+            string paramClassic = map.ToString("000", CultureInfo.InvariantCulture) + ".mmap";
+            string paramTrinity = map.ToString("0000", CultureInfo.InvariantCulture) + ".mmap";
+            string DescribeFile(string name)
+            {
+                try
+                {
+                    var file = new FileInfo(Path.Combine(directory, name));
+                    return file.Exists ? name + " (" + file.Length.ToString(CultureInfo.InvariantCulture) + " bytes)" : name + " absent or inaccessible";
+                }
+                catch { return name + " unreadable"; }
+            }
+            string loadedCount;
+            try { loadedCount = nav.GetLoadedTilesCount(map).ToString(CultureInfo.InvariantCulture); }
+            catch { loadedCount = "unavailable"; }
+            Logging.Write("[Mesh tile] " + context + "; map=" + map + ", player=" +
+                string.Format(CultureInfo.InvariantCulture, "({0:F1},{1:F1},{2:F1})", at.X, at.Y, at.Z) +
+                ", loader tile=(" + tile.X + "," + tile.Y + "), loaded tile count=" + loadedCount +
+                "; files in " + directory + ": " + DescribeFile(paramClassic) + ", " + DescribeFile(paramTrinity));
+            var entries = new List<string>();
+            for (int dx = -1; dx <= 1; dx++)
+                for (int dy = -1; dy <= 1; dy++)
+                {
+                    int tx = tile.X + dx, ty = tile.Y + dy;
+                    if (tx < 0 || tx > 63 || ty < 0 || ty > 63) continue;
+                    string classic = string.Format(CultureInfo.InvariantCulture, "{0:000}{1:00}{2:00}.mmtile", map, tx, ty);
+                    string trinity = string.Format(CultureInfo.InvariantCulture, "{0:0000}_{1:00}_{2:00}.mmtile", map, tx, ty);
+                    string loaded;
+                    try { loaded = nav.IsTileLoaded(map, tx, ty) ? "yes" : "no"; }
+                    catch { loaded = "unavailable"; }
+                    entries.Add("(" + tx + "," + ty + ") " + DescribeFile(classic) + ", " + DescribeFile(trinity) + ", loaded=" + loaded);
+                }
+            Logging.Write("[Mesh tile] 3x3 around player: " + string.Join("; ", entries) +
+                ". File/loaded status does not prove a walkable polygon or correct terrain.");
+        }
+        catch (Exception ex) { Logging.Write("[Mesh tile] diagnostic unavailable: " + ex.Message); }
     }
 
     /// <summary>
@@ -675,8 +719,8 @@ public static class ClickAimDiagnostics
                 if (polys == null || polys.Length == 0)
                 {
                     Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                        "[MeshProbe] polygons within {0:F0} yd: none - the tile is loaded but there is "
-                        + "no mesh here at all ({1:F1},{2:F1},{3:F1})", r, at.X, at.Y, at.Z));
+                        "[MeshProbe] polygons within {0:F0} yd: none returned ({1:F1},{2:F1},{3:F1}); "
+                        + "tile load, mesh coverage and query filtering require separate checks", r, at.X, at.Y, at.Z));
                     continue;
                 }
 
@@ -781,6 +825,8 @@ public static class ClickAimDiagnostics
             Logging.Write(string.Format(CultureInfo.InvariantCulture,
                 "[70707 mesh research] candidate map={0}, player=({1:F1},{2:F1},{3:F1}); nearest polygon found={4}, correction={5:F2} yd. Read-only query; map and transform unverified, no movement or path authorization.",
                 map, from.X, from.Y, from.Z, found, correction));
+            if (!found && !ClickAimUi.Running && !ClickAimUi.Paused && ObjectManager.WowB == reader && ObjectManager.Wow == memory)
+                ReportMeshTileDiagnostics(map, from, nav, "experimental candidate, read-only probe");
             if (ClickAimUi.Running || ClickAimUi.Paused || ObjectManager.WowB != reader || ObjectManager.Wow != memory) return;
             if (before.TargetGuid.IsEmpty || before.TargetGuid != after.TargetGuid ||
                 !before.TryGetSelectedTarget(out WowBObservedUnit targetBefore) ||

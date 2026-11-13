@@ -162,3 +162,30 @@ screen clicks, and the merchant window and item sale are not verified. The
 failure log now includes saved and nearby non-player GUIDs for diagnosis;
 matching is limited to client-loaded snapshots. Existing confirmations require
 no re-recording. Moving a town point intentionally clears its confirmations.
+
+## Riverglades mesh diagnosis
+
+The `2026-11-13_1922_9296.log` reports candidate map 0 and player position
+`(-9196.181, -4799.7695, 69.073)`. Detour's read-only experimental query found
+no polygon within its 5 yd horizontal / 40 yd vertical search box, and
+profile-free Grind refused to start without a verified nearby mesh layer. The
+startup inventory's map 1 is only the configured NavGrid default, not a live
+map read; its 988 files do not establish anything about map 0. The log did not
+report which map 0 tile files exist, load, or contain geometry.
+
+Using the existing loader tile calculation, that position lies in `(49,40)`,
+about 0.23 yd from the `(49,41)` boundary. Depending on naming convention the
+center file is `0004940.mmtile` or `0000_49_40.mmtile`; neighboring tile files
+can matter at the border. The candidate map and position layouts remain
+experimental. Missing tiles, incompatible params/tile format, mismatched game
+terrain and holes or filters are all possible; this log cannot choose among
+them. Do not mix separately built mesh sets under one map or bypass the mesh
+check to force movement.
+
+Startup's count now explicitly identifies the configured default as such. If
+the experimental probe finds no polygon, or profile-free roaming is refused
+with a stable map, read-only diagnostics log the candidate map and position,
+map parameter filenames and lengths, 3x3 tile filenames and lengths, and
+native loaded flags/counts. Existence or loading still does not prove correct
+or walkable geometry. These changes diagnose but do not create or repair a
+mesh, and require a Windows build and live verification.

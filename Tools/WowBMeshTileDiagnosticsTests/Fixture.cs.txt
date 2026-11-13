@@ -1,0 +1,41 @@
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
+using System.Numerics;
+using Styx.Helpers;
+namespace Styx.Helpers { static class Logging { public static List<string> Lines = new(); public static void Write(string s) => Lines.Add(s); } }
+namespace Tripper.Navigation
+{
+    sealed class Navigator
+    {
+        public int GetLoadedTilesCount(uint map) => map == 0 ? 1 : 0;
+        public bool IsTileLoaded(uint map, int x, int y) => map == 0 && x == 49 && y == 40;
+    }
+}
+namespace Styx.Logic.Pathing
+{
+    static class Fixture
+    {
+        // __PRODUCTION__
+        static void Check(bool b, string s) { if (!b) throw new Exception(s); }
+        public static void Main()
+        {
+            string dir=Path.Combine(AppContext.BaseDirectory,"mmaps");
+            Directory.CreateDirectory(dir);
+            try
+            {
+                File.WriteAllBytes(Path.Combine(dir,"0000.mmap"), new byte[40]);
+                File.WriteAllBytes(Path.Combine(dir,"0000_49_40.mmtile"), new byte[100]);
+                File.WriteAllBytes(Path.Combine(dir,"0004941.mmtile"), new byte[200]);
+                ReportMeshTileDiagnostics(0,new Vector3(-9196.181f,-4799.7695f,69.073f),new Tripper.Navigation.Navigator(),"fixture");
+                Check(Logging.Lines.Count == 2,"two messages");
+                Check(Logging.Lines[0].Contains("map=0") && Logging.Lines[0].Contains("loader tile=(49,40)") && Logging.Lines[0].Contains("0000.mmap (40 bytes)"),"map and tile");
+                Check(Logging.Lines[1].Contains("0000_49_40.mmtile (100 bytes), loaded=yes") && Logging.Lines[1].Contains("0004941.mmtile (200 bytes)"),"both naming schemes and boundary neighbor");
+                Check(Logging.Lines[1].Contains("does not prove"),"diagnostic is not path proof");
+            }
+            finally { Directory.Delete(dir,true); }
+            Console.WriteLine("Mesh tile diagnostics fixture passed (synthetic files only).");
+        }
+    }
+}

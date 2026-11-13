@@ -62,11 +62,16 @@ internal sealed class MeshRoam
             var nav = Navigator.TripperNavigator;
             var start = new Vector3((float)x, (float)y, (float)z);
             nav.EnsureTilesAroundPosition(map, start, Navigator.LoadTilesAroundRadius);
-            if (!nav.FindNearestPolyRef(map, start, 2.5f, 5f, out Tripper.Navigation.PolygonReference poly, out Vector3 snap)
-                || !poly.IsValid || !float.IsFinite(snap.X) || !float.IsFinite(snap.Y) || !float.IsFinite(snap.Z)
-                || ClickAimMath.Len(snap.X - x, snap.Y - y) > 2.5 || Math.Abs(snap.Z - z) > 5
-                || !reader.TryReadMapId(out uint again) || again != map || ObjectManager.WowB != reader)
-            { Logging.Write("[Roam] player is not on a verified mesh layer, or map changed; cannot start"); return false; }
+            bool found = nav.FindNearestPolyRef(map, start, 2.5f, 5f, out Tripper.Navigation.PolygonReference poly, out Vector3 snap);
+            bool sameMap = reader.TryReadMapId(out uint again) && again == map && ObjectManager.WowB == reader;
+            if (!found || !poly.IsValid || !float.IsFinite(snap.X) || !float.IsFinite(snap.Y) || !float.IsFinite(snap.Z)
+                || ClickAimMath.Len(snap.X - x, snap.Y - y) > 2.5 || Math.Abs(snap.Z - z) > 5 || !sameMap)
+            {
+                Logging.Write("[Roam] player is not on a verified mesh layer, or map changed; cannot start."
+                    + " nearest polygon found=" + found + ", valid=" + poly.IsValid + ", map stable=" + sameMap);
+                if (sameMap) ClickAimDiagnostics.ReportMeshTileDiagnostics(map, start, nav, "roam start refused; no movement authorized");
+                return false;
+            }
             int radius = GatherSettings.RoamRadiusYd;
             if (radius < 100 || radius > 3000) { Logging.Write("[Roam] invalid roaming radius"); return false; }
             roam = new MeshRoam(reader, map, snap, radius);
