@@ -106,7 +106,7 @@ internal static class MeshRelocate
                     || ClickAimMath.Len(snap.X - next.X, snap.Y - next.Y) > 0.5
                     || Math.Abs(snap.Z - next.Z) > 2.0
                     || (nav.GetPolyArea(map, end, out byte area) & 0x80000000U) != 0
-                    || !MeshRoam.SafeDestinationArea(area)
+                    || !MeshRoam.SafeDestinationArea(map, snap, area, (tx, ty) => nav.IsTileLoaded(map, tx, ty))
                     || ClickAimMath.Len(snap.X - originX, snap.Y - originY) > RadiusYd
                     || ClickAimMath.Len(snap.X - x, snap.Y - y) < MinDistanceYd
                     || ClickAimMath.Len(snap.X - x, snap.Y - y) > RadiusYd) continue;

@@ -1,0 +1,106 @@
+using System;
+using System.Collections.Generic;
+using System.Numerics;
+using Styx.Logic.Pathing;
+
+namespace Styx.Helpers
+{
+    internal static class Logging
+    {
+        internal static readonly List<string> Lines = new();
+        internal static void Write(string text) => Lines.Add(text);
+    }
+}
+namespace Styx.WoWInternals
+{
+    internal sealed class WowBReader
+    {
+        internal bool Valid = true;
+        internal bool TryReadMapId(out uint map) { map = 0; return Valid; }
+    }
+    internal static class ObjectManager { internal static WowBReader? WowB; }
+}
+namespace Tripper.Navigation
+{
+    internal readonly struct PolygonReference { internal bool IsValid => true; }
+    internal sealed class FakeNav
+    {
+        internal bool IsLoaded = true, RandomWorks = true, TilesLoaded = true;
+        internal byte Area = 11;
+        internal Vector3 Offset = new Vector3(30, 0, 0);
+        internal Action? OnSample;
+        internal void EnsureTilesAroundPosition(uint map, Vector3 at, int radius) { }
+        internal bool FindNearestPolyRef(uint map, Vector3 point, float h, float v, out PolygonReference poly, out Vector3 snap)
+        { poly = new PolygonReference(); snap = point; return true; }
+        internal bool FindRandomPoint(uint map, Vector3 from, float radius, out Vector3 next)
+        { OnSample?.Invoke(); next = from + Offset; return RandomWorks; }
+        internal uint GetPolyArea(uint map, PolygonReference poly, out byte area) { area = Area; return 0; }
+        internal bool IsTileLoaded(uint map, int x, int y) => TilesLoaded;
+    }
+}
+namespace Styx.Logic.Pathing
+{
+    internal sealed class RoutePoint { internal float X, Y, Z; internal string Kind = ""; }
+    internal static class Navigator
+    {
+        internal static Tripper.Navigation.FakeNav TripperNavigator = new();
+        internal const int LoadTilesAroundRadius = 1;
+    }
+    internal static class ClickAimMath { internal static double Len(double x, double y) => Math.Sqrt(x*x + y*y); }
+    internal static class ClickAimPositions
+    {
+        internal static bool TryRead(out double x, out double y) { x = -6200; y = -3400; return true; }
+        internal static double Z() => 250;
+    }
+    internal static class GatherSettings { internal static int RoamRadiusYd = 300; }
+    internal static class RouteRunner { internal static bool MeshReady() => true; }
+    internal static class ClickAimAbort { internal static bool Requested; }
+    internal static class ClickAimDiagnostics
+    {
+        internal static void ReportMeshTileDiagnostics(uint map, Vector3 at, Tripper.Navigation.FakeNav nav, string context) { }
+    }
+    // The real format reader is exercised separately in MmapGroundPolicyTests.
+    // This stub tests the actual MeshRoam integration and preserves the two
+    // mutually exclusive area interpretations and loaded-tile check.
+    internal static class MmapGroundPolicy
+    {
+        internal static bool V16 = true;
+        internal static bool LegacyGround(byte area) => area == 0 || area == 1 || area == 4;
+        internal static bool IsGround(uint map, Vector3 position, byte area, Func<int, int, bool> loaded)
+            => loaded(0, 0) && (V16 ? area == 11 : LegacyGround(area));
+    }
+    internal static class Program
+    {
+        private static void Check(bool ok, string message) { if (!ok) throw new Exception(message); }
+        private static MeshRoam Setup()
+        {
+            Styx.WoWInternals.ObjectManager.WowB = new Styx.WoWInternals.WowBReader();
+            Navigator.TripperNavigator = new(); MmapGroundPolicy.V16 = true; ClickAimAbort.Requested = false;
+            Styx.Helpers.Logging.Lines.Clear();
+            Check(MeshRoam.TryCreate(out MeshRoam? roam) && roam != null, "create");
+            return roam!;
+        }
+        public static void Main()
+        {
+            var roam = Setup();
+            Check(roam.TryNext(out RoutePoint point) && point.Kind == "Roam" && Math.Abs(point.X + 6170) < 0.1, "v16 area 11 sampled");
+            roam = Setup(); Navigator.TripperNavigator.Area = 9;
+            Check(!roam.TryNext(out _) && Styx.Helpers.Logging.Lines.Exists(s => s.Contains("ground/format=20") && s.Contains("9:20")), "v16 water denied and counted");
+            roam = Setup(); MmapGroundPolicy.V16 = false;
+            Check(!roam.TryNext(out _), "legacy area 11 portal denied");
+            roam = Setup(); MmapGroundPolicy.V16 = false; Navigator.TripperNavigator.Area = 1;
+            Check(roam.TryNext(out _), "legacy ground accepted");
+            roam = Setup(); Navigator.TripperNavigator.TilesLoaded = false;
+            Check(!roam.TryNext(out _), "unloaded tile denied");
+            roam = Setup(); Navigator.TripperNavigator.RandomWorks = false;
+            Check(!roam.TryNext(out _) && Styx.Helpers.Logging.Lines.Exists(s => s.Contains("random=20")), "random failures counted");
+            roam = Setup(); Navigator.TripperNavigator.Offset = new Vector3(1000, 0, 0);
+            Check(!roam.TryNext(out _), "outside anchor denied");
+            roam = Setup(); Navigator.TripperNavigator.OnSample = () => ClickAimAbort.Requested = true;
+            Check(!roam.TryNext(out _), "stop during sampling");
+            roam = Setup(); Navigator.TripperNavigator.OnSample = () => Styx.WoWInternals.ObjectManager.WowB!.Valid = false;
+            Check(!roam.TryNext(out _), "map change during sampling");
+            Console.WriteLine("MeshRoam format integration fixtures passed (synthetic navigation only).");
+        }
+    }
+}

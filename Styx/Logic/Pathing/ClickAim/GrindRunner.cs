@@ -1131,6 +1131,9 @@ internal static class GrindRunner
                 string combatReport;
                 if (TryEngage(hwnd, out combatReport))
                 {
+                    // A real engagement interrupts the failed-sample streak.
+                    // Old failures must not stop a later post-combat roam.
+                    roamSampleFailures = 0;
                     fights++;
                     // On the 70707 trial a lost selection does not confirm death.
                     // Preserve the existing 70291 accounting unchanged.
@@ -1325,6 +1328,7 @@ internal static class GrindRunner
             recovered = !watchCancelled && _recoveryReady && !ClickAimAbort.Requested &&
                 unchecked(Environment.TickCount - started) < budgetMs && RecoverIfPending(mover);
             if (recovered) dead = 0; // prior failed legs do not immediately halt the revived run
+            if (recovered) roamSampleFailures = 0; // old samples do not stop the revived run
             } while (recovered && !_stop && !ClickAimAbort.Requested && unchecked(Environment.TickCount - started) < budgetMs);
         }
         catch (Exception ex)

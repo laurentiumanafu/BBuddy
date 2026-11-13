@@ -31,19 +31,18 @@ internal sealed class MeshRoam
            && double.IsFinite(radius) && radius >= 100 && radius <= 3000
            && ClickAimMath.Len(x - anchorX, y - anchorY) <= radius;
 
-    // Area 0 is emitted by our legacy grid-to-mmap builder; native ground and
-    // road are 1 and 4. Do not intentionally choose water, lava or portals.
-    internal static bool SafeDestinationArea(byte area)
-        => area == 0 || area == (byte)Tripper.Navigation.AreaType.Ground
-           || area == (byte)Tripper.Navigation.AreaType.Road;
+    // Area 11 is ground in the verified Trinity v16 single-tile format, but
+    // an Alliance portal in the legacy HB enum. Never classify by byte alone.
+    internal static bool SafeDestinationArea(uint map, Vector3 position, byte area, Func<int, int, bool> tileLoaded)
+        => MmapGroundPolicy.IsGround(map, position, area, tileLoaded);
 
     internal static string SelfTest()
     {
         bool ok = WithinAnchor(0, 0, 0, 0, 250) && WithinAnchor(250, 0, 0, 0, 250)
                && !WithinAnchor(251, 0, 0, 0, 250) && WithinAnchor(251, 0, 0, 0, 1000)
                && !WithinAnchor(double.NaN, 0, 0, 0, 250) && !WithinAnchor(0, 0, 0, 0, 0)
-               && SafeDestinationArea(0) && SafeDestinationArea(1) && SafeDestinationArea(4)
-               && !SafeDestinationArea(2) && !SafeDestinationArea(3) && !SafeDestinationArea(17);
+               && MmapGroundPolicy.LegacyGround(0) && MmapGroundPolicy.LegacyGround(1) && MmapGroundPolicy.LegacyGround(4)
+               && !MmapGroundPolicy.LegacyGround(2) && !MmapGroundPolicy.LegacyGround(3) && !MmapGroundPolicy.LegacyGround(17);
         return "[Roam] destination-bound fixtures: " + (ok ? "pass" : "FAIL") + " (not a live mesh test)";
     }
 
@@ -96,40 +95,62 @@ internal sealed class MeshRoam
         try
         {
             var nav = Navigator.TripperNavigator;
-            if (!nav.IsLoaded) return false;
+            if (!nav.IsLoaded) { Logging.Write("[Roam] sampling unavailable: navigation DLL not loaded"); return false; }
             var at = new Vector3((float)x, (float)y, (float)z);
             nav.EnsureTilesAroundPosition(_map, at, Navigator.LoadTilesAroundRadius);
             if (!nav.FindNearestPolyRef(_map, at, 2.5f, 5f, out Tripper.Navigation.PolygonReference current, out Vector3 from)
                 || !current.IsValid || !float.IsFinite(from.X) || !float.IsFinite(from.Y) || !float.IsFinite(from.Z)
-                || ClickAimMath.Len(from.X - x, from.Y - y) > 2.5 || Math.Abs(from.Z - z) > 5) return false;
+                || ClickAimMath.Len(from.X - x, from.Y - y) > 2.5 || Math.Abs(from.Z - z) > 5)
+            { Logging.Write("[Roam] sampling unavailable: player polygon, snap or layer not verified"); return false; }
+            int random = 0, bounds = 0, distanceRejected = 0, recent = 0, snapRejected = 0, areaQuery = 0, areaRejected = 0;
+            var rejectedAreas = new SortedDictionary<byte, int>();
             for (int i = 0; i < CandidateCount && !ClickAimAbort.Requested; i++)
             {
-                if (!nav.FindRandomPoint(_map, from, StepRadiusYd, out Vector3 next)
-                    || !float.IsFinite(next.X) || !float.IsFinite(next.Y) || !float.IsFinite(next.Z)
-                    || !WithinAnchor(next.X, next.Y, _anchor.X, _anchor.Y, _radius)) continue;
+                if (!MapCurrent()) return false;
+                if (!nav.FindRandomPoint(_map, from, StepRadiusYd, out Vector3 next)) { random++; continue; }
+                if (!float.IsFinite(next.X) || !float.IsFinite(next.Y) || !float.IsFinite(next.Z)
+                    || !WithinAnchor(next.X, next.Y, _anchor.X, _anchor.Y, _radius)) { bounds++; continue; }
                 double distance = ClickAimMath.Len(next.X - x, next.Y - y);
-                if (distance < (i < 15 ? 15.0 : 6.0) || distance > StepRadiusYd + 2.0) continue;
+                if (distance < (i < 15 ? 15.0 : 6.0) || distance > StepRadiusYd + 2.0) { distanceRejected++; continue; }
                 if (i < 15)
                 {
                     bool seen = false;
                     foreach (var old in _recent)
                         if (ClickAimMath.Len(next.X - old.X, next.Y - old.Y) < 15.0) { seen = true; break; }
-                    if (seen) continue;
+                    if (seen) { recent++; continue; }
                 }
                 if (!nav.FindNearestPolyRef(_map, next, 0.5f, 2f, out Tripper.Navigation.PolygonReference end, out Vector3 endSnap)
                     || !end.IsValid || !float.IsFinite(endSnap.X) || !float.IsFinite(endSnap.Y) || !float.IsFinite(endSnap.Z)
                     || !WithinAnchor(endSnap.X, endSnap.Y, _anchor.X, _anchor.Y, _radius)
                     || ClickAimMath.Len(endSnap.X - next.X, endSnap.Y - next.Y) > 0.5
-                    || Math.Abs(endSnap.Z - next.Z) > 2.0
-                    || (nav.GetPolyArea(_map, end, out byte area) & 0x80000000U) != 0
-                    || !SafeDestinationArea(area) || !MapCurrent()) continue;
+                    || Math.Abs(endSnap.Z - next.Z) > 2.0) { snapRejected++; continue; }
+                if ((nav.GetPolyArea(_map, end, out byte area) & 0x80000000U) != 0) { areaQuery++; continue; }
+                if (!SafeDestinationArea(_map, endSnap, area, (tx, ty) => nav.IsTileLoaded(_map, tx, ty)))
+                {
+                    areaRejected++;
+                    rejectedAreas.TryGetValue(area, out int count);
+                    rejectedAreas[area] = count + 1;
+                    continue;
+                }
+                if (ClickAimAbort.Requested || !MapCurrent()) return false;
                 point = new RoutePoint { X = endSnap.X, Y = endSnap.Y, Z = endSnap.Z, Kind = "Roam" };
                 _recent.Add(endSnap);
                 if (_recent.Count > RecentLimit) _recent.RemoveAt(0);
                 return true;
             }
+            if (!ClickAimAbort.Requested && MapCurrent())
+            {
+                var areas = new List<string>();
+                foreach (var pair in rejectedAreas) areas.Add(pair.Key.ToString(CultureInfo.InvariantCulture) + ":" + pair.Value.ToString(CultureInfo.InvariantCulture));
+                Logging.Write("[Roam] sampling rejections (up to " + CandidateCount + "): random=" + random + ", invalid/outside anchor=" + bounds +
+                    ", distance=" + distanceRejected + ", recent=" + recent + ", snap/layer=" + snapRejected +
+                    ", area query=" + areaQuery + ", ground/format=" + areaRejected +
+                    ", rejected area IDs=" + (areas.Count == 0 ? "none" : string.Join(",", areas)) +
+                    "; no movement authorized without a verified destination");
+            }
         }
         catch (Exception ex) { Logging.Write("[Roam] mesh sampling failed: " + ex.Message); }
         return false;
     }
+
 }

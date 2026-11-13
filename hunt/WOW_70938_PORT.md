@@ -259,3 +259,31 @@ The C# fixture includes that anonymized crop and format-policy cases; C# tests,
 Windows build and in-game recovery were not run here. The fallback log now
 separates a failed safety check from an inspected frame without a matching
 button; ground-query failures report throttled reasons.
+
+### Badlands profile-free roaming stop (23:50 log)
+
+`2026-11-13_2350_23308.log` shows map 0 tiles and paths working. At 23:55
+and again 00:06, the client released, returned, accepted resurrection, and
+reported alive/action-bar confirmation before Grind resumed. At 00:03:25 and
+00:07:00, Grind stopped after the profile-free sampler failed to choose a local
+mesh destination five times. The old sampler did not log which of random query,
+anchor/distance, snap/layer, area or format rejected those samples, so the log
+does not prove a particular rejection reason. In the later run, those five
+failures were not consecutive: earlier failed samples accumulated across combat
+and a subsequent death/revival.
+
+Corpse recovery already used the version-aware ground policy, but MeshRoam and
+MeshRelocate still treated the polygon area as a legacy HB enum. In particular
+those paths rejected area 11 unconditionally even when the selected map and tile
+are the captured Trinity v16 layout where area 11 denotes ground. Both now use
+the same format-aware loaded-tile check as corpse recovery; this does not treat
+11 as ground for bare-parameter legacy maps, and unknown/mixed files, water,
+lava, border ambiguity and failed mesh checks are still refused. Bounds,
+map/session checks, STOP, valid snap, recent-spot avoidance and complete route
+validation remain. We have not inspected the actual Badlands tile contents, so
+whether that incompatibility explains the specific sampling failures is not yet
+confirmed. The sampler now reports rejection counts and area IDs when it finds no
+destination. A completed fight or confirmed resurrection resets the Grind roam
+failure streak; five fresh failed sampling rounds still stop rather than moving
+without a verified destination. C# fixture code models both formats, interrupts
+and relocation, but no .NET SDK/Windows client was available here to execute it.

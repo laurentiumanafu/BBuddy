@@ -40,6 +40,8 @@ internal static class MmapGroundPolicy
         catch (DirectoryNotFoundException) { return File.OpenRead(Path.Combine(directory, modern)); }
     }
 
+    internal static bool LegacyGround(byte area) => area == 0 || area == 1 || area == 4;
+
     internal static bool IsGround(uint map, Vector3 position, byte area, Func<int, int, bool> tileLoaded)
     {
         try
@@ -63,7 +65,7 @@ internal static class MmapGroundPolicy
             if (mapFile.Length < 28) return false;
             using var mapReader = new BinaryReader(mapFile);
             uint first = mapReader.ReadUInt32();
-            if (first != Magic) return area == 0 || area == 1 || area == 4; // old bare params
+            if (first != Magic) return LegacyGround(area); // old bare params
             if (mapFile.Length != 40 || mapReader.ReadUInt32() != Version || area != 11) return false;
 
             double tx = (Origin - (double)position.X) / TileSize, ty = (Origin - (double)position.Y) / TileSize;

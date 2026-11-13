@@ -33,6 +33,7 @@ namespace Tripper.Navigation
             return SampleEnabled;
         }
         internal uint GetPolyArea(uint map, PolygonReference poly, out byte area) { area = Area; return 0; }
+        internal bool IsTileLoaded(uint map, int x, int y) => true;
     }
 }
 namespace Styx.Logic.Pathing
@@ -53,7 +54,12 @@ namespace Styx.Logic.Pathing
         internal static bool TryRead(out double x, out double y) { x = X; y = Y; return Readable; }
         internal static double Z() => 0;
     }
-    internal static class MeshRoam { internal static bool SafeDestinationArea(byte area) => area == 0 || area == 1 || area == 4; }
+    internal static class MeshRoam
+    {
+        internal static bool V16;
+        internal static bool SafeDestinationArea(uint map, Vector3 point, byte area, Func<int, int, bool> loaded)
+            => loaded(0, 0) && (V16 ? area == 11 : area == 0 || area == 1 || area == 4);
+    }
     internal static class RouteRunner
     {
         internal static bool LastRunInterrupted;
@@ -91,7 +97,7 @@ namespace Styx.Logic.Pathing
         internal static void Reset()
         {
             _stop = false; ClickAimAbort.Requested = false; Combat = false; MapOk = true; Exclude = false; ExpectedCheckNodes = true;
-            RouteRunner.LastRunInterrupted = false; RouteRunner.PathValid = true;
+            RouteRunner.LastRunInterrupted = false; RouteRunner.PathValid = true; MeshRoam.V16 = false;
             ClickAimPositions.X = 0; ClickAimPositions.Y = 0; ClickAimPositions.Readable = true;
             Navigator.TripperNavigator = new Tripper.Navigation.FakeNav();
             InterruptCalls = 0; InterruptAt = int.MaxValue; Walks.Clear(); WalkResults.Clear();
@@ -135,6 +141,12 @@ namespace Styx.Logic.Pathing
             Check(!GatherRunner.Run() && GatherRunner.Walks.Count == 0, "blackspot rejection");
             GatherRunner.Reset(); Navigator.TripperNavigator.Area = 2;
             Check(!GatherRunner.Run() && GatherRunner.Walks.Count == 0, "unsafe area rejection");
+            GatherRunner.Reset(); MeshRoam.V16 = true; Navigator.TripperNavigator.Area = 11;
+            Check(MeshRelocate.TryPick(1, 0, 0, new List<RoutePoint>(), (x,y) => false, () => false, out _), "format-aware v16 ground relocation");
+            GatherRunner.Reset(); Navigator.TripperNavigator.Area = 11;
+            Check(!MeshRelocate.TryPick(1, 0, 0, new List<RoutePoint>(), (x,y) => false, () => false, out _), "legacy portal rejection");
+            GatherRunner.Reset(); MeshRoam.V16 = true; Navigator.TripperNavigator.Area = 9;
+            Check(!MeshRelocate.TryPick(1, 0, 0, new List<RoutePoint>(), (x,y) => false, () => false, out _), "v16 water rejection");
             GatherRunner.Reset(); RouteRunner.PathValid = false;
             Check(!GatherRunner.Run() && GatherRunner.Walks.Count == 0, "incomplete path rejection");
             GatherRunner.Reset(); Navigator.TripperNavigator.SampleEnabled = false;
