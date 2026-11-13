@@ -13,7 +13,12 @@ namespace Styx.WoWInternals
         public override bool Equals(object? o)=>o is WowBGuid g && this==g;
         public override int GetHashCode()=>Value; public override string ToString()=>Value.ToString();
     }
-    public sealed class WowBReader { public bool IsExperimental70938=true, IsExperimental70707=true; }
+    public struct WowBObservedUnit { }
+    public sealed class WowBReader
+    {
+        public bool IsExperimental70938=true, IsExperimental70707=true;
+        public bool TryRead70888RecoveryPlayer(out WowBObservedUnit p, out uint h, out uint m) { p=default;h=m=100;return true; }
+    }
     public static class ObjectManager { public static WowBReader? WowB; public static GreenMagic.Memory? Wow; }
 }
 namespace Styx.Helpers { public static class Logging { public static void Write(string s) { } } }
@@ -32,9 +37,15 @@ namespace Styx.Logic.Pathing
     internal static class GatherNodeScanner
     {
         internal struct Position { internal double X,Y,Z; }
-        internal struct Node { internal WowBGuid Guid; internal string Name; internal Position Position; internal double Distance; }
+        internal struct Node { internal WowBGuid Guid; internal string Name; internal Position Position; internal double Distance; internal bool IsHerb; }
         internal static bool ScanOk=true; internal static List<Node> Nodes=new();
         internal static bool TryCapture(double radius,out List<Node> result) { result=new List<Node>(Nodes);return ScanOk; }
+    }
+    internal static class WowBGatherCastResearch
+    {
+        internal static bool Seen;
+        internal static bool TryBegin(GreenMagic.Memory? m, WowBReader? r, out WowBObservedUnit p) { p=default; return m!=null && r?.IsExperimental70938==true; }
+        internal static bool TryObserve(GreenMagic.Memory m, WowBReader r, WowBObservedUnit p)=>Seen;
     }
     internal static class GatherInteraction
     {
@@ -65,11 +76,11 @@ namespace Styx.Logic.Pathing
             GrindRunner.Fighting=false;GrindRunner.Readable=true;
             _ignoreMonsters=_stop=_movementEnabled=_movementAttempted=_nodeDefence=false;_pending=null;
             Retry.Clear();FailedHarvestNodes.Clear();ObservedHarvestAttempts.Clear();GatherNodeScanner.ScanOk=true;GatherNodeScanner.Nodes=new(){Node(1)};
-            GatherInteraction.Clicked=true;GatherInteraction.HoverMiss=GatherInteraction.CursorMoved=false;GatherInteraction.Calls=0;GatherInteraction.Actual=default;
+            WowBGatherCastResearch.Seen=false;GatherInteraction.Clicked=true;GatherInteraction.HoverMiss=GatherInteraction.CursorMoved=false;GatherInteraction.Calls=0;GatherInteraction.Actual=default;
         }
         public static void Main()
         {
-            Reset();GatherAtNode((IntPtr)1,Node(1));
+            Reset();WowBGatherCastResearch.Seen=true;GatherAtNode((IntPtr)1,Node(1));
             Check(FailedHarvestNodes.Contains(Node(1).Guid) && !Ready(Node(1)) && Ready(Node(2)) && GatherInteraction.Calls==5,"only after five posted interactions blacklist that GUID");
             Reset();Check(Ready(Node(1)) && ObservedHarvestAttempts.Count==0,"new session clears blacklist and count");
             int waits=0; ClickAimAbort.OnWait=()=> { if (++waits == 5) ClickAimAbort.Requested=true; };

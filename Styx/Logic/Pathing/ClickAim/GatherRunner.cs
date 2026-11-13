@@ -561,6 +561,13 @@ internal static class GatherRunner
             // Even an unconfirmed attempt may coincide with a manual or unexpected cast.
             // Stay still for the entire window instead of scanning once and walking off.
             Logging.Write("[Gather] holding still for 6 seconds for a possible cast and auto-loot; success is not yet known");
+            // A 70938 trace showed one ID-3564 mining cast-like cluster. This
+            // observation is diagnostic only and never changes the wait,
+            // retry count, node blacklist or any gameplay input.
+            WowBObservedUnit castPlayer = default;
+            bool trackMining = clicked && !node.IsHerb &&
+                WowBGatherCastResearch.TryBegin(initialMemory, initialReader, out castPlayer);
+            bool miningCandidateSeen = false;
             int started = Environment.TickCount;
             bool unknownLogged = false;
             while (true)
@@ -580,8 +587,15 @@ internal static class GatherRunner
                     DeferForCombat(true);
                     return;
                 }
+                if (trackMining && !miningCandidateSeen && initialReader != null && initialMemory != null &&
+                    WowBGatherCastResearch.TryObserve(initialMemory, initialReader, castPlayer))
+                    miningCandidateSeen = true;
                 if (unchecked(Environment.TickCount - started) >= GatherHoldMs) break;
             }
+            if (clicked && !node.IsHerb && initialReader?.IsExperimental70938 == true)
+                Logging.Write(miningCandidateSeen
+                    ? "[Gather] 70938 ID-3564 mining cast-like candidate observed during this wait; it does not prove the click caused it, the cast completed or loot was obtained"
+                    : "[Gather] 70938 ID-3564 mining cast-like candidate not observed; timing, other ranks or unreadable data can explain this, so failure is not established");
             if (!GatherNodeScanner.TryCapture(SearchYd, out List<GatherNodeScanner.Node> after))
             {
                 Logging.Write("[Gather] post-attempt scan failed; result unknown, will retry later");

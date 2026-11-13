@@ -84,6 +84,16 @@ class TraceTests(unittest.TestCase):
         del changes[('player', 0x3e8)]
         self.assertEqual(candidate_events(changes), [])
 
+    def test_new_registered_build_headers(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'trace.txt'
+            for build in (70707, 70755, 70790, 70862, 70888, 70938):
+                path.write_text(f'{build} COMBAT RESEARCH v1: test\nsample=0 startMs=0 endMs=0 utc=x\nend: completed; samples=1\n', encoding='utf-8')
+                _, _, count, status = read_trace(path)
+                self.assertEqual((count, status), (1, 'completed; samples=1'))
+            path.write_text('99999 COMBAT RESEARCH v1: test\n', encoding='utf-8')
+            with self.assertRaises(ValueError): read_trace(path)
+
     def test_bad_header_and_out_of_bounds(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / 'bad.txt'

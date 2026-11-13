@@ -1,0 +1,63 @@
+using System;
+using GreenMagic;
+using Styx.WoWInternals;
+using Styx.Logic.Pathing;
+namespace GreenMagic
+{
+    public class Memory
+    {
+        public byte[] Data = new byte[0x60]; public bool Unreadable; public Action<int>? OnRead; public int Reads;
+        public byte[]? ReadBytes64(ulong address,int count) { OnRead?.Invoke(++Reads); return Unreadable ? null : (byte[])Data.Clone(); }
+        public IDisposable TemporaryCacheState(bool ignored) => new Scope();
+        private sealed class Scope : IDisposable { public void Dispose() { } }
+    }
+}
+namespace Styx.WoWInternals
+{
+    public readonly struct WowBGuid
+    {
+        public readonly ulong Low, High; public WowBGuid(ulong low,ulong high) { Low=low;High=high; }
+        public bool IsEmpty=>Low==0 && High==0;
+        public static bool operator ==(WowBGuid a,WowBGuid b)=>a.Low==b.Low && a.High==b.High;
+        public static bool operator !=(WowBGuid a,WowBGuid b)=>!(a==b);
+        public override bool Equals(object? o)=>o is WowBGuid g && g==this;
+        public override int GetHashCode()=>HashCode.Combine(Low,High);
+    }
+    public struct WowBObservedUnit { public ulong UnitAddress; }
+    public class WowBReader
+    {
+        public bool IsExperimental70938=true, ExperimentalGrindActive=true, PlayerReadable=true;
+        public bool TryRead70888RecoveryPlayer(out WowBObservedUnit p,out uint hp,out uint max)
+        { p = new WowBObservedUnit { UnitAddress=0x100000 }; hp=max=100; return PlayerReadable; }
+    }
+    public static class ObjectManager { public static Memory? Wow; public static WowBReader? WowB; }
+}
+namespace Styx.Logic.Pathing
+{
+    static class WowBGrindFactions
+    { internal static bool Stable=true; internal static bool TraceIdentity70707(Memory m,WowBReader r,WowBObservedUnit u,bool local)=>Stable; }
+}
+static class Program
+{
+    static void Check(bool b,string s) { if(!b) throw new Exception(s); }
+    static void Put(byte[] data,int offset,uint value)=>BitConverter.GetBytes(value).CopyTo(data,offset);
+    static void Put64(byte[] data,int offset,ulong value)=>BitConverter.GetBytes(value).CopyTo(data,offset);
+    static void Main()
+    {
+        var m=new Memory();var r=new WowBReader();ObjectManager.Wow=m;ObjectManager.WowB=r;
+        Put(m.Data,0,3564);Put(m.Data,0x2C,3564);
+        Put(m.Data,0x58,10000);Put(m.Data,0x5C,13200);
+        Check(WowBGatherCastResearch.Matches(m.Data,out var start,out var end) && start==10000 && end==13200,"exact observed candidate");
+        Check(WowBGatherCastResearch.TryBegin(m,r,out var player) && WowBGatherCastResearch.TryObserve(m,r,player),"stable diagnostic");
+        Check(!WowBGatherCastResearch.Matches(new byte[3],out _,out _),"short read rejected");
+        Put(m.Data,0x2C,3563); Check(!WowBGatherCastResearch.TryObserve(m,r,player),"different words rejected"); Put(m.Data,0x2C,3564);
+        Put(m.Data,0x5C,13000); Check(!WowBGatherCastResearch.TryObserve(m,r,player),"different duration rejected"); Put(m.Data,0x5C,13200);
+        m.OnRead=n=> { if(n==2) Put(m.Data,0x58,10001); };m.Reads=0;
+        Check(!WowBGatherCastResearch.TryObserve(m,r,player),"unstable double read rejected");
+        m.OnRead=null;Put(m.Data,0x58,10000);m.Unreadable=true;Check(!WowBGatherCastResearch.TryObserve(m,r,player),"unreadable is not a negative cast verdict");m.Unreadable=false;
+        WowBGrindFactions.Stable=false;Check(!WowBGatherCastResearch.TryObserve(m,r,player),"identity change rejected");WowBGrindFactions.Stable=true;
+        r.IsExperimental70938=false;Check(!WowBGatherCastResearch.TryObserve(m,r,player),"other build rejected");r.IsExperimental70938=true;
+        r.ExperimentalGrindActive=false;Check(!WowBGatherCastResearch.TryBegin(m,r,out _) && !WowBGatherCastResearch.TryObserve(m,r,player),"inactive session rejected");
+        Console.WriteLine("Synthetic cast-candidate fixtures passed; no real cast or loot is inferred.");
+    }
+}

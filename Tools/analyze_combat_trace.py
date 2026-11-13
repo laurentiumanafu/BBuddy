@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Summarize raw 70707 CombatResearch trace changes; never infer verified offsets."""
+"""Summarize raw supported CombatResearch traces; candidate matches are not verified offsets."""
 import argparse
 import re
 import struct
@@ -18,8 +18,8 @@ def read_trace(path, spell_id=None):
     status = "no end status"
     count = 0
     with Path(path).open(encoding="utf-8-sig") as stream:
-        if not stream.readline().startswith("70707 COMBAT RESEARCH v1:"):
-            raise ValueError("not a 70707 CombatResearch v1 file")
+        if not re.match(r"^(70707|70755|70790|70862|70888|70938) COMBAT RESEARCH v1:", stream.readline()):
+            raise ValueError("not a supported CombatResearch v1 file")
         for line in stream:
             line = line.rstrip("\r\n")
             match = SAMPLE.match(line)
@@ -69,7 +69,7 @@ def player_offsets_not_in_control(changes, control):
 
 
 def candidate_events(changes):
-    """Recognize observed 70707 trace patterns, never a general-purpose state reader."""
+    """Recognize correlated candidate patterns, never a general-purpose state reader."""
     grouped = defaultdict(dict)
     for (actor, offset), events in changes.items():
         for time, old, new in events:
