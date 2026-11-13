@@ -1,0 +1,110 @@
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using Styx.WoWInternals;
+namespace Styx.WoWInternals
+{
+    readonly struct WowBGuid : IEquatable<WowBGuid>
+    {
+        readonly int id; public WowBGuid(int value) { id = value; }
+        public bool Equals(WowBGuid other) => id == other.id;
+        public override bool Equals(object? o) => o is WowBGuid g && Equals(g);
+        public override int GetHashCode() => id;
+        public static bool operator ==(WowBGuid a, WowBGuid b) => a.Equals(b);
+        public static bool operator !=(WowBGuid a, WowBGuid b) => !a.Equals(b);
+    }
+    sealed class WowBReader { public bool IsExperimental70938 = true; }
+    static class ObjectManager { public static WowBReader? WowB = new WowBReader(); }
+}
+namespace Styx.Logic.Pathing
+{
+    struct Point { public double X, Y, Z; }
+    sealed class ClickAimMover { public bool QuietKeyStop; public void MoveStop() {} }
+    sealed class RoutePoint { public double X, Y, Z; }
+    static class RouteRunner
+    {
+        public static bool StopRequested, PollInterruptDuringWalk, RequireMeshDuringSession, LastRunInterrupted, Reached = true;
+        public static Func<bool>? ShouldInterrupt;
+        public static bool RunWithinSession(ClickAimMover mover, List<RoutePoint> route, int n) { LastRunInterrupted = ShouldInterrupt?.Invoke() ?? false; return Reached && !LastRunInterrupted; }
+    }
+    static class ClickAimAbort { public static bool Requested; public static bool Wait(int ms) => Requested; }
+    static class ClickAimKeySteer { public static void ReleaseHeld() {} public static bool Face(double x, double y, IntPtr h, double d, int n) => true; }
+    static class Logging { public static void Write(string s) {} }
+    static class GrindRunner
+    {
+        public static bool Fighting, CombatReadable = true;
+        public static bool TryReadGatherCombat(out bool fighting) { fighting = Fighting; return CombatReadable; }
+    }
+    static class GatherSettings { public static bool Mining = true, Herbalism; public static int MiningSkill = 300, HerbalismSkill; }
+    static class GatherNodeScanner
+    {
+        public struct Node { public WowBGuid Guid; public string Name; public double Distance; public Point Position; }
+        public struct ScanStats { public int HeaderRejected, Changed; }
+        public static bool ScanOk = true, Eligible = true, Uncertain;
+        public static List<Node> Nodes = new();
+        public static bool TryCapture(double radius, out List<Node> nodes) { nodes = ScanOk ? new List<Node>(Nodes.FindAll(n => n.Distance <= radius)) : new(); return ScanOk; }
+        public static bool TryCapture(double radius, out List<Node> nodes, out ScanStats stats)
+        { stats = new ScanStats { HeaderRejected = Uncertain ? 1 : 0 }; return TryCapture(radius, out nodes); }
+        public static bool IsEligible(Node n, bool m, int ms, bool h, int hs) => Eligible;
+    }
+    static class Fixture
+    {
+        const double SearchYd = 1000, GrindSearchYd = 150, InteractYd = 5;
+        const int RetryMs = 90000, InteractionRetryMs = 20000;
+        static bool _stop, MapCurrent = true, StartSafe = true, ContinueSafe = true;
+        static int _grindMissingScans, _grindApproachFailures, _grindReportAt, _lastSafetySummary, harvests;
+        static GatherNodeScanner.Node? _grindCommitted;
+        static readonly Dictionary<WowBGuid,int> Retry = new();
+        static readonly HashSet<WowBGuid> FailedHarvestNodes = new();
+        static void ClearGrindCommitment() { _grindCommitted = null; _grindMissingScans = _grindApproachFailures = 0; _grindReportAt = 0; }
+        static bool Ready(GatherNodeScanner.Node n) => !FailedHarvestNodes.Contains(n.Guid) && !Retry.ContainsKey(n.Guid);
+        static bool IsBlackspot(double x, double y) => false;
+        static bool MapStillCurrent() => MapCurrent;
+        static bool FindNode(out GatherNodeScanner.Node n, double radius) { n = default; if (!GatherNodeScanner.ScanOk || GatherNodeScanner.Nodes.Count == 0) return false; n = GatherNodeScanner.Nodes[0]; return Ready(n); }
+        static void GatherAtNode(IntPtr h, ClickAimMover m, GatherNodeScanner.Node n, Func<bool> safe) { if (safe()) harvests++; }
+        // __PRODUCTION__
+        static GatherNodeScanner.Node Node(int id, double d = 3) => new GatherNodeScanner.Node { Guid = new WowBGuid(id), Name = "ore", Distance = d, Position = new Point() };
+        static void Reset()
+        {
+            ClearGrindCommitment(); Retry.Clear(); FailedHarvestNodes.Clear(); _stop = RouteRunner.StopRequested = ClickAimAbort.Requested = GrindRunner.Fighting = false;
+            GrindRunner.CombatReadable = MapCurrent = StartSafe = ContinueSafe = GatherNodeScanner.ScanOk = GatherNodeScanner.Eligible = RouteRunner.Reached = true;
+            RouteRunner.LastRunInterrupted = GatherNodeScanner.Uncertain = false; ObjectManager.WowB = new WowBReader(); harvests = 0;
+            GatherNodeScanner.Nodes = new List<GatherNodeScanner.Node> { Node(1) };
+        }
+        static void Check(bool ok, string what) { if (!ok) throw new Exception(what); }
+        public static void Main()
+        {
+            var mover = new ClickAimMover(); Func<bool> start = () => StartSafe, active = () => ContinueSafe;
+            Reset(); StartSafe = false;
+            Check(!GatherForGrind((IntPtr)1, mover, start, active) && !_grindCommitted.HasValue && harvests == 0, "monster blocks new node");
+            StartSafe = true;
+            Check(GatherForGrind((IntPtr)1, mover, start, active) && _grindCommitted.HasValue && harvests == 1, "starts node when safe");
+            StartSafe = false;
+            Check(GatherForGrind((IntPtr)1, mover, start, active) && harvests == 2, "new monster does not interrupt committed node");
+            GrindRunner.Fighting = true;
+            Check(!GatherForGrind((IntPtr)1, mover, start, active) && _grindCommitted.HasValue && harvests == 2, "combat defends and preserves node");
+            GrindRunner.Fighting = false;
+            Check(GatherForGrind((IntPtr)1, mover, start, active) && harvests == 3, "resumes committed node after combat");
+            GrindRunner.CombatReadable = false;
+            Check(GatherForGrind((IntPtr)1, mover, start, active) && harvests == 3, "unknown combat holds without action");
+            GrindRunner.CombatReadable = true; GatherNodeScanner.ScanOk = false;
+            Check(GatherForGrind((IntPtr)1, mover, start, active) && _grindCommitted.HasValue && _grindMissingScans == 0, "unreadable scan holds");
+            GatherNodeScanner.ScanOk = true; Retry[Node(1).Guid] = 1;
+            Check(GatherForGrind((IntPtr)1, mover, start, active) && _grindCommitted.HasValue && harvests == 3, "cooldown stays committed");
+            Retry.Clear(); GatherNodeScanner.Nodes.Clear(); GatherNodeScanner.Uncertain = true;
+            Check(GatherForGrind((IntPtr)1, mover, start, active) && _grindMissingScans == 0, "rejected candidate does not prove absence");
+            GatherNodeScanner.Uncertain = false;
+            for (int i=0; i<3; i++) Check(GatherForGrind((IntPtr)1, mover, start, active), "missing node scan handled");
+            Check(!_grindCommitted.HasValue, "three absent observations release commitment without claiming loot");
+            Reset(); GatherNodeScanner.Nodes = new() { Node(1, 10) }; RouteRunner.Reached = false;
+            for (int i=0; i<3; i++) { Check(GatherForGrind((IntPtr)1, mover, start, active), "approach failure handled"); Retry.Clear(); }
+            Check(FailedHarvestNodes.Contains(Node(1).Guid), "three confirmed failed approaches blacklist exact node");
+            Check(GatherForGrind((IntPtr)1, mover, start, active) && !_grindCommitted.HasValue, "blacklist releases commitment");
+            Reset(); GatherNodeScanner.Nodes = new() { Node(1, 10) }; RouteRunner.Reached = false; ContinueSafe = false;
+            Check(GatherForGrind((IntPtr)1, mover, start, active) && _grindApproachFailures == 0, "failed safety never blacklists");
+            ClickAimAbort.Requested = true;
+            Check(!GatherForGrind((IntPtr)1, mover, start, active), "STOP wins");
+            Console.WriteLine("Grind gather commitment fixtures passed (synthetic client and routes only).");
+        }
+    }
+}

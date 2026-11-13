@@ -442,6 +442,7 @@ internal static class GrindRunner
         _focusedFightGuid = default; _defenceHandoffGuid = default; _focusedDamageObserved = false; _unverifiedGuid = default;
         _remoteDefenceAttempted = false; _nearDefenceAttempted = false; _nearDefenceExhausted = false; _remoteDefenceCursor = 0; _nearDefenceCursor = 0; _preferredDefenceCursor = 0; _damagedVoluntaryTarget = default;
         _combatHold = false; _poolApproachHandled = false;
+        GatherRunner.ClearGrindCommitment(); // a new life must not resume a stale node
         Buffs.Reset(); // confirmed revival; reapply at the next quiet opportunity
         return !_stop && !ClickAimAbort.Requested;
     }
@@ -1038,6 +1039,18 @@ internal static class GrindRunner
                     }
                 }
 
+                // Once a 70938 resource is committed, finish it before optional
+                // loot, rest, buffs, fresh pulls or roaming. Actual combat,
+                // death, STOP and explicit/automatic selling still preempt it.
+                if (gatherDuringGrind && GatherRunner.HasGrindCommitment)
+                {
+                    if (VendorDue()) { if (VendorTrip(hwnd, mover)) vendorTrips++; continue; }
+                    if (AutoVendorPending() && (!TryReadGatherCombat(out bool gatherVendorCombat) || !gatherVendorCombat))
+                    { ClickAimKeySteer.ReleaseHeld(); ClickAimAbort.Wait(250); continue; }
+                    if (GatherRunner.GatherForGrind(hwnd, mover, GatherAreaSafe, GatherContinuationSafe)) continue;
+                    if (_stop || ClickAimAbort.Requested) break;
+                }
+
                 // Do not wait through a long meal and let a recent corpse expire.
                 // A manual or automatic vendor trip still has priority; resting
                 // before that trip is handled below as before.
@@ -1109,10 +1122,10 @@ internal static class GrindRunner
                 Buffs.TryApply(hwnd, () => _stop, () => StopForBuff(hwnd, mover), () => _presses++);
                 if (_stop || ClickAimAbort.Requested) break;
 
-                // A nearby resource can be gathered before chasing a distant
-                // candidate, but never while in combat or an eligible pull is
-                // close. The same safety check interrupts the detour/cast.
-                if (gatherDuringGrind && GatherRunner.GatherForGrind(hwnd, mover, GatherAreaSafe)) continue;
+                // A new resource requires a clear 100-yard non-player NPC
+                // scan on 70938; once committed, mere proximity no longer
+                // interrupts it. Real combat still preempts gathering.
+                if (gatherDuringGrind && GatherRunner.GatherForGrind(hwnd, mover, GatherAreaSafe, GatherContinuationSafe)) continue;
                 if (_stop || ClickAimAbort.Requested) break;
 
                 string combatReport;
@@ -1146,7 +1159,7 @@ internal static class GrindRunner
                 if (rested.Length > 0) Logging.Write("[Grind] " + rested);
 
                 // Combat and vendor checks have priority over an optional resource detour.
-                if (gatherDuringGrind && GatherRunner.GatherForGrind(hwnd, mover, GatherAreaSafe)) continue;
+                if (gatherDuringGrind && GatherRunner.GatherForGrind(hwnd, mover, GatherAreaSafe, GatherContinuationSafe)) continue;
                 if (_stop || ClickAimAbort.Requested) break;
 
                 RoutePoint next;
@@ -4304,18 +4317,21 @@ internal static class GrindRunner
     // conservatively. Neither proximity nor an allowlist proves hostility.
     private const double GatherNpcSafetyYd = 12.0, GatherPullPriorityYd = 40.0;
     private static bool GatherUnitBlocks(bool local, bool player, double distance, bool readable, uint health,
-                                         bool eligible, bool factionUnknown)
+                                         bool eligible, bool factionUnknown, double pullRadius = GatherPullPriorityYd, bool blockAllLiving = false)
     {
-        if (local || player || distance > GatherPullPriorityYd) return false;
+        if (local || player || distance > pullRadius) return false;
         if (!double.IsFinite(distance)) return true;
         if (!readable) return true;
         if (health == 0) return false;
-        return distance <= GatherNpcSafetyYd || factionUnknown || eligible;
+        return blockAllLiving || distance <= GatherNpcSafetyYd || factionUnknown || eligible;
     }
 
-    private static bool GatherAreaSafe()
+    private static bool GatherAreaSafe() => GatherAreaSafeCore(true);
+    private static bool GatherContinuationSafe() => GatherAreaSafeCore(false);
+
+    private static bool GatherAreaSafeCore(bool checkNearby)
     {
-        if (_stop || ClickAimAbort.Requested || _vendorDue || VendorDue()) return false;
+        if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested || _vendorDue || VendorDue()) return false;
         WowBReader? reader = ObjectManager.WowB;
         GreenMagic.Memory? memory = ObjectManager.Wow;
         if (reader == null || memory == null ||
@@ -4323,20 +4339,26 @@ internal static class GrindRunner
         try
         {
             using var uncached = memory.TemporaryCacheState(false);
+            if (reader.IsExperimental70938 && (CheckDeathCheckpoint(trackerOnly: true) ||
+                !WowBGrindFactions.ExperimentalSessionPlayerCurrent(memory, reader))) return false;
             if (!Capture(out WowBWorldSnapshot? snap) || snap == null
                 || !snap.TryGetLocalPlayer(out WowBObservedUnit player)
                 || !reader.TryGetUnitFields(player.UnitAddress, out WowBReader.WowBUnitFields self)
-                || self.Health == 0 || (self.UnitFlags & PlayerCombatFlagCandidate) != 0) return false;
+                || self.MaxHealth == 0 || self.Health == 0 || self.Health > self.MaxHealth ||
+                   (self.UnitFlags & PlayerCombatFlagCandidate) != 0) return false;
+            if (!checkNearby) return !_stop && !ClickAimAbort.Requested && !RouteRunner.StopRequested && !_vendorDue &&
+                ObjectManager.Wow == memory && ObjectManager.WowB == reader;
+            double pullRadius = reader.IsExperimental70938 ? SearchYd : GatherPullPriorityYd;
             foreach (WowBObservedUnit unit in snap.Units)
             {
                 if (unit.IsLocalPlayer || unit.HasPlayerVtable) continue;
                 double distance = ClickAimMath.Len(unit.Location.X - player.Location.X, unit.Location.Y - player.Location.Y);
-                if (distance > GatherPullPriorityYd) continue;
+                if (distance > pullRadius) continue;
                 bool readable = reader.TryGetUnitFields(unit.UnitAddress, out WowBReader.WowBUnitFields fields);
                 bool unknown = false;
                 bool eligible = readable && fields.Health > 0 && LevelViable(fields.Level, (int)self.Level) &&
                     WowBGrindFactions.AllowsPull(reader, unit, out unknown);
-                if (GatherUnitBlocks(unit.IsLocalPlayer, unit.HasPlayerVtable, distance, readable, readable ? fields.Health : 0, eligible, unknown))
+                if (GatherUnitBlocks(unit.IsLocalPlayer, unit.HasPlayerVtable, distance, readable, readable ? fields.Health : 0, eligible, unknown, pullRadius, reader.IsExperimental70938))
                     return false;
             }
             return !_stop && !ClickAimAbort.Requested && !_vendorDue && ObjectManager.Wow == memory && ObjectManager.WowB == reader;
@@ -7299,6 +7321,10 @@ internal static class GrindRunner
             check("gatherSafetyUnlistedAtDistance", !GatherUnitBlocks(false, false, 35.0, true, 1, false, false));
             check("gatherSafetyCorpse", !GatherUnitBlocks(false, false, 10.0, true, 0, true, false));
             check("gatherSafetyOutOfRange", !GatherUnitBlocks(false, false, 40.1, true, 1, true, false));
+            check("gather70938AllowedAt100", GatherUnitBlocks(false, false, 100.0, true, 1, true, false, SearchYd));
+            check("gather70938AllowedOutside100", !GatherUnitBlocks(false, false, 100.1, true, 1, true, false, SearchYd));
+            check("gather70938UnlistedAt100", GatherUnitBlocks(false, false, 100.0, true, 1, false, false, SearchYd, true));
+            check("gather70938DeadAt100", !GatherUnitBlocks(false, false, 100.0, true, 0, false, false, SearchYd, true));
             check("gatherSafetyPlayer", !GatherUnitBlocks(false, true, 10.0, true, 1, true, false));
             check("chaseReachesTheSearch", ChaseYd >= SearchYd - 0.001);
             check("pullUsesTheSameRadius", Math.Abs(PullYd - SearchYd) < 0.001);

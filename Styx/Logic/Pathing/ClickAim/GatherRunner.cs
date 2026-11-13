@@ -61,6 +61,12 @@ internal static class GatherRunner
     private static int _lastSummary;
     private static int _lastSafetySummary;
     private static GatherNodeScanner.Node? _pending;
+    // Grind-only 70938 commitment. Standalone GatherBuddy retains its own flow.
+    private static GatherNodeScanner.Node? _grindCommitted;
+    private static int _grindMissingScans, _grindApproachFailures, _grindReportAt;
+    internal static bool HasGrindCommitment => _grindCommitted.HasValue;
+    internal static void ClearGrindCommitment()
+    { _grindCommitted = null; _grindMissingScans = _grindApproachFailures = 0; _grindReportAt = 0; }
     private static uint _sessionMap;
     // Frozen when standalone GatherBuddy starts; Grind's gathering never reads these.
     private static bool _ignoreMonsters, _movementEnabled, _movementAttempted, _nodeDefence;
@@ -621,7 +627,8 @@ internal static class GatherRunner
             bool castReady = mining70938 && WowBGatherCastResearch.TryBegin(initialMemory, initialReader, out castPlayer) &&
                 initialMemory != null && initialReader != null &&
                 WowBGatherCastResearch.Observe(initialMemory, initialReader, castPlayer) == WowBGatherCastResearch.Observation.Idle;
-            bool clicked = GatherInteraction.TryInteract(hwnd, node, candidate => MapStillCurrent() && Ready(candidate), extraSafety, out GatherNodeScanner.Node clickedNode,
+            bool clicked = GatherInteraction.TryInteract(hwnd, node, candidate => MapStillCurrent() && Ready(candidate) &&
+                (extraSafety == null || initialReader?.IsExperimental70938 != true || candidate.Guid == node.Guid), extraSafety, out GatherNodeScanner.Node clickedNode,
                                                           out string reason, out bool hoverMiss, out bool cursorMoved,
                                                           standaloneGuard ? StandaloneSafety : null);
             // A node interaction may have broken a movement form; one new
@@ -871,6 +878,7 @@ internal static class GatherRunner
             MissingMiningStarts.Clear();
             GatherInteraction.ResetHoverHint();
             _pending = null;
+            ClearGrindCommitment();
             _stop = false;
             _lastScan = unchecked(Environment.TickCount - 1500);
             _lastSummary = unchecked(Environment.TickCount - 15000);
@@ -878,7 +886,7 @@ internal static class GatherRunner
             Logging.Write("[Grind gather] enabled: Mining=" + GatherSettings.Mining + " skill=" + GatherSettings.MiningSkill +
                 ", Herbalism=" + GatherSettings.Herbalism + " skill=" + GatherSettings.HerbalismSkill +
                 "; resources within " + GrindSearchYd.ToString("F0", CultureInfo.InvariantCulture) +
-                " yd in the client-loaded pool; combat and nearby NPCs take priority. Hostility and 70707 node layout remain unverified.");
+                " yd in the client-loaded pool; 70938 starts only without living non-player NPCs within 100 yd, then prioritizes the node; actual combat and selling preempt. Hostility and node layout remain unverified.");
             return true;
         }
         catch (Exception ex) { Logging.Write("[Grind gather] disabled: " + ex.Message); return false; }
@@ -891,21 +899,100 @@ internal static class GatherRunner
         return MapStillCurrent() && safe() && FindNode(out _, GrindSearchYd);
     }
 
-    // Returns true if a node was attempted, not whether it was successfully looted.
-    internal static bool GatherForGrind(IntPtr hwnd, ClickAimMover mover, Func<bool> safe)
+    // A committed node owns the Grind detour even between attempts. Unreadable
+    // observations hold the bot, never count as a failure or proof of depletion.
+    private static void ReportGrindCommitment(string message)
     {
-        if (_stop || ClickAimAbort.Requested || !MapStillCurrent() ||
-            !GrindRunner.TryReadGatherCombat(out bool fighting) || fighting ||
-            !FindNode(out GatherNodeScanner.Node node, GrindSearchYd)) return false;
-        if (!safe())
+        if (unchecked(Environment.TickCount - _grindReportAt) < 0) return;
+        _grindReportAt = unchecked(Environment.TickCount + 15000);
+        Logging.Write("[Grind gather] " + message);
+    }
+
+    private static void RecordGrindApproachFailure(GatherNodeScanner.Node node, Func<bool> safe, string reason)
+    {
+        if (!safe() || !MapStillCurrent() || !GatherNodeScanner.TryCapture(SearchYd, out List<GatherNodeScanner.Node> observed)) return;
+        bool stillObserved = false;
+        foreach (var fresh in observed) if (fresh.Guid == node.Guid && Ready(fresh)) { stillObserved = true; break; }
+        if (!stillObserved || !safe() || _stop || ClickAimAbort.Requested || RouteRunner.StopRequested) return;
+        _grindApproachFailures++;
+        if (_grindApproachFailures >= 3)
         {
-            if (unchecked(Environment.TickCount - _lastSafetySummary) >= 15000)
-            {
-                _lastSafetySummary = Environment.TickCount;
-                Logging.Write("[Grind gather] a resource is in range, but combat, a nearby NPC, an eligible pull or unreadable safety state takes priority");
-            }
-            return false;
+            FailedHarvestNodes.Add(node.Guid);
+            Logging.Write("[Grind gather] committed node " + node.Guid + " session-blacklisted after three failed approaches (" + reason + "); reachability remains unverified");
         }
+        else
+        {
+            Retry[node.Guid] = unchecked(Environment.TickCount + 3000);
+            Logging.Write("[Grind gather] committed node approach failed " + _grindApproachFailures + "/3 (" + reason + "); retrying this node");
+        }
+    }
+
+    // Returns true while gathering/holding priority; false permits combat or
+    // ordinary Grind decisions. Presence, successful cast and loot are candidates.
+    internal static bool GatherForGrind(IntPtr hwnd, ClickAimMover mover, Func<bool> startSafe, Func<bool> continueSafe)
+    {
+        bool committed = _grindCommitted.HasValue;
+        if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested || !MapStillCurrent()) return false;
+        if (!GrindRunner.TryReadGatherCombat(out bool fighting))
+        {
+            if (committed) { ReportGrindCommitment("combat state unreadable; holding the committed node"); ClickAimAbort.Wait(250); }
+            return committed;
+        }
+        if (fighting) return false; // allow Grind's existing defensive fight
+        GatherNodeScanner.Node node;
+        if (committed)
+        {
+            node = _grindCommitted!.Value;
+            if (!continueSafe()) { ReportGrindCommitment("safety check unavailable; holding the committed node"); ClickAimAbort.Wait(250); return true; }
+            if (FailedHarvestNodes.Contains(node.Guid))
+            { Logging.Write("[Grind gather] committed node session-blacklisted; resuming Grind"); ClearGrindCommitment(); return true; }
+            if (!GatherNodeScanner.TryCapture(SearchYd, out List<GatherNodeScanner.Node> observed, out GatherNodeScanner.ScanStats scanStats))
+            { ReportGrindCommitment("node scan unavailable; holding the committed node"); ClickAimAbort.Wait(250); return true; }
+            bool found = false;
+            foreach (var fresh in observed)
+                if (fresh.Guid == node.Guid) { node = fresh; found = true; break; }
+            if (!found)
+            {
+                if (scanStats.HeaderRejected != 0 || scanStats.Changed != 0)
+                { ReportGrindCommitment("node candidates unreadable or changing; holding the committed node"); ClickAimAbort.Wait(250); return true; }
+                // A node can disappear because it was depleted, despawned or
+                // not streamed/read. Three fresh scans end this commitment, not
+                // a claim of successful harvest or permission to click blindly.
+                if (++_grindMissingScans >= 3)
+                {
+                    Logging.Write("[Grind gather] committed node no longer observed in three scans; resuming Grind (loot/depletion unverified)");
+                    ClearGrindCommitment();
+                }
+                else ClickAimAbort.Wait(500);
+                return true;
+            }
+            _grindMissingScans = 0; _grindCommitted = node;
+            if (IsBlackspot(node.Position.X, node.Position.Y) ||
+                !GatherNodeScanner.IsEligible(node, GatherSettings.Mining, GatherSettings.MiningSkill, GatherSettings.Herbalism, GatherSettings.HerbalismSkill))
+            { Logging.Write("[Grind gather] committed node no longer eligible; resuming Grind"); ClearGrindCommitment(); return true; }
+            if (!Ready(node))
+            { ReportGrindCommitment("waiting for the committed node's retry cooldown"); ClickAimAbort.Wait(250); return true; }
+        }
+        else
+        {
+            if (!FindNode(out node, GrindSearchYd)) return false;
+            if (!startSafe())
+            {
+                if (unchecked(Environment.TickCount - _lastSafetySummary) >= 15000)
+                {
+                    _lastSafetySummary = Environment.TickCount;
+                    Logging.Write("[Grind gather] resource in range, but combat, a living non-player NPC within 100 yd or unreadable safety state takes priority");
+                }
+                return false;
+            }
+            if (ObjectManager.WowB?.IsExperimental70938 == true)
+            {
+                _grindCommitted = node; _grindMissingScans = _grindApproachFailures = 0; _grindReportAt = 0;
+                committed = true;
+                Logging.Write("[Grind gather] committed to " + node.Guid + "; nearby monsters alone will not interrupt this node");
+            }
+        }
+        Func<bool> safe = committed ? continueSafe : startSafe;
         bool oldQuiet = mover.QuietKeyStop;
         mover.QuietKeyStop = true;
         try
@@ -942,7 +1029,11 @@ internal static class GatherRunner
                 if (_stop || ClickAimAbort.Requested || !safe()) return true;
                 if (!reached)
                 {
-                    if (!RouteRunner.LastRunInterrupted) Retry[node.Guid] = unchecked(Environment.TickCount + RetryMs);
+                    if (!RouteRunner.LastRunInterrupted)
+                    {
+                        if (!committed) Retry[node.Guid] = unchecked(Environment.TickCount + RetryMs);
+                        else RecordGrindApproachFailure(node, safe, "mesh route did not arrive");
+                    }
                     return true;
                 }
             }
@@ -953,10 +1044,21 @@ internal static class GatherRunner
             bool present = false;
             foreach (var fresh in nearby)
                 if (fresh.Guid == node.Guid && Ready(fresh)) { node = fresh; present = true; break; }
-            if (!present) { Retry[node.Guid] = unchecked(Environment.TickCount + InteractionRetryMs); return true; }
-            if (!safe() || !ClickAimKeySteer.Face(node.Position.X, node.Position.Y, hwnd, 20.0, 6))
-            { Retry[node.Guid] = unchecked(Environment.TickCount + InteractionRetryMs); return true; }
+            if (!present)
+            {
+                if (committed) RecordGrindApproachFailure(node, safe, "node not in interaction range");
+                else Retry[node.Guid] = unchecked(Environment.TickCount + InteractionRetryMs);
+                return true;
+            }
+            if (!safe()) return true;
+            if (!ClickAimKeySteer.Face(node.Position.X, node.Position.Y, hwnd, 20.0, 6))
+            {
+                if (committed) RecordGrindApproachFailure(node, safe, "could not face node");
+                else Retry[node.Guid] = unchecked(Environment.TickCount + InteractionRetryMs);
+                return true;
+            }
             if (!safe() || _stop || ClickAimAbort.Requested) return true;
+            if (committed) _grindApproachFailures = 0;
             GatherAtNode(hwnd, mover, node, safe);
             return true;
         }

@@ -387,6 +387,24 @@ being observed. Two early hover attempts sent no button-down after desktop
 cursor coordinates changed, and a later retry posted the click. The user reports
 that the run harvested successfully; the log by itself does not verify loot.
 
+### 70938 Grind node commitment
+
+On 70938, starting a new Grind-gather detour requires no observed living
+non-player NPC within 100 yd; unreadable nearby units also block it. Hostility
+is not verified, so friendly and neutral NPCs can block a new detour as well.
+Discovery remains 150 yd and profession/skill filters still apply. Snapshot
+coverage is limited to client-loaded objects and cannot prove no monster exists.
+
+Once a detour starts, Grind retains that exact node GUID ahead of optional loot,
+rest, buffs, new pulls and roaming. New proximity alone does not interrupt it;
+real combat preempts it and Grind retries the same GUID afterwards. STOP,
+confirmed death/recovery, map/identity guards and selling retain priority.
+Cooldowns and unreadable observations hold the commitment rather than switching
+targets. Three clean scans without the GUID release it (not proof of depletion
+or loot); repeated confirmed approach failures can session-blacklist it. No
+substitute nearby GUID may be clicked while committed. The behavior is
+experimental and requires a Windows build and live-client verification.
+
 ## 21:54 short-leg mesh, recovery and hover improvements
 
 The user reports becoming lost on an Elwynn leg and missing food/drink recovery.
