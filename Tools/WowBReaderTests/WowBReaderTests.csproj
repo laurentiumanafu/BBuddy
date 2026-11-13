@@ -7,6 +7,7 @@
     <DefineConstants>$(DefineConstants);WOWB_READER_TESTS</DefineConstants>
   </PropertyGroup>
   <ItemGroup>
+    <EmbeddedResource Include="Fixtures/Resurrect70938.bgra.gz" LogicalName="WowBReaderTests.Fixtures.Resurrect70938.bgra.gz" />
     <Compile Include="../../Styx/Offsets/WowBOffsets.cs" Link="WowBOffsets.cs" />
     <Compile Include="../../Styx/Offsets/Wow70707Offsets.cs" Link="Wow70707Offsets.cs" />
     <Compile Include="../../Styx/Offsets/Wow70755Offsets.cs" Link="Wow70755Offsets.cs" />
@@ -25,6 +26,7 @@
     <Compile Include="../../Styx/Logic/Pathing/ClickAim/WowBDeathCheckpoint.cs" Link="WowBDeathCheckpoint.cs" />
     <Compile Include="../../Styx/Logic/Pathing/ClickAim/WowBDefenceHandoff.cs" Link="WowBDefenceHandoff.cs" />
     <Compile Include="../../Styx/Logic/Pathing/ClickAim/WowBCorpseDialogPattern.cs" Link="WowBCorpseDialogPattern.cs" />
+    <Compile Include="../../Styx/Logic/Pathing/ClickAim/MmapGroundPolicy.cs" Link="MmapGroundPolicy.cs" />
     <Compile Include="../../Styx/Logic/Pathing/ClickAim/WowBCorpseSpotPolicy.cs" Link="WowBCorpseSpotPolicy.cs" />
     <Compile Include="../../Styx/Logic/Pathing/ClickAim/ClickAimSettings.cs" Link="ClickAimSettings.cs" />
     <Compile Include="../../Styx/Logic/Pathing/ClickAim/VendorFile.cs" Link="VendorFile.cs" />

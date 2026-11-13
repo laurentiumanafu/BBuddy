@@ -1,6 +1,8 @@
 #if WOWB_READER_TESTS
 using System;
 using System.Reflection;
+using System.IO;
+using System.IO.Compression;
 using Styx.Logic.Pathing;
 
 internal static class CorpseDialogTests
@@ -120,7 +122,27 @@ internal static class CorpseDialogTests
         ButtonBackground(wrongGeometry, width, cx, acceptY + accept.Length / 2);
         if (WowBCorpseDialogPattern.SuitableForClick(WowBCorpseDialogPattern.Inspect(wrongGeometry, width, height, stride), false, out _, out _))
             throw new Exception("Unrelated heading and button authorized a click");
-        Console.WriteLine("Corpse dialog synthetic pattern and click-eligibility fixtures passed (no live capture or input).");
+        // Only the anonymous 220x50 inner dialog was retained from the 70938
+        // screenshot. Paste unscaled on a synthetic client canvas: the original
+        // attachment was a horizontal crop, not full client/window geometry.
+        using var compressed = typeof(CorpseDialogTests).Assembly.GetManifestResourceStream("WowBReaderTests.Fixtures.Resurrect70938.bgra.gz")
+            ?? throw new Exception("Screenshot crop fixture missing");
+        using var zip = new GZipStream(compressed, CompressionMode.Decompress);
+        byte[] crop = new byte[220 * 50 * 4];
+        zip.ReadExactly(crop);
+        var padded = new byte[stride * height];
+        const int left = 210, top = 72;
+        for (int row = 0; row < 50; row++)
+            Buffer.BlockCopy(crop, row * 220 * 4, padded, (top + row) * stride + left * 4, 220 * 4);
+        var screenshotResult = WowBCorpseDialogPattern.Inspect(padded, width, height, stride);
+        if (!WowBCorpseDialogPattern.SuitableForClick(screenshotResult, false, out int screenshotX, out int screenshotY) ||
+            Math.Abs(screenshotX - (left + 109)) > 1 || Math.Abs(screenshotY - (top + 38)) > 1)
+            throw new Exception("70938 screenshot crop did not match on the synthetic canvas");
+        for (int row = 7; row < 17; row++)
+            Array.Clear(padded, (top + row) * stride + left * 4, 220 * 4);
+        if (WowBCorpseDialogPattern.SuitableForClick(WowBCorpseDialogPattern.Inspect(padded, width, height, stride), false, out _, out _))
+            throw new Exception("Screenshot button without heading authorized a click");
+        Console.WriteLine("Corpse dialog synthetic pattern and screenshot-crop fixtures passed (no live capture or input).");
     }
 }
 #endif

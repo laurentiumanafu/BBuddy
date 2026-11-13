@@ -107,6 +107,17 @@ internal static class WowBCorpseRecovery
         return true;
     }
 
+    private static int _lastGroundDiagnostic;
+    private static bool _groundDiagnosticWritten;
+    private static void GroundDiagnostic(uint map, string reason)
+    {
+        int now = Environment.TickCount;
+        if (_groundDiagnosticWritten && unchecked(now - _lastGroundDiagnostic) < 5000) return;
+        _lastGroundDiagnostic = now; _groundDiagnosticWritten = true;
+        Logging.Write("[Corpse] mesh ground check refused on map " + map + ": " + reason +
+                      "; no resurrection click or unverified walk authorized");
+    }
+
     private static bool TrySnapSafeSpot(uint map, WoWPoint candidate, WoWPoint corpse, out WoWPoint result)
     {
         result = default;
@@ -116,13 +127,20 @@ internal static class WowBCorpseRecovery
             var point = new Vector3(candidate.X, candidate.Y, candidate.Z);
             nav.EnsureTilesAroundPosition(map, point, Navigator.LoadTilesAroundRadius);
             if (!nav.IsLoaded || !nav.FindNearestPolyRef(map, point, 2.5f, 5f, out Tripper.Navigation.PolygonReference poly, out Vector3 snapped) ||
-                !poly.IsValid || !float.IsFinite(snapped.X) || !float.IsFinite(snapped.Y) || !float.IsFinite(snapped.Z) ||
-                (nav.GetPolyArea(map, poly, out byte area) & 0x80000000U) != 0 || !WowBCorpseSpotPolicy.GroundArea(area)) return false;
+                !poly.IsValid || !float.IsFinite(snapped.X) || !float.IsFinite(snapped.Y) || !float.IsFinite(snapped.Z))
+            { GroundDiagnostic(map, "nearest polygon unavailable"); return false; }
+            uint status = nav.GetPolyArea(map, poly, out byte area);
+            if ((status & 0x80000000U) != 0)
+            { GroundDiagnostic(map, "polygon area query failed"); return false; }
+            if (!MmapGroundPolicy.IsGround(map, snapped, area, (x, y) => nav.IsTileLoaded(map, x, y)))
+            { GroundDiagnostic(map, "area " + area + " or its loaded tile/format could not be verified as ground"); return false; }
             result = new WoWPoint(snapped.X, snapped.Y, snapped.Z);
-            return WowBCorpseSpotPolicy.Distance(candidate, result) <= 2.5 && Math.Abs((double)candidate.Z - result.Z) <= 5 &&
-                   WowBCorpseSpotPolicy.InRange(result, corpse, WowBCorpseSpotPolicy.MaxClickRadius);
+            if (WowBCorpseSpotPolicy.Distance(candidate, result) <= 2.5 && Math.Abs((double)candidate.Z - result.Z) <= 5 &&
+                WowBCorpseSpotPolicy.InRange(result, corpse, WowBCorpseSpotPolicy.MaxClickRadius)) return true;
+            GroundDiagnostic(map, "snapped point exceeds corpse range or layer tolerance");
+            return false;
         }
-        catch { return false; }
+        catch { GroundDiagnostic(map, "mesh or format check threw an exception"); return false; }
     }
 
     private static bool WalkGhostTo(Memory memory, WowBReader reader, IntPtr hwnd, WowBDeathCheckpoint.Candidate checkpoint,
@@ -309,11 +327,13 @@ internal static class WowBCorpseRecovery
             !WowBCorpseSpotPolicy.InRange(current, checkpoint.Position, WowBCorpseSpotPolicy.MaxClickRadius)) return false;
         if (SpotSafe(memory, reader, hwnd, checkpoint, running, false))
         {
-            if (!TryPromptAtSpot(memory, reader, hwnd, checkpoint, running, false, out bool visible)) return false;
+            if (!TryPromptAtSpot(memory, reader, hwnd, checkpoint, running, false, out bool visible))
+            { Logging.Write("[Corpse] fallback prompt capture or safety check unavailable; stopping without a click"); return false; }
             if (visible)
             { Logging.Write("[Corpse] resurrection prompt is visible here; using fallback even near observed NPCs"); return true; }
+            Logging.Write("[Corpse] captured frame did not meet resurrection-button checks; checking reachable positions closer to the checkpoint");
         }
-        Logging.Write("[Corpse] fallback prompt not visible here; checking reachable positions closer to the checkpoint");
+        else Logging.Write("[Corpse] current position failed ghost, range or ground verification; prompt was not checked here; checking reachable positions closer to the checkpoint");
         double reachedRadius = double.PositiveInfinity;
         foreach (WoWPoint candidate in WowBCorpseSpotPolicy.FallbackLocations(checkpoint.Position, current))
         {
@@ -348,7 +368,7 @@ internal static class WowBCorpseRecovery
             if (visible) return true;
             if (ClickAimAbort.Wait(500)) return false;
         }
-        Logging.Write("[Corpse] fallback could not confirm a reachable resurrection prompt; cannot safely click or resume as a ghost");
+        Logging.Write("[Corpse] fallback could not confirm both safe ground and a matching resurrection prompt; cannot safely click or resume as a ghost");
         return false;
     }
 

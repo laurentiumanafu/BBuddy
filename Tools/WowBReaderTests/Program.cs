@@ -41,6 +41,7 @@ GatherSettingsTests.Run(); // persistence and default policy, not live mouse iso
 DeathCheckpointTests.Run(); // synthetic recording policy, not a live death test
 DefenceHandoffTests.Run(); // target-switch policy only, not live defence
 CorpseDialogTests.Run(); // image matching only; no live capture or click
+MmapGroundPolicyTests.Run(); // file-format classification only
 CorpseSpotTests.Run(); // geometric heuristic only; no live NPC or mesh test
 
 // Foreground classification for the opt-in gather diagnostic; no native calls.

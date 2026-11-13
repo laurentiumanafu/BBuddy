@@ -220,3 +220,42 @@ inactive sentinel in update/finalize. No callers of that API were found outside
 its managed wrapper. This is not evidence for the nearest-poly failure and was
 not changed by the map-header fix; if a future feature uses sliced paths on map
 0, it needs a separate active-state fix and tests.
+
+
+### 21:28 corpse-recovery report (70938)
+
+The log recorded a death at `(-9179.1,-4532.8,16.2)`, release, a ghost
+route, four unproductive scout attempts and a fallback that stopped without a
+click. The fallback's old "prompt not visible" message was misleading: it
+also printed when its ground/state guard failed before any image check, and
+the log does not identify which guard failed. The user confirms the prompt was
+visible and provided a horizontally cropped screenshot.
+
+Offline Detour queries on the previously supplied version-16 `0000_49_40`
+mesh returned polygon area **11** at the logged corpse position and at each
+cardinal 8, 16 and 32 yd sample. The existing recovery ground guard accepted
+only 0, 1 or 4 and therefore rejects these particular queried polygons. Trinity
+v16 `MMapDefines.h` (TrinityCore commit `49e6ed29efbb7689a04a2830c811bd5a6848a907`,
+`src/common/mmaps_common/MMapDefines.h`) identifies 11 as ground, 10 as steep,
+9 as water and 8 as magma/slime; in the older HB enum, 11 instead denotes Alliance portal. The
+actual stopped ghost position and installed tile hashes are not recorded, so
+this is a concrete incompatibility consistent with, but not proof of, the
+specific failed check in the log.
+
+Recovery now permits 11 only when the map parameters and the selected loaded
+single tile both match the observed version-16 format, using the same native DLL
+folder and classic-before-modern filename priority. Near tile boundaries,
+unknown or mixed formats, inaccessible files, other v16 area IDs and unloaded
+tiles fail closed. Bare legacy parameter maps retain the prior 0/1/4 policy.
+The ghost/session, map, ground-snap/range, NPC preference/four-attempt policy,
+visual prompt, hover/focus/STOP, and alive-confirmation guards remain. No map
+files should be changed or mixed while the process is running. Other roam and
+relocation area policies have not been changed by this corpse-specific fix.
+
+An offline independent replay of the pixel matcher found unique heading and
+Accept candidates from the unscaled screenshot crop on a synthetic client
+canvas. The crop lacks full client geometry and is not a live capture or click.
+The C# fixture includes that anonymized crop and format-policy cases; C# tests,
+Windows build and in-game recovery were not run here. The fallback log now
+separates a failed safety check from an inspected frame without a matching
+button; ground-query failures report throttled reasons.

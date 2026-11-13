@@ -103,6 +103,8 @@ internal static class WowBCorpseSpotPolicy
         return !double.IsNaN(clearance) && double.IsFinite(minimum) && minimum >= 0 && clearance >= minimum;
     }
 
+    // Legacy sequential HB/bare-map encoding only. Versioned extractors can
+    // assign different meanings; recovery uses MmapGroundPolicy instead.
     internal static bool GroundArea(byte area) => area == 0 || area == 1 || area == 4;
 
 }
