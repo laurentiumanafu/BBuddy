@@ -1,0 +1,29 @@
+using System;
+using Styx.Logic.Pathing;
+
+static class Fixture
+{
+    static void Check(bool value, string name) { if (!value) throw new Exception(name); }
+    static void Main()
+    {
+        Run(1, "ignored first click is retried", tick => tick >= 6000 ? WowBReleaseTransition.State.Ghost : WowBReleaseTransition.State.Dead, true, true, WowBReleaseTransition.CleanPost, true);
+        Run(0, "ghost immediately prevents retry", tick => WowBReleaseTransition.State.Ghost, true, true, WowBReleaseTransition.CleanPost, true);
+        Run(0, "unknown permanently vetoes retries", tick => tick == 1000 ? WowBReleaseTransition.State.Unknown : WowBReleaseTransition.State.Dead, true, true, WowBReleaseTransition.CleanPost, false);
+        Run(0, "alive permanently vetoes retries", tick => tick == 1000 ? WowBReleaseTransition.State.Alive : WowBReleaseTransition.State.Dead, true, true, WowBReleaseTransition.CleanPost, false);
+        Run(0, "unconfirmed button up vetoes retries", tick => WowBReleaseTransition.State.Dead, true, true, "button-up failed", false);
+        Run(0, "other builds never retry", tick => WowBReleaseTransition.State.Dead, true, false, WowBReleaseTransition.CleanPost, false);
+        Run(1, "missing prompt vetoes further retry checks", tick => WowBReleaseTransition.State.Dead, false, true, WowBReleaseTransition.CleanPost, false);
+        Run(2, "retry posts bounded", tick => WowBReleaseTransition.State.Dead, true, true, WowBReleaseTransition.CleanPost, false);
+        Run(0, "STOP preempts retries", tick => WowBReleaseTransition.State.Dead, true, true, WowBReleaseTransition.CleanPost, false, 2000);
+        Console.WriteLine("Release transition synthetic fixtures passed.");
+    }
+    static void Run(int expected, string name, Func<int, WowBReleaseTransition.State> state, bool posted, bool enable, string initial, bool resultExpected, int stopAt = int.MaxValue)
+    {
+        int tick = 0, checks = 0;
+        bool result = WowBReleaseTransition.Wait(
+            () => (state(tick), "fixture"),
+            () => { checks++; return (posted, posted ? WowBReleaseTransition.CleanPost : "prompt not visible"); },
+            () => tick < stopAt, ms => { tick += ms; return tick >= stopAt; }, () => tick, _ => {}, initial, 30000, enable);
+        Check(checks == expected && result == resultExpected, name);
+    }
+}

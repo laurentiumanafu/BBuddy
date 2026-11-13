@@ -73,7 +73,7 @@ internal sealed class WowBDeathCheckpoint
     internal static bool ReadRecoveryPlayer(WowBReader reader, out WowBObservedUnit player, out uint health, out uint maxHealth)
         => ReadRecoveryPlayer(reader, out player, out health, out maxHealth, out _);
 
-    private static bool ReadRecoveryPlayer(WowBReader reader, out WowBObservedUnit player, out uint health, out uint maxHealth, out string reason)
+    internal static bool ReadRecoveryPlayer(WowBReader reader, out WowBObservedUnit player, out uint health, out uint maxHealth, out string reason)
     {
         player = default; health = maxHealth = 0;
         if (reader.Uses70888Features)

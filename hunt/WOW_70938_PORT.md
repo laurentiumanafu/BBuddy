@@ -79,3 +79,20 @@ Two 70938 Combat research recordings, `no ghost wolf` and `ghost wolf`, each hav
 The opt-in **Use movement skill when travelling** checkbox and selected first-bar slot now also cover Ghost Wolf on **70938 Grind hotspot legs**, including profile-free roaming, and continue covering standalone GatherBuddy travel to resources and hotspots. A 70938-only controller recognizes first-bar spell 2645 or 1238640 and uses the externally/inlined aura candidate ID 1238640. It validates the full bounded slot/count representation twice, rechecks local identity, map, session, health, ghost, combat, cast-like fields, bar and the configured action, and does not press the form while candidate presence is observed or state is unknown. No Lua, target changes or client writes are used. Non-wolf travel abilities and earlier builds retain their previous behavior; this does not add Grind movement-form handling for those abilities.
 
 When a stable candidate appears absent and at least 100 candidate mana is available (an estimate based on the trace and [Forever spell listing](https://www.wowhead.com/forever/spell=1238640/ghost-wolf)), it stops, rechecks, posts the configured key, holds still for up to four seconds, then checks again. STOP, combat, death/ghost, map, bar, session and Grind's fight/vendor priority can interrupt the hold; attempts are limited to one per 15 seconds. While travelling, the route checks at most every three seconds and yields to the existing outer loop if a fresh absent candidate and enough mana suggest reapplication is needed. Unknown state, insufficient mana, combat or an unsupported slot simply withhold the key; movement can continue without Ghost Wolf. A missed/incorrect aura reading could still lead to a form being toggled off or left inactive. A present aura ID is not proof of visual form, speed or success. For 70938, Ghost Wolf is excluded from the generic timed buff scheduler even if manually marked Buff, so the movement checkbox exclusively controls automatic attempts; this prevents the two controllers from toggling it against one another. Restart the bot after changing the setting. The action bar must still pass the existing guard after shapeshifting.
+
+### Release transition after death
+
+In a drowning log the checkpoint was saved and one foreground Release Spirit
+click was posted, but the ghost candidate was not confirmed within 30 seconds.
+A posted Windows message is not proof that the client accepted it; that log
+cannot distinguish an ignored click from an unreadable/incorrect ghost flag.
+The 70938 experimental path now records bounded state/read diagnostics while
+waiting. After a clean button-down/up post it may make at most two additional
+attempts, five seconds apart, only after repeated dead observations and a fresh,
+unique, fully guarded release-dialog validation. An unknown or alive observation
+permanently vetoes retries during that transition; an unconfirmed button-up also
+vetoes retries. A missing dialog or failed guard never posts a click and vetoes further retries. No corpse
+movement is permitted until the ghost candidate is confirmed. Other builds retain
+the single-click policy. These guards and the inherited ghost candidate require
+live validation; underwater checkpoint positions and mesh availability can still
+prevent a subsequent return, which this particular log never reached.

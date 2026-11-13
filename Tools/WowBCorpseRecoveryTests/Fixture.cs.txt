@@ -5,7 +5,7 @@ using GreenMagic;
 using Styx.WoWInternals;
 
 namespace GreenMagic { sealed class Memory { public IntPtr WindowHandle = new IntPtr(1); } }
-namespace Styx.WoWInternals { sealed class WowBReader { } static class ObjectManager { public static Memory? Wow; public static WowBReader? WowB; } }
+namespace Styx.WoWInternals { sealed class WowBReader { public bool IsExperimental70938 = true; } static class ObjectManager { public static Memory? Wow; public static WowBReader? WowB; } }
 namespace Styx.Logic.Pathing
 {
     readonly struct WoWPoint
@@ -66,6 +66,8 @@ namespace Styx.Logic.Pathing
         private static bool Allowed(Memory m, WowBReader r, IntPtr h, Func<bool> active) => running && active() && !ClickAimAbort.Requested && !RouteRunner.StopRequested;
         private static State ReadState(Memory m, WowBReader r, IntPtr h, WowBDeathCheckpoint.Candidate c, Func<bool> active, out WoWPoint p)
         { p = position; return !Allowed(m, r, h, active) ? State.Unknown : ghost ? State.Ghost : alive ? State.Alive : State.Dead; }
+        private static State ReadState(Memory m, WowBReader r, IntPtr h, WowBDeathCheckpoint.Candidate c, Func<bool> active, out WoWPoint p, out string reason)
+        { reason = "fixture"; return ReadState(m, r, h, c, active, out p); }
         private static bool TryNpcSnapshot(Memory m, WowBReader r, IntPtr h, WowBDeathCheckpoint.Candidate c, Func<bool> active, out WoWPoint p, out List<WoWPoint> units)
         { p = position; units = npcs; return ReadState(m, r, h, c, active, out _) == State.Ghost; }
         private static bool SpotSafe(Memory m, WowBReader r, IntPtr h, WowBDeathCheckpoint.Candidate c, Func<bool> active, bool clear)
@@ -97,7 +99,7 @@ namespace Styx.Logic.Pathing
         {
             problem = "fixture";
             if (!Allowed(m, r, h, active) || !capture) return false;
-            if (release) { if (ghost || alive) return false; releaseClicks++; ghost = true; return true; }
+            if (release) { if (ghost || alive) return false; releaseClicks++; ghost = true; problem = WowBReleaseTransition.CleanPost; return true; }
             if (requireClearance && moveAtClick) { moveAtClick = false; Surround(); return false; }
             if (!SpotSafe(m, r, h, c, active, requireClearance) ||
                 !(promptAlways || WowBCorpseSpotPolicy.Distance(position, c.Position) <= promptRange)) return false;

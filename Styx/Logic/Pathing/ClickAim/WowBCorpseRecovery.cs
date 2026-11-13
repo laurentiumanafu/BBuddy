@@ -23,22 +23,36 @@ internal static class WowBCorpseRecovery
 
     private static State ReadState(Memory memory, WowBReader reader, IntPtr hwnd,
         WowBDeathCheckpoint.Candidate checkpoint, Func<bool> running, out WoWPoint position)
+        => ReadState(memory, reader, hwnd, checkpoint, running, out position, out _);
+
+    private static State ReadState(Memory memory, WowBReader reader, IntPtr hwnd,
+        WowBDeathCheckpoint.Candidate checkpoint, Func<bool> running, out WoWPoint position, out string reason)
     {
         position = default;
+        reason = "recovery session, attachment or STOP guard";
         try
         {
             if (!Allowed(memory, reader, hwnd, running)) return State.Unknown;
             using var uncached = memory.TemporaryCacheState(false);
-            if (!reader.TryReadMapId(out uint map) || map != checkpoint.Map ||
-                !WowBDeathCheckpoint.ReadRecoveryPlayer(reader, out WowBObservedUnit player, out uint health, out uint maxHealth) ||
-                player.Guid != checkpoint.Player || maxHealth == 0 || health > maxHealth ||
-                !WowBGrindFactions.TryReadGhostFlagCandidate(memory, reader, player, out bool ghost) ||
-                !reader.TryReadMapId(out uint mapAfter) || mapAfter != map || !Allowed(memory, reader, hwnd, running)) return State.Unknown;
+            reason = "map unavailable";
+            if (!reader.TryReadMapId(out uint map)) return State.Unknown;
+            reason = "map differs from saved checkpoint";
+            if (map != checkpoint.Map) return State.Unknown;
+            if (!WowBDeathCheckpoint.ReadRecoveryPlayer(reader, out WowBObservedUnit player, out uint health, out uint maxHealth, out string playerReason))
+            { reason = "local player: " + playerReason; return State.Unknown; }
+            reason = "player GUID changed or health candidate invalid";
+            if (player.Guid != checkpoint.Player || maxHealth == 0 || health > maxHealth) return State.Unknown;
+            reason = "ghost candidate unavailable or unstable";
+            if (!WowBGrindFactions.TryReadGhostFlagCandidate(memory, reader, player, out bool ghost)) return State.Unknown;
+            reason = "map or session changed during observation";
+            if (!reader.TryReadMapId(out uint mapAfter) || mapAfter != map || !Allowed(memory, reader, hwnd, running)) return State.Unknown;
             position = player.Location;
+            reason = "player position invalid";
             if (!double.IsFinite(position.X) || !double.IsFinite(position.Y) || !double.IsFinite(position.Z)) return State.Unknown;
+            reason = ghost ? "ghost candidate set" : health == 0 ? "zero health, ghost candidate clear" : "positive health, ghost candidate clear";
             return ghost ? State.Ghost : health == 0 ? State.Dead : State.Alive;
         }
-        catch { return State.Unknown; }
+        catch { reason = "state read failed unexpectedly"; return State.Unknown; }
     }
 
     // All observed non-player units are treated as potential threats, including
@@ -425,27 +439,42 @@ internal static class WowBCorpseRecovery
         finally { mover.QuietKeyStop = initialQuiet; }
         int started = Environment.TickCount, lastProblem = unchecked(Environment.TickCount - 6000);
         bool released = false, sentRelease = false;
+        string releasePostReason = "";
         while (unchecked(Environment.TickCount - started) < PromptWaitMs && Allowed(memory, reader, hwnd, running))
         {
             State state = ReadState(memory, reader, hwnd, checkpoint, running, out _);
             if (state == State.Ghost) { released = true; break; }
             if (state == State.Alive) { Logging.Write("[Corpse] player is already alive; stopping rather than guessing a recovery transition"); return false; }
             string problem = "player state unavailable or changing";
-            if (state == State.Dead && TryDialogClick(memory, reader, hwnd, checkpoint, running, true, true, out problem)) { sentRelease = true; break; }
+            if (state == State.Dead && TryDialogClick(memory, reader, hwnd, checkpoint, running, true, true, out problem))
+            { sentRelease = true; releasePostReason = problem; break; }
             if (unchecked(Environment.TickCount - lastProblem) >= 5000)
             { Logging.Write("[Corpse] release not clicked: " + problem); lastProblem = Environment.TickCount; }
             if (ClickAimAbort.Wait(500)) return false;
         }
         if (sentRelease)
         {
-            started = Environment.TickCount;
-            while (unchecked(Environment.TickCount - started) < TransitionWaitMs && Allowed(memory, reader, hwnd, running))
+            (WowBReleaseTransition.State State, string Reason) ObserveRelease()
             {
-                if (ReadState(memory, reader, hwnd, checkpoint, running, out _) == State.Ghost) { released = true; break; }
-                if (ClickAimAbort.Wait(500)) return false;
+                State state = ReadState(memory, reader, hwnd, checkpoint, running, out _, out string reason);
+                return (state switch
+                {
+                    State.Dead => WowBReleaseTransition.State.Dead,
+                    State.Ghost => WowBReleaseTransition.State.Ghost,
+                    State.Alive => WowBReleaseTransition.State.Alive,
+                    _ => WowBReleaseTransition.State.Unknown
+                }, reason);
             }
+            (bool Posted, string Reason) RetryRelease()
+            {
+                bool posted = TryDialogClick(memory, reader, hwnd, checkpoint, running, true, true, out string problem);
+                return (posted, problem);
+            }
+            released = WowBReleaseTransition.Wait(ObserveRelease, RetryRelease,
+                () => Allowed(memory, reader, hwnd, running), ClickAimAbort.Wait, () => Environment.TickCount,
+                Logging.Write, releasePostReason, TransitionWaitMs, reader.IsExperimental70938);
         }
-        if (!released) { Logging.Write("[Corpse] release prompt/ghost transition not confirmed; stopped without retrying the click"); return false; }
+        if (!released) { Logging.Write("[Corpse] ghost transition not confirmed; stopping without corpse movement"); return false; }
         if (ReadState(memory, reader, hwnd, checkpoint, running, out WoWPoint ghostPos) != State.Ghost ||
             !RouteRunner.MeshReady()) { Logging.Write("[Corpse] ghost, map or mesh unavailable; stopping"); return false; }
         double distance = ClickAimMath.Len(ghostPos.X - checkpoint.Position.X, ghostPos.Y - checkpoint.Position.Y);
