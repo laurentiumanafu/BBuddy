@@ -18,6 +18,8 @@ class GatheringWiring(unittest.TestCase):
  def test_blacklist_is_session_scoped_and_post_click(self):
   self.assertIn('HashSet<WowBGuid> FailedHarvestNodes',RUNNER)
   self.assertEqual(RUNNER.count('FailedHarvestNodes.Clear();'),2)
+  self.assertEqual(RUNNER.count('ObservedHarvestAttempts.Clear();'),2)
+  self.assertIn('private const int ClassicGatherAttempts = 5;',RUNNER)
   ready=part(RUNNER,'    private static bool Ready(', '    private static bool FindNode(')
   self.assertIn('FailedHarvestNodes.Contains(node.Guid)',ready)
   gather=part(RUNNER,'    private static void GatherAtNode(', '    // Grind owns the thread')
@@ -30,6 +32,10 @@ class GatheringWiring(unittest.TestCase):
             'ObjectManager.Wow != initialMemory', '!MapStillCurrent()', '!extraSafety()',
             '!GrindRunner.TryReadGatherCombat(out fighting)', 'if (fighting)'):
    self.assertIn(x,gate)
+  self.assertIn('if (observedAttempts >= ClassicGatherAttempts)', gate)
+  self.assertIn('ObservedHarvestAttempts.TryGetValue(node.Guid', gate)
+  self.assertIn('ObservedHarvestAttempts.Remove(node.Guid)',gather)
+  self.assertIn('ObservedHarvestAttempts[node.Guid] = observedAttempts',gather)
   self.assertIn('a multi-hit vein may still contain ore',gather)
   self.assertIn('session-blacklisted',RUNNER)
 if __name__=='__main__': unittest.main()

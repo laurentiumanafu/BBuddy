@@ -46,11 +46,12 @@ namespace Styx.Logic.Pathing
     internal static class GatherRunner
     {
         const double SearchYd=1000, InteractYd=5;
-        const int MaxGatherAttempts=4, GatherHoldMs=0, InteractionRetryMs=20000, UnavailableRetryMs=120000;
+        const int MaxGatherAttempts=4, ClassicGatherAttempts=5, GatherHoldMs=0, InteractionRetryMs=20000, UnavailableRetryMs=120000;
         static bool _ignoreMonsters,_stop,_movementEnabled,_movementAttempted,_nodeDefence;
         static GatherNodeScanner.Node? _pending;
         static readonly Dictionary<WowBGuid,int> Retry = new();
         static readonly HashSet<WowBGuid> FailedHarvestNodes = new();
+        static readonly Dictionary<WowBGuid,int> ObservedHarvestAttempts = new();
         static bool MapStillCurrent()=>true;
         static bool StopIfDeadOrGhost()=>false;
         static bool Ready(GatherNodeScanner.Node n)=>!FailedHarvestNodes.Contains(n.Guid) && !Retry.ContainsKey(n.Guid);
@@ -63,14 +64,27 @@ namespace Styx.Logic.Pathing
             ClickAimAbort.Requested=false;ClickAimAbort.OnWait=null;RouteRunner.StopRequested=false;
             GrindRunner.Fighting=false;GrindRunner.Readable=true;
             _ignoreMonsters=_stop=_movementEnabled=_movementAttempted=_nodeDefence=false;_pending=null;
-            Retry.Clear();FailedHarvestNodes.Clear();GatherNodeScanner.ScanOk=true;GatherNodeScanner.Nodes=new(){Node(1)};
+            Retry.Clear();FailedHarvestNodes.Clear();ObservedHarvestAttempts.Clear();GatherNodeScanner.ScanOk=true;GatherNodeScanner.Nodes=new(){Node(1)};
             GatherInteraction.Clicked=true;GatherInteraction.HoverMiss=GatherInteraction.CursorMoved=false;GatherInteraction.Calls=0;GatherInteraction.Actual=default;
         }
         public static void Main()
         {
             Reset();GatherAtNode((IntPtr)1,Node(1));
-            Check(FailedHarvestNodes.Contains(Node(1).Guid) && !Ready(Node(1)) && Ready(Node(2)) && GatherInteraction.Calls==1,"still observed posted click blacklists only that GUID");
-            Reset();Check(Ready(Node(1)),"new session clears blacklist");
+            Check(FailedHarvestNodes.Contains(Node(1).Guid) && !Ready(Node(1)) && Ready(Node(2)) && GatherInteraction.Calls==5,"only after five posted interactions blacklist that GUID");
+            Reset();Check(Ready(Node(1)) && ObservedHarvestAttempts.Count==0,"new session clears blacklist and count");
+            int waits=0; ClickAimAbort.OnWait=()=> { if (++waits == 5) ClickAimAbort.Requested=true; };
+            GatherAtNode((IntPtr)1,Node(1));
+            Check(!FailedHarvestNodes.Contains(Node(1).Guid) && ObservedHarvestAttempts[Node(1).Guid]==4, "interrupted fifth attempt cannot blacklist");
+            ClickAimAbort.Requested=false; ClickAimAbort.OnWait=null;
+            GatherAtNode((IntPtr)1,Node(1));
+            Check(FailedHarvestNodes.Contains(Node(1).Guid) && GatherInteraction.Calls==6, "completed observations are counted across interrupted visits");
+            Reset(); ObservedHarvestAttempts[Node(1).Guid]=4; GatherInteraction.Clicked=false; GatherInteraction.HoverMiss=true;
+            GatherAtNode((IntPtr)1,Node(1));
+            Check(!FailedHarvestNodes.Contains(Node(1).Guid) && ObservedHarvestAttempts[Node(1).Guid]==4, "missing hover is not the fifth attempt");
+            Reset(); waits=0; ClickAimAbort.OnWait=()=> { if (++waits == 3) GatherNodeScanner.Nodes.Clear(); };
+            GatherAtNode((IntPtr)1,Node(1));
+            Check(!FailedHarvestNodes.Contains(Node(1).Guid) && !ObservedHarvestAttempts.ContainsKey(Node(1).Guid), "absent observation clears old attempt count");
+            Reset();
             GatherInteraction.Clicked=false;GatherInteraction.HoverMiss=true;GatherAtNode((IntPtr)1,Node(1));
             Check(!FailedHarvestNodes.Contains(Node(1).Guid) && Retry.ContainsKey(Node(1).Guid),"hover miss is not harvest failure");
             Reset();GatherNodeScanner.ScanOk=false;GatherAtNode((IntPtr)1,Node(1));
@@ -82,7 +96,7 @@ namespace Styx.Logic.Pathing
             Reset();ClickAimAbort.OnWait=()=>GrindRunner.Fighting=true;GatherAtNode((IntPtr)1,Node(1));
             Check(!FailedHarvestNodes.Contains(Node(1).Guid) && _pending.HasValue,"combat interrupts wait");
             Reset();GatherInteraction.Actual=Node(2);GatherNodeScanner.Nodes=new(){Node(2)};GatherAtNode((IntPtr)1,Node(1));
-            Check(!FailedHarvestNodes.Contains(Node(1).Guid) && FailedHarvestNodes.Contains(Node(2).Guid),"only actual hovered GUID is blacklisted");
+            Check(!FailedHarvestNodes.Contains(Node(1).Guid) && FailedHarvestNodes.Contains(Node(2).Guid) && GatherInteraction.Calls==5,"only actual hovered GUID is blacklisted after five");
             Reset();ObjectManager.WowB!.IsExperimental70938=false;GatherAtNode((IntPtr)1,Node(1));
             Check(FailedHarvestNodes.Count==0 && GatherInteraction.Calls==4 && Retry.ContainsKey(Node(1).Guid),"other builds retain multi-hit behavior");
             Console.WriteLine("Synthetic gather failure fixtures passed, no live client.");

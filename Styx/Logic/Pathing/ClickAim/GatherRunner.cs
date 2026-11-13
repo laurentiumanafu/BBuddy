@@ -24,6 +24,8 @@ internal static class GatherRunner
     // without suppressing new spawns at the same position.
     private const int UnavailableRetryMs = 120000;
     private const int MaxGatherAttempts = 4;
+    // 70938 Classic veins may require several successful mining casts.
+    private const int ClassicGatherAttempts = 5;
     // Covers a 2.5 s mining cast plus time for the loot window / auto-loot.
     private const int GatherHoldMs = 6000;
     // Only throttle degenerate routes whose points are repeatedly already reached.
@@ -48,6 +50,9 @@ internal static class GatherRunner
     // Only the exact observed GUID is excluded, and only for this gathering
     // session. A new spawn at the same position remains eligible.
     private static readonly HashSet<WowBGuid> FailedHarvestNodes = new HashSet<WowBGuid>();
+    // Counts only posted interactions followed by an uninterrupted wait and
+    // a successful scan still observing this exact GUID, across short retries.
+    private static readonly Dictionary<WowBGuid, int> ObservedHarvestAttempts = new Dictionary<WowBGuid, int>();
     private static readonly List<(double X, double Y, double Z, double Radius)> Blackspots = new List<(double, double, double, double)>();
     private static int _lastScan;
     private static int _lastCombatCheck;
@@ -190,6 +195,7 @@ internal static class GatherRunner
             _nodeDefence = false;
             Retry.Clear();
             FailedHarvestNodes.Clear();
+            ObservedHarvestAttempts.Clear();
             GatherInteraction.ResetHoverHint();
             _pending = null;
             _lastScan = unchecked(Environment.TickCount - 1500);
@@ -467,8 +473,8 @@ internal static class GatherRunner
 
     // No movement, turns, stop-key taps or extra clicks while a cast may be running.
     // A resource remaining in the pool can need another hit, or the attempt can have
-    // failed; neither proves success. Per user preference, stop retrying that GUID for
-    // this session after a posted interaction and a successful scan still sees it.
+    // failed; neither proves success. For 70938, allow five posted interactions
+    // with uninterrupted waits and observations before session-blacklisting a GUID.
     private static void GatherAtNode(IntPtr hwnd, GatherNodeScanner.Node node, Func<bool>? extraSafety = null)
     {
         // Standalone ignore mode still enforces session, death and map checks.
@@ -499,13 +505,14 @@ internal static class GatherRunner
             }
         }
         int cursorRecoveries = 0;
-        for (int attempt = 1; attempt <= MaxGatherAttempts && !_stop && !ClickAimAbort.Requested; attempt++)
+        int searchLimit = initialReader?.IsExperimental70938 == true ? ClassicGatherAttempts : MaxGatherAttempts;
+        for (int attempt = 1; attempt <= searchLimit && !_stop && !ClickAimAbort.Requested; attempt++)
         {
             bool fighting;
             if ((extraSafety != null && !extraSafety()) || (standaloneGuard && !StandaloneSafety())) { _pending = node; return; }
             if (!GrindRunner.TryReadGatherCombat(out fighting)) { _pending = node; return; }
             if (fighting) { DeferForCombat(true); return; }
-            Logging.Write("[Gather] hover search attempt " + attempt + "/" + MaxGatherAttempts
+            Logging.Write("[Gather] hover search attempt " + attempt + "/" + searchLimit
                           + "; background mouse movement allowed, foreground interruptions retry automatically");
             if (!MapStillCurrent()) return;
             bool clicked = GatherInteraction.TryInteract(hwnd, node, candidate => MapStillCurrent() && Ready(candidate), extraSafety, out GatherNodeScanner.Node clickedNode,
@@ -586,15 +593,18 @@ internal static class GatherRunner
                 if (fresh.Guid == node.Guid) { node = fresh; observed = true; break; }
             if (!observed)
             {
+                // An absent node may be depleted or missing from the snapshot.
+                // Do not carry old progress into a later re-observation.
+                ObservedHarvestAttempts.Remove(node.Guid);
                 int delay = clicked ? UnavailableRetryMs : InteractionRetryMs;
                 Logging.Write("[Gather] " + node.Guid + " no longer observed after the wait; loot was not independently verified. "
                               + "The same GUID is deferred for " + (delay / 1000) + " seconds.");
                 Retry[node.Guid] = unchecked(Environment.TickCount + delay);
                 return;
             }
-            // A posted click is only an interaction attempt, not proof of a
-            // completed cast or failed loot. Still present can also mean a
-            // multi-hit vein. The user requested skipping it rather than looping.
+            // A posted click is not proof that a cast or loot succeeded. Only
+            // count it after the full uninterrupted wait and a successful scan
+            // still observing the same GUID. Cursor/hover misses do not count.
             if (clicked && initialReader?.IsExperimental70938 == true)
             {
                 if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested || ObjectManager.WowB != initialReader ||
@@ -604,10 +614,20 @@ internal static class GatherRunner
                 if (fighting) { DeferForCombat(true); return; }
                 if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested ||
                     ObjectManager.WowB != initialReader || ObjectManager.Wow != initialMemory) return;
-                FailedHarvestNodes.Add(node.Guid);
-                Logging.Write("[Gather] node " + node.Guid + " still observed after a posted interaction; blacklisted this GUID for the current gathering session. "
-                              + "Harvest failure is unverified; a multi-hit vein may still contain ore.");
-                return;
+                ObservedHarvestAttempts.TryGetValue(node.Guid, out int previousAttempts);
+                int observedAttempts = previousAttempts + 1;
+                if (observedAttempts >= ClassicGatherAttempts)
+                {
+                    ObservedHarvestAttempts.Remove(node.Guid);
+                    FailedHarvestNodes.Add(node.Guid);
+                    Logging.Write("[Gather] node " + node.Guid + " still observed after " + observedAttempts +
+                                  " posted interactions with completed waits; blacklisted this GUID for the current gathering session. "
+                                  + "Harvest failure is unverified; a multi-hit vein may still contain ore.");
+                    return;
+                }
+                ObservedHarvestAttempts[node.Guid] = observedAttempts;
+                Logging.Write("[Gather] node still observed after posted interaction " + observedAttempts + "/" +
+                              ClassicGatherAttempts + "; attempting another hit if safe. Cast and loot are unverified.");
             }
             if (!Ready(node)) return;
             if (hoverMiss)
@@ -654,6 +674,7 @@ internal static class GatherRunner
             if (ClickAimAbort.Requested) return false;
             Retry.Clear();
             FailedHarvestNodes.Clear();
+            ObservedHarvestAttempts.Clear();
             GatherInteraction.ResetHoverHint();
             _pending = null;
             _stop = false;
