@@ -111,6 +111,21 @@ internal static class CombatResearchTests
             Check(WowBCombatResearch.ReadExternalCandidate(mem, playerUnit, out extReason, true)?.Bytes.Length == grownSize, "70888 28-slot header accepted only with readable stable data");
             mem.U64(playerUnit + 0x5F8, 29);
             Check(WowBCombatResearch.ReadExternalCandidate(mem, playerUnit, out extReason, true) == null, "70888 length above observed bound denied");
+            int size70938 = 29 * WowBCombatResearch.ExternalCandidateStride;
+            mem.Bytes(externalBase, new byte[size70938]);
+            Check(WowBCombatResearch.ReadExternalCandidate(mem, playerUnit, out extReason, true, true)?.Bytes.Length == size70938,
+                "70938 observed 29-slot header accepted only with readable stable data");
+            mem.U64(playerUnit + 0x5F8, 30);
+            Check(WowBCombatResearch.ReadExternalCandidate(mem, playerUnit, out extReason, true, true) == null, "70938 beyond observed length denied");
+            mem.U64(playerUnit + 0x5F8, 29); mem.U64(playerUnit + 0x600, 37);
+            Check(WowBCombatResearch.ReadExternalCandidate(mem, playerUnit, out extReason, true, true) == null, "70938 capacity above bound denied");
+            mem.U64(playerUnit + 0x600, 36); mem.ReadableRangeAllowed = false;
+            Check(WowBCombatResearch.ReadExternalCandidate(mem, playerUnit, out extReason, true, true) == null, "70938 grown region must be readable");
+            mem.ReadableRangeAllowed = true;
+            int reads70938 = 0;
+            mem.OnRead = (address, count) => { if (address == externalBase && count == size70938 && ++reads70938 == 2) mem.U32(externalBase + 0xE8, 1234); };
+            Check(WowBCombatResearch.ReadExternalCandidate(mem, playerUnit, out extReason, true, true) == null, "70938 changed grown data denied");
+            mem.OnRead = null;
             mem.U64(playerUnit + 0x5F8, 28); mem.U64(playerUnit + 0x600, 37);
             Check(WowBCombatResearch.ReadExternalCandidate(mem, playerUnit, out extReason, true) == null, "70888 capacity above observed bound denied");
             mem.U64(playerUnit + 0x5F8, 28); mem.U64(playerUnit + 0x600, 36); mem.ReadableRangeAllowed = false;

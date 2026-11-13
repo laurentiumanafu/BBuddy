@@ -56,6 +56,21 @@ class Analyzer(unittest.TestCase):
                         'external baseline pointer=0x100000 length=29 capacity=36 bytes=' + '00' * (29 * a.STRIDE))
         with self.assertRaises(ValueError): a.read_trace(path)
 
+    def test_70938_observed_29_slots_only(self):
+        data = bytearray(a.STRIDE * 29)
+        struct.pack_into('<I', data, 28 * a.STRIDE + 0xE8, 10491)
+        base = f'external baseline pointer=0x100000 length=29 capacity=36 bytes={data.hex().upper()}'
+        path = self.make_trace(['sample=0 startMs=0', base])
+        original = path.read_text()
+        for build in ('70862', '70888'):
+            path.write_text(original.replace('70862 COMBAT', build + ' COMBAT'))
+            with self.assertRaises(ValueError): a.read_trace(path)
+        path.write_text(original.replace('70862 COMBAT', '70938 COMBAT'))
+        self.assertEqual(a.read_trace(path)[2][0][2][0][1], 10491)
+        path.write_text('70938 COMBAT RESEARCH v1: raw\nsample=0 startMs=0\n' +
+                        'external baseline pointer=0x100000 length=30 capacity=36 bytes=' + '00' * (30 * a.STRIDE))
+        with self.assertRaises(ValueError): a.read_trace(path)
+
     def test_mismatch_invalidates_not_absent(self):
         data = bytearray(a.STRIDE)
         path = self.make_trace(['sample=0 startMs=0', f'external baseline pointer=0x100000 length=1 capacity=8 bytes={data.hex().upper()}',

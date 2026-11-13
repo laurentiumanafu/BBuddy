@@ -8,6 +8,7 @@ from pathlib import Path
 STRIDE = 0x128  # hypothesis inherited from the old inline observation
 MAX_SLOTS = 24
 MAX_SLOTS_70888 = 28
+MAX_SLOTS_70938 = 29
 ID_WITHIN_SLOT = 0xE8
 SAMPLE = re.compile(r'^sample=(\d+) startMs=(\d+)')
 BASELINE = re.compile(r'^external baseline pointer=0x([0-9A-F]+) length=(\d+) capacity=(\d+) bytes=([0-9A-F]+)$')
@@ -34,8 +35,10 @@ def read_trace(path):
         header = f.readline()
         if header.startswith('70862 COMBAT RESEARCH v1:'):
             max_slots, max_capacity = MAX_SLOTS, 32
-        elif header.startswith(('70888 COMBAT RESEARCH v1:', '70938 COMBAT RESEARCH v1:')):
+        elif header.startswith('70888 COMBAT RESEARCH v1:'):
             max_slots, max_capacity = MAX_SLOTS_70888, 36
+        elif header.startswith('70938 COMBAT RESEARCH v1:'):
+            max_slots, max_capacity = MAX_SLOTS_70938, 36
         else:
             raise ValueError('not a 70862/70888/70938 Combat Research v1 trace')
         for line in f:

@@ -96,3 +96,25 @@ movement is permitted until the ghost candidate is confirmed. Other builds retai
 the single-click policy. These guards and the inherited ghost candidate require
 live validation; underwater checkpoint positions and mesh availability can still
 prevent a subsequent return, which this particular log never reached.
+
+### Totem macro blocked by a grown aura header
+
+In `2026-11-13_1317_6764.log`, Grind had combat buffs enabled and the key 2
+macro configured for Mana Spring (two presses). It repeatedly withheld the
+macro because the inline header had length 29, capacity 36 and the external
+reader's inherited 70888 limit was 28. The earlier drowning log shows the same
+rejection after earlier macro attempts. The user's 70938 recordings captured
+external 26-slot buffers with capacity 36; the 29-slot report records a header,
+not the corresponding bytes or proof of completeness. The earlier GatherBuddy
+log reports macro attempts but cannot prove delivery or totem casts.
+
+The 70938-only experimental bound is now 29 slots (not the full capacity 36);
+older build limits are unchanged. The full readable region and header still
+must be stable, and the nonzero, unique candidate IDs must match the separate
+active count. Missing, unstable or inconsistent data is unknown and must not
+trigger a macro or a potentially toggle-like Ghost Wolf key. With valid data,
+existing combat, mana, identity, selection, STOP, Earth reservation and retry
+checks still apply. The same candidate reader also serves shield and 70938
+Ghost Wolf decisions, so the widened bound affects those features too. A
+stable 29-slot layout and effect absence remain unverified until traced live;
+this change is not proof that the macro, aura mapping or casting works.
