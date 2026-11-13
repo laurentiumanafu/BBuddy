@@ -3491,12 +3491,17 @@ internal static class GrindRunner
         {
             _vendorRetryAt = Environment.TickCount + VendorRetryMs;
             Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                "[Grind] no user-confirmed live merchant was found within {1} yd of the character at town point {0}. The point was {2:F0} yd away at departure.",
-                point, ClickAimSettings.VendorSearchYd, ClickAimMath.Len(point.X - px, point.Y - py)));
+                "[Grind] no confirmed GUID or unique 70938 same-high merchant candidate was found within {1} yd at town point {0}. The point was {2:F0} yd away at departure; {3} confirmation(s) loaded. Identity, streaming or candidate reads may differ.",
+                point, ClickAimSettings.VendorSearchYd, ClickAimMath.Len(point.X - px, point.Y - py), point.MerchantGuids.Count));
+            ReportVendorIdentityCandidates(point);
             return false;
         }
 
-        // Track the exact user-confirmed GUID and live object identity while
+        if (!point.MerchantGuids.Contains(npc.Guid.ToString()))
+            Logging.Write("[Grind] 70938 merchant GUID differs from saved confirmation; using unique same-high candidate " + npc.Guid +
+                " near the saved town (merchant identity is not independently verified)");
+
+        // Track the selected live GUID and object identity while
         // following a complete mesh path. Never walk directly to a stale position.
         int walkStart = Environment.TickCount;
         var vendorWatch = new ChaseWatch(walkStart);
@@ -3524,7 +3529,7 @@ internal static class GrindRunner
         _clicks++;
 
         Logging.Write(string.Format(CultureInfo.InvariantCulture,
-            "[Grind] sent right-click at user-confirmed merchant {0} (seen {1:F1} yd away, clicked at {2:F1} yd); waiting "
+            "[Grind] sent right-click at recorded merchant or 70938 candidate {0} (seen {1:F1} yd away, clicked at {2:F1} yd); waiting "
             + "{3} ms before {4} recorded step(s). Merchant window is not verified",
             npc.Guid, npcYd, reach, ClickAimSettings.VendorWaitMs, point.Steps.Count));
         GreenMagic.Memory? vendorMemory = ObjectManager.Wow;
@@ -3634,8 +3639,28 @@ internal static class GrindRunner
         return sent;
     }
 
-    // The only known merchants are full GUIDs explicitly confirmed by the user.
-    // Faction ID, proximity and exclusion flags cannot establish merchant type.
+    // Diagnostic only: show which saved and nearby GUIDs were actually seen.
+    // No candidate in this report authorizes a click or implies merchant type.
+    private static void ReportVendorIdentityCandidates(VendorFile.VendorPoint point)
+    {
+        if (!Capture(out WowBWorldSnapshot? snap) || snap == null || !snap.TryGetLocalPlayer(out WowBObservedUnit me)) return;
+        var nearby = new List<string>();
+        foreach (WowBObservedUnit unit in snap.Units)
+        {
+            if (unit.IsLocalPlayer || unit.HasPlayerVtable || unit.Guid.IsEmpty) continue;
+            double d = ClickAimMath.Len(unit.Location.X - me.Location.X, unit.Location.Y - me.Location.Y);
+            if (!double.IsFinite(d) || d > ClickAimSettings.VendorSearchYd) continue;
+            nearby.Add(unit.Guid + "@" + d.ToString("F1", CultureInfo.InvariantCulture) + "yd");
+            if (nearby.Count >= 8) break;
+        }
+        Logging.Write("[Grind] merchant identity diagnostic; saved=" + string.Join(", ", point.MerchantGuids) +
+            "; nearby non-player GUIDs (up to 8)=" + (nearby.Count == 0 ? "none observed" : string.Join(", ", nearby)) +
+            "; presence and type unverified");
+    }
+
+    // Exact user-confirmed GUIDs take priority. For 70938 only, a unique
+    // same-high GUID near the recorded town is an experimental respawn
+    // candidate, not proof of merchant identity. Never use an ambiguous match.
     private static bool TryFindVendorNpc(VendorFile.VendorPoint point, out WowBObservedUnit npc, out double yards)
     {
         npc = default; yards = double.MaxValue;
@@ -3643,14 +3668,36 @@ internal static class GrindRunner
             !Capture(out WowBWorldSnapshot? snap) || snap == null || !snap.TryGetLocalPlayer(out WowBObservedUnit me)) return false;
         var reader = ObjectManager.WowB; var memory = ObjectManager.Wow;
         if (reader == null || memory == null || !reader.TryReadMapId(out uint map) || point.TownMap != map) return false;
+        WowBObservedUnit fallback = default;
+        double fallbackYd = double.MaxValue;
+        int fallbackCount = 0;
+        bool exactObserved = false;
         foreach (WowBObservedUnit candidate in snap.Units)
         {
+            if (candidate.IsLocalPlayer || candidate.HasPlayerVtable || candidate.Guid.IsEmpty) continue;
             double d = ClickAimMath.Len(candidate.Location.X - me.Location.X, candidate.Location.Y - me.Location.Y);
-            if (!double.IsFinite(d) || d <= 0.4 || d > ClickAimSettings.VendorSearchYd || d >= yards) continue;
-            if (!WowBKnownMerchants.IsRecordedLive(point, candidate, memory, reader)) continue;
-            npc = candidate; yards = d;
+            if (point.MerchantGuids.Contains(candidate.Guid.ToString()))
+            {
+                exactObserved = true;
+                if (double.IsFinite(d) && d > 0.4 && d <= ClickAimSettings.VendorSearchYd &&
+                    d < yards && WowBKnownMerchants.IsRecordedLive(point, candidate, memory, reader))
+                { npc = candidate; yards = d; }
+                continue;
+            }
+            if (!reader.IsExperimental70938 || !WowBKnownMerchants.Same70938HighCandidate(point, candidate.Guid)) continue;
+            double townDistance = ClickAimMath.Len(candidate.Location.X - point.X, candidate.Location.Y - point.Y);
+            if (!double.IsFinite(townDistance) || townDistance > ClickAimSettings.VendorSearchYd ||
+                !double.IsFinite(candidate.Location.Z) || Math.Abs(candidate.Location.Z - point.Z) > 5.0) continue;
+            // Count even unreadable/dead candidates: filtering them out could
+            // turn an ambiguous identity into an apparently unique one.
+            fallbackCount++;
+            fallback = candidate; fallbackYd = d;
         }
-        return !npc.Guid.IsEmpty;
+        if (!npc.Guid.IsEmpty) return true;
+        if (exactObserved || fallbackCount != 1 || !double.IsFinite(fallbackYd) || fallbackYd <= 0.4 ||
+            fallbackYd > ClickAimSettings.VendorSearchYd ||
+            !WowBKnownMerchants.IsRecordedLive(point, fallback, memory, reader, true)) return false;
+        npc = fallback; yards = fallbackYd; return true;
     }
 
     private static bool VendorCandidateStillValid(VendorFile.VendorPoint point, WowBObservedUnit original,
@@ -3663,8 +3710,11 @@ internal static class GrindRunner
             (reader.Uses70862Features && !WowBGrindFactions.Experimental70707BarSafe(reader)) ||
             !reader.TryReadMapId(out uint map) || point.TownMap != map ||
             !Capture(out WowBWorldSnapshot? snap) || snap == null || !snap.TryGetLocalPlayer(out player) ||
-            !snap.TryGetUnit(original.Guid, out npc) || npc.RecordAddress != original.RecordAddress || npc.UnitAddress != original.UnitAddress ||
-            !WowBKnownMerchants.IsRecordedLive(point, npc, memory, reader)) return false;
+            !snap.TryGetUnit(original.Guid, out npc) || npc.RecordAddress != original.RecordAddress || npc.UnitAddress != original.UnitAddress) return false;
+        bool exact = point.MerchantGuids.Contains(npc.Guid.ToString());
+        if (!WowBKnownMerchants.IsRecordedLive(point, npc, memory, reader, !exact)) return false;
+        if (!exact && (!TryFindVendorNpc(point, out WowBObservedUnit unique, out _) ||
+            unique.Guid != original.Guid || unique.RecordAddress != original.RecordAddress || unique.UnitAddress != original.UnitAddress)) return false;
         // An automatic trip cannot interact after the character/attachment or
         // auto-sell setting changes, including after reaching the town point.
         if (_vendorAutoPending && !_vendorManualPending &&

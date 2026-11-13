@@ -670,7 +670,8 @@ namespace CopilotBuddy.UI
                     "{0}, {1} step(s). The plan runs top to bottom: it is what sells the loot, so it has to "
                     + "match the merchant window's own layout.", point, point.Steps.Count);
             lblVendorPlan.Text += " Town map: " + (point.TownMap.HasValue ? point.TownMap.Value.ToString(CultureInfo.InvariantCulture) : "not recorded")
-                + "; confirmed merchant GUIDs: " + point.MerchantGuids.Count.ToString(CultureInfo.InvariantCulture) + ".";
+                + "; saved merchant GUIDs: " + point.MerchantGuids.Count.ToString(CultureInfo.InvariantCulture)
+                + ". 70938 may use a unique same-high candidate near this town if a GUID changes; verify the first sale.";
         }
 
         private void lstVendors_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -796,7 +797,7 @@ namespace CopilotBuddy.UI
             { lblVendorNote.Text = "Selection or map changed; merchant not saved. " + finalReason; return; }
             if (!VendorFile.AddMerchant(index, guid.ToString(), map, out string error)) { lblVendorNote.Text = "Merchant was not saved: " + error; return; }
             LoadVendor(); lstVendors.SelectedIndex = index;
-            lblVendorNote.Text = "Recorded merchant " + guid + ". This is user-confirmed, not an automatically detected merchant type.";
+            lblVendorNote.Text = "Saved merchant " + guid + " to the vendor file. Merchant type is not detected; on 70938 a unique same-high candidate near town may be used if the GUID changes.";
         }
 
         private void btnVendorAdd_Click(object sender, RoutedEventArgs e)

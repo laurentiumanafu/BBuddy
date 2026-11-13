@@ -1,0 +1,78 @@
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using Styx.WoWInternals;
+namespace GreenMagic { sealed class Memory {} }
+namespace Styx.WoWInternals
+{
+    struct Location { public double X,Y,Z; }
+    struct WowBObservedUnit { public WowBGuid Guid; public bool IsLocalPlayer, HasPlayerVtable; public Location Location; public ulong RecordAddress, UnitAddress; }
+    sealed class WowBReader
+    {
+        public bool IsExperimental70938, Uses70862Features;
+        public bool MapReadable = true; public uint Map = 1;
+        public bool TryReadMapId(out uint map) { map = Map; return MapReadable; }
+    }
+    static class ObjectManager { public static WowBReader? WowB; public static GreenMagic.Memory? Wow; }
+    sealed class WowBWorldSnapshot
+    {
+        public WowBObservedUnit Player; public List<WowBObservedUnit> Units = new();
+        public bool TryGetLocalPlayer(out WowBObservedUnit p) { p=Player; return !p.Guid.IsEmpty; }
+        public bool TryGetUnit(WowBGuid guid, out WowBObservedUnit u) { foreach (var x in Units) if (x.Guid == guid) { u=x; return true; } u=default; return false; }
+    }
+}
+namespace Styx.Logic.Pathing
+{
+    static class VendorFile { public sealed class VendorPoint { public double X,Y,Z; public uint? TownMap; public List<string> MerchantGuids = new(); } }
+    static class ClickAimSettings { public static double VendorSearchYd = 25; public static bool AutoSell = true; }
+    static class ClickAimAbort { public static bool Requested; }
+    static class ClickAimMath { public static double Len(double x,double y) => Math.Sqrt(x*x+y*y); }
+    static class WowBGrindFactions { public static bool Experimental70707BarSafe(WowBReader r) => true; }
+    static class WowBKnownMerchants
+    {
+        // __HIGH_MATCH__
+        public static bool Living = true;
+        public static bool IsRecordedLive(VendorFile.VendorPoint p, WowBObservedUnit u, GreenMagic.Memory? m, WowBReader? r, bool allow70938Candidate = false)
+            => m != null && r != null && Living && !u.IsLocalPlayer && !u.HasPlayerVtable &&
+               (p.MerchantGuids.Contains(u.Guid.ToString()) || (allow70938Candidate && r.IsExperimental70938 && Same70938HighCandidate(p,u.Guid)));
+    }
+    static class Fixture
+    {
+        static bool _stop, _vendorDue, _vendorAutoPending, _vendorManualPending, Fighting, Readable = true;
+        static WowBReader? _vendorAutoReader; static GreenMagic.Memory? _vendorAutoMemory; static WowBGuid _vendorAutoPlayer;
+        static WowBWorldSnapshot snapshot = new();
+        static bool TryReadGatherCombat(out bool fighting) { fighting=Fighting; return Readable; }
+        static bool Capture(out WowBWorldSnapshot? s) { s=snapshot; return true; }
+        static bool AutoVendorIdentityMatches(WowBReader r, GreenMagic.Memory m, WowBGuid g) => true;
+        // __PRODUCTION__
+        static void Check(bool ok, string why) { if (!ok) throw new Exception(why); }
+        public static void Main()
+        {
+            ObjectManager.WowB = new WowBReader { IsExperimental70938 = true }; ObjectManager.Wow = new GreenMagic.Memory();
+            var town = new VendorFile.VendorPoint { TownMap = 1 };
+            var saved = new WowBGuid(42, 0x206B500020043D80); town.MerchantGuids.Add(saved.ToString());
+            var player = new WowBObservedUnit { Guid = new WowBGuid(1, 1), IsLocalPlayer = true };
+            var replacement = new WowBObservedUnit { Guid = new WowBGuid(43, saved.High), UnitAddress = 2, RecordAddress = 20, Location = new Location { X = 4 } };
+            snapshot.Player = player; snapshot.Units.Add(player); snapshot.Units.Add(replacement);
+            Check(TryFindVendorNpc(town, out var found, out _) && found.Guid == replacement.Guid, "unique respawn candidate found");
+            Check(VendorCandidateStillValid(town, found, out _, out _, out _), "candidate identity remains valid");
+            var duplicate = replacement; duplicate.Guid = new WowBGuid(44, saved.High); duplicate.UnitAddress=3; duplicate.RecordAddress=30; duplicate.Location.X=10;
+            snapshot.Units.Add(duplicate);
+            Check(!TryFindVendorNpc(town, out _, out _) && !VendorCandidateStillValid(town, found, out _, out _, out _), "ambiguous candidate blocks search and replay");
+            snapshot.Units.Remove(duplicate);
+            var exact = replacement; exact.Guid = saved; exact.UnitAddress=4; exact.RecordAddress=40; exact.Location.X=6; snapshot.Units.Add(exact);
+            Check(TryFindVendorNpc(town, out found, out _) && found.Guid == saved, "exact confirmation preferred even farther away");
+            exact.Location.X=100; snapshot.Units[2]=exact;
+            Check(!TryFindVendorNpc(town, out _, out _), "observed exact prevents candidate substitution");
+            snapshot.Units.RemoveAt(2);
+            town.TownMap = 2; Check(!TryFindVendorNpc(town, out _, out _), "wrong map"); town.TownMap=1;
+            town.X = 100; Check(!TryFindVendorNpc(town, out _, out _), "outside town"); town.X=0;
+            ObjectManager.WowB.IsExperimental70938 = false; Check(!TryFindVendorNpc(town, out _, out _), "legacy builds exact only");
+            ObjectManager.WowB.IsExperimental70938 = true; WowBKnownMerchants.Living = false; Check(!TryFindVendorNpc(town, out _, out _), "unreadable live candidate rejected"); WowBKnownMerchants.Living=true;
+            Fighting=true; Check(!VendorCandidateStillValid(town, replacement, out _, out _, out _), "combat preempts"); Fighting=false;
+            var changed = replacement; changed.RecordAddress++; snapshot.Units[1]=changed;
+            Check(!VendorCandidateStillValid(town, replacement, out _, out _, out _), "changed record blocks replay");
+            Console.WriteLine("Merchant search/identity fixtures passed with synthetic snapshots.");
+        }
+    }
+}

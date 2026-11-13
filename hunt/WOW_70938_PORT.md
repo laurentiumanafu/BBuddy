@@ -139,3 +139,26 @@ failure count resets. A zero-health read without the existing recent matching
 alive evidence cannot invent a checkpoint: the watch remains paused and logs
 why. This is experimental; it does not guarantee release, dialog recognition,
 ghost detection or corpse navigation. STOP remains authoritative.
+
+
+## Grind merchant identity after restart (experimental)
+
+The 15:59 log shows the recorded town and three-step plan loaded and a 991 yd
+mesh trip to town; the later lookup found no exact confirmed live GUID. The log
+does not contain the saved GUID or the NPC's current GUID, so it does not prove
+whether the low half changed, the NPC was absent/unreadable, or another guard
+failed. The saved confirmation count is not proof that a current GUID matched.
+
+70938 now prefers the exact recorded full GUID, and only if none of the saved
+GUIDs is currently observed may it use a single non-player candidate whose
+high 64 GUID bits match a saved GUID, within the configured search radius of
+both the recorded town and player, and within 5 yd vertically of town. It
+counts even unreadable or dead matching candidates as ambiguous. The live GUID,
+object/record, map, combat and uniqueness are rechecked on approach and replay.
+Other client builds remain exact-only. The high-half correlation and merchant
+identity are unverified; a different NPC could share the high bits, so supervise
+and verify the first interaction and sale. The recorded plan still replays
+screen clicks, and the merchant window and item sale are not verified. The
+failure log now includes saved and nearby non-player GUIDs for diagnosis;
+matching is limited to client-loaded snapshots. Existing confirmations require
+no re-recording. Moving a town point intentionally clears its confirmations.

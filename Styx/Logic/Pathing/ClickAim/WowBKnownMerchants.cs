@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using GreenMagic;
 using Styx.WoWInternals;
 using Styx.Offsets;
@@ -75,10 +76,26 @@ internal static class WowBKnownMerchants
             WowBGrindFactions.ValidateDiagnosticUnit(memory, reader, unit);
     }
 
-    public static bool IsRecordedLive(VendorFile.VendorPoint point, WowBObservedUnit unit, Memory? memory, WowBReader? reader)
+    // 70938 GUIDs contain an observed type/entry candidate in the high half;
+    // the low half may differ after a server restart or respawn. This is NOT
+    // proof of the same NPC. Only the town-scoped, unique fallback in Grind may
+    // use it; exact GUIDs remain preferred and other builds stay exact-only.
+    public static bool Same70938HighCandidate(VendorFile.VendorPoint point, WowBGuid guid)
+    {
+        if (guid.IsEmpty || guid.High == 0) return false;
+        foreach (string recorded in point.MerchantGuids)
+            if (recorded.Length == 34 && recorded.StartsWith("0x", StringComparison.Ordinal) &&
+                ulong.TryParse(recorded.Substring(2, 16), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out ulong high) &&
+                high == guid.High) return true;
+        return false;
+    }
+
+    public static bool IsRecordedLive(VendorFile.VendorPoint point, WowBObservedUnit unit, Memory? memory, WowBReader? reader,
+                                      bool allow70938Candidate = false)
     {
         if (memory == null || reader == null || unit.Guid.IsEmpty || unit.IsLocalPlayer || unit.HasPlayerVtable ||
-            !point.MerchantGuids.Contains(unit.Guid.ToString())) return false;
+            (!point.MerchantGuids.Contains(unit.Guid.ToString()) &&
+             !(allow70938Candidate && reader.IsExperimental70938 && Same70938HighCandidate(point, unit.Guid)))) return false;
         try
         {
             return WowBGrindFactions.ValidateDiagnosticUnit(memory, reader, unit) &&

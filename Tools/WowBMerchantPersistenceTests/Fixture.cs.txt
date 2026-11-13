@@ -1,0 +1,26 @@
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using Styx.WoWInternals;
+namespace Styx.Logic.Pathing
+{
+    static class VendorFile { public sealed class VendorPoint { public List<string> MerchantGuids = new(); } }
+    static class Fixture
+    {
+        // __PRODUCTION__
+        static void Check(bool value, string name) { if (!value) throw new Exception(name); }
+        public static void Main()
+        {
+            var town = new VendorFile.VendorPoint();
+            var saved = new WowBGuid(0x411F00007714B0UL, 0x206B500020043D80UL);
+            town.MerchantGuids.Add(saved.ToString());
+            Check(Same70938HighCandidate(town, saved), "exact high");
+            Check(Same70938HighCandidate(town, new WowBGuid(0x411F000077FFFFUL, saved.High)), "changed low matches high candidate");
+            Check(!Same70938HighCandidate(town, new WowBGuid(saved.Low, saved.High + 1)), "different high rejected");
+            Check(!Same70938HighCandidate(town, new WowBGuid(1, 0)), "zero high rejected");
+            town.MerchantGuids.Clear(); town.MerchantGuids.Add("invalid");
+            Check(!Same70938HighCandidate(town, saved), "invalid recording rejected");
+            Console.WriteLine("Merchant high-half candidate fixture passed; no live identity proof.");
+        }
+    }
+}
