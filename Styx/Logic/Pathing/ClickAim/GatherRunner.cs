@@ -45,6 +45,9 @@ internal static class GatherRunner
     private static volatile bool _running;
     private static volatile bool _stop;
     private static readonly Dictionary<WowBGuid, int> Retry = new Dictionary<WowBGuid, int>();
+    // Only the exact observed GUID is excluded, and only for this gathering
+    // session. A new spawn at the same position remains eligible.
+    private static readonly HashSet<WowBGuid> FailedHarvestNodes = new HashSet<WowBGuid>();
     private static readonly List<(double X, double Y, double Z, double Radius)> Blackspots = new List<(double, double, double, double)>();
     private static int _lastScan;
     private static int _lastCombatCheck;
@@ -186,6 +189,7 @@ internal static class GatherRunner
             _movementAttempted = false;
             _nodeDefence = false;
             Retry.Clear();
+            FailedHarvestNodes.Clear();
             GatherInteraction.ResetHoverHint();
             _pending = null;
             _lastScan = unchecked(Environment.TickCount - 1500);
@@ -229,7 +233,7 @@ internal static class GatherRunner
 
     private static bool Ready(GatherNodeScanner.Node node)
     {
-        if (IsBlackspot(node.Position.X, node.Position.Y)) return false;
+        if (FailedHarvestNodes.Contains(node.Guid) || IsBlackspot(node.Position.X, node.Position.Y)) return false;
         if (!GatherNodeScanner.IsEligible(node, GatherSettings.Mining, GatherSettings.MiningSkill,
                                           GatherSettings.Herbalism, GatherSettings.HerbalismSkill)) return false;
         return !Retry.TryGetValue(node.Guid, out int until) || unchecked(Environment.TickCount - until) >= 0;
@@ -239,12 +243,13 @@ internal static class GatherRunner
     {
         node = default;
         bool scanOk = GatherNodeScanner.TryCapture(radius, out List<GatherNodeScanner.Node> nodes, out GatherNodeScanner.ScanStats stats);
-        int eligible = 0, blackspotted = 0, coolingDown = 0, skillExcluded = 0;
+        int eligible = 0, blackspotted = 0, coolingDown = 0, skillExcluded = 0, failedHarvest = 0;
         foreach (GatherNodeScanner.Node candidate in nodes)
         {
             if (!GatherNodeScanner.IsEligible(candidate, GatherSettings.Mining, GatherSettings.MiningSkill,
                                                GatherSettings.Herbalism, GatherSettings.HerbalismSkill)) { skillExcluded++; continue; }
             if (IsBlackspot(candidate.Position.X, candidate.Position.Y)) { blackspotted++; continue; }
+            if (FailedHarvestNodes.Contains(candidate.Guid)) { failedHarvest++; continue; }
             if (!Ready(candidate)) { coolingDown++; continue; }
             if (eligible++ == 0) node = candidate;
         }
@@ -254,7 +259,7 @@ internal static class GatherRunner
             if (!scanOk) Logging.Write("[Gather] node scan failed; no conclusion about nearby resources");
             else Logging.Write("[Gather] scan within " + radius.ToString("F0", CultureInfo.InvariantCulture) + " yd: " + nodes.Count + " recognized, " + eligible
                 + " eligible, " + skillExcluded + " profession/skill/blacklist excluded, "
-                + blackspotted + " profile-blackspot excluded, " + coolingDown + " on retry cooldown; "
+                + blackspotted + " profile-blackspot excluded, " + failedHarvest + " session-blacklisted, " + coolingDown + " on retry cooldown; "
                 + "known GUID-entry candidates in pool=" + stats.KnownGuidEntries + ", header rejected=" + stats.HeaderRejected
                 + ", outside radius=" + stats.OutsideRadius + ", changed=" + stats.Changed + "; "
                 + "an empty scan is not proof no nodes exist");
@@ -462,7 +467,8 @@ internal static class GatherRunner
 
     // No movement, turns, stop-key taps or extra clicks while a cast may be running.
     // A resource remaining in the pool can need another hit, or the attempt can have
-    // failed; neither proves success. Bound attempts and revisit rather than spin forever.
+    // failed; neither proves success. Per user preference, stop retrying that GUID for
+    // this session after a posted interaction and a successful scan still sees it.
     private static void GatherAtNode(IntPtr hwnd, GatherNodeScanner.Node node, Func<bool>? extraSafety = null)
     {
         // Standalone ignore mode still enforces session, death and map checks.
@@ -586,6 +592,23 @@ internal static class GatherRunner
                 Retry[node.Guid] = unchecked(Environment.TickCount + delay);
                 return;
             }
+            // A posted click is only an interaction attempt, not proof of a
+            // completed cast or failed loot. Still present can also mean a
+            // multi-hit vein. The user requested skipping it rather than looping.
+            if (clicked && initialReader?.IsExperimental70938 == true)
+            {
+                if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested || ObjectManager.WowB != initialReader ||
+                    ObjectManager.Wow != initialMemory || !MapStillCurrent() || (extraSafety != null && !extraSafety()) ||
+                    (standaloneGuard && !StandaloneSafety())) return;
+                if (!GrindRunner.TryReadGatherCombat(out fighting)) { _pending = node; return; }
+                if (fighting) { DeferForCombat(true); return; }
+                if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested ||
+                    ObjectManager.WowB != initialReader || ObjectManager.Wow != initialMemory) return;
+                FailedHarvestNodes.Add(node.Guid);
+                Logging.Write("[Gather] node " + node.Guid + " still observed after a posted interaction; blacklisted this GUID for the current gathering session. "
+                              + "Harvest failure is unverified; a multi-hit vein may still contain ore.");
+                return;
+            }
             if (!Ready(node)) return;
             if (hoverMiss)
             {
@@ -630,6 +653,7 @@ internal static class GatherRunner
             { Logging.Write("[Grind gather] navmesh unavailable; gathering disabled"); return false; }
             if (ClickAimAbort.Requested) return false;
             Retry.Clear();
+            FailedHarvestNodes.Clear();
             GatherInteraction.ResetHoverHint();
             _pending = null;
             _stop = false;

@@ -1,0 +1,91 @@
+using System;
+using System.Collections.Generic;
+using Styx.WoWInternals;
+using Styx.Helpers;
+namespace GreenMagic { public sealed class Memory { public IntPtr WindowHandle=(IntPtr)1; } }
+namespace Styx.WoWInternals
+{
+    public readonly struct WowBGuid
+    {
+        public readonly int Value; public WowBGuid(int v) { Value=v; }
+        public static bool operator ==(WowBGuid a, WowBGuid b) => a.Value==b.Value;
+        public static bool operator !=(WowBGuid a, WowBGuid b) => !(a==b);
+        public override bool Equals(object? o)=>o is WowBGuid g && this==g;
+        public override int GetHashCode()=>Value; public override string ToString()=>Value.ToString();
+    }
+    public sealed class WowBReader { public bool IsExperimental70938=true, IsExperimental70707=true; }
+    public static class ObjectManager { public static WowBReader? WowB; public static GreenMagic.Memory? Wow; }
+}
+namespace Styx.Helpers { public static class Logging { public static void Write(string s) { } } }
+namespace Styx.Logic.Pathing
+{
+    internal static class ClickAimAbort
+    { internal static bool Requested; internal static Action? OnWait; internal static bool Wait(int ms) { OnWait?.Invoke(); return Requested; } }
+    internal static class RouteRunner { internal static bool StopRequested; }
+    internal static class ClickAimPositions
+    { internal static bool TryRead(out double x,out double y) { x=0;y=0;return true; } internal static double Z()=>0; }
+    internal static class GatherNodeDefence { internal static bool InRange(double x,double y,double z,double r)=>true; }
+    internal static class WowBGrindFactions { internal static bool Experimental70707BarSafe(WowBReader r)=>true; }
+    internal static class GrindRunner
+    { internal static bool Fighting, Readable=true; internal static bool TryReadGatherCombat(out bool f) { f=Fighting; return Readable; } }
+    internal static class GatherBackgroundFocus { internal static bool RetryCursorInterruption(bool clicked,bool moved)=>!clicked&&moved; }
+    internal static class GatherNodeScanner
+    {
+        internal struct Position { internal double X,Y,Z; }
+        internal struct Node { internal WowBGuid Guid; internal string Name; internal Position Position; internal double Distance; }
+        internal static bool ScanOk=true; internal static List<Node> Nodes=new();
+        internal static bool TryCapture(double radius,out List<Node> result) { result=new List<Node>(Nodes);return ScanOk; }
+    }
+    internal static class GatherInteraction
+    {
+        internal static bool Clicked=true, HoverMiss, CursorMoved; internal static int Calls; internal static GatherNodeScanner.Node Actual;
+        internal static bool TryInteract(IntPtr h, GatherNodeScanner.Node n, Func<GatherNodeScanner.Node,bool> ready, Func<bool>? safety,
+            out GatherNodeScanner.Node actual, out string reason,out bool miss,out bool moved,Func<bool>? standalone)
+        { Calls++;actual=Actual.Guid.Value==0?n:Actual;reason="fixture";miss=HoverMiss;moved=CursorMoved;return Clicked; }
+    }
+    internal static class GatherRunner
+    {
+        const double SearchYd=1000, InteractYd=5;
+        const int MaxGatherAttempts=4, GatherHoldMs=0, InteractionRetryMs=20000, UnavailableRetryMs=120000;
+        static bool _ignoreMonsters,_stop,_movementEnabled,_movementAttempted,_nodeDefence;
+        static GatherNodeScanner.Node? _pending;
+        static readonly Dictionary<WowBGuid,int> Retry = new();
+        static readonly HashSet<WowBGuid> FailedHarvestNodes = new();
+        static bool MapStillCurrent()=>true;
+        static bool StopIfDeadOrGhost()=>false;
+        static bool Ready(GatherNodeScanner.Node n)=>!FailedHarvestNodes.Contains(n.Guid) && !Retry.ContainsKey(n.Guid);
+        // __METHOD__
+        static void Check(bool ok,string s) { if (!ok) throw new Exception(s); }
+        static GatherNodeScanner.Node Node(int id)=>new() { Guid=new WowBGuid(id),Name="ore",Distance=2 };
+        static void Reset()
+        {
+            ObjectManager.Wow=new GreenMagic.Memory();ObjectManager.WowB=new WowBReader();
+            ClickAimAbort.Requested=false;ClickAimAbort.OnWait=null;RouteRunner.StopRequested=false;
+            GrindRunner.Fighting=false;GrindRunner.Readable=true;
+            _ignoreMonsters=_stop=_movementEnabled=_movementAttempted=_nodeDefence=false;_pending=null;
+            Retry.Clear();FailedHarvestNodes.Clear();GatherNodeScanner.ScanOk=true;GatherNodeScanner.Nodes=new(){Node(1)};
+            GatherInteraction.Clicked=true;GatherInteraction.HoverMiss=GatherInteraction.CursorMoved=false;GatherInteraction.Calls=0;GatherInteraction.Actual=default;
+        }
+        public static void Main()
+        {
+            Reset();GatherAtNode((IntPtr)1,Node(1));
+            Check(FailedHarvestNodes.Contains(Node(1).Guid) && !Ready(Node(1)) && Ready(Node(2)) && GatherInteraction.Calls==1,"still observed posted click blacklists only that GUID");
+            Reset();Check(Ready(Node(1)),"new session clears blacklist");
+            GatherInteraction.Clicked=false;GatherInteraction.HoverMiss=true;GatherAtNode((IntPtr)1,Node(1));
+            Check(!FailedHarvestNodes.Contains(Node(1).Guid) && Retry.ContainsKey(Node(1).Guid),"hover miss is not harvest failure");
+            Reset();GatherNodeScanner.ScanOk=false;GatherAtNode((IntPtr)1,Node(1));
+            Check(!FailedHarvestNodes.Contains(Node(1).Guid) && Retry.ContainsKey(Node(1).Guid),"failed scan does not blacklist");
+            Reset();GatherNodeScanner.Nodes.Clear();GatherAtNode((IntPtr)1,Node(1));
+            Check(!FailedHarvestNodes.Contains(Node(1).Guid) && Retry.ContainsKey(Node(1).Guid),"not observed uses normal cooldown");
+            Reset();ClickAimAbort.OnWait=()=>ClickAimAbort.Requested=true;GatherAtNode((IntPtr)1,Node(1));
+            Check(!FailedHarvestNodes.Contains(Node(1).Guid),"STOP during wait does not blacklist");
+            Reset();ClickAimAbort.OnWait=()=>GrindRunner.Fighting=true;GatherAtNode((IntPtr)1,Node(1));
+            Check(!FailedHarvestNodes.Contains(Node(1).Guid) && _pending.HasValue,"combat interrupts wait");
+            Reset();GatherInteraction.Actual=Node(2);GatherNodeScanner.Nodes=new(){Node(2)};GatherAtNode((IntPtr)1,Node(1));
+            Check(!FailedHarvestNodes.Contains(Node(1).Guid) && FailedHarvestNodes.Contains(Node(2).Guid),"only actual hovered GUID is blacklisted");
+            Reset();ObjectManager.WowB!.IsExperimental70938=false;GatherAtNode((IntPtr)1,Node(1));
+            Check(FailedHarvestNodes.Count==0 && GatherInteraction.Calls==4 && Retry.ContainsKey(Node(1).Guid),"other builds retain multi-hit behavior");
+            Console.WriteLine("Synthetic gather failure fixtures passed, no live client.");
+        }
+    }
+}

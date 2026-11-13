@@ -36,18 +36,37 @@ internal static class GatherNodeScanner
         public readonly WoWPoint Position;
         public readonly double Distance;
 
-        public Node(WowBGuid guid, GatherableNode kind, bool isHerb, WoWPoint position, double distance)
+        public Node(WowBGuid guid, GatherableNode kind, bool isHerb, WoWPoint position, double distance, bool classic70938 = false)
         {
             Guid = guid;
             Entry = kind.Entry;
             Name = kind.Name;
-            RequiredSkill = kind.RequiredSkill;
+            RequiredSkill = classic70938 && !isHerb ? Classic70938MiningSkill(kind.Entry, kind.RequiredSkill) : kind.RequiredSkill;
             IsHerb = isHerb;
             DefaultBlacklisted = GatherableNodes.DefaultBlacklistedEntries.Contains(kind.Entry);
             Position = position;
             Distance = distance;
         }
     }
+
+    // 70938 is the Forever client, not the WotLK source of the shared table.
+    // These common Classic vein thresholds are estimates from Classic-era
+    // references, not values read from the 70938 client. Keep the WotLK table
+    // intact for 3.3.5a and other builds. Unknown entries retain their table value.
+    internal static uint Classic70938MiningSkill(uint entry, uint fallback) => entry switch
+    {
+        1731U => 1U,   // Copper
+        1732U => 65U,  // Tin
+        1733U => 75U,  // Silver
+        1735U => 125U, // Iron
+        1734U => 155U, // Gold
+        2040U => 175U, // Mithril
+        2047U => 230U, // Truesilver
+        165658U => 230U, // Dark Iron
+        324U => 245U,  // Small Thorium
+        175404U => 275U, // Rich Thorium
+        _ => fallback
+    };
 
     // 70291 additions are kept separate from the 3.3.5a Gatherbuddy database.
     // 656160 matched the user's hovered herb and header; 656161 matched a
@@ -165,7 +184,7 @@ internal static class GatherNodeScanner
                         reader.IsExperimental70707 ? reader.GameObjectVtableCandidateRva : null)
                     || entryAfter != entry || !reader.IsPoolRecordCurrent(record)) { stats.Changed++; continue; }
                 found.Add(record.Guid);
-                nodes.Add(new Node(record.Guid, kind, herb, new WoWPoint(x, y, z), distance));
+                nodes.Add(new Node(record.Guid, kind, herb, new WoWPoint(x, y, z), distance, reader.IsExperimental70938));
             }
             if (ObjectManager.Wow != memory || ObjectManager.WowB != reader)
             {
@@ -224,6 +243,13 @@ internal static class GatherNodeScanner
             var highOre = new GatherableNode(324U, "Small Thorium Vein", 200U);
             Node highNode = new Node(copper, highOre, false, new WoWPoint(0, 0, 0), 2);
             checkFixture(!IsEligible(highNode, true, 199, false, 0));
+            var gold = new GatherableNode(1734U, "Gold Vein", 115U);
+            var classicGold = new Node(copper, gold, false, new WoWPoint(0, 0, 0), 2, true);
+            var legacyGold = new Node(copper, gold, false, new WoWPoint(0, 0, 0), 2);
+            checkFixture(!IsEligible(classicGold, true, 125, false, 0));
+            checkFixture(!IsEligible(classicGold, true, 154, false, 0));
+            checkFixture(IsEligible(classicGold, true, 155, false, 0));
+            checkFixture(IsEligible(legacyGold, true, 125, false, 0));
             var excluded = new GatherableNode(1610U, "Incendicite Mineral Vein", 50U);
             Node excludedNode = new Node(copper, excluded, false, new WoWPoint(0, 0, 0), 2);
             checkFixture(!IsEligible(excludedNode, true, 300, false, 0));

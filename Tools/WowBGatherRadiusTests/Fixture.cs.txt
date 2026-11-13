@@ -15,7 +15,7 @@ namespace Bots.Gatherbuddy
     public static class GatherableNodes
     {
         public static readonly GatherableNode[] Herbs = { new(1618,"Herb",1) };
-        public static readonly GatherableNode[] Minerals = { new(1731,"Copper",1) };
+        public static readonly GatherableNode[] Minerals = { new(1731,"Copper",1), new(1734,"Gold Vein",115), new(1735,"Iron Deposit",100) };
         public static readonly HashSet<uint> DefaultBlacklistedEntries = new() { 1610 };
     }
 }
@@ -60,7 +60,7 @@ namespace Styx.WoWInternals
     {
         public readonly struct WowBPoolObject
         { public readonly WowBGuid Guid; public readonly ulong RecordPtr; public WowBPoolObject(WowBGuid guid,ulong ptr) { Guid=guid; RecordPtr=ptr; } }
-        public bool IsExperimental70707=true, ExperimentalGrindActive=true;
+        public bool IsExperimental70707=true, ExperimentalGrindActive=true, IsExperimental70938=false;
         public ulong GameObjectVtableCandidateRva=Wow70790Offsets.GameObjectVtableCandidate;
         public List<WowBPoolObject> Records=new(); public HashSet<ulong> Stale=new();
         public bool TryCaptureWorldSnapshot(out WowBWorldSnapshot? snap) { snap=new WowBWorldSnapshot(); return true; }
@@ -73,10 +73,10 @@ static class Program
 {
     static void Check(bool condition,string label) { if (!condition) throw new Exception(label); }
     static void Write(Memory mem,ulong address,ulong value) => mem.Bytes(address,BitConverter.GetBytes(value));
-    static void Node(Memory mem,WowBReader reader,int id,float distance,float z=0)
+    static void Node(Memory mem,WowBReader reader,int id,float distance,float z=0,uint entry=1731)
     {
         ulong rec=0x300000UL+(ulong)id*0x1000UL, obj=0x500000UL+(ulong)id*0x1000UL;
-        var guid=new WowBGuid((ulong)id,(ulong)1731<<6);
+        var guid=new WowBGuid((ulong)id,(ulong)entry<<6);
         reader.Records.Add(new WowBReader.WowBPoolObject(guid,rec));
         Write(mem,rec+WowBOffsets.RecordDataBlockPtrOffset,obj);
         Write(mem,rec+WowBOffsets.RecordGuidLoOffset,guid.Low); Write(mem,rec+WowBOffsets.RecordGuidLoOffset+8,guid.High);
@@ -86,7 +86,7 @@ static class Program
         var header=new byte[0x94];
         BitConverter.GetBytes(mem.ImageBase64+reader.GameObjectVtableCandidateRva).CopyTo(header,0);
         BitConverter.GetBytes(rec).CopyTo(header,8); BitConverter.GetBytes(guid.Low).CopyTo(header,16);
-        BitConverter.GetBytes(guid.High).CopyTo(header,24); BitConverter.GetBytes(1731u).CopyTo(header,0x90);
+        BitConverter.GetBytes(guid.High).CopyTo(header,24); BitConverter.GetBytes(entry).CopyTo(header,0x90);
         mem.Bytes(obj,header);
     }
     static void Main()
@@ -102,9 +102,26 @@ static class Program
         Check(stats.KnownGuidEntries==10 && stats.OutsideRadius==2,"outside-radius diagnostics");
         Check(GatherNodeScanner.IsEligible(result[0],true,1,false,0) && !GatherNodeScanner.IsEligible(result[0],false,0,true,1),"profession gate unchanged");
         Check(GatherNodeScanner.TryCapture(grindRadius,out result) && result.Select(n=>n.Distance).SequenceEqual(new double[] {99,100,101,149,150}),"Grind 150 yd inclusive, 151 excluded");
+        var gold = new Bots.Gatherbuddy.GatherableNode(1734,"Gold Vein",115);
+        var g = new WowBGuid(9,1734UL<<6);
+        var legacyGold = new GatherNodeScanner.Node(g,gold,false,new WoWPoint(0,0,0),1);
+        var modernGold = new GatherNodeScanner.Node(g,gold,false,new WoWPoint(0,0,0),1,true);
+        Check(legacyGold.RequiredSkill==115 && GatherNodeScanner.IsEligible(legacyGold,true,125,false,0),"WotLK gold unchanged");
+        Check(modernGold.RequiredSkill==155 && !GatherNodeScanner.IsEligible(modernGold,true,125,false,0) &&
+              !GatherNodeScanner.IsEligible(modernGold,true,154,false,0) && GatherNodeScanner.IsEligible(modernGold,true,155,false,0),"70938 gold 155 boundary");
+        var iron = new GatherNodeScanner.Node(g,new Bots.Gatherbuddy.GatherableNode(1735,"Iron",100),false,new WoWPoint(0,0,0),1,true);
+        Check(!GatherNodeScanner.IsEligible(iron,true,124,false,0) && GatherNodeScanner.IsEligible(iron,true,125,false,0),"70938 iron 125 boundary");
+        Check(GatherNodeScanner.Classic70938MiningSkill(999999,111)==111,"unknown entries retain original metadata");
         Check(!GatherNodeScanner.TryCapture(double.NaN,out _) && !GatherNodeScanner.TryCapture(0,out _),"invalid radii rejected");
         reader.Stale.Add(reader.Records[4].RecordPtr);
         Check(GatherNodeScanner.TryCapture(radius,out result,out stats) && result.Count==7 && stats.Changed==1,"stale pool record rejected");
+        reader.Records.Clear(); reader.IsExperimental70938=true;
+        Node(mem,reader,11,10,entry:1734);
+        Check(GatherNodeScanner.TryCapture(radius,out result) && result.Count==1 && result[0].RequiredSkill==155 &&
+              !GatherNodeScanner.IsEligible(result[0],true,125,false,0), "actual 70938 capture uses gold override");
+        reader.IsExperimental70938=false;
+        Check(GatherNodeScanner.TryCapture(radius,out result) && result[0].RequiredSkill==115 &&
+              GatherNodeScanner.IsEligible(result[0],true,125,false,0), "legacy capture retains WotLK metadata");
         reader.ExperimentalGrindActive=false;
         Check(!GatherNodeScanner.TryCapture(radius,out _),"experimental session guard retained");
         Console.WriteLine("Gather radius production scanner fixtures passed (synthetic loaded objects only).");
