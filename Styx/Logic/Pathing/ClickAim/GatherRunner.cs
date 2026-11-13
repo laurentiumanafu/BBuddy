@@ -28,6 +28,7 @@ internal static class GatherRunner
     private const int ClassicGatherAttempts = 5;
     // Covers a 2.5 s mining cast plus time for the loot window / auto-loot.
     private const int GatherHoldMs = 6000;
+    private const int MiningStartWaitMs = 2500, MiningLootWaitMs = 1000, MiningCastLimitMs = 12000;
     // Only throttle degenerate routes whose points are repeatedly already reached.
     // Normal hotspot transitions have no fixed delay.
     private const int FastHotspotMs = 100;
@@ -53,6 +54,7 @@ internal static class GatherRunner
     // Counts only posted interactions followed by an uninterrupted wait and
     // a successful scan still observing this exact GUID, across short retries.
     private static readonly Dictionary<WowBGuid, int> ObservedHarvestAttempts = new Dictionary<WowBGuid, int>();
+    private static readonly Dictionary<WowBGuid, int> MissingMiningStarts = new Dictionary<WowBGuid, int>();
     private static readonly List<(double X, double Y, double Z, double Radius)> Blackspots = new List<(double, double, double, double)>();
     private static int _lastScan;
     private static int _lastCombatCheck;
@@ -196,6 +198,7 @@ internal static class GatherRunner
             Retry.Clear();
             FailedHarvestNodes.Clear();
             ObservedHarvestAttempts.Clear();
+            MissingMiningStarts.Clear();
             GatherInteraction.ResetHoverHint();
             _pending = null;
             _lastScan = unchecked(Environment.TickCount - 1500);
@@ -471,11 +474,88 @@ internal static class GatherRunner
         return false;
     }
 
+    // After an actual bounded hover miss, approach from a different side. A
+    // failed mesh query or interrupted walk is unknown, not a failed angle.
+    private static bool TryHoverAngle(ClickAimMover mover, IntPtr hwnd, ref GatherNodeScanner.Node node,
+                                      int angleNumber, List<double> triedBearings, Func<bool>? extraSafety, Func<bool>? standaloneSafety)
+    {
+        GreenMagic.Memory? memory = ObjectManager.Wow;
+        WowBReader? reader = ObjectManager.WowB;
+        if (!WowBGatherCastResearch.TryBegin(memory, reader, out WowBObservedUnit player) || memory == null || reader == null) return false;
+        bool Safe()
+        {
+            return !_stop && !ClickAimAbort.Requested && !RouteRunner.StopRequested && MapStillCurrent() &&
+                ObjectManager.Wow == memory && ObjectManager.WowB == reader && memory.WindowHandle == hwnd &&
+                (!reader.IsExperimental70707 || WowBGrindFactions.Experimental70707BarSafe(reader)) &&
+                (extraSafety != null ? extraSafety() : !StopIfDeadOrGhost()) &&
+                (standaloneSafety == null || standaloneSafety()) &&
+                GrindRunner.TryReadGatherCombat(out bool fighting) && !fighting &&
+                WowBGatherCastResearch.Observe(memory, reader, player) == WowBGatherCastResearch.Observation.Idle;
+        }
+        if (!Safe() || !ClickAimPositions.TryRead(out double x, out double y)) return false;
+        double dx = x - node.Position.X, dy = y - node.Position.Y;
+        double bearing = Math.Atan2(dy, dx);
+        if (triedBearings.Count == 0) triedBearings.Add(bearing);
+        // Alternate both sides and the opposite side; retrying more nearby mesh
+        // points is bounded and does not mean that the node is unreachable.
+        double[] rotations = angleNumber == 1 ? new[] { 2.1, -2.1, Math.PI }
+                           : angleNumber == 2 ? new[] { -2.1, Math.PI, 2.1 }
+                           : new[] { Math.PI, 2.1, -2.1 };
+        foreach (double rotation in rotations)
+        {
+            if (!Safe()) return false;
+            double a = triedBearings[0] + rotation;
+            bool alreadyTried = false;
+            foreach (double prior in triedBearings)
+                if (Math.Abs(Math.Atan2(Math.Sin(a - prior), Math.Cos(a - prior))) < 0.5) { alreadyTried = true; break; }
+            if (alreadyTried) continue;
+            var destination = new RoutePoint { X = node.Position.X + 3.0 * Math.Cos(a),
+                Y = node.Position.Y + 3.0 * Math.Sin(a), Z = node.Position.Z };
+            if (IsBlackspot(destination.X, destination.Y) ||
+                RouteRunner.TryCombatMeshPath(x, y, destination) == null) continue;
+            Func<bool>? priorInterrupt = RouteRunner.ShouldInterrupt;
+            bool priorPoll = RouteRunner.PollInterruptDuringWalk, priorMesh = RouteRunner.RequireMeshDuringSession;
+            bool reached;
+            try
+            {
+                RouteRunner.ShouldInterrupt = () => !Safe();
+                RouteRunner.PollInterruptDuringWalk = true;
+                RouteRunner.RequireMeshDuringSession = true;
+                reached = RouteRunner.RunWithinSession(mover, new List<RoutePoint> { destination }, 1);
+            }
+            finally
+            {
+                RouteRunner.ShouldInterrupt = priorInterrupt;
+                RouteRunner.PollInterruptDuringWalk = priorPoll;
+                RouteRunner.RequireMeshDuringSession = priorMesh;
+            }
+            if (!Safe() || RouteRunner.LastRunInterrupted) return false;
+            if (!reached || !ClickAimPositions.TryRead(out double nx, out double ny)) return false;
+            // A route may claim arrival before it really changed the viewpoint.
+            double ndx = nx - node.Position.X, ndy = ny - node.Position.Y;
+            double actualBearing = Math.Atan2(ndy, ndx);
+            foreach (double prior in triedBearings)
+                if (Math.Abs(Math.Atan2(Math.Sin(actualBearing - prior), Math.Cos(actualBearing - prior))) < 0.5) return false;
+            if (ClickAimMath.Len(nx - x, ny - y) < 1.0) return false;
+            ClickAimKeySteer.ReleaseHeld();
+            try { mover.MoveStop(); } catch { }
+            if (ClickAimAbort.Wait(400) || !Safe() || !GatherNodeScanner.TryCapture(InteractYd, out List<GatherNodeScanner.Node> nearby)) return false;
+            bool found = false;
+            foreach (var fresh in nearby)
+                if (fresh.Guid == node.Guid && Ready(fresh)) { node = fresh; found = true; break; }
+            if (!found || !Safe() || !ClickAimKeySteer.Face(node.Position.X, node.Position.Y, hwnd, 20.0, 6)) return false;
+            if (!Safe()) return false;
+            triedBearings.Add(actualBearing);
+            return true;
+        }
+        return false;
+    }
+
     // No movement, turns, stop-key taps or extra clicks while a cast may be running.
     // A resource remaining in the pool can need another hit, or the attempt can have
-    // failed; neither proves success. For 70938, allow five posted interactions
-    // with uninterrupted waits and observations before session-blacklisting a GUID.
-    private static void GatherAtNode(IntPtr hwnd, GatherNodeScanner.Node node, Func<bool>? extraSafety = null)
+    // failed; neither proves success. On 70938 ore, count five detected and
+    // cleared candidates or three candidate-absent starts separately.
+    private static void GatherAtNode(IntPtr hwnd, ClickAimMover mover, GatherNodeScanner.Node node, Func<bool>? extraSafety = null)
     {
         // Standalone ignore mode still enforces session, death and map checks.
         bool standaloneGuard = _ignoreMonsters && extraSafety == null;
@@ -504,17 +584,23 @@ internal static class GatherRunner
                 Logging.Write("[Gather] combat at the node; defending before gathering resumes");
             }
         }
-        int cursorRecoveries = 0;
+        int cursorRecoveries = 0, angleAttempts = 0;
+        var triedBearings = new List<double>();
         int searchLimit = initialReader?.IsExperimental70938 == true ? ClassicGatherAttempts : MaxGatherAttempts;
-        for (int attempt = 1; attempt <= searchLimit && !_stop && !ClickAimAbort.Requested; attempt++)
+        for (int attempt = 1; attempt <= searchLimit + (initialReader?.IsExperimental70938 == true ? 6 : 0) && !_stop && !ClickAimAbort.Requested; attempt++)
         {
             bool fighting;
             if ((extraSafety != null && !extraSafety()) || (standaloneGuard && !StandaloneSafety())) { _pending = node; return; }
             if (!GrindRunner.TryReadGatherCombat(out fighting)) { _pending = node; return; }
             if (fighting) { DeferForCombat(true); return; }
-            Logging.Write("[Gather] hover search attempt " + attempt + "/" + searchLimit
+            Logging.Write("[Gather] hover search attempt " + attempt + (initialReader?.IsExperimental70938 == true ? "" : "/" + searchLimit)
                           + "; background mouse movement allowed, foreground interruptions retry automatically");
             if (!MapStillCurrent()) return;
+            bool mining70938 = initialReader?.IsExperimental70938 == true && !node.IsHerb;
+            WowBObservedUnit castPlayer = default;
+            bool castReady = mining70938 && WowBGatherCastResearch.TryBegin(initialMemory, initialReader, out castPlayer) &&
+                initialMemory != null && initialReader != null &&
+                WowBGatherCastResearch.Observe(initialMemory, initialReader, castPlayer) == WowBGatherCastResearch.Observation.Idle;
             bool clicked = GatherInteraction.TryInteract(hwnd, node, candidate => MapStillCurrent() && Ready(candidate), extraSafety, out GatherNodeScanner.Node clickedNode,
                                                           out string reason, out bool hoverMiss, out bool cursorMoved,
                                                           standaloneGuard ? StandaloneSafety : null);
@@ -527,6 +613,10 @@ internal static class GatherRunner
                               + " instead of " + node.Guid + "; deferring the original GUID for 30 seconds");
                 Retry[node.Guid] = unchecked(Environment.TickCount + 30000);
                 node = clickedNode;
+                angleAttempts = 0; triedBearings.Clear();
+                // A substituted herb/ore is not the same pre-click observation.
+                castReady = false;
+                mining70938 = initialReader?.IsExperimental70938 == true && !node.IsHerb;
             }
             Logging.Write(clicked ? "[Gather] node interaction: " + reason
                                   : "[Gather] no right-button down sent: " + reason);
@@ -558,18 +648,40 @@ internal static class GatherRunner
                 Logging.Write("[Gather] repeated mouse interruptions; yielding briefly before another search");
                 return;
             }
-            // Even an unconfirmed attempt may coincide with a manual or unexpected cast.
-            // Stay still for the entire window instead of scanning once and walking off.
-            Logging.Write("[Gather] holding still for 6 seconds for a possible cast and auto-loot; success is not yet known");
-            // A 70938 trace showed one ID-3564 mining cast-like cluster. This
-            // observation is diagnostic only and never changes the wait,
-            // retry count, node blacklist or any gameplay input.
-            WowBObservedUnit castPlayer = default;
-            bool trackMining = clicked && !node.IsHerb &&
-                WowBGatherCastResearch.TryBegin(initialMemory, initialReader, out castPlayer);
-            bool miningCandidateSeen = false;
-            int started = Environment.TickCount;
+            if (!clicked && hoverMiss && initialReader?.IsExperimental70938 == true)
+            {
+                if (angleAttempts >= 3)
+                {
+                    if ((extraSafety != null && !extraSafety()) || (standaloneGuard && !StandaloneSafety()) ||
+                        !MapStillCurrent() || !GrindRunner.TryReadGatherCombat(out fighting) || fighting ||
+                        !GatherNodeScanner.TryCapture(SearchYd, out List<GatherNodeScanner.Node> check)) return;
+                    bool stillPresent = false;
+                    foreach (var fresh in check) if (fresh.Guid == node.Guid && Ready(fresh)) { stillPresent = true; break; }
+                    if (!stillPresent || _stop || ClickAimAbort.Requested || RouteRunner.StopRequested ||
+                        ObjectManager.Wow != initialMemory || ObjectManager.WowB != initialReader) return;
+                    FailedHarvestNodes.Add(node.Guid);
+                    Logging.Write("[Gather] node " + node.Guid + " not hovered after three alternate approaches; session-blacklisted this GUID. Visibility/occlusion is not verified.");
+                    return;
+                }
+                Logging.Write("[Gather] hover miss; trying alternate approach " + (angleAttempts + 1) + "/3");
+                if (!TryHoverAngle(mover, hwnd, ref node, angleAttempts + 1, triedBearings, extraSafety, standaloneGuard ? StandaloneSafety : null))
+                {
+                    if (!_stop && !ClickAimAbort.Requested && MapStillCurrent())
+                    { Retry[node.Guid] = unchecked(Environment.TickCount + InteractionRetryMs); Logging.Write("[Gather] alternate approach unavailable or interrupted; deferring, not blacklisting"); }
+                    return;
+                }
+                angleAttempts++;
+                attempt--;
+                continue;
+            }
+            // Keep the old fallback for herbs, other builds, uncertain reads,
+            // and any interaction that was not posted. Never treat unknown as idle.
+            bool seen = false, missing = false, uncertain = !castReady, cleared = false;
+            int idleAfter = 0, started = Environment.TickCount, clearedAt = 0;
             bool unknownLogged = false;
+            Logging.Write(mining70938 && clicked && castReady
+                ? "[Gather] waiting for the 70938 ID-3564 cast-like candidate and its clear; loot is not verified"
+                : "[Gather] holding still for 6 seconds for a possible cast and auto-loot; success is not yet known");
             while (true)
             {
                 if (ClickAimAbort.Wait(250) || _stop) return;
@@ -578,7 +690,7 @@ internal static class GatherRunner
                 if (!GrindRunner.TryReadGatherCombat(out fighting))
                 {
                     if (!unknownLogged) Logging.Write("[Gather] combat state unreadable; continuing to hold still");
-                    unknownLogged = true;
+                    unknownLogged = true; uncertain = true;
                     continue;
                 }
                 if (fighting)
@@ -587,15 +699,29 @@ internal static class GatherRunner
                     DeferForCombat(true);
                     return;
                 }
-                if (trackMining && !miningCandidateSeen && initialReader != null && initialMemory != null &&
-                    WowBGatherCastResearch.TryObserve(initialMemory, initialReader, castPlayer))
-                    miningCandidateSeen = true;
-                if (unchecked(Environment.TickCount - started) >= GatherHoldMs) break;
+                int elapsed = unchecked(Environment.TickCount - started);
+                if (clicked && castReady && initialReader != null && initialMemory != null)
+                {
+                    var state = WowBGatherCastResearch.Observe(initialMemory, initialReader, castPlayer);
+                    if (state == WowBGatherCastResearch.Observation.Mining)
+                    { seen = true; idleAfter = 0; cleared = false; }
+                    else if (state == WowBGatherCastResearch.Observation.Idle)
+                    {
+                        if (seen && ++idleAfter >= 2 && !cleared) { cleared = true; clearedAt = Environment.TickCount; }
+                    }
+                    else { uncertain = true; idleAfter = 0; cleared = false; }
+                    if (seen && cleared && unchecked(Environment.TickCount - clearedAt) >= MiningLootWaitMs) break;
+                    if (!seen && !uncertain && elapsed >= MiningStartWaitMs) { missing = true; break; }
+                    // A stuck active signal must not hang forever; result remains
+                    // unknown and will be deferred rather than immediately retried.
+                    if (seen && elapsed >= MiningCastLimitMs) { uncertain = true; cleared = false; break; }
+                }
+                if ((!clicked || !castReady || (!seen && uncertain)) && elapsed >= GatherHoldMs) break;
             }
-            if (clicked && !node.IsHerb && initialReader?.IsExperimental70938 == true)
-                Logging.Write(miningCandidateSeen
-                    ? "[Gather] 70938 ID-3564 mining cast-like candidate observed during this wait; it does not prove the click caused it, the cast completed or loot was obtained"
-                    : "[Gather] 70938 ID-3564 mining cast-like candidate not observed; timing, other ranks or unreadable data can explain this, so failure is not established");
+            if (mining70938 && clicked)
+                Logging.Write(seen ? "[Gather] ID-3564 cast-like candidate observed" + (cleared ? " then cleared" : " but did not clear reliably") + "; cast completion and loot are unverified"
+                    : missing ? "[Gather] no ID-3564 candidate observed during the start window; this can miss a cast or another rank"
+                    : "[Gather] cast observation unknown; no missing-cast failure counted");
             if (!GatherNodeScanner.TryCapture(SearchYd, out List<GatherNodeScanner.Node> after))
             {
                 Logging.Write("[Gather] post-attempt scan failed; result unknown, will retry later");
@@ -610,6 +736,7 @@ internal static class GatherRunner
                 // An absent node may be depleted or missing from the snapshot.
                 // Do not carry old progress into a later re-observation.
                 ObservedHarvestAttempts.Remove(node.Guid);
+                MissingMiningStarts.Remove(node.Guid);
                 int delay = clicked ? UnavailableRetryMs : InteractionRetryMs;
                 Logging.Write("[Gather] " + node.Guid + " no longer observed after the wait; loot was not independently verified. "
                               + "The same GUID is deferred for " + (delay / 1000) + " seconds.");
@@ -617,8 +744,8 @@ internal static class GatherRunner
                 return;
             }
             // A posted click is not proof that a cast or loot succeeded. Only
-            // count it after the full uninterrupted wait and a successful scan
-            // still observing the same GUID. Cursor/hover misses do not count.
+            // count it after an uninterrupted wait and a successful scan still
+            // observing the same GUID. Cursor/hover misses do not count as casts.
             if (clicked && initialReader?.IsExperimental70938 == true)
             {
                 if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested || ObjectManager.WowB != initialReader ||
@@ -628,6 +755,30 @@ internal static class GatherRunner
                 if (fighting) { DeferForCombat(true); return; }
                 if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested ||
                     ObjectManager.WowB != initialReader || ObjectManager.Wow != initialMemory) return;
+                if (mining70938 && missing)
+                {
+                    MissingMiningStarts.TryGetValue(node.Guid, out int absentCasts);
+                    absentCasts++;
+                    MissingMiningStarts[node.Guid] = absentCasts;
+                    if (absentCasts >= 3)
+                    {
+                        FailedHarvestNodes.Add(node.Guid);
+                        Logging.Write("[Gather] node " + node.Guid + " session-blacklisted after three posted interactions with no observed ID-3564 start; a missed cast or different rank remains possible");
+                        return;
+                    }
+                    Logging.Write("[Gather] no cast-like start " + absentCasts + "/3; retrying if safe");
+                    if (!Ready(node)) return;
+                    if (node.Distance > InteractYd) { _pending = node; return; }
+                    continue;
+                }
+                if (mining70938 && (!seen || !cleared))
+                {
+                    MissingMiningStarts.Remove(node.Guid);
+                    Retry[node.Guid] = unchecked(Environment.TickCount + InteractionRetryMs);
+                    Logging.Write("[Gather] cast state uncertain; deferring without counting a failure");
+                    return;
+                }
+                MissingMiningStarts.Remove(node.Guid);
                 ObservedHarvestAttempts.TryGetValue(node.Guid, out int previousAttempts);
                 int observedAttempts = previousAttempts + 1;
                 if (observedAttempts >= ClassicGatherAttempts)
@@ -644,6 +795,14 @@ internal static class GatherRunner
                               ClassicGatherAttempts + "; attempting another hit if safe. Cast and loot are unverified.");
             }
             if (!Ready(node)) return;
+            // An unposted click for a reason other than a confirmed hover miss
+            // is unknown, not permission to repeatedly interact from this state.
+            if (!clicked && initialReader?.IsExperimental70938 == true && !hoverMiss)
+            {
+                Retry[node.Guid] = unchecked(Environment.TickCount + InteractionRetryMs);
+                Logging.Write("[Gather] interaction was not posted; deferring without a cast or hover failure count");
+                return;
+            }
             if (hoverMiss)
             {
                 Retry[node.Guid] = unchecked(Environment.TickCount + UnavailableRetryMs);
@@ -689,6 +848,7 @@ internal static class GatherRunner
             Retry.Clear();
             FailedHarvestNodes.Clear();
             ObservedHarvestAttempts.Clear();
+            MissingMiningStarts.Clear();
             GatherInteraction.ResetHoverHint();
             _pending = null;
             _stop = false;
@@ -777,7 +937,7 @@ internal static class GatherRunner
             if (!safe() || !ClickAimKeySteer.Face(node.Position.X, node.Position.Y, hwnd, 20.0, 6))
             { Retry[node.Guid] = unchecked(Environment.TickCount + InteractionRetryMs); return true; }
             if (!safe() || _stop || ClickAimAbort.Requested) return true;
-            GatherAtNode(hwnd, node, safe);
+            GatherAtNode(hwnd, mover, node, safe);
             return true;
         }
         finally { mover.QuietKeyStop = oldQuiet; }
@@ -1046,7 +1206,7 @@ internal static class GatherRunner
                     continue;
                 }
                 if (_stop || ClickAimAbort.Requested) break;
-                GatherAtNode(hwnd, node);
+                GatherAtNode(hwnd, mover, node);
 
             }
             recovered = _recoveryReady && !ClickAimAbort.Requested && RecoverIfPending(mover);

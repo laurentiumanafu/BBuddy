@@ -5,14 +5,13 @@ using Styx.WoWInternals;
 namespace Styx.Logic.Pathing;
 
 /// <summary>
-/// Read-only 70938 diagnostic for one observed ID-3564 mining pattern. This is
-/// not a general casting API, nor proof of completed casts, loot or failure.
-/// Never use the result to authorize movement, clicks, retries or blacklisting.
+/// Experimental 70938 ID-3564 mining-pattern observer. Read-only, not a
+/// general casting API or proof of cast completion, loot or failure.
 /// </summary>
 internal static class WowBGatherCastResearch
 {
     private const ulong WindowOffset = 0x3C0;
-    private const int WindowSize = 0x60;
+    private const int WindowSize = 0x78;
     private const ulong UserLimit = 0x00007FFFFFFFFFFFUL;
 
     // Based on four correlated intervals in one 70938 mining recording. Other
@@ -42,22 +41,42 @@ internal static class WowBGatherCastResearch
         catch { player = default; return false; }
     }
 
-    internal static bool TryObserve(Memory memory, WowBReader reader, WowBObservedUnit player)
+    internal enum Observation { Unknown, Idle, Mining }
+
+    // Stable zeros are only a narrow candidate for inactivity. Other or
+    // partially updated cast clusters are Unknown, never an absent cast.
+    internal static Observation Classify(byte[]? data, out uint start, out uint end)
+    {
+        start = end = 0;
+        if (data == null || data.Length != WindowSize) return Observation.Unknown;
+        if (Matches(data, out start, out end))
+            return BitConverter.ToUInt32(data, 0x64) == 0 && BitConverter.ToUInt32(data, 0x70) == 0 &&
+                   BitConverter.ToUInt32(data, 0x74) == 0 ? Observation.Mining : Observation.Unknown;
+        if (BitConverter.ToUInt32(data, 0) == 0 && BitConverter.ToUInt32(data, 0x2C) == 0 &&
+            BitConverter.ToUInt32(data, 0x58) == 0 && BitConverter.ToUInt32(data, 0x5C) == 0 &&
+            BitConverter.ToUInt32(data, 0x64) == 0 && BitConverter.ToUInt32(data, 0x70) == 0 &&
+            BitConverter.ToUInt32(data, 0x74) == 0) return Observation.Idle;
+        return Observation.Unknown;
+    }
+
+    internal static Observation Observe(Memory memory, WowBReader reader, WowBObservedUnit player)
     {
         try
         {
             if (!reader.IsExperimental70938 || !reader.ExperimentalGrindActive ||
                 ObjectManager.Wow != memory || ObjectManager.WowB != reader ||
-                player.UnitAddress < 0x10000UL || player.UnitAddress > UserLimit - WindowOffset - WindowSize) return false;
+                player.UnitAddress < 0x10000UL || player.UnitAddress > UserLimit - WindowOffset - WindowSize) return Observation.Unknown;
             using var uncached = memory.TemporaryCacheState(false);
-            if (!WowBGrindFactions.TraceIdentity70707(memory, reader, player, true)) return false;
+            if (!WowBGrindFactions.TraceIdentity70707(memory, reader, player, true)) return Observation.Unknown;
             byte[]? first = memory.ReadBytes64(player.UnitAddress + WindowOffset, WindowSize);
             byte[]? second = memory.ReadBytes64(player.UnitAddress + WindowOffset, WindowSize);
-            return Matches(first, out uint start1, out uint end1) &&
-                Matches(second, out uint start2, out uint end2) && start1 == start2 && end1 == end2 &&
-                WowBGrindFactions.TraceIdentity70707(memory, reader, player, true) &&
-                ObjectManager.Wow == memory && ObjectManager.WowB == reader && reader.ExperimentalGrindActive;
+            Observation one = Classify(first, out uint start1, out uint end1);
+            Observation two = Classify(second, out uint start2, out uint end2);
+            if (one == Observation.Unknown || one != two || start1 != start2 || end1 != end2 ||
+                !WowBGrindFactions.TraceIdentity70707(memory, reader, player, true) ||
+                ObjectManager.Wow != memory || ObjectManager.WowB != reader || !reader.ExperimentalGrindActive) return Observation.Unknown;
+            return one;
         }
-        catch { return false; }
+        catch { return Observation.Unknown; }
     }
 }

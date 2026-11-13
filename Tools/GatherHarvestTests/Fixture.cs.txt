@@ -41,31 +41,48 @@ namespace Styx.Logic.Pathing
         internal static bool ScanOk=true; internal static List<Node> Nodes=new();
         internal static bool TryCapture(double radius,out List<Node> result) { result=new List<Node>(Nodes);return ScanOk; }
     }
+    internal sealed class ClickAimMover { }
     internal static class WowBGatherCastResearch
     {
-        internal static bool Seen;
+        internal enum Observation { Unknown, Idle, Mining }
+        internal static string Mode="seen"; internal static bool InClick; internal static int Samples;
         internal static bool TryBegin(GreenMagic.Memory? m, WowBReader? r, out WowBObservedUnit p) { p=default; return m!=null && r?.IsExperimental70938==true; }
-        internal static bool TryObserve(GreenMagic.Memory m, WowBReader r, WowBObservedUnit p)=>Seen;
+        internal static Observation Observe(GreenMagic.Memory m, WowBReader r, WowBObservedUnit p)
+        {
+            if (!InClick) return Observation.Idle;
+            if (Mode=="unknown") return Observation.Unknown;
+            if (Mode=="missing") return Observation.Idle;
+            Samples++;
+            if (Samples==1) return Observation.Mining;
+            if (Samples>=3) InClick=false;
+            return Observation.Idle;
+        }
     }
     internal static class GatherInteraction
     {
         internal static bool Clicked=true, HoverMiss, CursorMoved; internal static int Calls; internal static GatherNodeScanner.Node Actual;
         internal static bool TryInteract(IntPtr h, GatherNodeScanner.Node n, Func<GatherNodeScanner.Node,bool> ready, Func<bool>? safety,
             out GatherNodeScanner.Node actual, out string reason,out bool miss,out bool moved,Func<bool>? standalone)
-        { Calls++;actual=Actual.Guid.Value==0?n:Actual;reason="fixture";miss=HoverMiss;moved=CursorMoved;return Clicked; }
+        { Calls++;actual=Actual.Guid.Value==0?n:Actual;reason="fixture";miss=HoverMiss;moved=CursorMoved;
+          if (Clicked) { WowBGatherCastResearch.InClick=true; WowBGatherCastResearch.Samples=0; } return Clicked; }
     }
     internal static class GatherRunner
     {
         const double SearchYd=1000, InteractYd=5;
         const int MaxGatherAttempts=4, ClassicGatherAttempts=5, GatherHoldMs=0, InteractionRetryMs=20000, UnavailableRetryMs=120000;
+        const int MiningStartWaitMs=0, MiningLootWaitMs=0, MiningCastLimitMs=10000;
         static bool _ignoreMonsters,_stop,_movementEnabled,_movementAttempted,_nodeDefence;
         static GatherNodeScanner.Node? _pending;
         static readonly Dictionary<WowBGuid,int> Retry = new();
         static readonly HashSet<WowBGuid> FailedHarvestNodes = new();
         static readonly Dictionary<WowBGuid,int> ObservedHarvestAttempts = new();
+        static readonly Dictionary<WowBGuid,int> MissingMiningStarts = new();
         static bool MapStillCurrent()=>true;
         static bool StopIfDeadOrGhost()=>false;
         static bool Ready(GatherNodeScanner.Node n)=>!FailedHarvestNodes.Contains(n.Guid) && !Retry.ContainsKey(n.Guid);
+        static bool AngleAvailable=true; static int AngleCalls;
+        static bool TryHoverAngle(ClickAimMover m, IntPtr h, ref GatherNodeScanner.Node n, int attempt, List<double> bearings, Func<bool>? extra, Func<bool>? standalone)
+        { AngleCalls++; return AngleAvailable; }
         // __METHOD__
         static void Check(bool ok,string s) { if (!ok) throw new Exception(s); }
         static GatherNodeScanner.Node Node(int id)=>new() { Guid=new WowBGuid(id),Name="ore",Distance=2 };
@@ -75,42 +92,41 @@ namespace Styx.Logic.Pathing
             ClickAimAbort.Requested=false;ClickAimAbort.OnWait=null;RouteRunner.StopRequested=false;
             GrindRunner.Fighting=false;GrindRunner.Readable=true;
             _ignoreMonsters=_stop=_movementEnabled=_movementAttempted=_nodeDefence=false;_pending=null;
-            Retry.Clear();FailedHarvestNodes.Clear();ObservedHarvestAttempts.Clear();GatherNodeScanner.ScanOk=true;GatherNodeScanner.Nodes=new(){Node(1)};
-            WowBGatherCastResearch.Seen=false;GatherInteraction.Clicked=true;GatherInteraction.HoverMiss=GatherInteraction.CursorMoved=false;GatherInteraction.Calls=0;GatherInteraction.Actual=default;
+            Retry.Clear();FailedHarvestNodes.Clear();ObservedHarvestAttempts.Clear();MissingMiningStarts.Clear();GatherNodeScanner.ScanOk=true;GatherNodeScanner.Nodes=new(){Node(1)};
+            WowBGatherCastResearch.Mode="seen"; WowBGatherCastResearch.InClick=false; WowBGatherCastResearch.Samples=0; AngleAvailable=true; AngleCalls=0; GatherInteraction.Clicked=true;GatherInteraction.HoverMiss=GatherInteraction.CursorMoved=false;GatherInteraction.Calls=0;GatherInteraction.Actual=default;
         }
         public static void Main()
         {
-            Reset();WowBGatherCastResearch.Seen=true;GatherAtNode((IntPtr)1,Node(1));
-            Check(FailedHarvestNodes.Contains(Node(1).Guid) && !Ready(Node(1)) && Ready(Node(2)) && GatherInteraction.Calls==5,"only after five posted interactions blacklist that GUID");
-            Reset();Check(Ready(Node(1)) && ObservedHarvestAttempts.Count==0,"new session clears blacklist and count");
-            int waits=0; ClickAimAbort.OnWait=()=> { if (++waits == 5) ClickAimAbort.Requested=true; };
-            GatherAtNode((IntPtr)1,Node(1));
-            Check(!FailedHarvestNodes.Contains(Node(1).Guid) && ObservedHarvestAttempts[Node(1).Guid]==4, "interrupted fifth attempt cannot blacklist");
-            ClickAimAbort.Requested=false; ClickAimAbort.OnWait=null;
-            GatherAtNode((IntPtr)1,Node(1));
-            Check(FailedHarvestNodes.Contains(Node(1).Guid) && GatherInteraction.Calls==6, "completed observations are counted across interrupted visits");
-            Reset(); ObservedHarvestAttempts[Node(1).Guid]=4; GatherInteraction.Clicked=false; GatherInteraction.HoverMiss=true;
-            GatherAtNode((IntPtr)1,Node(1));
-            Check(!FailedHarvestNodes.Contains(Node(1).Guid) && ObservedHarvestAttempts[Node(1).Guid]==4, "missing hover is not the fifth attempt");
-            Reset(); waits=0; ClickAimAbort.OnWait=()=> { if (++waits == 3) GatherNodeScanner.Nodes.Clear(); };
-            GatherAtNode((IntPtr)1,Node(1));
-            Check(!FailedHarvestNodes.Contains(Node(1).Guid) && !ObservedHarvestAttempts.ContainsKey(Node(1).Guid), "absent observation clears old attempt count");
-            Reset();
-            GatherInteraction.Clicked=false;GatherInteraction.HoverMiss=true;GatherAtNode((IntPtr)1,Node(1));
-            Check(!FailedHarvestNodes.Contains(Node(1).Guid) && Retry.ContainsKey(Node(1).Guid),"hover miss is not harvest failure");
-            Reset();GatherNodeScanner.ScanOk=false;GatherAtNode((IntPtr)1,Node(1));
+            var mover=new ClickAimMover();
+            Reset();GatherAtNode((IntPtr)1,mover,Node(1));
+            Check(FailedHarvestNodes.Contains(Node(1).Guid) && !Ready(Node(1)) && Ready(Node(2)) && GatherInteraction.Calls==5,"five observed casts, same GUID remains");
+            Reset();WowBGatherCastResearch.Mode="missing";GatherAtNode((IntPtr)1,mover,Node(1));
+            Check(FailedHarvestNodes.Contains(Node(1).Guid) && GatherInteraction.Calls==3,"three missing starts blacklist");
+            Reset();WowBGatherCastResearch.Mode="missing";MissingMiningStarts[Node(1).Guid]=2;
+            ClickAimAbort.OnWait=()=>ClickAimAbort.Requested=true;GatherAtNode((IntPtr)1,mover,Node(1));
+            Check(!FailedHarvestNodes.Contains(Node(1).Guid) && MissingMiningStarts[Node(1).Guid]==2,"interrupted third attempt is not counted");
+            ClickAimAbort.Requested=false;ClickAimAbort.OnWait=null;WowBGatherCastResearch.InClick=false;
+            GatherAtNode((IntPtr)1,mover,Node(1));
+            Check(FailedHarvestNodes.Contains(Node(1).Guid),"completed missing starts survive an interruption");
+            Reset();WowBGatherCastResearch.Mode="unknown";GatherAtNode((IntPtr)1,mover,Node(1));
+            Check(!FailedHarvestNodes.Contains(Node(1).Guid) && Retry.ContainsKey(Node(1).Guid),"unknown does not count as missing");
+            Reset();GatherInteraction.Clicked=false;GatherInteraction.HoverMiss=true;GatherAtNode((IntPtr)1,mover,Node(1));
+            Check(FailedHarvestNodes.Contains(Node(1).Guid) && AngleCalls==3 && GatherInteraction.Calls==4,"three alternate angles each searched before blacklist");
+            Reset();GatherInteraction.Clicked=false;GatherInteraction.HoverMiss=true;AngleAvailable=false;GatherAtNode((IntPtr)1,mover,Node(1));
+            Check(!FailedHarvestNodes.Contains(Node(1).Guid) && Retry.ContainsKey(Node(1).Guid),"unavailable angle deferred not blacklisted");
+            Reset();GatherNodeScanner.ScanOk=false;GatherAtNode((IntPtr)1,mover,Node(1));
             Check(!FailedHarvestNodes.Contains(Node(1).Guid) && Retry.ContainsKey(Node(1).Guid),"failed scan does not blacklist");
-            Reset();GatherNodeScanner.Nodes.Clear();GatherAtNode((IntPtr)1,Node(1));
+            Reset();GatherNodeScanner.Nodes.Clear();GatherAtNode((IntPtr)1,mover,Node(1));
             Check(!FailedHarvestNodes.Contains(Node(1).Guid) && Retry.ContainsKey(Node(1).Guid),"not observed uses normal cooldown");
-            Reset();ClickAimAbort.OnWait=()=>ClickAimAbort.Requested=true;GatherAtNode((IntPtr)1,Node(1));
+            Reset();ClickAimAbort.OnWait=()=>ClickAimAbort.Requested=true;GatherAtNode((IntPtr)1,mover,Node(1));
             Check(!FailedHarvestNodes.Contains(Node(1).Guid),"STOP during wait does not blacklist");
-            Reset();ClickAimAbort.OnWait=()=>GrindRunner.Fighting=true;GatherAtNode((IntPtr)1,Node(1));
+            Reset();ClickAimAbort.OnWait=()=>GrindRunner.Fighting=true;GatherAtNode((IntPtr)1,mover,Node(1));
             Check(!FailedHarvestNodes.Contains(Node(1).Guid) && _pending.HasValue,"combat interrupts wait");
-            Reset();GatherInteraction.Actual=Node(2);GatherNodeScanner.Nodes=new(){Node(2)};GatherAtNode((IntPtr)1,Node(1));
-            Check(!FailedHarvestNodes.Contains(Node(1).Guid) && FailedHarvestNodes.Contains(Node(2).Guid) && GatherInteraction.Calls==5,"only actual hovered GUID is blacklisted after five");
-            Reset();ObjectManager.WowB!.IsExperimental70938=false;GatherAtNode((IntPtr)1,Node(1));
+            Reset();GatherInteraction.Actual=Node(2);GatherNodeScanner.Nodes=new(){Node(2)};GatherAtNode((IntPtr)1,mover,Node(1));
+            Check(!FailedHarvestNodes.Contains(Node(1).Guid),"substituted GUID cannot blacklist original");
+            Reset();ObjectManager.WowB!.IsExperimental70938=false;GatherAtNode((IntPtr)1,mover,Node(1));
             Check(FailedHarvestNodes.Count==0 && GatherInteraction.Calls==4 && Retry.ContainsKey(Node(1).Guid),"other builds retain multi-hit behavior");
-            Console.WriteLine("Synthetic gather failure fixtures passed, no live client.");
+            Console.WriteLine("Synthetic gather policy fixtures passed, no live client.");
         }
     }
 }

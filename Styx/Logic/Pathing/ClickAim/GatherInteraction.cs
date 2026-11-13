@@ -166,7 +166,8 @@ internal static class GatherInteraction
     }
 
     // hoverMiss is only set after the bounded grid search really failed to find the
-    // node. Cursor/client/stop/read failures are NOT evidence of a depleted node.
+    // node or hover-away still reads the requested node. Cursor/client/stop/read
+    // failures are NOT evidence of a depleted node.
     public static bool TryInteract(IntPtr hwnd, GatherNodeScanner.Node node,
                                    Func<GatherNodeScanner.Node, bool> allowed, Func<bool>? extraSafety,
                                    out GatherNodeScanner.Node clickedNode, out string reason, out bool hoverMiss,
@@ -208,7 +209,7 @@ internal static class GatherInteraction
         reason = "hover-away GUID could not be read";
         if (!ReadHover(memory, reader, out WowBGuid away)) return false;
         reason = "hover-away GUID remained on the node";
-        if (away == node.Guid) return false;
+        if (away == node.Guid) { hoverMiss = reader.IsExperimental70938; return false; }
         // Two interleaved grids cover gaps in the first pass. They still cannot guarantee
         // a hit on a small/occluded node, so a miss is reported rather than clicked blindly.
         List<(double X, double Y)> points = SearchPoints(node, width, height,

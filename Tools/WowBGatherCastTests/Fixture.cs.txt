@@ -6,7 +6,7 @@ namespace GreenMagic
 {
     public class Memory
     {
-        public byte[] Data = new byte[0x60]; public bool Unreadable; public Action<int>? OnRead; public int Reads;
+        public byte[] Data = new byte[0x78]; public bool Unreadable; public Action<int>? OnRead; public int Reads;
         public byte[]? ReadBytes64(ulong address,int count) { OnRead?.Invoke(++Reads); return Unreadable ? null : (byte[])Data.Clone(); }
         public IDisposable TemporaryCacheState(bool ignored) => new Scope();
         private sealed class Scope : IDisposable { public void Dispose() { } }
@@ -48,16 +48,19 @@ static class Program
         Put(m.Data,0,3564);Put(m.Data,0x2C,3564);
         Put(m.Data,0x58,10000);Put(m.Data,0x5C,13200);
         Check(WowBGatherCastResearch.Matches(m.Data,out var start,out var end) && start==10000 && end==13200,"exact observed candidate");
-        Check(WowBGatherCastResearch.TryBegin(m,r,out var player) && WowBGatherCastResearch.TryObserve(m,r,player),"stable diagnostic");
+        Check(WowBGatherCastResearch.TryBegin(m,r,out var player) && WowBGatherCastResearch.Observe(m,r,player) == WowBGatherCastResearch.Observation.Mining,"stable diagnostic");
         Check(!WowBGatherCastResearch.Matches(new byte[3],out _,out _),"short read rejected");
-        Put(m.Data,0x2C,3563); Check(!WowBGatherCastResearch.TryObserve(m,r,player),"different words rejected"); Put(m.Data,0x2C,3564);
-        Put(m.Data,0x5C,13000); Check(!WowBGatherCastResearch.TryObserve(m,r,player),"different duration rejected"); Put(m.Data,0x5C,13200);
+        Check(WowBGatherCastResearch.Classify(new byte[0x78],out _,out _) == WowBGatherCastResearch.Observation.Idle,"all candidate fields clear");
+        var other = new byte[0x78]; Put(other,0x64,403);
+        Check(WowBGatherCastResearch.Classify(other,out _,out _) == WowBGatherCastResearch.Observation.Unknown,"other cast cluster is not idle");
+        Put(m.Data,0x2C,3563); Check(WowBGatherCastResearch.Observe(m,r,player) == WowBGatherCastResearch.Observation.Unknown,"different words rejected"); Put(m.Data,0x2C,3564);
+        Put(m.Data,0x5C,13000); Check(WowBGatherCastResearch.Observe(m,r,player) == WowBGatherCastResearch.Observation.Unknown,"different duration rejected"); Put(m.Data,0x5C,13200);
         m.OnRead=n=> { if(n==2) Put(m.Data,0x58,10001); };m.Reads=0;
-        Check(!WowBGatherCastResearch.TryObserve(m,r,player),"unstable double read rejected");
-        m.OnRead=null;Put(m.Data,0x58,10000);m.Unreadable=true;Check(!WowBGatherCastResearch.TryObserve(m,r,player),"unreadable is not a negative cast verdict");m.Unreadable=false;
-        WowBGrindFactions.Stable=false;Check(!WowBGatherCastResearch.TryObserve(m,r,player),"identity change rejected");WowBGrindFactions.Stable=true;
-        r.IsExperimental70938=false;Check(!WowBGatherCastResearch.TryObserve(m,r,player),"other build rejected");r.IsExperimental70938=true;
-        r.ExperimentalGrindActive=false;Check(!WowBGatherCastResearch.TryBegin(m,r,out _) && !WowBGatherCastResearch.TryObserve(m,r,player),"inactive session rejected");
+        Check(WowBGatherCastResearch.Observe(m,r,player) == WowBGatherCastResearch.Observation.Unknown,"unstable double read rejected");
+        m.OnRead=null;Put(m.Data,0x58,10000);m.Unreadable=true;Check(WowBGatherCastResearch.Observe(m,r,player) == WowBGatherCastResearch.Observation.Unknown,"unreadable is not a negative cast verdict");m.Unreadable=false;
+        WowBGrindFactions.Stable=false;Check(WowBGatherCastResearch.Observe(m,r,player) == WowBGatherCastResearch.Observation.Unknown,"identity change rejected");WowBGrindFactions.Stable=true;
+        r.IsExperimental70938=false;Check(WowBGatherCastResearch.Observe(m,r,player) == WowBGatherCastResearch.Observation.Unknown,"other build rejected");r.IsExperimental70938=true;
+        r.ExperimentalGrindActive=false;Check(!WowBGatherCastResearch.TryBegin(m,r,out _) && WowBGatherCastResearch.Observe(m,r,player) == WowBGatherCastResearch.Observation.Unknown,"inactive session rejected");
         Console.WriteLine("Synthetic cast-candidate fixtures passed; no real cast or loot is inferred.");
     }
 }

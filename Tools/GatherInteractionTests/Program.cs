@@ -111,6 +111,14 @@ internal static class Program
         Require(GatherNodeDefence.InRange(3, 4, 0, 5) && !GatherNodeDefence.InRange(3, 4, 0.1, 5), "three-dimensional node interaction range");
         Require(!GatherNodeDefence.InRange(double.NaN, 0, 0, 5) && !GatherNodeDefence.InRange(0, 0, 0, -1), "unreadable or invalid position cannot establish range");
 
+        Reset(true); ObjectManager.WowB!.IsExperimental70938 = true;
+        WowBReader.OnRead = _ => NodeGuid;
+        Require(!GatherInteraction.TryInteract(Window, Node, _ => true, null, out _, out _, out bool stuckAway, out _) &&
+                stuckAway && ClickAimInput.DownCount == 0, "70938 hover-away stuck triggers angle retry, not a click");
+        Reset(true); WowBReader.OnRead = _ => NodeGuid;
+        Require(!GatherInteraction.TryInteract(Window, Node, _ => true, null, out _, out _, out stuckAway, out _) &&
+                !stuckAway && ClickAimInput.DownCount == 0, "older builds retain stuck hover-away handling");
+
         Reset(true); GatherNodeScanner.Available = false;
         Require(!Try(out moved) && ClickAimInput.DownCount == 0, "missing fresh node prevents click");
 
@@ -170,6 +178,7 @@ namespace Styx.WoWInternals
         public static int ReadCount;
         public static Func<int, WowBGuid>? OnRead;
         public bool IsExperimental70707 => true;
+        public bool IsExperimental70938 { get; set; }
         public int ExperimentalBuildNumber => 70707;
         public ulong MouseoverGuidCandidateRva => 1;
         public bool TryReadMouseoverGuidCandidate(out WowBGuid guid)

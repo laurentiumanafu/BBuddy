@@ -25,14 +25,18 @@ class GatheringWiring(unittest.TestCase):
   gather=part(RUNNER,'    private static void GatherAtNode(', '    // Grind owns the thread')
   self.assertLess(gather.index('if (clicked && clickedNode.Guid != node.Guid)'),gather.index('FailedHarvestNodes.Add(node.Guid)'))
   self.assertLess(gather.index('if (!GatherNodeScanner.TryCapture(SearchYd'),gather.index('FailedHarvestNodes.Add(node.Guid)'))
-  self.assertLess(gather.index('if (!observed)'),gather.index('FailedHarvestNodes.Add(node.Guid)'))
+  after=gather[gather.index('if (!observed)'):]
+  self.assertIn('FailedHarvestNodes.Add(node.Guid)',after)
+  hover=gather[gather.index('if (!clicked && hoverMiss'):gather.index('// Keep the old fallback')]
+  for x in ('angleAttempts >= 3','TryHoverAngle','stillPresent','!GrindRunner.TryReadGatherCombat(out fighting)'):
+   self.assertIn(x,hover)
   self.assertIn('if (clicked && initialReader?.IsExperimental70938 == true)',gather)
-  gate=gather[gather.index('if (clicked && initialReader?.IsExperimental70938 == true)'):gather.index('FailedHarvestNodes.Add(node.Guid)')]
+  gate=gather[gather.index('if (clicked && initialReader?.IsExperimental70938 == true)'):gather.index('if (observedAttempts >= ClassicGatherAttempts)')]
   for x in ('ClickAimAbort.Requested','RouteRunner.StopRequested','ObjectManager.WowB != initialReader',
             'ObjectManager.Wow != initialMemory', '!MapStillCurrent()', '!extraSafety()',
             '!GrindRunner.TryReadGatherCombat(out fighting)', 'if (fighting)'):
    self.assertIn(x,gate)
-  self.assertIn('if (observedAttempts >= ClassicGatherAttempts)', gate)
+  self.assertIn('if (observedAttempts >= ClassicGatherAttempts)', gather)
   self.assertIn('ObservedHarvestAttempts.TryGetValue(node.Guid', gate)
   self.assertIn('ObservedHarvestAttempts.Remove(node.Guid)',gather)
   self.assertIn('ObservedHarvestAttempts[node.Guid] = observedAttempts',gather)

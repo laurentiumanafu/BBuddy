@@ -23,7 +23,7 @@ assert 'Buffs.Reset()' in grind[grind.index('    internal static void PrepareGat
 assert 'Buffs.TryApply(hwnd, () => _stop, () => StopForBuff(hwnd, mover), () => _presses++)' in grind
 assert gather.count('GrindRunner.BuffForGather(hwnd, mover, () => _stop)') == 1
 gather_loop = gather[gather.index('    private static void Run(List<RoutePoint>'):]
-assert gather_loop.index('GatherNodeDefence.ShouldDefend(fighting, _ignoreMonsters, _nodeDefence)') < gather_loop.index('GrindRunner.RestForGather(hwnd)') < gather_loop.index('GrindRunner.BuffForGather(hwnd, mover, () => _stop)') < gather_loop.index('GatherAtNode(hwnd, node)')
+assert gather_loop.index('GatherNodeDefence.ShouldDefend(fighting, _ignoreMonsters, _nodeDefence)') < gather_loop.index('GrindRunner.RestForGather(hwnd)') < gather_loop.index('GrindRunner.BuffForGather(hwnd, mover, () => _stop)') < gather_loop.index('GatherAtNode(hwnd, mover, node)')
 assert 'TryQuietPlayer' in controller and 'TryReadGhostFlagCandidate' in controller and 'SameSlot' in controller
 assert 'reader.ReadTargetGuid() != selected' in controller
 fight = grind[grind.index('    private static string Fight('):grind.index("    /// <summary>\n    /// A unit's health straight out of its data block")]
