@@ -12,7 +12,7 @@ using Styx.WoWInternals;
 namespace Styx.Logic.Pathing;
 
 // Read-only evidence collection. No Lua, casts, keyboard/mouse input or
-// gameplay offset promotion. An explicit 70862-only option samples one bounded
+// gameplay offset promotion. An explicit 70862/70888/70938 option samples one bounded
 // external candidate pointer; it never follows a pointer graph. Data may miss state.
 internal static class WowBCombatResearch
 {
@@ -229,9 +229,9 @@ internal static class WowBCombatResearch
             Memory? memory = ObjectManager.Wow;
             WowBReader? reader = ObjectManager.WowB;
             if (memory == null || reader == null || !memory.Is64BitTarget || !reader.IsExperimental70707)
-                return "Attach to a 70707, 70755, 70790, 70862 or 70888 client and enter the world first.";
+                return "Attach to a 70707, 70755, 70790, 70862, 70888 or 70938 client and enter the world first.";
             if (includeExternalArray && !reader.Uses70862Features)
-                return "External aura research is currently limited to 70862/70888; uncheck it for other builds.";
+                return "External aura research is currently limited to 70862/70888/70938; uncheck it for other builds.";
             using var uncached = memory.TemporaryCacheState(false);
             if (!WowBGrindFactions.TraceBuild70707(memory, reader) ||
                 !reader.TryCaptureWorldSnapshot(out WowBWorldSnapshot? snapshot) || snapshot == null ||
@@ -282,7 +282,7 @@ internal static class WowBCombatResearch
                     byte[]?[]? targetBytes = target.HasValue ? ReadWindow(memory, target.Value.UnitAddress) : null;
                     string externalReason = "";
                     ExternalCandidateSample? external = includeExternalArray && !cancel.IsCancellationRequested
-                        ? ReadExternalCandidate(memory, player.UnitAddress, out externalReason, reader.IsExperimental70888) : null;
+                        ? ReadExternalCandidate(memory, player.UnitAddress, out externalReason, reader.Uses70888Features) : null;
                     if (cancel.IsCancellationRequested) { reason = "cancelled during read; last sample discarded"; break; }
                     if (!StableWithBar(memory, reader, player, target, snapshot.TargetGuid, bar, out why))
                     { reason = "state changed during read (" + why + "); last sample discarded"; break; }

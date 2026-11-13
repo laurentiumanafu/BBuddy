@@ -12,7 +12,7 @@ class Port70888(unittest.TestCase):
         policy = text('Styx/WoWInternals/ClientAttachPolicy.cs')
         reader = text('Styx/WoWInternals/WowBReader.cs')
         self.assertIn('ExperimentalBuild70888 = 70888', policy)
-        self.assertIn('ExperimentalBuild70862, ExperimentalBuild70888 }', policy)
+        self.assertIn('ExperimentalBuild70862, ExperimentalBuild70888, ExperimentalBuild70938 }', policy)
         self.assertIn('Uses70862Features => IsExperimental70862 || IsExperimental70888', reader)
         self.assertIn('experimental70862 ? 1 : 0) + (experimental70888 ? 1 : 0)', reader)
         for field in ('PlayerGuid', 'PlayerNamePrimary', 'PlayerTargetGuid', 'MouseoverGuidCandidate',

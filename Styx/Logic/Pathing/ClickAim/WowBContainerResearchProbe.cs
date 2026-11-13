@@ -44,6 +44,11 @@ internal static class WowBContainerResearchProbe
         (0x24758D6, "486390C00A0000"), (0x24758E4, "4C8D8090040000"),
         (0x24758F0, "498B00")
     };
+    private static readonly (ulong Rva, string Bytes)[] Markers70938 = {
+        (0xD6C5BC, "E8BF1A8101"), (0xD6C5E0, "8B80C00A0000"),
+        (0x257FB96, "486390C00A0000"), (0x257FBA4, "4C8D8090040000"),
+        (0x257FBB0, "498B00")
+    };
     private sealed class Candidate
     {
         public WowBGuid Guid;
@@ -100,7 +105,7 @@ internal static class WowBContainerResearchProbe
     {
         bool match = true;
         var statuses = new List<string>();
-        foreach (var marker in build == 70888 ? Markers70888 : build == 70862 ? Markers70862 : build == 70790 ? Markers70790 : build == 70755 ? Markers70755 : Markers)
+        foreach (var marker in build == 70938 ? Markers70938 : build == 70888 ? Markers70888 : build == 70862 ? Markers70862 : build == 70790 ? Markers70790 : build == 70755 ? Markers70755 : Markers)
         {
             byte[]? bytes = memory.ReadBytes64(memory.GetAbsolute64(marker.Rva), marker.Bytes.Length / 2);
             string status;
@@ -301,7 +306,7 @@ internal static class WowBContainerResearchProbe
             { Forget(); return "Container research: experimental player, build or stopped state unavailable; no container candidates captured.\n"; }
             if (!Signatures(memory, reader.ExperimentalBuildNumber, out string markerBefore))
             { Forget(); return "Container research: readable code marker mismatch (" + markerBefore + "); no container candidates captured.\n"; }
-            ulong table = memory.GetAbsolute64(reader.IsExperimental70888 ? Wow70888Offsets.ContainerIdentityTableCandidate : reader.IsExperimental70862 ? Wow70862Offsets.ContainerIdentityTableCandidate : reader.IsExperimental70790 ? Wow70790Offsets.ContainerIdentityTableCandidate : reader.IsExperimental70755 ? Wow70755Offsets.ContainerIdentityTableCandidate : IdentityTableRva);
+            ulong table = memory.GetAbsolute64(reader.IsExperimental70938 ? Wow70938Offsets.ContainerIdentityTableCandidate : reader.IsExperimental70888 ? Wow70888Offsets.ContainerIdentityTableCandidate : reader.IsExperimental70862 ? Wow70862Offsets.ContainerIdentityTableCandidate : reader.IsExperimental70790 ? Wow70790Offsets.ContainerIdentityTableCandidate : reader.IsExperimental70755 ? Wow70755Offsets.ContainerIdentityTableCandidate : IdentityTableRva);
             byte[]? identityBytes = memory.ReadBytes64(table, CandidateIdentities * SlotStride);
             if (identityBytes == null || identityBytes.Length != CandidateIdentities * SlotStride)
             { Forget(); return "Container research: candidate identity table unreadable; no container candidates captured.\n"; }
@@ -422,7 +427,7 @@ internal static class WowBContainerResearchProbe
             if (complete) subtotal = (sizeSum, zeroSum, resolved, zeroIdentities, ordinarySize, ordinaryZero, unclassified);
             if (!active) { _previousMemory = memory; _previousReader = reader; _previousPlayer = player.Guid; _previous = next; _lastComplete = complete; }
             text.AppendLine("Container code markers after: " + markerAfter + "; unreadable is not confirmation of a match.");
-            text.AppendLine("Container reads are non-atomic; unresolved/zero candidates are unknown. Grind may use the subtotal experimentally for selling on 70707/70755/70790/70862/70888.");
+            text.AppendLine("Container reads are non-atomic; unresolved/zero candidates are unknown. Grind may use the subtotal experimentally for selling on 70707/70755/70790/70862/70888/70938.");
             return text.ToString();
         }
         catch (Exception ex) { subtotal = null; Forget(); return "Container research unavailable: " + ex.Message + "\n"; }

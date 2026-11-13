@@ -57,7 +57,7 @@
                 <TextBlock Grid.Row="4" Grid.Column="0" VerticalAlignment="Center" Margin="0,0,8,8"
                            Text="Drink at or below (percent mana)"/>
                 <TextBox x:Name="txtDrink" Grid.Row="4" Grid.Column="1" Margin="0,0,0,8"
-                         ToolTip="On 70707/70755/70790/70862/70888, voluntary pulls wait until mana recovers to this value, even when the drink key has no item. Combat and Stop take priority. 0 disables this rule."/>
+                         ToolTip="On 70707/70755/70790/70862/70888/70938, voluntary pulls wait until mana recovers to this value, even when the drink key has no item. Combat and Stop take priority. 0 disables this rule."/>
 
                 <CheckBox x:Name="chkDot" Grid.Row="5" Grid.ColumnSpan="2" Margin="0,8,0,4"
                           Content="Use damage-over-time spells (Moonfire, Corruption, Serpent Sting ...)"/>
@@ -68,7 +68,7 @@
 
                 <CheckBox x:Name="chkBuffs" Grid.Row="7" Grid.ColumnSpan="2" Margin="0,4,0,12"
                           Content="Apply self-buffs on start, periodically, and after resurrection"
-                          ToolTip="Grind and GatherBuddy attempt ordinary hotbar buffs outside combat. The supported 70862/70888 totems are combat-only and require the separate combat-buffs checkbox. Cast success is not verified."/>
+                          ToolTip="Grind and GatherBuddy attempt ordinary hotbar buffs outside combat. The supported 70862/70888/70938 totems are combat-only and require the separate combat-buffs checkbox. Cast success is not verified."/>
 
                 <TextBlock Grid.Row="8" Grid.Column="0" VerticalAlignment="Center" Margin="0,0,8,8"
                            Text="Food slot (0 = find it on the bar)"/>
@@ -87,7 +87,7 @@
 
                 <TextBlock Grid.Row="12" Grid.ColumnSpan="2" TextWrapping="Wrap" Margin="0,12,0,0"
                            VerticalAlignment="Top" FontSize="11" Opacity="0.7"
-                           Text="The character eats and drinks between fights, out of combat. On 70707/70755/70790/70862/70888 it also waits for the mana threshold before a new pull if drinking fails or no drink is available; that wait is not limited by the food/drink timer."/>
+                           Text="The character eats and drinks between fights, out of combat. On 70707/70755/70790/70862/70888/70938 it also waits for the mana threshold before a new pull if drinking fails or no drink is available; that wait is not limited by the food/drink timer."/>
             </Grid>
         </TabItem>
 
@@ -104,21 +104,21 @@
 
                 <StackPanel Grid.Row="0" Margin="0,0,0,8">
                     <TextBlock TextWrapping="Wrap" Margin="0,0,0,6"
-                               Text="Stage 1: choose a low-level hotbar priority. Auto uses recognizable class spells; ambiguous bars use Generic. The rotation does not read spec, cooldowns, forms, runes, combo points or pets. Selected 70707/70755/70790/70862/70888 buffs use experimental aura candidates."/>
+                               Text="Stage 1: choose a low-level hotbar priority. Auto uses recognizable class spells; ambiguous bars use Generic. The rotation does not read spec, cooldowns, forms, runes, combo points or pets. Selected 70707/70755/70790/70862/70888/70938 buffs use experimental aura candidates."/>
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="Rotation class:" VerticalAlignment="Center" Margin="0,0,8,0"/>
                         <ComboBox x:Name="cmbRotation" Width="145"/>
                     </StackPanel>
                     <TextBlock TextWrapping="Wrap" FontSize="11" Opacity="0.7" Margin="0,5,0,0"
-                               Text="Generic retains the older first-spell behavior, including its limitations. Class profiles omit rune abilities, feral forms, finishers and pet actions unless manually overridden. On 70707/70755/70790/70862/70888 the experimental gate supports mana-type and candidate rage-type characters; rage-dependent actions remain withheld."/>
+                               Text="Generic retains the older first-spell behavior, including its limitations. Class profiles omit rune abilities, feral forms, finishers and pet actions unless manually overridden. On 70707/70755/70790/70862/70888/70938 the experimental gate supports mana-type and candidate rage-type characters; rage-dependent actions remain withheld."/>
                     <CheckBox x:Name="chkKeyOneAttackMacro" IsChecked="False" Margin="0,8,0,0"
-                              Content="Use my repeat-safe Start Attack macro on key 1 (70862/70888)"
+                              Content="Use my repeat-safe Start Attack macro on key 1 (70862/70888/70938)"
                               ToolTip="Place your Start Attack macro on the first action bar, bound to key 1. Test manually that repeated presses never stop auto-attack. Contents, binding and swing state cannot be verified. This takes priority over the separate post-heal key."/>
                     <TextBlock TextWrapping="Wrap" FontSize="11" Opacity="0.7" Margin="0,4,0,0"
                                Text="Key 1 is attempted at fight start and after heal or Shock attempts. Use a repeat-safe, non-toggle Start Attack macro; the bot cannot verify macro contents or success. This overrides the post-heal key below."/>
                     <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
                         <CheckBox x:Name="chkPostHealStartAttack" IsChecked="False" VerticalAlignment="Center" Margin="0,0,8,0"
-                                  Content="Restart auto-attack after heal (70862/70888)"
+                                  Content="Restart auto-attack after heal (70862/70888/70938)"
                                   ToolTip="Optional. First bind the chosen key to WoW's Start Attack (not Attack Target or the toggling Attack action), and test manually that repeating it does not stop attacks. The bot cannot verify your key binding or swing state."/>
                         <ComboBox x:Name="cmbPostHealStartAttack" Width="75" SelectedIndex="0"
                                   IsEnabled="{Binding IsChecked, ElementName=chkPostHealStartAttack}"
@@ -131,9 +131,9 @@
                                Text="Optional: bind the same key to WoW's Start Attack first; do not use Attack Target (toggle). Test the binding manually. Bot cannot verify it or the swing state."/>
                     <CheckBox x:Name="chkBuffsInCombat" Margin="0,8,0,0"
                               Content="Re-cast supported buffs when they run out during combat"
-                              ToolTip="Requires Apply self-buffs. Experimental Frost Armor rank 1 and Lightning Shield rank 1; on 70862/70888 Lightning Shield ranks 1–7, plus Strength of Earth Totem rank 2, Healing Stream Totem rank 1 and Mana Spring Totem rank 1. Totems are combat-only; with at least 10 seconds between attempts. Missing effects from leaving range can cause a totem replacement. Unknown reads withhold combat casts; mana costs and cast success are not verified."/>
+                              ToolTip="Requires Apply self-buffs. Experimental Frost Armor rank 1 and Lightning Shield rank 1; on 70862/70888/70938 Lightning Shield ranks 1–7, plus Strength of Earth Totem rank 2, Healing Stream Totem rank 1 and Mana Spring Totem rank 1. Totems are combat-only; with at least 10 seconds between attempts. Missing effects from leaving range can cause a totem replacement. Unknown reads withhold combat casts; mana costs and cast success are not verified."/>
                     <Button Content="Shaman totem macro…" HorizontalAlignment="Left" Height="26" Padding="10,0" Margin="0,8,0,0"
-                            Click="btnShamanTotemMacro_Click" ToolTip="Configure a user-made macro on keys 1–9 and choose which totem effects to check (70862/70888, combat only)."/>
+                            Click="btnShamanTotemMacro_Click" ToolTip="Configure a user-made macro on keys 1–9 and choose which totem effects to check (70862/70888/70938, combat only)."/>
                 </StackPanel>
 
                 <ListView x:Name="lstSpells" Grid.Row="1" Margin="0,0,0,8"
@@ -178,13 +178,13 @@
         <!-- ================================================ combat research ========= -->
         <TabItem Header="Combat research">
             <StackPanel Margin="12">
-                <TextBlock FontWeight="Bold" Text="70707/70755/70790/70862/70888 spell-state research (read-only)" Margin="0,0,0,8"/>
+                <TextBlock FontWeight="Bold" Text="70707/70755/70790/70862/70888/70938 spell-state research (read-only)" Margin="0,0,0,8"/>
                 <TextBlock TextWrapping="Wrap" Margin="0,0,0,8"
                            Text="Stop the bot. Select a target before recording if you need target data, then start the trace. Wait for the Recording message, return to the game, wait about five seconds and manually cast one spell once. Keep the same character and target selected."/>
                 <TextBlock TextWrapping="Wrap" Margin="0,0,0,10"
                            Text="The trace samples raw player data and, when available, the selected NPC. It does not press keys, use Lua, or identify cooldowns or auras. The data may contain GUIDs, process addresses and other sensitive information."/>
                 <CheckBox x:Name="chkExternalAuraResearch" IsChecked="False" Margin="0,0,0,8"
-                          Content="Also record bounded external aura candidate (70862/70888 only)"
+                          Content="Also record bounded external aura candidate (70862/70888/70938 only)"
                           ToolTip="Read-only research; captures additional raw memory that may be sensitive. This does not identify buffs or change gameplay."/>
                 <TextBlock Text="Experiment label (e.g. Mage Fireball or Shaman Lightning Bolt):" Margin="0,0,0,4"/>
                 <TextBox x:Name="txtCombatResearchLabel" MaxLength="80" Margin="0,0,0,10"/>
@@ -218,7 +218,7 @@
                 </Grid.RowDefinitions>
 
                 <TextBlock Grid.Row="0" Grid.ColumnSpan="3" TextWrapping="Wrap" Margin="0,0,0,10"
-                           Text="On 70755/70790/70862/70888, Grind uses the experimental ordinary-bag subtotal, excluding bags you mark as specialty. Unclassified or unreadable candidates wait rather than guessing. On 70707, all candidate bags count. Two fresh zero observations are required. Other WowB builds use the corpse-interaction threshold below. The recorded click plan is replayed; sales are not verified."/>
+                           Text="On 70755/70790/70862/70888/70938, Grind uses the experimental ordinary-bag subtotal, excluding bags you mark as specialty. Unclassified or unreadable candidates wait rather than guessing. On 70707, all candidate bags count. Two fresh zero observations are required. Other WowB builds use the corpse-interaction threshold below. The recorded click plan is replayed; sales are not verified."/>
 
                 <CheckBox x:Name="chkAutoSell" Grid.Row="1" Grid.ColumnSpan="3" Margin="0,0,0,8"
                           Content="Walk to the vendor and sell when the bags are due"/>
@@ -244,7 +244,7 @@
                 <StackPanel Grid.Row="5" Grid.ColumnSpan="3">
                     <Button x:Name="btnInventoryProbe" Content="Bag research snapshot" Height="24" Padding="10,0" HorizontalAlignment="Left" Click="btnInventoryProbe_Click"
                             ToolTip="Stopped bot only. Read-only candidate bytes; logged data can be sensitive."/>
-                    <TextBlock TextWrapping="Wrap" Margin="0,5,0,3" Text="70755/70790/70862/70888: after a snapshot, identify each observed bag as ordinary or specialty. Candidate numbers are not bag slot numbers. Unknown bags prevent automatic selling; select a bag only when you know which it is."/>
+                    <TextBlock TextWrapping="Wrap" Margin="0,5,0,3" Text="70755/70790/70862/70888/70938: after a snapshot, identify each observed bag as ordinary or specialty. Candidate numbers are not bag slot numbers. Unknown bags prevent automatic selling; select a bag only when you know which it is."/>
                     <ComboBox x:Name="cmbBagCandidate" MinWidth="250" HorizontalAlignment="Left" ToolTip="Candidates from the most recent stopped snapshot; size and identity do not automatically establish bag type."/>
                     <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
                         <Button Content="Mark ordinary" Height="24" Padding="8,0" Click="btnBagOrdinary_Click"/>
@@ -337,7 +337,7 @@
         <TabItem Header="Factions">
             <ScrollViewer VerticalScrollBarVisibility="Auto">
                 <StackPanel Margin="12">
-                    <TextBlock TextWrapping="Wrap" Text="Stop the bot and scan nearby NPC faction-template IDs without selecting them. On 70707/70755/70790/70862/70888 keys and gameplay are experimental; Grind requires Allow or Blacklist mode. IDs are not names or proof of hostility or merchant status."/>
+                    <TextBlock TextWrapping="Wrap" Text="Stop the bot and scan nearby NPC faction-template IDs without selecting them. On 70707/70755/70790/70862/70888/70938 keys and gameplay are experimental; Grind requires Allow or Blacklist mode. IDs are not names or proof of hostility or merchant status."/>
                     <Button x:Name="btnFactionScan" Content="Scan nearby NPC factions (100 horizontal yd)" Height="30" Margin="0,10,0,0" Click="btnFactionScan_Click"/>
                     <TextBox x:Name="txtFactionReport" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" Height="145" Margin="0,8,0,8"/>
                     <TextBlock Text="Filter mode (only one applies)" FontWeight="SemiBold" Margin="0,2,0,4"/>

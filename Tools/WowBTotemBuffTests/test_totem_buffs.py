@@ -62,7 +62,7 @@ class TotemBuffs(unittest.TestCase):
 
     def test_ui_and_docs_are_honest(self):
         ET.fromstring(X)
-        self.assertIn('The supported 70862/70888 totems are combat-only', X)
+        self.assertIn('The supported 70862/70888/70938 totems are combat-only', X)
         self.assertIn('at least 10 seconds between attempts', X)
         doc = read('TOTEM_BUFFS_70862.md')
         self.assertIn('Other ranks and spells are **not** mapped', doc)

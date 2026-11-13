@@ -77,7 +77,7 @@ internal static class WowBSkinning
             }
         }
         message = "Saved beast entry candidate " + entry.ToString(CultureInfo.InvariantCulture)
-            + " for " + (reader.IsExperimental70707 ? "70707/70755/70790/70862/70888" : "70291")
+            + " for " + (reader.IsExperimental70707 ? "70707/70755/70790/70862/70888/70938" : "70291")
             + ". Other spawns with this entry will be treated as the same beast type.";
         return true;
     }

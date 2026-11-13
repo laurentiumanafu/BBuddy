@@ -10,14 +10,14 @@ class PlayerDeathRecovery(unittest.TestCase):
     def test_recovery_observation_is_local_and_health_only(self):
         reader = read('Styx/WoWInternals/WowBReader.cs')
         method = section(reader, 'internal bool TryRead70888RecoveryPlayer(', '        /// <summary>\n        /// Captures only records')
-        for requirement in ('!IsExperimental70888', '!ExperimentalGrindActive', 'TryGetPlayerObject(',
+        for requirement in ('!Uses70888Features', '!ExperimentalGrindActive', 'TryGetPlayerObject(',
                             'IsPoolRecordCurrent(record)', 'TryGetUnitObject(', 'TryReadTraceLocalGuid(',
                             'HealthCandidateOffset, 16', 'SequenceEqual(second)', 'hp > max', 'max == 0'):
             self.assertIn(requirement, method)
         for prohibited in ('TargetGuid', 'ReadTarget', 'PowerArray', 'TryGetUnitFields('):
             self.assertNotIn(prohibited, method)
         tracker = read('Styx/Logic/Pathing/ClickAim/WowBDeathCheckpoint.cs')
-        self.assertIn('reader.IsExperimental70888', tracker)
+        self.assertIn('reader.Uses70888Features', tracker)
         self.assertIn('TryRead70888RecoveryPlayer', tracker)
         self.assertIn('MayRecord(_hasAlive, _saved', tracker)
         self.assertIn('TryReadGhostFlagCandidate', tracker)
@@ -33,13 +33,13 @@ class PlayerDeathRecovery(unittest.TestCase):
         grind = read('Styx/Logic/Pathing/ClickAim/GrindRunner.cs')
         wait = section(grind, 'private static string StopFightForSafety(', '    private static bool RecoverIfPending(')
         self.assertIn('ClickAimKeySteer.ReleaseHeld()', wait)
-        self.assertIn('safetyReader?.IsExperimental70888 == true && _deathCheckpoint != null', wait)
+        self.assertIn('safetyReader?.Uses70888Features == true && _deathCheckpoint != null', wait)
         self.assertIn('deferUnconfirmed: extended', wait)
         self.assertIn('extended ? 200 : 20', wait)
         self.assertIn('ClickAimAbort.Requested || RouteRunner.StopRequested', wait)
         self.assertIn('ObjectManager.Wow != safetyMemory || ObjectManager.WowB != safetyReader', wait)
         self.assertIn('_deathCheckpoint.LastObservation', wait)
-        self.assertIn('70888 safety pause observations:', wait)
+        self.assertIn('70888/70938 safety pause observations:', wait)
         self.assertNotIn('TapKey', wait)
         check = section(grind, 'private static bool CheckDeathCheckpoint(', '    // These 70707 combat exits')
         self.assertIn('!_deathCheckpoint.Recorded.HasValue', check)
@@ -52,7 +52,7 @@ class PlayerDeathRecovery(unittest.TestCase):
     def test_heal_snapshot_target_change_yields_without_input(self):
         grind = read('Styx/Logic/Pathing/ClickAim/GrindRunner.cs')
         helper = section(grind, 'private static bool TryYieldHealSnapshotTargetChange(', '    private static void LogFactionFight(')
-        for text in ('reader.IsExperimental70888', 'firstTarget == expectedTarget', 'firstTarget != secondTarget',
+        for text in ('reader.Uses70888Features', 'firstTarget == expectedTarget', 'firstTarget != secondTarget',
                      'CheckDeathCheckpoint(trackerOnly: true)', 'LastObservation != "alive candidate"',
                      'ReadRecoveryPlayer(reader', 'current.Guid != expectedPlayer.Guid',
                      'current.UnitAddress != expectedPlayer.UnitAddress', 'current.RecordAddress != expectedPlayer.RecordAddress',

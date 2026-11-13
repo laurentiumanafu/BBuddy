@@ -151,7 +151,7 @@ internal sealed class ClickAimBuffController
         string text = !state.HasValue ? "unavailable; combat cast withheld" : state.Value < 0 ? "absent" : "present";
         if (_reportedAuraState.TryGetValue(action.Id, out string? old) && old == text) return;
         _reportedAuraState[action.Id] = text;
-        Logging.Write("[Buff] 70862/70888 experimental Lightning Shield candidate: " + text + " (rank " + WowBLightningShield.Rank(action.Id) + "; not verified)");
+        Logging.Write("[Buff] 70862/70888/70938 experimental Lightning Shield candidate: " + text + " (rank " + WowBLightningShield.Rank(action.Id) + "; not verified)");
     }
 
     private static bool TotemSupported(WowBReader reader, ClickAimAction action)
@@ -176,7 +176,7 @@ internal sealed class ClickAimBuffController
         string state = !active.HasValue ? "unavailable; cast withheld" : active.Value ? "active" : "absent; retry limited to 10 seconds";
         if (_reportedAuraState.TryGetValue(action.Id, out string? old) && old == state) return;
         _reportedAuraState[action.Id] = state;
-        Logging.Write("[Buff] 70862/70888 experimental totem effect " + action.Name + ": " + state + " (player effect, not totem existence)");
+        Logging.Write("[Buff] 70862/70888/70938 experimental totem effect " + action.Name + ": " + state + " (player effect, not totem existence)");
     }
 
     private static bool SameSlot(ClickAimAction action, List<ClickAimAction> bar)

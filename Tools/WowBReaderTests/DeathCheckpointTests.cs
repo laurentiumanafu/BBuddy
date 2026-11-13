@@ -89,7 +89,8 @@ internal static class DeathCheckpointTests
         string folder = Path.Combine(Path.GetTempPath(), "bbuddy-70888-death-" + Guid.NewGuid().ToString("N"));
         ulong manaMax = unit + Wow70707Offsets.MaxPowerArrayCandidateOffset;
         ulong hp = unit + Wow70707Offsets.HealthCandidateOffset;
-        ulong target = memory.ImageBase64 + Wow70888Offsets.PlayerTargetGuid;
+        ulong target = memory.ImageBase64 + (reader.IsExperimental70938 ? Wow70938Offsets.PlayerTargetGuid : Wow70888Offsets.PlayerTargetGuid);
+        ulong guid = memory.ImageBase64 + (reader.IsExperimental70938 ? Wow70938Offsets.PlayerGuid : Wow70888Offsets.PlayerGuid);
         WowBGuid originalTarget = reader.ReadTargetGuid();
         try
         {
@@ -136,7 +137,7 @@ internal static class DeathCheckpointTests
             if (reader.TryRead70888RecoveryPlayer(out _, out _, out _, out string invalidReason) || invalidReason != "local health or position candidate invalid")
                 throw new Exception("unknown maximum health must not be treated as death");
             memory.U64(unit + Wow70707Offsets.MaxHealthCandidateOffset, 148);
-            memory.Guid(memory.ImageBase64 + Wow70888Offsets.PlayerGuid, new WowBGuid(999, 888));
+            memory.Guid(guid, new WowBGuid(999, 888));
             if (reader.TryRead70888RecoveryPlayer(out _, out _, out _))
                 throw new Exception("changed local identity must fail closed");
         }
@@ -144,7 +145,7 @@ internal static class DeathCheckpointTests
         {
             memory.OnRead = null;
             memory.Guid(target, originalTarget);
-            memory.Guid(memory.ImageBase64 + Wow70888Offsets.PlayerGuid, player);
+            memory.Guid(guid, player);
             memory.U64(hp, 148);
             memory.U64(unit + Wow70707Offsets.MaxHealthCandidateOffset, 148);
             memory.U32(manaMax, 20);

@@ -334,7 +334,7 @@ internal static class GatherRunner
         if (!reader.Uses70862Features || _movementSlot < 1 || _movementSlot > 12)
         {
             _movementAttempted = true;
-            Logging.Write("[Gather] movement skill requires 70862/70888 and a configured first-bar slot 1–12; no key sent");
+            Logging.Write("[Gather] movement skill requires 70862/70888/70938 and a configured first-bar slot 1–12; no key sent");
             return false;
         }
         try

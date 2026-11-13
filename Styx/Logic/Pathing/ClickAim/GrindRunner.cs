@@ -335,10 +335,10 @@ internal static class GrindRunner
         bool observed = false;
         bool veto = _deathCheckpoint != null && _deathCheckpoint.Poll(out observed);
         if (!veto && (observed || trackerOnly || !PlayerDead())) return false;
-        // During a no-input 70888 safety pause, a transient ghost/unreadable
+        // During a no-input 70888/70938 safety pause, a transient ghost/unreadable
         // veto without a checkpoint must not end the retry immediately. It is
         // still never permission to release or move; STOP remains authoritative.
-        if (deferUnconfirmed && ObjectManager.WowB?.IsExperimental70888 == true &&
+        if (deferUnconfirmed && ObjectManager.WowB?.Uses70888Features == true &&
             _deathCheckpoint != null && !_deathCheckpoint.Recorded.HasValue && !_stop && !ClickAimAbort.Requested)
             return false;
         lock (StartStopGate)
@@ -363,9 +363,9 @@ internal static class GrindRunner
         ClickAimKeySteer.ReleaseHeld();
         WowBReader? safetyReader = ObjectManager.WowB;
         var safetyMemory = ObjectManager.Wow;
-        bool extended = safetyReader?.IsExperimental70888 == true && _deathCheckpoint != null;
+        bool extended = safetyReader?.Uses70888Features == true && _deathCheckpoint != null;
         Logging.Write("[Grind] " + reason + "; pausing input to check for a death/ghost transition" +
-            (extended ? " (70888: up to 20 seconds plus read time)" : " before stopping"));
+            (extended ? " (70888/70938: up to 20 seconds plus read time)" : " before stopping"));
         var observations = new Dictionary<string, int>();
         bool veto = WowBDeathCheckpoint.ObserveSafetyExit(
             () =>
@@ -387,7 +387,7 @@ internal static class GrindRunner
         {
             var counts = new List<string>();
             foreach (var entry in observations) counts.Add(entry.Key + "=" + entry.Value);
-            Logging.Write("[Grind] 70888 safety pause observations: " + (counts.Count == 0 ? "none" : string.Join("; ", counts)) +
+            Logging.Write("[Grind] 70888/70938 safety pause observations: " + (counts.Count == 0 ? "none" : string.Join("; ", counts)) +
                 "; diagnostic only, unknown is not death");
         }
         _stop = true;
@@ -713,7 +713,7 @@ internal static class GrindRunner
         { Logging.Write("[Grind] profile faction filter could not start: " + factionError); return false; }
         Logging.Write("[Grind] profile Blackspots, vendor/trainer/mail and other directives are not executed; recorded selling remains separate.");
         Logging.Write("[Grind] profile factions override the manual roaming filter for voluntary pulls; faction IDs and hostility remain unverified. " +
-            (ObjectManager.WowB?.Uses70862Features == true ? "70862/70888 combat defence prefers profile/manual allow factions, but can select the wrong NPC, including a friendly." : "Combat defence retains its existing safeguards."));
+            (ObjectManager.WowB?.Uses70862Features == true ? "70862/70888/70938 combat defence prefers profile/manual allow factions, but can select the wrong NPC, including a friendly." : "Combat defence retains its existing safeguards."));
         WowBReader? trialReader = WowBGrindFactions.ExperimentalBoundReader;
 
         double px, py;
@@ -2335,7 +2335,7 @@ internal static class GrindRunner
         WowBObservedUnit expectedPlayer, WowBGuid expectedTarget, out string report)
     {
         report = "";
-        if (!reader.IsExperimental70888 || _deathCheckpoint == null || _stop || ClickAimAbort.Requested || RouteRunner.StopRequested ||
+        if (!reader.Uses70888Features || _deathCheckpoint == null || _stop || ClickAimAbort.Requested || RouteRunner.StopRequested ||
             ObjectManager.Wow != memory || ObjectManager.WowB != reader ||
             !reader.TryReadTraceTargetGuid(out WowBGuid firstTarget) || firstTarget == expectedTarget) return false;
         if (CheckDeathCheckpoint(trackerOnly: true))
@@ -2363,7 +2363,7 @@ internal static class GrindRunner
         Logging.Write("[Grind] " + (defence ? "defensive" : "voluntary") + " target " + unit.Guid +
             " faction key " + observed + "; filter " + GrindFactionSettings.Rules.Mode + " " + GrindFactionSettings.Rules.KeyText +
             (defence && reader?.Uses70862Features == true
-                ? "; 70862/70888 defence bypasses faction; attacker and hostility unverified"
+                ? "; 70862/70888/70938 defence bypasses faction; attacker and hostility unverified"
                 : "; attack checks will re-read identity, selection and key"));
     }
 

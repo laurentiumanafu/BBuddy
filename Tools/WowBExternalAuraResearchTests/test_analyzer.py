@@ -46,6 +46,10 @@ class Analyzer(unittest.TestCase):
         events = a.read_trace(path)[2]
         self.assertEqual(events[0][2][0][1], 10491)
         self.assertEqual(events[1][2], ())
+        path.write_text(original.replace('70862 COMBAT', '70938 COMBAT'))
+        self.assertEqual(a.read_trace(path)[2][1][2], ())
+        path.write_text(original.replace('70862 COMBAT', '70938 COMBAT').replace('capacity=36', 'capacity=37'))
+        with self.assertRaises(ValueError): a.read_trace(path)
         path.write_text(original.replace('70862 COMBAT', '70888 COMBAT').replace('capacity=36', 'capacity=37'))
         with self.assertRaises(ValueError): a.read_trace(path)
         path.write_text('70888 COMBAT RESEARCH v1: raw\nsample=0 startMs=0\n' +

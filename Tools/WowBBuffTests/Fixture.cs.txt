@@ -49,8 +49,9 @@ namespace Styx.WoWInternals
     sealed class WowBReader
     {
         public struct WowBUnitFields { public uint Health, MaxHealth, Power; public int PlayerPowerTypeCandidate; }
-        public bool IsExperimental70707 = true, IsExperimental70862, IsExperimental70888, Readable = true;
-        public bool Uses70862Features => IsExperimental70862 || IsExperimental70888;
+        public bool IsExperimental70707 = true, IsExperimental70862, IsExperimental70888, IsExperimental70938, Readable = true;
+        public bool Uses70888Features => IsExperimental70888 || IsExperimental70938;
+        public bool Uses70862Features => IsExperimental70862 || Uses70888Features;
         public uint Map = 0, Health = 100, MaxHealth = 100, Power = 100;
         public int PowerType;
         public WowBGuid Selected;

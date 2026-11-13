@@ -39,10 +39,10 @@ class ExternalResearch(unittest.TestCase):
             self.assertIn(text, fn)
         self.assertEqual(fn.count('ReadBytes64(address, size)'), 2)
         self.assertEqual(fn.count('IsCommittedReadableRange64(address, size)'), 2)
-        self.assertIn('out externalReason, reader.IsExperimental70888', S)
+        self.assertIn('out externalReason, reader.Uses70888Features', S)
         totem = read('Styx/Logic/Pathing/ClickAim/WowBTotemAuraCandidate.cs')
-        self.assertIn('out string externalReason, reader.IsExperimental70888', totem)
-        self.assertIn('FromBytes(sample.Bytes, count, reader.IsExperimental70888)', totem)
+        self.assertIn('out string externalReason, reader.Uses70888Features', totem)
+        self.assertIn('FromBytes(sample.Bytes, count, reader.Uses70888Features)', totem)
         region = part(M, 'public bool IsCommittedReadableRange64(', '        /// <summary>\n        /// True only when VirtualQueryEx')
         for text in ('VirtualQueryEx64', 'info.State != 0x1000', 'info.Protect & 0x100', 'info.RegionSize', 'info.BaseAddress'):
             self.assertIn(text, region)

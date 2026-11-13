@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Summarize experimental 70862/70888 external-candidate traces; never infer verified auras."""
+"""Summarize experimental 70862/70888/70938 external-candidate traces; never infer verified auras."""
 import argparse
 import re
 import struct
@@ -34,10 +34,10 @@ def read_trace(path):
         header = f.readline()
         if header.startswith('70862 COMBAT RESEARCH v1:'):
             max_slots, max_capacity = MAX_SLOTS, 32
-        elif header.startswith('70888 COMBAT RESEARCH v1:'):
+        elif header.startswith(('70888 COMBAT RESEARCH v1:', '70938 COMBAT RESEARCH v1:')):
             max_slots, max_capacity = MAX_SLOTS_70888, 36
         else:
-            raise ValueError('not a 70862/70888 Combat Research v1 trace')
+            raise ValueError('not a 70862/70888/70938 Combat Research v1 trace')
         for line in f:
             line = line.rstrip('\r\n')
             m = SAMPLE.match(line)

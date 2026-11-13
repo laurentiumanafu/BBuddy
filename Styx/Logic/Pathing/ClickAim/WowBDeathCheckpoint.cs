@@ -68,7 +68,7 @@ internal sealed class WowBDeathCheckpoint
            && double.IsFinite(x) && double.IsFinite(y) && double.IsFinite(z)
            && Math.Abs(x) < 100000 && Math.Abs(y) < 100000 && Math.Abs(z) < 100000;
 
-    // 70888 recovery must not depend on target selection or mana remaining
+    // 70888/70938 recovery must not depend on target selection or mana remaining
     // readable during death. Older builds retain their established path.
     internal static bool ReadRecoveryPlayer(WowBReader reader, out WowBObservedUnit player, out uint health, out uint maxHealth)
         => ReadRecoveryPlayer(reader, out player, out health, out maxHealth, out _);
@@ -76,7 +76,7 @@ internal sealed class WowBDeathCheckpoint
     private static bool ReadRecoveryPlayer(WowBReader reader, out WowBObservedUnit player, out uint health, out uint maxHealth, out string reason)
     {
         player = default; health = maxHealth = 0;
-        if (reader.IsExperimental70888)
+        if (reader.Uses70888Features)
             return reader.TryRead70888RecoveryPlayer(out player, out health, out maxHealth, out reason);
         reason = "local snapshot or vitals unavailable";
         if (!reader.TryCaptureWorldSnapshot(out WowBWorldSnapshot? snapshot) || snapshot == null ||

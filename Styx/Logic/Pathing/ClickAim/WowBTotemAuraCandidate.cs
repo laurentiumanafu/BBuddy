@@ -5,7 +5,7 @@ using Styx.WoWInternals;
 
 namespace Styx.Logic.Pathing;
 
-// Experimental 70862/70888; effect mapping observed only on 70862. This observes effects on the player, not totem
+// Experimental 70862/70888/70938; effect mapping observed only on 70862. This observes effects on the player, not totem
 // existence. The mappings are limited to the ranks suggested by the user's
 // single-totem/range traces and published spell tables, not all totem ranks.
 internal sealed class WowBTotemAuraCandidate
@@ -32,7 +32,7 @@ internal sealed class WowBTotemAuraCandidate
     // Macro contents/rank are opaque. Treat any known Mana Spring candidate
     // as present, rather than repeatedly replacing a higher rank. Only 5677
     // has been observed in the user's traces; the others are Classic IDs and
-    // their 70888 representation remains unverified.
+    // their 70888/70938 representation remains unverified.
     internal bool ManaSpringActive() => _ids.Contains(5677) || _ids.Contains(10491) ||
         _ids.Contains(10493) || _ids.Contains(10494);
 
@@ -75,13 +75,13 @@ internal sealed class WowBTotemAuraCandidate
                 inlineReason = "inline candidate empty";
             }
             byte[]? before = memory.ReadBytes64(player.UnitAddress + ActiveCountOffset, 4);
-            WowBCombatResearch.ExternalCandidateSample? sample = WowBCombatResearch.ReadExternalCandidate(memory, player.UnitAddress, out string externalReason, reader.IsExperimental70888);
+            WowBCombatResearch.ExternalCandidateSample? sample = WowBCombatResearch.ReadExternalCandidate(memory, player.UnitAddress, out string externalReason, reader.Uses70888Features);
             byte[]? after = memory.ReadBytes64(player.UnitAddress + ActiveCountOffset, 4);
             reason = inlineReason + "; external " + (sample == null ? externalReason : "count/slot validation failed");
             if (before == null || after == null || before.Length != 4 || after.Length != 4 || sample == null) return null;
             uint count = BitConverter.ToUInt32(before, 0);
             if (count != BitConverter.ToUInt32(after, 0)) return null;
-            WowBTotemAuraCandidate? result = FromBytes(sample.Bytes, count, reader.IsExperimental70888);
+            WowBTotemAuraCandidate? result = FromBytes(sample.Bytes, count, reader.Uses70888Features);
             if (result != null) reason = "external candidate";
             return result;
         }

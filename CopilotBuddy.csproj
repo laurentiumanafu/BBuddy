@@ -10,7 +10,7 @@
     <UseWindowsForms>true</UseWindowsForms>
     <!--
       The default/AnyCPU project configuration targets x64 for the current
-      70888 client. Explicit x86 remains available for 32-bit 3.3.5a clients.
+      70938 client. Explicit x86 remains available for 32-bit 3.3.5a clients.
       The native Navigation.dll must match the chosen target architecture.
     -->
     <Platforms>x64;x86</Platforms>

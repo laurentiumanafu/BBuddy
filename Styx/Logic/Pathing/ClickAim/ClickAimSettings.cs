@@ -453,7 +453,7 @@ internal static class ClickAimSettings
         return string.Format(CultureInfo.InvariantCulture,
             "heal at {0}% (0 = never) and only above {8}% power, eat at {1}%, drink at {2}%, "
             + "damage over time {3}, buffs {4}, combat buffs {14}, food slot {5}, drink slot {6}, "
-            + "{7} spell role(s) set by hand; selling {9} (70707/70755/70790/70862/70888 experimental zero subtotal; other WowB builds after {10} corpse interaction(s), "
+            + "{7} spell role(s) set by hand; selling {9} (70707/70755/70790/70862/70888/70938 experimental zero subtotal; other WowB builds after {10} corpse interaction(s), "
             + "{11} ms for the merchant window, vendor NPC looked for within {12} yd; bag offset hunt {13})",
             HealBelowPercent, EatBelowPercent, DrinkBelowPercent,
             UseDamageOverTime ? "on" : "off", UseBuffs ? "on" : "off",
