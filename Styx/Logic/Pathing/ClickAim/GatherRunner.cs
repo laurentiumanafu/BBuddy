@@ -806,6 +806,7 @@ internal static class GatherRunner
                     Logging.Write("[Gather] combat state unreadable; holding position");
                     ClickAimAbort.Wait(1500); continue;
                 }
+                if (!fighting) GrindRunner.ClearGatherDefenceSelectionOnCombatEnd();
                 if (!fighting && _nodeDefence)
                 {
                     _nodeDefence = false;

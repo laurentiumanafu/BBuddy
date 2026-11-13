@@ -22,7 +22,7 @@ fight = section('    private static string Fight(', "    /// <summary>\n    /// 
 chase = section('    private static bool ChaseStep(', '    // A pool unit\'s position')
 assert 'nearby.Count == 0' in defend and 'GrindFactionSettings.Rules.Enabled' in defend
 assert 'HasNearbyOtherNpc(snap, player, default, reader)' in defend
-assert 'FightDefenceWithHandoffs(hwnd, reader, true, player, selected, true)' in remote
+assert 'FightDefenceWithHandoffs(hwnd, reader, true, player, selected, true, selectedRemoteFallback)' in remote
 assert 'remoteDefence ? RemoteDefenceRadius + 3.0' in fight
 assert 'myMana >= needForCast' in fight and 'if (canCast && d > selectedRange)' in fight
 assert 'if (d > MeleeEngageYd)' in fight
@@ -31,7 +31,11 @@ assert 'remoteDefence = false; // changed selections' in g
 assert chase.count('combatMoveAllowed != null && !combatMoveAllowed()') >= 2
 assert 'RouteRunner.TryCombatMeshPath' in chase and 'no complete validated mesh path' in chase
 assert '(!TryReadGatherCombat(out bool fighting) || !fighting)' in fight
-assert 'grindMode && !reader.Uses70862Features, remoteDefence' in g
+assert 'grindMode && !reader.Uses70862Features, remoteDefence, selectedRemoteFallback' in g
+assert 'RemoteDefenceMovementAllowed(reader, fightMemory, expectedPull, selectedRemoteFallback)' in fight
+assert 'RemoteDefenceBlocked(reader, snap, me, target, selectedRemoteFallback)' in fight
+assert '_nearDefenceExhausted && reader.IsExperimental70938' in defend
+assert 'out selectedReport, RemoteDefenceRadius, false, true' in defend
 assert 'FactionPullStillAllowed(ObjectManager.WowB, expectedPull, target)' in fight
 assert 'FactionPullStillAllowed(reader, expectedPull, target)' in fight
 assert fight.count('!defenceOnly || defenceFactionFilter, defenceOnly') == 10

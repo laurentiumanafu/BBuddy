@@ -47,7 +47,7 @@ class DefenceScopeTests(unittest.TestCase):
         self.assertIn('player, focused, focusedRemote)', near)
         fight = section('    private static string Fight(', "    /// <summary>\n    /// A unit's health straight out of its data block")
         self.assertIn('defenceOnly && remoteDefence', fight)
-        self.assertIn('RemoteDefenceMovementAllowed(reader, fightMemory, expectedPull)', fight)
+        self.assertIn('RemoteDefenceMovementAllowed(reader, fightMemory, expectedPull, selectedRemoteFallback)', fight)
         self.assertIn('defenceOnly && remoteDefence && d > GatherDefenceRadius && RemoteDefenceBlocked', fight)
         self.assertIn('combatMoveAllowed: defensiveMovement', fight)
 
