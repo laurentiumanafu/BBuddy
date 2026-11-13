@@ -112,6 +112,22 @@ internal static class WowBGrindFactions
         finally { if (!armed) { reader.SetExperimentalGrindActive(false); _experimentalBar = null; } }
     }
 
+    // The no-input hotspot watch can outlast a disconnect or character change.
+    // Require the original bound player, independently of target and action bar.
+    internal static bool ExperimentalSessionPlayerCurrent(Memory memory, WowBReader reader)
+    {
+        try
+        {
+            using var uncached = memory.TemporaryCacheState(false);
+            return ObjectManager.Wow == memory && ObjectManager.WowB == reader &&
+                _boundMemory == memory && _boundReader == reader && !_boundPlayer.IsEmpty && reader.ExperimentalGrindActive &&
+                reader.TryReadTraceLocalGuid(out WowBGuid first) && first == _boundPlayer &&
+                reader.TryReadTraceLocalGuid(out WowBGuid second) && second == first &&
+                ObjectManager.Wow == memory && ObjectManager.WowB == reader && reader.ExperimentalGrindActive;
+        }
+        catch { return false; }
+    }
+
     internal static bool Experimental70707BarSafe(WowBReader reader)
         => ExperimentalBarStatus(reader, out _);
 

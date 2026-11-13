@@ -321,6 +321,14 @@ internal static class Experimental70938Tests
         Require(reader.TryReadMapId(out map) && map == 7 && reader.ReadActionBar().Count == 1 &&
             reader.TryGetUnitFields(units[0], out var fields) && fields.Health == 148 && fields.Power == 10,
             "70938 session reads candidate gameplay fields and its own action array");
+        Require(WowBGrindFactions.ExperimentalSessionPlayerCurrent(memory, reader), "hotspot watch accepts original session player");
+        ulong playerIdentity = image + Wow70938Offsets.PlayerGuid;
+        memory.Guid(playerIdentity, new WowBGuid(888, 999));
+        Require(!WowBGrindFactions.ExperimentalSessionPlayerCurrent(memory, reader), "hotspot watch rejects changed player");
+        memory.Remove(playerIdentity);
+        Require(!WowBGrindFactions.ExperimentalSessionPlayerCurrent(memory, reader), "hotspot watch rejects unreadable player");
+        memory.Guid(playerIdentity, player);
+        Require(WowBGrindFactions.ExperimentalSessionPlayerCurrent(memory, reader), "original player can resume watch");
         DeathCheckpointTests.RunActive70888(memory, reader, units[0], player);
         ulong actionAddress = image + Wow70938Offsets.StoredActionArrayCandidate;
         memory.U64(actionAddress, 1);

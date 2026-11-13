@@ -52,6 +52,16 @@ internal static class DeathCheckpointTests
             if (!changedMap.Poll(out wasObserved) || !wasObserved || Directory.Exists(directory))
                 throw new Exception("Changed map must not save a checkpoint");
             memory.U32(0x30000000 + Wow70707Offsets.MapIdCandidateOffset, 7);
+            // A no-checkpoint zero observation must not poison a later valid
+            // alive-to-zero observation while the owner is holding position.
+            memory.U64(unit + Wow70707Offsets.HealthCandidateOffset, 148);
+            if (deadAtStart.Poll(out _) || deadAtStart.LastObservation != "alive candidate")
+                throw new Exception("Unconfirmed zero should allow later alive evidence");
+            memory.U64(unit + Wow70707Offsets.HealthCandidateOffset, 0);
+            if (!deadAtStart.Poll(out _) || !deadAtStart.Recorded.HasValue)
+                throw new Exception("Later valid alive-to-zero transition must record a checkpoint");
+            // Isolate the original file count checks below.
+            foreach (string file in Directory.GetFiles(directory)) File.Delete(file);
             var tracker = new WowBDeathCheckpoint();
             memory.U64(unit + Wow70707Offsets.HealthCandidateOffset, 148);
             if (tracker.Poll(out _)) throw new Exception("Living observation marked dead");
@@ -63,7 +73,7 @@ internal static class DeathCheckpointTests
             var recorded = tracker.Recorded;
             if (!recorded.HasValue || recorded.Value.Player != player || recorded.Value.Map != 7 ||
                 recorded.Value.Position.X != 100 || recorded.Value.Position.Y != 200 || recorded.Value.Position.Z != 300 ||
-                deadAtStart.Recorded.HasValue || changedMap.Recorded.HasValue || ghostTracker.Recorded.HasValue || transitionTracker.Recorded.HasValue)
+                !deadAtStart.Recorded.HasValue || changedMap.Recorded.HasValue || ghostTracker.Recorded.HasValue || transitionTracker.Recorded.HasValue)
                 throw new Exception("In-memory recovery candidate was missing or created without a valid death observation");
             string path = Directory.GetFiles(directory).Single();
             string data = File.ReadAllText(path);

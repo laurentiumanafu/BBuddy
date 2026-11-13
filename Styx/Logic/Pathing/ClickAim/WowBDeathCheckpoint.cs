@@ -25,7 +25,7 @@ internal sealed class WowBDeathCheckpoint
     private WowBGuid _aliveGuid;
     private uint _aliveMap;
     private int _aliveAt;
-    private bool _hasAlive, _saved, _hasGhostWarning;
+    private bool _hasAlive, _saved, _hasGhostWarning, _warnedNoCheckpoint;
     private int _lastGhostWarning;
     private const int AliveEvidenceMaxMs = 30000;
 
@@ -128,6 +128,7 @@ internal sealed class WowBDeathCheckpoint
             if (health > 0)
             {
                 _aliveGuid = player.Guid; _aliveMap = map; _aliveAt = Environment.TickCount; _hasAlive = true;
+                _warnedNoCheckpoint = false;
                 LastObservation = "alive candidate";
                 observed = true;
                 return false;
@@ -160,9 +161,10 @@ internal sealed class WowBDeathCheckpoint
             }
             else if (!_saved)
             {
-                _saved = true;
                 LastObservation = "zero-health without eligible alive history or position";
-                Logging.Write("[Corpse] 0-health candidate but no recent matching alive observation; no checkpoint saved");
+                if (!_warnedNoCheckpoint)
+                    Logging.Write("[Corpse] 0-health candidate but no recent matching alive observation; no checkpoint saved");
+                _warnedNoCheckpoint = true;
             }
             else LastObservation = "zero-health checkpoint already handled";
             observed = true;

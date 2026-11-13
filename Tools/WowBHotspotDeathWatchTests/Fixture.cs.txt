@@ -1,0 +1,34 @@
+using System;
+using System.Collections.Generic;
+using Styx.Logic.Pathing;
+
+static class Fixture
+{
+    static void Check(bool value, string name) { if (!value) throw new Exception(name); }
+    public static void Main()
+    {
+        int polls = 0, waits = 0; long clock = 0; bool stop = false;
+        var logs = new List<string>();
+        bool result = WowBHotspotDeathWatch.Wait(
+            () => (++polls == 5, polls == 1 ? "alive candidate" : polls < 5 ? "unreadable" : "zero-health checkpoint"),
+            () => stop, ms => { Check(ms == 500, "sampling interval"); waits++; clock += ms; return false; }, () => clock, logs.Add);
+        Check(result && polls == 5 && waits == 4 && logs.Count == 2, "alive and unknown wait until confirmed checkpoint");
+        polls = waits = 0; clock = 0; stop = false;
+        result = WowBHotspotDeathWatch.Wait(() => { polls++; stop = true; return (true, "checkpoint"); },
+            () => stop, ms => { waits++; return false; }, () => clock, logs.Add);
+        Check(!result && polls == 1 && waits == 0, "STOP during poll wins over checkpoint");
+        polls = waits = 0; stop = false;
+        result = WowBHotspotDeathWatch.Wait(() => { polls++; return (false, "alive"); },
+            () => stop, ms => { waits++; stop = true; return true; }, () => clock, logs.Add);
+        Check(!result && polls == 1 && waits == 1, "STOP interrupts wait");
+        polls = waits = 0; stop = true;
+        result = WowBHotspotDeathWatch.Wait(() => { polls++; return (true, "checkpoint"); },
+            () => stop, ms => { waits++; return false; }, () => clock, logs.Add);
+        Check(!result && polls == 0 && waits == 0, "STOP before watch");
+        polls = waits = 0; clock = 0; stop = false; logs.Clear();
+        result = WowBHotspotDeathWatch.Wait(() => { polls++; return (false, "unknown"); },
+            () => clock >= 31000, ms => { waits++; clock += ms; return false; }, () => clock, logs.Add);
+        Check(!result && polls == 62 && waits == 62 && logs.Count == 3, "unknown stays paused and logs are throttled until session expiry");
+        Console.WriteLine("Hotspot death watch fixtures passed (synthetic state only).");
+    }
+}

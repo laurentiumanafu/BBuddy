@@ -395,6 +395,33 @@ internal static class GrindRunner
         return reason + "; no death/ghost transition confirmed during safety pause";
     }
 
+    // Four failed routes may coincide with death, but are not evidence of it.
+    // Hold without attacks or new movement while the local health/ghost tracker
+    // continues; a confirmed checkpoint returns to the existing guarded recovery.
+    private static bool WatchDeathAfterHotspotFailures(ClickAimMover mover, WowBReader reader, int started, int budgetMs, Func<bool> sessionMapCurrent)
+    {
+        var memory = ObjectManager.Wow;
+        bool quiet = mover.QuietKeyStop;
+        try { mover.QuietKeyStop = true; mover.MoveStop(); }
+        finally { mover.QuietKeyStop = quiet; }
+        ClickAimKeySteer.ReleaseHeld();
+        ClickAimKeySteer.ReleaseArrows(memory?.WindowHandle ?? IntPtr.Zero);
+        Logging.Write("[Grind] 4 hotspot failures: checking player HP and waiting without movement for a death checkpoint; STOP remains active");
+        bool Cancelled() => ClickAimAbort.Requested || RouteRunner.StopRequested ||
+            (_stop && !_recoveryReady) || ObjectManager.Wow != memory || ObjectManager.WowB != reader ||
+            !reader.ExperimentalGrindActive || unchecked(Environment.TickCount - started) >= budgetMs;
+        (bool Ready, string Observation) Poll()
+        {
+            if (memory == null || !WowBGrindFactions.ExperimentalSessionPlayerCurrent(memory, reader) || !sessionMapCurrent())
+                return (false, "original player or map unavailable or changed");
+            CheckDeathCheckpoint(trackerOnly: true, deferUnconfirmed: true);
+            if (!WowBGrindFactions.ExperimentalSessionPlayerCurrent(memory, reader) || !sessionMapCurrent())
+                return (false, "original player or map unavailable or changed");
+            return (_recoveryReady, _deathCheckpoint?.LastObservation ?? "checkpoint tracker unavailable");
+        }
+        return WowBHotspotDeathWatch.Wait(Poll, Cancelled, ClickAimAbort.Wait, () => Environment.TickCount64, Logging.Write);
+    }
+
     private static bool RecoverIfPending(ClickAimMover mover)
     {
         WowBDeathCheckpoint.Candidate candidate;
@@ -928,6 +955,7 @@ internal static class GrindRunner
             bool recovered;
             do
             {
+            bool watchCancelled = false;
             while (!_stop && !ClickAimAbort.Requested && unchecked(Environment.TickCount - started) < budgetMs)
             {
                 if (CheckDeathCheckpoint()) break;
@@ -1264,6 +1292,14 @@ internal static class GrindRunner
                         next.X, next.Y, dead));
                     if (dead >= MaxDeadHotspots)
                     {
+                        if (trialReader?.IsExperimental70938 == true && _deathCheckpoint != null)
+                        {
+                            watchCancelled = !WatchDeathAfterHotspotFailures(mover, trialReader, started, budgetMs,
+                                () => roam != null ? roam.MapCurrent() : ProfileMapCurrent());
+                            // A saved zero-health checkpoint goes through the owner below,
+                            // including the fresh release-dialog checks, not blind input.
+                            break;
+                        }
                         Logging.Write("[Grind] the last " + dead + " hotspots were all unreachable. "
                                       + "Stopping: a grind loop that cannot reach its ring is a "
                                       + "walk in a circle.");
@@ -1273,7 +1309,9 @@ internal static class GrindRunner
 
                 Thread.Sleep(150);
             }
-            recovered = _recoveryReady && !ClickAimAbort.Requested && RecoverIfPending(mover);
+            recovered = !watchCancelled && _recoveryReady && !ClickAimAbort.Requested &&
+                unchecked(Environment.TickCount - started) < budgetMs && RecoverIfPending(mover);
+            if (recovered) dead = 0; // prior failed legs do not immediately halt the revived run
             } while (recovered && !_stop && !ClickAimAbort.Requested && unchecked(Environment.TickCount - started) < budgetMs);
         }
         catch (Exception ex)

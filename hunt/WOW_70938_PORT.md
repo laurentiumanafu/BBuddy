@@ -118,3 +118,24 @@ checks still apply. The same candidate reader also serves shield and 70938
 Ghost Wolf decisions, so the widened bound affects those features too. A
 stable 29-slot layout and effect absence remain unverified until traced live;
 this change is not proof that the macro, aura mapping or casting works.
+
+### Hotspot exhaustion and death watch
+
+In `2026-11-13_1330_952.log`, the route failed at 14:42:46 and Grind
+immediately ended after its fourth consecutive failed hotspot. There is no
+zero-health sample, checkpoint or dialog observation in that ending, so the
+log alone cannot establish when the reported PvP death occurred or why death
+was not seen during the route. A failed route is not evidence of death.
+
+For 70938, four failed hotspots now release held movement and keep the run
+alive in a no-input death watch, polling the local HP/ghost checkpoint tracker
+until it produces an eligible checkpoint, STOP, attachment/session loss or the
+configured run time expires. If alive or unreadable, it holds position instead
+of walking the same failing ring; it does not fight while in this hold. A
+confirmed checkpoint transfers to the existing recovery path, which checks the
+release dialog, map, player identity and mesh before release and requires a
+confirmed ghost before corpse travel. After successful revival, the hotspot
+failure count resets. A zero-health read without the existing recent matching
+alive evidence cannot invent a checkpoint: the watch remains paused and logs
+why. This is experimental; it does not guarantee release, dialog recognition,
+ghost detection or corpse navigation. STOP remains authoritative.

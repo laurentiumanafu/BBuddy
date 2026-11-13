@@ -50,7 +50,7 @@ assert 'MayBeginRecovery' in owner and '_deathStopGeneration, _stopGeneration' i
 assert 'WowBCorpseRecovery.TryRecover(candidate, mover' in owner and 'Buffs.Reset()' in owner
 loop = grind[grind.index('            bool recovered;'):grind.index('        catch (Exception ex)', grind.index('            bool recovered;'))]
 assert 'if (CheckDeathCheckpoint()) break;' in loop
-assert '_recoveryReady && !ClickAimAbort.Requested && RecoverIfPending(mover)' in loop
+assert '!watchCancelled && _recoveryReady && !ClickAimAbort.Requested' in loop and 'RecoverIfPending(mover)' in loop
 assert 'while (recovered && !_stop && !ClickAimAbort.Requested' in loop
 policy = (root / 'Styx/Logic/Pathing/ClickAim/WowBCorpseSpotPolicy.cs').read_text(encoding='utf-8-sig')
 project = '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><Nullable>enable</Nullable></PropertyGroup></Project>'
