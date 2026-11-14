@@ -82,6 +82,8 @@ internal static class CombatResearchTests
             Check(!reader.HasExperimentalGrindSession && reader.ReadActionBar().Count == 0, "trace does not arm gameplay");
             Check(WowBCombatResearch.Capture("external on 70707", CancellationToken.None, 1, 10, includeExternalArray: true)
                 .Contains("limited to 70862"), "external probe is build gated");
+            Check(WowBCombatResearch.Capture("cooldown on 70707", CancellationToken.None, 1, 10, includeCooldownCandidate: true)
+                .Contains("limited to 70938"), "cooldown probe is build gated");
 
             // The following synthetic bytes exercise only the bounded candidate
             // reader; they do not validate the live 70862 header or layout.

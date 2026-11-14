@@ -41,13 +41,17 @@ linear disassembly of those blocks is not reliable.
 
 ## Validation needed before any gameplay use
 
-A bounded, read-only research recorder could sample the candidate array and
-nodes, with exact 70938 gating, attachment/player identity checks, readable
-committed-page checks, strict node/byte/time limits, cycle detection, tagged
-pointer handling, and stable pre/post reads. An unstable or incomplete
-snapshot must be marked unknown, not empty or ready. Its feasibility and actual
-layout must be established locally first; this document does not add that
-recorder and raw memory should not be uploaded without review.
+The Combat research tab has a default-off **Also record bounded cooldown
+candidate (70938 only)** option. It samples the two hypothesized array entries
+0 and 1, follows at most 64 nodes per list, checks readable committed ranges,
+cycle/alignment/address limits and a 100 ms per-sample budget checked between
+reads, and compares two complete observations. Unreadable, changing, cancelled or incomplete
+observations are `unknown`, not empty or ready. The capture is stopped-bot only,
+requires 70938 and retains the existing attachment, identity and bar checks.
+The values are raw research evidence: even a stable observation is not a live
+cooldown result or proof the list is exhaustive. Reads are not atomic and the
+number of list states and structure layout remain unverified. The normal
+player window is also captured; raw memory should not be uploaded without review.
 
 Compare separate stopped-bot observations on the same character and bar:
 ready, immediately after one successful Stormstrike, natural expiry, and a
@@ -60,3 +64,36 @@ handling separately. Do not substitute a guessed timer or an incomplete list
 for live data. Existing eight-second attempt estimates remain in the rotation
 and **cannot detect early resets**; until validated, the requested live cooldown
 behavior is not implemented.
+
+## Manual recording procedure
+
+Rebuild the Windows app, attach to the 70938 character, stop all bot/route
+activity, open Combat research, check **Player only** and **Also record bounded
+cooldown candidate (70938 only)**, and leave the external aura option off.
+Keep the same character and action bar. For each separate recording enter the
+label below, click **Record 25 seconds**, wait for **Recording**, then return to
+the game and wait approximately five seconds. Allow the recording to finish;
+its status gives the path in `Logs/CombatResearch`. Avoid incidental casts,
+actions or equipment/bar changes; use a safe, durable target for attacks.
+
+1. `ready control`: with Stormstrike ready at the start, do not cast anything.
+2. `normal Stormstrike`: start ready; at about five seconds successfully cast
+   Stormstrike once. Do not cast anything else; observe the visible cooldown
+   until it expires. Report whether it appeared and its approximate duration.
+3. `GCD ready`: start with Stormstrike ready; cast one unrelated spell which
+   produces a visible global cooldown, and do not use Stormstrike. Report its
+   name and whether the Stormstrike icon briefly shows the GCD.
+4. `GCD during Stormstrike`: start ready, use Stormstrike around five seconds;
+   after its global cooldown permits, use the same unrelated spell once while
+   Stormstrike's own cooldown remains visibly active. Report approximate times.
+5. `confirmed early reset`: start ready, use Stormstrike and perform the
+   normal in-game actions that can trigger the talent. If its visible cooldown
+   genuinely clears early, report the approximate first-cast and reset times,
+   what was visible, and whether Stormstrike was actually usable. Do not assume
+   every talent proc resets it. If no reset is visibly observed, mark the trace
+   `no confirmed reset` and repeat when convenient; never fabricate one.
+
+Each trace can contain character identifiers, raw process addresses and
+other sensitive memory. Review before sharing. In particular, label unclear
+casts, target deaths, other actions, failed attempts, and recordings cut short;
+the recorder may return `unknown` or miss the data despite stable samples.

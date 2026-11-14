@@ -219,7 +219,7 @@ internal static class WowBCombatResearch
 
     // Shorter bounded parameters allow the same production capture path to be
     // exercised in synthetic fixtures. The UI uses 100 x 250 ms (25 seconds).
-    internal static string Capture(string label, CancellationToken cancel, int samples = 100, int intervalMs = 250, Action? onStarted = null, bool includeExternalArray = false, bool playerOnly = false)
+    internal static string Capture(string label, CancellationToken cancel, int samples = 100, int intervalMs = 250, Action? onStarted = null, bool includeExternalArray = false, bool playerOnly = false, bool includeCooldownCandidate = false)
     {
         if (Interlocked.CompareExchange(ref _running, 1, 0) != 0) return "A combat research capture is already running.";
         string? path = null;
@@ -233,6 +233,8 @@ internal static class WowBCombatResearch
                 return "Attach to a 70707, 70755, 70790, 70862, 70888 or 70938 client and enter the world first.";
             if (includeExternalArray && !reader.Uses70862Features)
                 return "External aura research is currently limited to 70862/70888/70938; uncheck it for other builds.";
+            if (includeCooldownCandidate && !reader.IsExperimental70938)
+                return "Cooldown candidate research is limited to 70938; uncheck it for other builds.";
             using var uncached = memory.TemporaryCacheState(false);
             if (!WowBGrindFactions.TraceBuild70707(memory, reader) ||
                 !reader.TryCaptureWorldSnapshot(out WowBWorldSnapshot? snapshot) || snapshot == null ||
@@ -270,6 +272,8 @@ internal static class WowBCombatResearch
                 output.WriteLine("Reads are non-atomic; game events, effects and other causes can change fields. No keyboard, mouse, Lua or game writes were used.");
                 if (includeExternalArray)
                     output.WriteLine("External candidate enabled: bounded read-only pointer at player+0x5F0; length, capacity and stride are unverified. Raw data may be sensitive.");
+                if (includeCooldownCandidate)
+                    output.WriteLine("Cooldown candidate enabled: two hypothesized 70938 lists, bounded and double-read; not a readiness or complete cooldown result. Raw data may be sensitive.");
                 foreach (var slot in bar)
                     output.WriteLine("bar slot=" + slot.Index.ToString(CultureInfo.InvariantCulture) + " raw=0x" + slot.Raw.ToString("X16", CultureInfo.InvariantCulture));
                 var watch = Stopwatch.StartNew();
@@ -287,6 +291,8 @@ internal static class WowBCombatResearch
                     string externalReason = "";
                     ExternalCandidateSample? external = includeExternalArray && !cancel.IsCancellationRequested
                         ? ReadExternalCandidate(memory, player.UnitAddress, out externalReason, reader.Uses70888Features, reader.IsExperimental70938) : null;
+                    string? cooldown = includeCooldownCandidate && !cancel.IsCancellationRequested
+                        ? WowBCooldownResearch.Capture(memory, cancel) : null;
                     if (cancel.IsCancellationRequested) { reason = "cancelled during read; last sample discarded"; break; }
                     if (!StableWithBar(memory, reader, player, target, snapshot.TargetGuid, bar, out why, playerOnly))
                     { reason = "state changed during read (" + why + "); last sample discarded"; break; }
@@ -294,6 +300,7 @@ internal static class WowBCombatResearch
                         " endMs=" + watch.ElapsedMilliseconds.ToString(CultureInfo.InvariantCulture) + " utc=" + DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
                     output.Write(Diff(priorPlayer, playerBytes, "player"));
                     if (targetBytes != null) output.Write(Diff(priorTarget, targetBytes, "target"));
+                    if (cooldown != null) output.WriteLine(cooldown);
                     if (includeExternalArray)
                     {
                         if (external == null)

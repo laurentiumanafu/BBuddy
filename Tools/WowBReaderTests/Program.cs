@@ -37,6 +37,7 @@ RotationTests.Run(); // hotbar/priority logic only, not client-state validation
 HealPolicyTests.Run(); // heal eligibility/slot policy only, not actual spell-cost data
 BuffScheduleTests.Run(); // timer and hotbar roles only, not live aura state
 CombatResearchTests.Run(); // bounded read-only trace fixtures, not live offsets
+CooldownResearchTests.Run(); // candidate-list safety fixtures, not live cooldown validation
 GatherSettingsTests.Run(); // persistence and default policy, not live mouse isolation
 DeathCheckpointTests.Run(); // synthetic recording policy, not a live death test
 DefenceHandoffTests.Run(); // target-switch policy only, not live defence

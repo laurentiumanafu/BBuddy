@@ -177,6 +177,7 @@
         </TabItem>
         <!-- ================================================ combat research ========= -->
         <TabItem Header="Combat research">
+            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
             <StackPanel Margin="12">
                 <TextBlock FontWeight="Bold" Text="70707/70755/70790/70862/70888/70938 spell-state research (read-only)" Margin="0,0,0,8"/>
                 <TextBlock TextWrapping="Wrap" Margin="0,0,0,8"
@@ -189,6 +190,9 @@
                 <CheckBox x:Name="chkExternalAuraResearch" IsChecked="False" Margin="0,0,0,8"
                           Content="Also record bounded external aura candidate (70862/70888/70938 only)"
                           ToolTip="Read-only research; captures additional raw memory that may be sensitive. This does not identify buffs or change gameplay."/>
+                <CheckBox x:Name="chkCooldownResearch" IsChecked="False" Margin="0,0,0,8"
+                          Content="Also record bounded cooldown candidate (70938 only)"
+                          ToolTip="Research only; records candidate list fields and addresses. Not a live cooldown reader and may contain sensitive data."/>
                 <TextBlock Text="Experiment label (e.g. Mage Fireball or Shaman Lightning Bolt):" Margin="0,0,0,4"/>
                 <TextBox x:Name="txtCombatResearchLabel" MaxLength="80" Margin="0,0,0,10"/>
                 <StackPanel Orientation="Horizontal">
@@ -199,6 +203,7 @@
                 <TextBlock TextWrapping="Wrap" Margin="0,14,0,0" FontSize="11" Opacity="0.7"
                            Text="Files are saved under Logs/CombatResearch. Select a durable target to avoid losing the end of the trace when it dies. Identifying spell state may require additional traces or other memory regions."/>
             </StackPanel>
+            </ScrollViewer>
         </TabItem>
         <!-- ===================================================== selling ============ -->
         <TabItem Header="Selling">
