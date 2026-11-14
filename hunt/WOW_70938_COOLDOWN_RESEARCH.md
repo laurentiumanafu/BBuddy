@@ -97,8 +97,45 @@ compared to the Stormstrike `+0x1C` value, it had advanced 9175 units at
 though the 8000-unit node remained present. This strongly cautions that node
 presence is **not** equivalent to an active cooldown. The field's clock source,
 units, wrap behavior, stale nodes, update races, alternate client paths and
-actual UI readiness remain unverified. No reset test was supplied, and no
-rotation change is justified by these four recordings alone.
+actual UI readiness remain unverified. No reset test was supplied among these
+four recordings, and no rotation change is justified by them alone.
+
+## Improved Stormstrike recording (2026-11-14 12:49:50)
+
+The user describes the cooldown as appearing on cast and disappearing
+immediately or after about one second. The recording labelled `Testing Cooldown
+Reset Improved Stormstrike` completed 100 samples at roughly 250 ms intervals;
+its first two candidate lists were empty at the baseline. The visible action
+and exact reset time are not independently timestamped in the trace.
+
+- At 2.506 s, a 17364 category-133/1500 candidate appeared. At 2.757 s, a
+  separate 17364 node with `+0x20=8000` appeared, sharing its start-like value.
+  It was still 8000 at 3.257 s. By 3.508 s **the same node address and
+  start-like value** had `+0x20=0`; the category-133/1500 node remained.
+  This is a promising direct correlation with the described early reset,
+  approximately 1.002 s after the first category sample, but the sample
+  interval brackets the actual change. The node remained present, reinforcing
+  that absence/presence alone is not a readiness signal.
+- A further 17364 category entry appeared at 19.034 s and an 8000 entry at
+  19.284 s. Both were last seen at 21.289 s and absent at 21.539 s; another
+  17364 pair was observed at 23.041 s, before eight seconds had passed since
+  the 19.034 s sample. The disappearance is a different pattern: it does not
+  by itself prove a reset or establish what caused removal.
+- Both lists were recorded as stable at every sample; stability is not
+  atomicity, completeness, cast success, or effective cooldown readiness.
+  `Tools/analyze_cooldown_candidate.py` now flags a narrow matching-field
+  8000-to-zero transition, without retaining addresses, and treats unknowns,
+  long gaps, duplicate signatures, category entries and disappearance
+  conservatively. Its field match does not itself prove node identity.
+
+This is the best reset lead so far, but the effective cooldown still depends on
+other static paths, categories and global cooldown behavior that are not read by
+this candidate. It is not yet safe to equate zero or missing nodes with actual
+readiness, nor to claim all resets can be detected. The rotation still uses the
+8-second attempt estimate and cannot exploit this observed early transition.
+A repeated controlled early-reset recording with approximate visible event
+times, plus successful use after the reset and a fresh-session comparison,
+would help distinguish the field change from unrelated removal or timing.
 
 ## Manual recording procedure
 
