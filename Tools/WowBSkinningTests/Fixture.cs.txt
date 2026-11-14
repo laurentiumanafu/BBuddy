@@ -34,6 +34,7 @@ namespace Styx.WoWInternals
     internal class WowBReader
     {
         internal bool IsExperimental70707 = true;
+        internal bool IsExperimental70938 = false;
         internal bool TryReadMapId(out uint map) { map=TestState.Map; return TestState.MapReadable; }
         internal WowBGuid ReadTargetGuid() => TestState.Target;
         internal bool TryReadMouseoverGuidCandidate(out WowBGuid guid) { guid=TestState.Hover; return TestState.HoverReadable; }
@@ -85,9 +86,17 @@ namespace Styx.Logic.Pathing
     internal static class ClickAimKeySteer { internal static void ReleaseHeld() => TestState.Releases++; }
     internal sealed class RecentLootFixture { internal bool Matches(WowBObservedUnit u, uint map, int now) => TestState.Recent; }
     internal static class WowBGrindFactions { internal static bool AllowsPull(WowBReader r, WowBObservedUnit u, out bool unknown) { unknown=false; return TestState.Faction; } }
+    internal static class GatherBackgroundFocus
+    {
+        internal enum State { OtherApplication, Unavailable, Game }
+        internal static State Current(IntPtr hwnd) => State.OtherApplication;
+        internal static bool TryClientOrigin(IntPtr hwnd, out int x, out int y) { x=y=0; return true; }
+    }
     internal static class ClickAimInput
     {
         internal static bool ClientSize(IntPtr h, out int w, out int height) { w=800; height=600; return true; }
+        internal static bool TryCursorScreen(out int x, out int y) { x=y=0; return true; }
+        internal static bool MouseButtonsUp() => true;
         internal static bool PostMouseMoveFraction(IntPtr h, double x, double y) => TestState.MoveOk;
         internal static bool ConfirmedRightClick(IntPtr h, int x, int y, int w, int height, Func<bool> confirm, out string reason)
         { reason="cancelled"; if (ClickAimAbort.Requested || !confirm() || ClickAimAbort.Requested) return false; TestState.Clicks++; reason="posted"; return true; }
@@ -95,7 +104,8 @@ namespace Styx.Logic.Pathing
     internal static class GrindRunner
     {
         private static bool _stop, _vendorDue, vendorDue;
-        private static int _clicks;
+        private static int _clicks, _clickBiasX, _clickBiasY;
+        private static bool _clickBiasKnown;
         private const double LootReachYd = 4, RecentLootApproachYd = 3, LootYd = 18;
         private const int LootWalkMs = 1000;
         private static readonly WowBSkinAttempts NearbySkinAttempts = new();
@@ -113,6 +123,9 @@ namespace Styx.Logic.Pathing
         internal static void Reset() { _stop=false; _vendorDue=false; vendorDue=false; _clicks=0; NearbySkinAttempts.Clear(); }
         internal static void Vendor() { _vendorDue=true; }
         private static bool VendorDue() => vendorDue;
+        private static bool AutoVendorPending() => false;
+        private static bool TryProject(IntPtr h, double px, double py, double tx, double ty, double tz, out int dx, out int dy)
+        { dx=dy=0; return false; }
         private static bool CheckDeathCheckpoint() => TestState.Death;
         private static bool TryReadGatherCombat(out bool fighting) { fighting=TestState.Combat; return TestState.CombatReadable; }
         private static bool Capture(out WowBWorldSnapshot? snap) { snap=TestState.CaptureOk ? new WowBWorldSnapshot() : null; return snap != null; }

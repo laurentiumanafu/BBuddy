@@ -6,11 +6,11 @@ import tempfile
 root = Path(__file__).resolve().parents[2]
 src = root / 'Styx/Logic/Pathing/ClickAim'
 gather = (src / 'GrindRunner.cs').read_text(encoding='utf-8-sig')
-methods = gather[gather.index('    // Selection-free nearby scan.'):gather.index('    /// <summary>The click found no point on the body at all.')]
+methods = gather[gather.index('    // Search by the exact candidate mouseover GUID only:'):gather.index('    /// <summary>The click found no point on the body at all.')]
 reach = gather[gather.index('    private static bool RecentLootInReach('):gather.index('    private static bool ApproachRecentCorpse(')]
 fixture = (Path(__file__).parent / 'Fixture.cs.txt').read_text().replace('        // METHODS', reach + methods)
-loop = gather[gather.index('                // A dying NPC may clear selection'):gather.index('                RoutePoint next;')]
-assert loop.index('LootNearby(hwnd, 3, recentOnly: true)') < loop.index('TryEngage(hwnd, out combatReport)') < loop.index('TrySkinNearby(hwnd)')
+loop = gather[gather.index('                // Do not wait through a long meal'):gather.index('                RoutePoint next;')]
+assert loop.index('LootNearby(hwnd, 3, recentOnly: true)') < loop.index('TrySkinNearby(hwnd)') < loop.index('TryEngage(hwnd, out combatReport)')
 route = gather[gather.index('                bool resourceInterrupt = false, vendorInterrupt = false;'):gather.index('                if (ok)', gather.index('                bool resourceInterrupt = false, vendorInterrupt = false;'))]
 assert route.index('if (VendorDue())') < route.index('if (FightNeeded(hwnd, SearchYd))') < route.index('if (HasNearbySkin())')
 assert 'if (skinInterrupt)' in route and 'if (roam == null) index--;' in route
@@ -28,5 +28,6 @@ with tempfile.TemporaryDirectory(prefix='wowb-skinning-tests-') as folder:
     (folder/'Fixture.cs').write_text(fixture)
     (folder/'WowBSkinning.cs').write_text((src/'WowBSkinning.cs').read_text(encoding='utf-8-sig'))
     (folder/'WowBSkinCastProgress.cs').write_text((src/'WowBSkinCastProgress.cs').read_text(encoding='utf-8-sig'))
+    (folder/'WowBSkinHoverSearch.cs').write_text((src/'WowBSkinHoverSearch.cs').read_text(encoding='utf-8-sig'))
     (folder/'GatherSettings.cs').write_text((src/'GatherSettings.cs').read_text(encoding='utf-8-sig'))
     subprocess.run(['dotnet', 'run', '--project', str(folder/'Fixture.csproj')], check=True)

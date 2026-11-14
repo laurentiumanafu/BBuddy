@@ -23,7 +23,11 @@ static class Program
         p = new WowBSkinCastProgress(); p.Update(o,100,3100,0); p.Update(o,200,3200,1000); p.Update(idle,0,0,3000);
         Check(p.Update(idle,0,0,6000)==WowBSkinCastProgress.Result.Fallback,"cast identity change is not completion");
         p = new WowBSkinCastProgress();
-        Check(p.Update(idle,0,0,6000)==WowBSkinCastProgress.Result.Fallback,"missing cast retains fallback");
+        p.Update(idle,0,0,200);
+        Check(p.Update(idle,0,0,6000)==WowBSkinCastProgress.Result.Fallback && p.ConfirmedNoCast && !p.SawCast,"repeated known idle permits retry");
+        p = new WowBSkinCastProgress(); p.Update(idle,0,0,0); p.Update(unknown,0,0,200); p.Update(idle,0,0,400);
+        Check(p.Update(idle,0,0,6000)==WowBSkinCastProgress.Result.Fallback && !p.ConfirmedNoCast,"unknown prevents retry");
+        p = new WowBSkinCastProgress(); p.Update(o,100,3100,0); Check(p.SawCast && !p.ConfirmedNoCast, "observed candidate prevents repeat click");
         p = new WowBSkinCastProgress(); p.Update(o,100,3100,0);
         Check(p.Update(o,100,3100,6000)==WowBSkinCastProgress.Result.Waiting,"active past fallback still holds");
         Check(p.Update(o,100,3100,12000)==WowBSkinCastProgress.Result.ActiveTimeout,"stuck active bounded and uncertain");

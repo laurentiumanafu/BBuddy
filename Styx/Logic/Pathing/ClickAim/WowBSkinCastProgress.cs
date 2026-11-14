@@ -11,6 +11,11 @@ internal sealed class WowBSkinCastProgress
     private uint castStart, castEnd;
     private int firstSeen, idleCount, clearedAt;
 
+    // Only stable idle observations with no intervening unknown/mining/cast
+    // permit a second interaction. A cast candidate is never proof of loot.
+    internal bool SawCast => seen;
+    internal bool ConfirmedNoCast => !seen && !uncertain && idleCount >= 2;
+
     internal Result Update(WowBGatherCastResearch.Observation state, uint start, uint end, int elapsed)
     {
         if (state == WowBGatherCastResearch.Observation.Skinning)

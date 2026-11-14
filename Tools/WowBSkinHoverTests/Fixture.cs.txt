@@ -1,0 +1,54 @@
+using System;
+using Styx.Logic.Pathing;
+using Styx.WoWInternals;
+namespace Styx.WoWInternals
+{
+    internal struct WowBGuid : IEquatable<WowBGuid>
+    {
+        private int value;
+        internal WowBGuid(int v) { value = v; }
+        internal bool IsEmpty => value == 0;
+        public bool Equals(WowBGuid b) => value == b.value;
+        public override bool Equals(object? obj) => obj is WowBGuid b && Equals(b);
+        public override int GetHashCode() => value;
+        public static bool operator ==(WowBGuid a, WowBGuid b) => a.Equals(b);
+        public static bool operator !=(WowBGuid a, WowBGuid b) => !a.Equals(b);
+    }
+}
+static class Fixture
+{
+    static void Check(bool ok, string name) { if (!ok) throw new Exception(name); }
+    static void Main()
+    {
+        var corpse = new WowBGuid(123); var totem = new WowBGuid(456); var empty = new WowBGuid(0);
+        int moves = 0, reads = 0;
+        bool found = WowBSkinHoverSearch.Find(800, 600, 400, 300, corpse, 9,
+            (x,y) => { moves++; return true; },
+            () => { reads++; return (true, reads == 1 ? empty : reads == 2 ? totem : corpse); },
+            () => true, ms => false, out int x, out int y, out bool exhausted, out _);
+        Check(found && !exhausted && moves == 3 && x == 440 && y == 300 && reads == 4, "hover skips totem without selecting it");
+        moves = 0; reads = 0;
+        found = WowBSkinHoverSearch.Find(800, 600, 400, 300, corpse, 2,
+            (a,b) => { moves++; return true; }, () => { reads++; return (true, empty); },
+            () => true, ms => false, out _, out _, out exhausted, out _);
+        Check(!found && exhausted && moves == 3, "bounded misses");
+        found = WowBSkinHoverSearch.Find(800, 600, 400, 300, corpse, 2,
+            (a,b) => true, () => (true, corpse), () => true, ms => false, out _, out _, out exhausted, out _);
+        Check(!found && !exhausted, "stale baseline denied");
+        reads = 0;
+        found = WowBSkinHoverSearch.Find(800, 600, 400, 300, corpse, 2,
+            (a,b) => true, () => { reads++; return (true, reads == 1 ? empty : reads == 2 ? corpse : totem); },
+            () => true, ms => false, out _, out _, out exhausted, out _);
+        Check(!found && !exhausted, "changed hover denied");
+        found = WowBSkinHoverSearch.Find(800, 600, 400, 300, corpse, 2,
+            (a,b) => true, () => (false, empty), () => true, ms => false, out _, out _, out exhausted, out _);
+        Check(!found && !exhausted, "unreadable denied");
+        found = WowBSkinHoverSearch.Find(800, 600, 400, 300, corpse, 2,
+            (a,b) => true, () => (true, empty), () => true, ms => true, out _, out _, out exhausted, out _);
+        Check(!found && !exhausted, "STOP denied");
+        found = WowBSkinHoverSearch.Find(800, 600, 400, 300, corpse, 2,
+            (a,b) => true, () => (true, empty), () => false, ms => false, out _, out _, out exhausted, out _);
+        Check(!found && !exhausted, "unsafe denied");
+        Console.WriteLine("Synthetic hover search checks passed; no game or input was used.");
+    }
+}

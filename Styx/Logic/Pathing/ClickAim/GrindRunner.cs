@@ -1063,6 +1063,12 @@ internal static class GrindRunner
                     if (RecentLootRetryPending()) { ClickAimAbort.Wait(200); continue; }
                 }
 
+                // Prioritize 70938 nearby beasts before rest, new gathering and
+                // voluntary pulls, but never interrupt a committed gathering
+                // procedure, active combat, pending selling or recent loot.
+                if (trialReader?.IsExperimental70938 == true && !_vendorDue && !AutoVendorPending() &&
+                    !VendorDue() && !RecentLootRetryPending() && TrySkinNearby(hwnd)) continue;
+
                 /* No recovery step: healing needs a cast, a cast needs the action bar, and
                  * clicking a heal button 40 pixels wide on a 3D scene is a guess. Auto-attack
                  * plus the client's own swing is what a level-2 character does anyway. */
@@ -1697,6 +1703,11 @@ internal static class GrindRunner
                 return false;
             }
         }
+
+        // Hotspot dwell also reaches this method directly. On 70938, process
+        // nearby beasts after combat/vendor/recent loot but before a new pull.
+        if (trialReader?.IsExperimental70938 == true && TrySkinNearby(hwnd))
+        { _poolApproachHandled = true; return false; }
 
         // Defence always takes precedence above. Mana users wait at the configured
         // threshold; a stable 70707 rage-type candidate must not wait for mana.
@@ -3950,6 +3961,46 @@ internal static class GrindRunner
         return result;
     }
 
+    // Search by the exact candidate mouseover GUID only: no left-click probes,
+    // TAB, or selection of nearby totems. All inputs are still experimental.
+    private static bool FindCorpseHover(IntPtr hwnd, WowBReader reader, GreenMagic.Memory memory,
+        WowBObservedUnit corpse, double px, double py, Func<bool> corpseSafe, int maxProbes,
+        out int x, out int y, out int width, out int height, out bool exhausted, out string reason, out Func<bool>? hoverSafe)
+    {
+        x = y = width = height = 0; exhausted = false; hoverSafe = null; reason = "focus or client geometry unavailable";
+        if (!ClickAimInput.ClientSize(hwnd, out int w, out int h) ||
+            !GatherBackgroundFocus.TryClientOrigin(hwnd, out int ox, out int oy)) return false;
+        var focus = GatherBackgroundFocus.Current(hwnd);
+        if (focus == GatherBackgroundFocus.State.Unavailable) return false;
+        int mouseX = 0, mouseY = 0;
+        if (focus == GatherBackgroundFocus.State.Game &&
+            (!ClickAimInput.TryCursorScreen(out mouseX, out mouseY) || !ClickAimInput.MouseButtonsUp())) return false;
+        bool Safe()
+        {
+            if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested || memory.WindowHandle != hwnd ||
+                ObjectManager.Wow != memory || ObjectManager.WowB != reader || !corpseSafe() ||
+                GatherBackgroundFocus.Current(hwnd) != focus || !ClickAimInput.ClientSize(hwnd, out int w2, out int h2) ||
+                w2 != w || h2 != h || !GatherBackgroundFocus.TryClientOrigin(hwnd, out int ox2, out int oy2) || ox != ox2 || oy != oy2) return false;
+            if (focus == GatherBackgroundFocus.State.Game &&
+                (!ClickAimInput.MouseButtonsUp() || !ClickAimInput.TryCursorScreen(out int mx, out int my) ||
+                 Math.Abs((long)mx - mouseX) > 3 || Math.Abs((long)my - mouseY) > 3)) return false;
+            return !_stop && !ClickAimAbort.Requested && ObjectManager.Wow == memory && ObjectManager.WowB == reader;
+        }
+        int dx = 0, dy = 0;
+        bool projected = TryProject(hwnd, px, py, corpse.Location.X, corpse.Location.Y, corpse.Location.Z, out dx, out dy);
+        int centerX = w / 2 + dx + (_clickBiasKnown ? _clickBiasX : 0);
+        int centerY = h / 2 + dy + (_clickBiasKnown ? _clickBiasY : 0);
+        if (!projected) { centerX = w / 2 + (_clickBiasKnown ? _clickBiasX : 0); centerY = h / 2 + (_clickBiasKnown ? _clickBiasY : 0); }
+        bool found = WowBSkinHoverSearch.Find(w, h, centerX, centerY, corpse.Guid, maxProbes,
+            (mx, my) => ClickAimInput.PostMouseMoveFraction(hwnd, mx / (double)(w - 1), my / (double)(h - 1)),
+            () => (reader.TryReadMouseoverGuidCandidate(out WowBGuid hover), hover), Safe, ClickAimAbort.Wait,
+            out x, out y, out exhausted, out reason);
+        if (!found) return false;
+        if (!Safe()) { reason = "corpse, focus or geometry changed after hover search"; return false; }
+        width = w; height = h; hoverSafe = Safe;
+        return true;
+    }
+
     // Selection-free nearby scan. The corpse need not be one we fought, but
     // its beast entry must have been confirmed by the user. No loot click is
     // sent first: one right-click may instead open loot if the body is not ready.
@@ -3969,8 +4020,9 @@ internal static class GrindRunner
                 !reader.TryGetUnitFields(unit.UnitAddress, out WowBReader.WowBUnitFields fields) || fields.Health != 0) continue;
             double distance = ClickAimMath.Len(unit.Location.X - player.Location.X, unit.Location.Y - player.Location.Y);
             double height = Math.Abs(unit.Location.Z - player.Location.Z);
-            if (!double.IsFinite(distance) || !double.IsFinite(height) || distance > LootYd || height > 5.0 || distance >= best) continue;
-            best = distance; original = unit;
+            double distance3d = Math.Sqrt(distance * distance + height * height);
+            if (!double.IsFinite(distance3d) || distance > LootYd || height > 5.0 || distance3d >= best) continue;
+            best = distance3d; original = unit;
         }
         return !original.Guid.IsEmpty && SkinQuiet(reader, memory, map, true);
     }
@@ -4056,7 +4108,7 @@ internal static class GrindRunner
     // entry candidate is eligible, and neither the loot nor the skin is observable.
     private static bool SkinQuiet(WowBReader reader, GreenMagic.Memory memory, uint map, bool nearby = false)
     {
-        if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested || _vendorDue ||
+        if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested || _vendorDue || AutoVendorPending() ||
             !(nearby ? GatherSettings.SkinNearby : GatherSettings.Skinning) || map == uint.MaxValue || ObjectManager.Wow != memory || ObjectManager.WowB != reader)
             return false;
         if (CheckDeathCheckpoint() || !reader.TryReadMapId(out uint now) || now != map ||
@@ -4082,6 +4134,65 @@ internal static class GrindRunner
         return Math.Sqrt(dx * dx + dy * dy + dz * dz) <= LootReachYd + 1.0 && SkinQuiet(reader, memory, map, nearby);
     }
 
+    // 70938 only: two posted attempts at most, and only retry after a whole
+    // observation window of readable idle samples without a cast candidate.
+    private static void TrySkin70938(IntPtr hwnd, WowBReader reader, GreenMagic.Memory memory,
+        WowBObservedUnit original, WowBGuid playerGuid, uint map, bool nearby, out bool anySent)
+    {
+        anySent = false;
+        for (int attempt = 1; attempt <= 2; attempt++)
+        {
+            if (!SkinCorpseCurrent(reader, memory, map, original, playerGuid, out WowBObservedUnit corpse,
+                out WowBObservedUnit player, nearby)) return;
+            bool CorpseSafe() => SkinCorpseCurrent(reader, memory, map, original, playerGuid, out _, out _, nearby);
+            if (!FindCorpseHover(hwnd, reader, memory, corpse, player.Location.X, player.Location.Y, CorpseSafe, 40,
+                out int x, out int y, out int width, out int height, out _, out string how, out Func<bool>? hoverSafe) || hoverSafe == null)
+            { Logging.Write("[Skin] 70938 hover-only search withheld: " + how); return; }
+            if (!WowBGatherCastResearch.TryBegin(memory, reader, out WowBObservedUnit castPlayer) || castPlayer.Guid != playerGuid ||
+                WowBGatherCastResearch.Observe(memory, reader, castPlayer) != WowBGatherCastResearch.Observation.Idle || !hoverSafe())
+            { Logging.Write("[Skin] cast baseline or corpse safety unknown; no interaction sent"); return; }
+            bool sent = ClickAimInput.ConfirmedRightClick(hwnd, x, y, width, height, () =>
+                hoverSafe() && reader.TryReadMouseoverGuidCandidate(out WowBGuid hover) && hover == original.Guid &&
+                reader.TryReadMouseoverGuidCandidate(out WowBGuid hoverAgain) && hoverAgain == original.Guid &&
+                WowBGatherCastResearch.Observe(memory, reader, castPlayer) == WowBGatherCastResearch.Observation.Idle &&
+                hoverSafe() && reader.TryReadMouseoverGuidCandidate(out WowBGuid finalHover) && finalHover == original.Guid,
+                out string reason);
+            if (!sent) { Logging.Write("[Skin] attempt " + attempt + "/2 withheld: " + reason); return; }
+            anySent = true;
+            _clicks++;
+            Logging.Write("[Skin] attempt " + attempt + "/2 posted on exact corpse hover; " + how + "; " + reason + "; cast and loot unverified");
+            // A posted down with uncertain button-up must never be retried,
+            // but it may have started a cast, so still observe and hold still.
+            bool mayRetry = reason == "right-button messages posted";
+            if (!mayRetry) Logging.Write("[Skin] button-up unconfirmed; observing the possible cast but no second attempt");
+            var progress = new WowBSkinCastProgress();
+            int started = Environment.TickCount;
+            WowBSkinCastProgress.Result result;
+            do
+            {
+                if (!SkinQuiet(reader, memory, map, nearby)) return;
+                var state = WowBGatherCastResearch.Observe(memory, reader, castPlayer, out uint start, out uint end);
+                if (!SkinQuiet(reader, memory, map, nearby)) return;
+                result = progress.Update(state, start, end, unchecked(Environment.TickCount - started));
+                if (result == WowBSkinCastProgress.Result.Waiting && ClickAimAbort.Wait(200)) return;
+            } while (result == WowBSkinCastProgress.Result.Waiting);
+            if (result == WowBSkinCastProgress.Result.CandidateCleared)
+            {
+                Logging.Write("[Skin] ID-10768 cast-like candidate completed its observed interval and cleared; skinning success and loot remain unverified");
+                return;
+            }
+            if (result == WowBSkinCastProgress.Result.ActiveTimeout || progress.SawCast || !progress.ConfirmedNoCast || !mayRetry)
+            {
+                Logging.Write("[Skin] cast observed, interrupted, unreadable or uncertain, or button-up unconfirmed; no blind retry; skinning success and loot remain unverified");
+                return;
+            }
+            if (attempt == 1)
+                Logging.Write("[Skin] no skinning cast candidate after first attempt; rechecking corpse and hover for one retry");
+            else
+                Logging.Write("[Skin] no skinning cast candidate after two attempts; giving up on this corpse");
+        }
+    }
+
     private static void TrySkinLootedBeast(IntPtr hwnd, WowBReader reader, WowBObservedUnit original, uint map, bool nearby = false)
     {
         GreenMagic.Memory? memory = ObjectManager.Wow;
@@ -4094,7 +4205,15 @@ internal static class GrindRunner
         // Both paths share a session cache, so neither can immediately issue a
         // second skinning interaction on a body the other already attempted.
         if (!nearby && NearbySkinAttempts.Contains(original, map)) return;
-        if (!nearby) NearbySkinAttempts.Remember(original, map);
+        if (!nearby && !NearbySkinAttempts.Remember(original, map)) return;
+        if (reader.IsExperimental70938)
+        {
+            TrySkin70938(hwnd, reader, memory, original, playerGuid, map, nearby, out bool anySent);
+            if (!anySent && (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested || _vendorDue ||
+                AutoVendorPending() || VendorDue() || !TryReadGatherCombat(out bool fighting) || fighting))
+                NearbySkinAttempts.Forget(original, map);
+            return;
+        }
 
         // First loot normally dismissed the corpse. If not, clear it with verified
         // F1; never use the unverified projected-point fallback for skinning.
@@ -5285,6 +5404,23 @@ internal static class GrindRunner
         GreenMagic.Memory? clickMemory = ObjectManager.Wow;
         if (strictClick && (clickReader == null || clickMemory == null)) { how = "client attachment unavailable"; return false; }
         using var uncachedClick = strictClick ? clickMemory?.TemporaryCacheState(false) : null;
+        // Recent, user-confirmed beast corpses are often looted immediately
+        // before skinning. Do not left-click search rings over nearby totems.
+        if (strictClick && clickReader?.IsExperimental70938 == true && clickMemory != null && safeToClick != null &&
+            (GatherSettings.Skinning || GatherSettings.SkinNearby) && WowBSkinning.IsConfirmed(true, unit.Guid))
+        {
+            if (!FindCorpseHover(hwnd, clickReader, clickMemory, unit, px, py, safeToClick, maxProbes,
+                out int hx, out int hy, out int hw, out int hh, out searchExhausted, out how, out Func<bool>? hoverSafe) || hoverSafe == null)
+                return false;
+            if (!ClickAimInput.ConfirmedRightClick(hwnd, hx, hy, hw, hh, () =>
+                hoverSafe() && clickReader.TryReadMouseoverGuidCandidate(out WowBGuid hover) && hover == unit.Guid &&
+                clickReader.TryReadMouseoverGuidCandidate(out WowBGuid again) && again == unit.Guid && hoverSafe() &&
+                clickReader.TryReadMouseoverGuidCandidate(out WowBGuid finalHover) && finalHover == unit.Guid, out string why))
+            { how += "; guarded loot click withheld: " + why; return false; }
+            how += "; " + why + "; hover is a candidate, loot is unverified";
+            pixelConfirmed = true; // exact double-read hover, not a selected-target proof
+            return true;
+        }
         if (strictClick && clickReader != null && clickReader.ReadTargetGuid() == unit.Guid &&
             clickReader.TryGetUnitFields(unit.UnitAddress, out WowBReader.WowBUnitFields clickFields) && clickFields.Health == 0 &&
             Capture(out WowBWorldSnapshot? clickSnapshot) && clickSnapshot != null &&
