@@ -84,7 +84,13 @@ internal static class ClickAimClassRotation
         return found;
     }
 
-    internal static ClickAimRotationPlan Build(ClickAimRotationClass requested, List<ClickAimAction> bar)
+    // 70938 timing is an estimate from published data and one user trace, not
+    // a readable per-spell cooldown; failed attempts can also start this timer.
+    internal const int StormstrikeId = 17364, StormstrikeInterval70938Ms = 8000;
+    internal const uint StormstrikePowerFloor70938 = 125;
+    internal const string StormstrikeCooldownGroup70938 = "Stormstrike-70938";
+
+    internal static ClickAimRotationPlan Build(ClickAimRotationClass requested, List<ClickAimAction> bar, bool experimental70938 = false)
     {
         var plan = new ClickAimRotationPlan { Class = Resolve(requested, bar) };
         if (!Definitions.TryGetValue(plan.Class, out Definition? def))
@@ -93,10 +99,13 @@ internal static class ClickAimClassRotation
             plan.Melee = ClickAimCombat.FirstMeleeDamage(bar);
             plan.Dot = ClickAimCombat.FirstDot(bar);
             plan.Heal = ClickAimCombat.FirstHeal(bar);
+            ConfigureStormstrike(plan, experimental70938);
             return plan;
         }
         plan.Damage = Find(bar, def.Damage, ClickAimSpellRole.Damage);
         plan.Melee = Find(bar, def.Melee, ClickAimSpellRole.Damage);
+        if (experimental70938 && plan.Class == ClickAimRotationClass.Shaman && plan.Melee == null)
+            plan.Melee = Find(bar, new[] { "Stormstrike" }, ClickAimSpellRole.Damage);
         if (plan.Melee != null && (plan.Class == ClickAimRotationClass.Hunter || plan.Class == ClickAimRotationClass.Paladin))
         {
             plan.MeleeGroup = ClickAimCombat.NameOf(plan.Melee.Id);
@@ -144,7 +153,18 @@ internal static class ClickAimClassRotation
             plan.DamageGroup = "Shocks";
             plan.DamageIntervalMs = 8000;
         }
+        ConfigureStormstrike(plan, experimental70938);
         return plan;
+    }
+
+    private static void ConfigureStormstrike(ClickAimRotationPlan plan, bool experimental70938)
+    {
+        if (experimental70938 && plan.Melee != null && plan.Melee.Id == StormstrikeId &&
+            plan.Melee.IsDamage && plan.Melee.IsMelee && plan.Melee.KeyVk != 0)
+        {
+            plan.MeleeGroup = StormstrikeCooldownGroup70938;
+            plan.MeleeIntervalMs = StormstrikeInterval70938Ms;
+        }
     }
 
     internal static bool IsDirectShock(ClickAimAction action)

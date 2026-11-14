@@ -5925,7 +5925,7 @@ internal static class GrindRunner
         Func<bool>? defensiveMovement = defenceOnly && remoteDefence
             ? () => RemoteDefenceMovementAllowed(reader, fightMemory, expectedPull, selectedRemoteFallback) : null;
         List<ClickAimAction> bar = ClickAimCombat.ReadBar(reader);
-        ClickAimRotationPlan rotation = ClickAimClassRotation.Build(ClickAimSettings.RotationClass, bar);
+        ClickAimRotationPlan rotation = ClickAimClassRotation.Build(ClickAimSettings.RotationClass, bar, reader.IsExperimental70938);
         ClickAimAction? damage = rotation.Damage;
         ClickAimAction? heal = rotation.Heal;
         ClickAimAction? auto = ClickAimCombat.AutoAttack(bar);          // Attack (6603)
@@ -6534,7 +6534,10 @@ internal static class GrindRunner
             // actually in melee range, even if Shock is ready. A health drop is
             // not proof of a swing. Attack is a toggle, so attempt it only once
             // per Fight and never retry merely because damage is quiet.
-            if (shockAutoPlan) conservativeShockAttack = true;
+            // Stormstrike also relies on keeping the existing swing on: Attack
+            // is a toggle, so never retry it solely because damage is quiet.
+            if (shockAutoPlan || (reader.IsExperimental70938 && meleeHit != null && meleeHit.Id == ClickAimClassRotation.StormstrikeId && meleeHit.IsDamage))
+                conservativeShockAttack = true;
             if (!keyOneMacro && ClickAimClassRotation.MayPressConservativeAttack(shockAutoPlan, attackPressed, false, false, d, AttackRangeYd))
             {
                 ClickAimKeySteer.ReleaseHeld();
@@ -7034,16 +7037,53 @@ internal static class GrindRunner
             /* The melee half of the bar is only used at arm's length. On 70707,
              * candidate rage has no validated amount; withhold resource-dependent
              * abilities rather than repeatedly pressing them at unknown rage. */
-            if (meleeHit != null && !unmeasuredRage && (!swinging || sinceDamageMs >= MeleePressMs)
+            bool stormstrike70938 = reader.IsExperimental70938 && meleeHit?.Id == ClickAimClassRotation.StormstrikeId;
+            uint meleePower = stormstrike70938
+                ? Math.Max(PowerForCast(meleeHit, 10), ClickAimClassRotation.StormstrikePowerFloor70938)
+                : PowerForCast(meleeHit, 10);
+            if (meleeHit != null && !unmeasuredRage && (stormstrike70938 || !swinging || sinceDamageMs >= MeleePressMs)
                 && ClickAimClassRotation.Ready(_rotationCooldowns, rotation.MeleeGroup, Environment.TickCount)
-                && (rotation.MeleeIntervalMs == 0 || myMana >= PowerForCast(meleeHit, 10)))
+                && (rotation.MeleeIntervalMs == 0 || myMana >= meleePower)
+                && (!stormstrike70938 || (meleeHit.KeyVk != 0 &&
+                    rotation.MeleeIntervalMs == ClickAimClassRotation.StormstrikeInterval70938Ms &&
+                    rotation.MeleeGroup == ClickAimClassRotation.StormstrikeCooldownGroup70938 &&
+                    d <= ClickAimCombat.MeleeRangeYd &&
+                    (lastCastMs == 0 || unchecked(Environment.TickCount - lastCastMs) >= ClickAimCombat.CastSettleMs) &&
+                    (lastHealMs == 0 || unchecked(Environment.TickCount - lastHealMs) >= ClickAimCombat.CastSettleMs))))
             {
                 if (!FightAttackInputAllowed(reader, fightMemory, defenceTarget, expectedPull, !defenceOnly || defenceFactionFilter, defenceOnly, !defenceOnly))
                 { return YieldForTargetChange(reader, fightMemory, defenceTarget); }
                 if (!meleeHit.IsDamage) return "melee ability role changed; attack withheld";
                 if (!ResourceInputStillAllowed(reader)) continue;
+                if (stormstrike70938)
+                {
+                    // Re-read target, player, range and mana just before the key;
+                    // a recent swing, stale coordinates or an estimated timer is
+                    // not proof that the current client can accept this cast.
+                    if (!Capture(out WowBWorldSnapshot? hitSnap) || hitSnap == null ||
+                        !hitSnap.TryGetLocalPlayer(out WowBObservedUnit hitPlayer) || hitPlayer.Guid != me.Guid ||
+                        hitPlayer.UnitAddress != me.UnitAddress || hitPlayer.RecordAddress != me.RecordAddress ||
+                        !hitSnap.TryGetSelectedTarget(out WowBObservedUnit hitTarget) ||
+                        hitTarget.Guid != defenceTarget || hitTarget.UnitAddress != expectedPull.UnitAddress ||
+                        hitTarget.RecordAddress != expectedPull.RecordAddress || hitTarget.IsLocalPlayer || hitTarget.HasPlayerVtable ||
+                        !reader.TryGetUnitFields(hitTarget.UnitAddress, out WowBReader.WowBUnitFields hitMob) ||
+                        !DefenceFieldsValid(hitMob.Health, hitMob.UnitFlags, false) ||
+                        !reader.TryGetUnitFields(hitPlayer.UnitAddress, out WowBReader.WowBUnitFields hitSelf) ||
+                        hitSelf.Health == 0 || hitSelf.PlayerPowerTypeCandidate != 0 || hitSelf.Power < meleePower) continue;
+                    double hx = hitTarget.Location.X - hitPlayer.Location.X, hy = hitTarget.Location.Y - hitPlayer.Location.Y;
+                    double hz = hitTarget.Location.Z - hitPlayer.Location.Z;
+                    double hitDistance = Math.Sqrt(hx * hx + hy * hy + hz * hz);
+                    if (!double.IsFinite(hitDistance) || hitDistance > ClickAimCombat.MeleeRangeYd ||
+                        !ClickAimClassRotation.Ready(_rotationCooldowns, rotation.MeleeGroup, Environment.TickCount) ||
+                        !meleeHit.IsDamage ||
+                        !FightAttackInputAllowed(reader, fightMemory, defenceTarget, expectedPull, !defenceOnly || defenceFactionFilter, defenceOnly, !defenceOnly)) continue;
+                    myMana = hitSelf.Power;
+                }
                 ClickAimInput.TapKey(hwnd, meleeHit.KeyVk, 40);
+                if (stormstrike70938) lastCastMs = Environment.TickCount;
                 ClickAimClassRotation.Defer(_rotationCooldowns, rotation.MeleeGroup, rotation.MeleeIntervalMs, Environment.TickCount);
+                if (stormstrike70938)
+                    Logging.Write("[Grind] Stormstrike key attempted in melee; 8-second estimate started (client cooldown and cast success unverified)");
                 if (keyOneMacro && ClickAimClassRotation.IsAnyShock(meleeHit))
                 {
                     if (TryFightKeyOneMacro(hwnd, reader, fightMemory, macroPlayer, expectedPull, macroMap,

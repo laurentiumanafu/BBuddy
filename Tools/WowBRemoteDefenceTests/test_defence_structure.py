@@ -35,7 +35,8 @@ class DefenceScopeTests(unittest.TestCase):
         fight = section('    private static string Fight(', "    /// <summary>\n    /// A unit's health straight out of its data block")
         self.assertIn('grindMode && !reader.Uses70862Features, remoteDefence', handoff)
         self.assertIn('(!defenceOnly || defenceFactionFilter) && !FactionPullStillAllowed', fight)
-        self.assertEqual(10, fight.count('!defenceOnly || defenceFactionFilter, defenceOnly'))
+        # Includes the additional last-moment Stormstrike target/faction check.
+        self.assertEqual(11, fight.count('!defenceOnly || defenceFactionFilter, defenceOnly'))
         self.assertIn('target.UnitAddress != expectedPull.UnitAddress', fight)
         self.assertIn('target.RecordAddress != expectedPull.RecordAddress', fight)
         self.assertIn('reader.Uses70862Features) && GrindFactionSettings.Rules.Enabled', fight)

@@ -410,3 +410,32 @@ use of Stormstrike with a durable target, no other casts or movement, and
 include a visible timestamp when it becomes usable; repeat once and compare.
 An idle/no-cooldown control should also be stationary. A separate mana-spending
 spell would help test whether the five-second pattern is generic.
+
+### 2026-11-14: 70938 Stormstrike attempts in the damage rotation
+
+The user reports two Stormstrike uses in
+`20261114-091521-7d3195263b274b2db1b45aee3be22bd8.txt`. An ID-17364-like
+player word appeared at 2.75 s and cleared at 3.00 s; a second such transient
+was not captured at 250 ms sampling. Mana-like decreases and +0x1C14 timer-like
+transitions occurred at 3.00 and 11.01 s, roughly eight seconds apart, matching
+the user's report and external eight-second references. Those observations do
+not independently establish either cast's success or a per-spell cooldown
+field; the +0x1C14 intervals are about five seconds, so the bot does not use
+that field as a Stormstrike cooldown.
+
+For 70938, a bound Stormstrike with Damage role is selected as a Shaman melee
+ability and gets its own eight-second **per-attempt** timer, independent of
+Shocks. This also covers a Stormstrike selected in the Generic melee fallback;
+other builds keep their prior rotation. Ignore or an unbound key withholds the
+ability. The action is attempted only in melee, with fresh player/target
+identity, living target, 3-D range, mana-type and power checks, and existing
+faction/profile/defence, attachment, bar, and STOP guards. Mana uses a
+conservative candidate floor of 125 based on a published spell listing and any
+larger learned estimate; actual 70938 cost is unverified and the floor can
+withhold a usable cast. Avoid issuing immediately after a recent cast/heal;
+use the existing short global-settle window after the key, without suppressing
+auto-attack or imposing Stormstrike's eight-second timer on Shocks. The timer
+persists across fights and starts even when a key is refused. It is not a live
+cooldown read: a manually used spell before the bot starts, a cooldown reset, a
+failed key, or a hotfix can make the estimate wrong. Actual cast success,
+target-facing dynamics, mana cost, and live cooldown remain unverified.

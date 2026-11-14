@@ -90,11 +90,45 @@ internal static class RotationTests
             "Lightning Bolt filler retains ranged rotation");
     }
 
+    private static void Stormstrike70938Tests()
+    {
+        ClickAimCombat.ClearRoleOverrides();
+        var bar = Bar(6603, 8056, 17364, 331);
+        ClickAimCombat.SetRoleOverride(17364, ClickAimSpellRole.Damage);
+        var plan = ClickAimClassRotation.Build(ClickAimRotationClass.Shaman, bar, true);
+        Check(plan.Melee?.Id == 17364 && plan.Melee.IsMelee && plan.MeleeIntervalMs == 8000 &&
+              plan.MeleeGroup == ClickAimClassRotation.StormstrikeCooldownGroup70938, "70938 Stormstrike has separate eight second attempt estimate");
+        Check(plan.Damage?.Id == 8056 && plan.DamageGroup == "Shocks" && plan.DamageIntervalMs == 8000,
+              "Stormstrike does not replace Frost Shock");
+        Check(ClickAimClassRotation.ShockAutoPlan(plan, bar[0]), "Shock and auto attack stay enabled");
+        var until = new Dictionary<string, int>();
+        Check(ClickAimClassRotation.Ready(until, plan.MeleeGroup, 1000), "initial estimated availability");
+        ClickAimClassRotation.Defer(until, plan.MeleeGroup, plan.MeleeIntervalMs, 1000);
+        Check(!ClickAimClassRotation.Ready(until, plan.MeleeGroup, 8999) &&
+              ClickAimClassRotation.Ready(until, plan.MeleeGroup, 9000), "per-attempt estimate boundary");
+        Check(ClickAimClassRotation.Ready(until, plan.DamageGroup, 2000), "Stormstrike does not defer Shock group");
+        ClickAimClassRotation.Defer(until, plan.DamageGroup, plan.DamageIntervalMs, 2000);
+        Check(ClickAimClassRotation.Ready(until, plan.MeleeGroup, 9000), "Shock does not defer Stormstrike group");
+        var generic = ClickAimClassRotation.Build(ClickAimRotationClass.Auto, Bar(17364), true);
+        Check(generic.Melee?.Id == 17364 && generic.MeleeIntervalMs == 8000, "Stormstrike-only generic bar gets estimate");
+        var older = ClickAimClassRotation.Build(ClickAimRotationClass.Shaman, bar);
+        Check(older.Melee?.Id == 17364 && older.MeleeIntervalMs == 0, "older build rotation retains old behavior");
+        ClickAimCombat.SetRoleOverride(17364, ClickAimSpellRole.Ignore);
+        Check(ClickAimClassRotation.Build(ClickAimRotationClass.Shaman, bar, true).Melee == null, "Ignore suppresses Stormstrike");
+        ClickAimCombat.SetRoleOverride(17364, ClickAimSpellRole.Damage);
+        var unbound = Bar(17364); unbound[0].KeyVk = 0;
+        Check(ClickAimClassRotation.Build(ClickAimRotationClass.Shaman, unbound, true).Melee == null, "unbound ability is withheld");
+        ClickAimCombat.ClearRoleOverrides();
+        var normal = ClickAimClassRotation.Build(ClickAimRotationClass.Shaman, bar, true);
+        Check(normal.Melee?.Id == 17364 && normal.MeleeIntervalMs == 8000, "default Damage role is usable");
+    }
+
     internal static void Run()
     {
         ClickAimCombat.ClearRoleOverrides();
         try
         {
+            Stormstrike70938Tests();
             var shaman = Bar(8042, 403, 331, 8050); // shock before bolt on the bar
             var plan = ClickAimClassRotation.Build(ClickAimRotationClass.Auto, shaman);
             Check(plan.Class == ClickAimRotationClass.Shaman && plan.Damage?.Id == 403 &&
