@@ -65,6 +65,41 @@ for live data. Existing eight-second attempt estimates remain in the rotation
 and **cannot detect early resets**; until validated, the requested live cooldown
 behavior is not implemented.
 
+## Four supplied recordings (2026-11-14)
+
+All four completed with 100 samples and no reported candidate-read failures.
+`Tools/analyze_cooldown_candidate.py <trace>` summarizes changes without
+printing process addresses; it is a raw research parser, not a reader used by
+combat. The entries below are correlations, not independently verified
+semantics or proof that every client cooldown path is covered.
+
+- Ready control: both sampled candidate lists contained no nodes throughout.
+- Normal Stormstrike: the initial state contained ID 8045 (the local name
+  table identifies this as Earth Shock), so it was not a clean all-idle
+  baseline. At 7.758 seconds an ID 17364 node appeared with `+0x20=8000`
+  and another with `+0x38=133`, `+0x3C=1500`. Both had the same `+0x1C`
+  start-like value. Their last sampled presence was 16.770 seconds; both
+  were gone at 17.020 seconds.
+- GCD-ready: ID 8045 appeared at 6.258 seconds, including a node with
+  `+0x38=133` and `+0x3C=1500`, plus a different node with `+0x24=19` and
+  `+0x2C=6000`. No ID 17364 node was sampled. The 1500-unit entry is a
+  **global-cooldown candidate**, not proof of an active GCD for every spell.
+- GCD during Stormstrike: a 17364 `+0x3C=1500` node appeared at 6.260 s;
+  the 17364 `+0x20=8000` node appeared at 6.510 s. At 8.262 s ID 8045
+  appeared with its own `+0x3C=1500` node, while the 17364 8000-unit node
+  remained. These simultaneous distinct records are useful evidence that
+  the short category-like field and spell-specific candidate differ. Both
+  spell IDs were last seen at 17.770 s and gone by 18.019 s.
+
+The candidate player `+0x1C10` word advanced near real-time in these traces;
+compared to the Stormstrike `+0x1C` value, it had advanced 9175 units at
+16.770 s in the normal trace and 11601 at 17.770 s in the mixed trace, even
+though the 8000-unit node remained present. This strongly cautions that node
+presence is **not** equivalent to an active cooldown. The field's clock source,
+units, wrap behavior, stale nodes, update races, alternate client paths and
+actual UI readiness remain unverified. No reset test was supplied, and no
+rotation change is justified by these four recordings alone.
+
 ## Manual recording procedure
 
 Rebuild the Windows app, attach to the 70938 character, stop all bot/route
