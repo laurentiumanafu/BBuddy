@@ -1,0 +1,31 @@
+using System;
+using Styx.Logic.Pathing;
+
+static class Fixture
+{
+    static void Check(bool ok, string name) { if (!ok) throw new Exception(name); }
+    static WowBResurrectionRetry Create(bool enabled = true, string reason = WowBReleaseTransition.CleanPost)
+        => new WowBResurrectionRetry(enabled, reason, 0);
+    static void Main()
+    {
+        var p = Create();
+        Check(!p.Observe(true, 0) && !p.Observe(true, 4999), "two ghost samples and delay");
+        Check(p.Observe(true, 5000), "retry after five seconds");
+        p.Attempted(true, WowBReleaseTransition.CleanPost, 5000);
+        Check(!p.Observe(true, 5001) && p.Observe(true, 10000), "second retry requires new observations");
+        p.Attempted(true, WowBReleaseTransition.CleanPost, 10000);
+        Check(!p.Observe(true, 15000) && !p.Observe(true, 16000) && p.Posts == 3, "at most three posts");
+        p = Create(); p.Observe(true, 0); p.Observe(false, 1000);
+        Check(!p.Observe(true, 5000) && !p.Observe(true, 6000), "non-ghost permanently vetoes retry");
+        p = Create(); p.Observe(true, 0); Check(p.Observe(true, 5000), "failed retry setup");
+        p.Attempted(false, "prompt missing", 5000);
+        Check(!p.Observe(true, 10000) && !p.Observe(true, 11000), "failed revalidation vetoes retries");
+        p = Create(); p.Observe(true, 0); p.Observe(true, 5000); p.Attempted(true, "up failed", 5000);
+        Check(!p.Observe(true, 10000) && !p.Observe(true, 11000), "uncertain button up vetoes retries");
+        p = Create(false); p.Observe(true, 0); Check(!p.Observe(true, 5000), "other builds unchanged");
+        p = Create(true, "up failed"); p.Observe(true, 0); Check(!p.Observe(true, 5000), "unclean first post vetoes retry");
+        p = new WowBResurrectionRetry(true, WowBReleaseTransition.CleanPost, int.MaxValue - 1000);
+        p.Observe(true, int.MaxValue - 500); Check(p.Observe(true, unchecked(int.MaxValue + 4500)), "tick count wrap");
+        Console.WriteLine("Synthetic resurrection retry policy passed.");
+    }
+}

@@ -439,3 +439,28 @@ persists across fights and starts even when a key is refused. It is not a live
 cooldown read: a manually used spell before the bot starts, a cooldown reset, a
 failed key, or a hotfix can make the estimate wrong. Actual cast success,
 target-facing dynamics, mana cost, and live cooldown remain unverified.
+
+### 2026-11-14: resurrection Accept highlighted but not confirmed
+
+In `2026-11-14_1151_5820.log`, the corpse route reached a scout spot and the
+resurrection prompt was visible. At 11:58:55 the app reported a foreground
+button down/up **posted**; 30 seconds later it had not confirmed resurrection
+or the action-bar transition and stopped. The user observed the Accept button
+highlight but no effective click. Posting and highlighting do not prove the
+client processed the button event. The log does not identify whether timing,
+input delivery, a game/UI state or another cause prevented resurrection.
+
+For 70938 only, the resurrection dialog's posted down is now held for 100 ms
+instead of 35 ms as an experimental delivery mitigation. STOP interrupts the
+hold and still sends button-up. If the initial down/up posts succeeded and
+repeated readings still show the same ghost, the bot may make up to two further
+attempts at least five seconds apart, each through the existing session, ghost,
+corpse range, mesh ground, NPC/fallback, fresh dialog, hover, focus and STOP
+checks. If a previous hover leaves the button highlighted, a retry clears the
+hover and requires a newly inspected matching prompt. Any unknown/non-ghost
+state, an unconfirmed button-up, a changed or missing dialog, or a failed guard
+vetoes further retries. A real foreground mouse button held also blocks posting.
+The bot still resumes only after two alive observations and a safe action bar.
+The change uses posted messages rather than moving the user's desktop cursor;
+its actual effect in the game is unverified and it may still fail for reasons
+unrelated to button-down duration. Other builds retain their no-retry policy.

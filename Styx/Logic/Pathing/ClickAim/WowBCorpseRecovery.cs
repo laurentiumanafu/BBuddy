@@ -373,7 +373,8 @@ internal static class WowBCorpseRecovery
     }
 
     private static bool TryDialogClick(Memory memory, WowBReader reader, IntPtr hwnd,
-        WowBDeathCheckpoint.Candidate checkpoint, Func<bool> running, bool release, bool requireNpcClearance, out string problem)
+        WowBDeathCheckpoint.Candidate checkpoint, Func<bool> running, bool release, bool requireNpcClearance, out string problem,
+        bool recoverHoveredButton = false)
     {
         problem = "player state or recovery session changed";
         State expected = release ? State.Dead : State.Ghost;
@@ -390,10 +391,16 @@ internal static class WowBCorpseRecovery
             problem = (background ? "background" : "foreground") + " image did not meet button checks (release=" +
                 dialog.ReleaseText + ", releaseUnique=" + dialog.ReleaseUnique + ", releaseRed=" + dialog.ReleaseButtonRed +
                 ", heading=" + dialog.ResurrectText + ", accept=" + dialog.AcceptText + ", acceptRed=" + dialog.AcceptButtonRed + ")";
-            // A prior unsuccessful hover can leave the button highlighted and
-            // unrecognizable. Move away without clicking so a later frame can recover.
-            if (Safety()) ClickAimInput.PostMouseMoveFraction(hwnd, 0.05, 0.05);
-            return false;
+            // A previous posted hover can leave the button highlighted. For a
+            // guarded retry only, clear it and inspect a fresh image; never
+            // treat the highlighted or missing image as permission to click.
+            if (!Safety() || !ClickAimInput.PostMouseMoveFraction(hwnd, 0.05, 0.05)) return false;
+            if (!recoverHoveredButton || ClickAimAbort.Wait(200)) return false;
+            if (!WowBCorpseDialogProbe.TryInspectForRecovery(memory, reader, hwnd, Safety,
+                out dialog, out _, out bool freshBackground, out int freshWidth, out int freshHeight, out problem) ||
+                freshBackground != background || freshWidth != width || freshHeight != height ||
+                !WowBCorpseDialogPattern.SuitableForClick(dialog, release, out x, out y))
+            { problem = "fresh dialog unavailable or unsuitable after clearing prior hover"; return false; }
         }
         // First clear a previous hover and obtain a fresh pre-hover image. The
         // background mode additionally requires a visible response to our hover.
@@ -430,10 +437,14 @@ internal static class WowBCorpseRecovery
             }
             return lastFailure;
         }
-        bool posted = ClickAimInput.ConfirmedLeftClick(hwnd, x, y, width, height, background, FinalCheck, out string reason);
+        // Give the 70938 resurrection dialog a longer posted button-down. This
+        // is an unverified delivery mitigation, not a physical mouse click.
+        int holdMs = !release && reader.IsExperimental70938 ? 100 : 35;
+        bool posted = ClickAimInput.ConfirmedLeftClick(hwnd, x, y, width, height, background, FinalCheck, out string reason, holdMs);
         problem = reason;
         if (posted) Logging.Write("[Corpse] " + (release ? "release" : "resurrection") + " dialog click (" +
-                                  (background ? "background window capture" : "foreground") + "): " + reason);
+                                  (background ? "background window capture" : "foreground") + "): " + reason +
+                                  "; hold=" + holdMs + " ms; post is not confirmation");
         return posted;
     }
 
@@ -527,6 +538,7 @@ internal static class WowBCorpseRecovery
             if (ClickAimAbort.Wait(800) || !FindSafeSpot(memory, reader, hwnd, checkpoint, running, mover, routeStarted, tried, out bool fallback)) return false;
             started = Environment.TickCount; lastProblem = unchecked(started - 6000);
             bool sentResurrect = false;
+            string resurrectPostReason = "";
             while (unchecked(Environment.TickCount - started) < PromptWaitMs && Allowed(memory, reader, hwnd, running))
             {
                 if (!TryNpcSnapshot(memory, reader, hwnd, checkpoint, running, out ghostPos, out var nearby) ||
@@ -537,7 +549,8 @@ internal static class WowBCorpseRecovery
                     if (!FindSafeSpot(memory, reader, hwnd, checkpoint, running, mover, routeStarted, tried, out fallback)) break;
                     continue;
                 }
-                if (TryDialogClick(memory, reader, hwnd, checkpoint, running, false, !fallback, out string problem)) { sentResurrect = true; break; }
+                if (TryDialogClick(memory, reader, hwnd, checkpoint, running, false, !fallback, out string problem))
+                { sentResurrect = true; resurrectPostReason = problem; break; }
                 if (unchecked(Environment.TickCount - lastProblem) >= 5000)
                 { Logging.Write("[Corpse] resurrection not clicked: " + problem); lastProblem = Environment.TickCount; }
                 if (ClickAimAbort.Wait(500)) return false;
@@ -545,15 +558,33 @@ internal static class WowBCorpseRecovery
             if (!sentResurrect) { Logging.Write("[Corpse] resurrection dialog not confirmed; stopping"); return false; }
             started = Environment.TickCount;
             int aliveReads = 0;
+            var retry = new WowBResurrectionRetry(reader.IsExperimental70938, resurrectPostReason, started);
+            if (reader.IsExperimental70938 && resurrectPostReason != WowBReleaseTransition.CleanPost)
+                Logging.Write("[Corpse] resurrection button-up was not confirmed posted; retries disabled");
             while (unchecked(Environment.TickCount - started) < TransitionWaitMs && Allowed(memory, reader, hwnd, running))
             {
-                if (ReadState(memory, reader, hwnd, checkpoint, running, out _) == State.Alive) aliveReads++;
+                State state = ReadState(memory, reader, hwnd, checkpoint, running, out _);
+                if (state == State.Alive) aliveReads++;
                 else aliveReads = 0;
                 if (aliveReads >= 2 && WowBGrindFactions.Experimental70707BarSafe(reader))
                 { Logging.Write("[Corpse] alive candidate and action bar confirmed; resuming the bot"); return true; }
+                if (retry.Observe(state == State.Ghost, Environment.TickCount) && Allowed(memory, reader, hwnd, running))
+                {
+                    // Recheck player/spot, corpse range, NPC clearance policy,
+                    // fresh dialog, hover, focus and STOP; never repeat blindly.
+                    bool posted = TryDialogClick(memory, reader, hwnd, checkpoint, running, false, !fallback, out string retryReason, recoverHoveredButton: true);
+                    retry.Attempted(posted, retryReason, Environment.TickCount);
+                    if (posted)
+                        Logging.Write("[Corpse] resurrection retry " + retry.Posts + "/" + WowBResurrectionRetry.MaxPosts +
+                            " posted after repeated ghost observations; transition still unconfirmed");
+                    else
+                        Logging.Write("[Corpse] resurrection retry withheld; further retries disabled: " + retryReason);
+                }
                 if (ClickAimAbort.Wait(500)) return false;
             }
-            Logging.Write("[Corpse] resurrection or action-bar transition not confirmed; stopping without retrying");
+            State finalState = ReadState(memory, reader, hwnd, checkpoint, running, out _, out string finalReason);
+            Logging.Write("[Corpse] resurrection or action-bar transition not confirmed; stopping (state=" +
+                finalState.ToString().ToLowerInvariant() + ", " + finalReason + "; posts=" + retry.Posts + ")");
             return false;
         }
         finally

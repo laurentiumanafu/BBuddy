@@ -196,11 +196,11 @@ internal static class ClickAimInput
     // One dialog click only. Recheck the screen and state after the posted move;
     // always release the button if down was sent, including after STOP.
     internal static bool ConfirmedLeftClick(IntPtr hWnd, int x, int y, int expectedWidth, int expectedHeight,
-                                            bool background, Func<string?> confirm, out string reason)
+                                            bool background, Func<string?> confirm, out string reason, int buttonHoldMs = 35)
     {
         reason = "stopped, cursor unavailable, or client size changed";
         int oldX = 0, oldY = 0;
-        if (ClickAimAbort.Requested || (!background && !TryCursorScreen(out oldX, out oldY)) ||
+        if (buttonHoldMs < 35 || buttonHoldMs > 120 || ClickAimAbort.Requested || (!background && !TryCursorScreen(out oldX, out oldY)) ||
             !ClientSize(hWnd, out int w, out int h) || w != expectedWidth || h != expectedHeight ||
             x <= 0 || x >= w - 1 || y <= 0 || y >= h - 1) return false;
         if (!PostMessageInternal(hWnd, WM_MOUSEMOVE, IntPtr.Zero, Lp(x, y))) { reason = "dialog mouse move failed"; return false; }
@@ -211,6 +211,7 @@ internal static class ClickAimInput
         if (!background && (!TryCursorScreen(out int newX, out int newY) ||
             Math.Abs(newX - oldX) > 3 || Math.Abs(newY - oldY) > 3))
         { reason = "foreground desktop cursor moved during final check"; return false; }
+        if (!background && !MouseButtonsUp()) { reason = "foreground mouse button held"; return false; }
         if (!ClientSize(hWnd, out w, out h) || w != expectedWidth || h != expectedHeight)
         { reason = "client size changed before button down"; return false; }
         if (background ? GatherBackgroundFocus.Current(hWnd) != GatherBackgroundFocus.State.OtherApplication : GetForegroundWindow() != hWnd)
@@ -218,7 +219,8 @@ internal static class ClickAimInput
         if (ClickAimAbort.Requested) { reason = "stopped"; return false; }
         if (!PostMessageInternal(hWnd, WM_LBUTTONDOWN, new IntPtr(MK_LBUTTON), Lp(x, y)))
         { reason = "left-button down failed"; return false; }
-        Thread.Sleep(35);
+        // Interrupting the hold on STOP still sends button-up below.
+        ClickAimAbort.Wait(buttonHoldMs);
         bool up = PostMessageInternal(hWnd, WM_LBUTTONUP, IntPtr.Zero, Lp(x, y));
         Thread.Sleep(5);
         bool again = PostMessageInternal(hWnd, WM_LBUTTONUP, IntPtr.Zero, Lp(x, y));

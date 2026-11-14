@@ -95,7 +95,7 @@ namespace Styx.Logic.Pathing
         }
         private static bool WalkGhostWithRelocation(Memory m, WowBReader r, IntPtr h, WowBDeathCheckpoint.Candidate c, Func<bool> active, ClickAimMover mover, RoutePoint goal, int started)
             => WalkGhostTo(m, r, h, c, active, mover, goal, started, true);
-        private static bool TryDialogClick(Memory m, WowBReader r, IntPtr h, WowBDeathCheckpoint.Candidate c, Func<bool> active, bool release, bool requireClearance, out string problem)
+        private static bool TryDialogClick(Memory m, WowBReader r, IntPtr h, WowBDeathCheckpoint.Candidate c, Func<bool> active, bool release, bool requireClearance, out string problem, bool recoverHoveredButton = false)
         {
             problem = "fixture";
             if (!Allowed(m, r, h, active) || !capture) return false;

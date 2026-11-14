@@ -60,4 +60,5 @@ with tempfile.TemporaryDirectory(prefix='wowb-corpse-recovery-') as directory:
     (directory / 'Program.cs').write_text(fixture, encoding='utf-8')
     (directory / 'Policy.cs').write_text(policy, encoding='utf-8')
     (directory / 'ReleaseTransition.cs').write_text((root / 'Styx/Logic/Pathing/ClickAim/WowBReleaseTransition.cs').read_text(encoding='utf-8-sig'), encoding='utf-8')
+    (directory / 'ResurrectionRetry.cs').write_text((root / 'Styx/Logic/Pathing/ClickAim/WowBResurrectionRetry.cs').read_text(encoding='utf-8-sig'), encoding='utf-8')
     subprocess.run(['dotnet', 'run', '--project', str(directory / 'Fixture.csproj')], check=True)
