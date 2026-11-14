@@ -25,4 +25,23 @@ class SkinCast(unittest.TestCase):
                      'LootSettleMs = 1000', 'idleCount >= 2', 'uncertain = true',
                      'start != castStart || end != castEnd', 'Result.ActiveTimeout'):
             self.assertIn(text,P)
+    def test_70938_post_click_hold_and_interruption_wiring(self):
+        guard = G[G.index('private static SkinPostClickGuard SkinPostClickSafety'):G.index('// 70938 only: two posted attempts')]
+        for text in ('RouteRunner.StopRequested', 'ObjectManager.Wow != memory', 'memory.WindowHandle != hwnd',
+                     'CheckDeathCheckpoint(trackerOnly: true, deferUnconfirmed: true)',
+                     'TryRead70888RecoveryPlayer', 'TryReadGhostFlagCandidate', 'hp == 0',
+                     'currentMap != map', 'combatRead && fighting', 'SkinPostClickGuard.Unknown'):
+            self.assertIn(text, guard)
+        for text in ('VendorDue()', '_vendorDue', 'GatherSettings.Skinning', 'GatherSettings.SkinNearby'):
+            self.assertNotIn(text, guard)
+        section = G[G.index('private static void TrySkin70938'):G.index('private static void TrySkinLootedBeast')]
+        self.assertEqual(section.count('SkinPostClickSafety(reader, memory, hwnd, map, castPlayer,'), 2)
+        for text in ('SkinPostClickGuard.Stop', 'SkinPostClickGuard.Combat', 'SkinPostClickGuard.UnsafeSession',
+                     'state = WowBGatherCastResearch.Observation.Unknown', 'progress.CanRelease',
+                     'WowBSkinCastProgress.HoldLimitReached(elapsed)', 'Stop(); return;',
+                     '!progress.ConfirmedNoCast || !mayRetry', 'ClickAimAbort.Wait(200)'):
+            self.assertIn(text, section)
+        self.assertNotIn('if (!SkinQuiet(reader, memory, map, nearby)) return;', section)
+        self.assertIn('if (skinRoutineCalled) break;', G)
+        self.assertIn('guardSafe && StableIdle', P)
 if __name__ == '__main__': unittest.main()

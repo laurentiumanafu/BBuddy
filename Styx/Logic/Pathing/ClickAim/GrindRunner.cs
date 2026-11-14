@@ -3227,12 +3227,16 @@ internal static class GrindRunner
             clicked++;
             _loots++;
             _lootsSinceTrip++;
+            bool skinRoutineCalled = false;
             if (result == 0 && _running && GatherSettings.Skinning)
             {
                 if (!lootPixelConfirmed)
                     Logging.Write("[Skin] not attempted: loot pixel was not confirmed");
                 else if (WowBSkinning.IsConfirmed(reader.IsExperimental70707, corpse.Guid))
+                {
+                    skinRoutineCalled = true;
                     TrySkinLootedBeast(hwnd, reader, corpse, lootMap);
+                }
                 else
                     Logging.Write("[Skin] not attempted: unconfirmed beast entry candidate "
                         + WowBSkinning.EntryCandidate(corpse.Guid).ToString(CultureInfo.InvariantCulture));
@@ -3253,6 +3257,9 @@ internal static class GrindRunner
                     "[Grind] sent a loot interaction for {0} ({1:F1} yd away); the corpse was still observed (loot not verified)",
                     corpse.Guid, corpses[i].Key));
             }
+            // Let the main loop reassess combat and safety after skinning, rather
+            // than immediately probing another corpse following an interruption.
+            if (skinRoutineCalled) break;
         }
 
         if (clicked == 0 && unreached == 0) return "";
@@ -4134,6 +4141,53 @@ internal static class GrindRunner
         return Math.Sqrt(dx * dx + dy * dy + dz * dz) <= LootReachYd + 1.0 && SkinQuiet(reader, memory, map, nearby);
     }
 
+    private enum SkinPostClickGuard { Safe, Unknown, Combat, Stop, UnsafeSession }
+
+    // Once a down was posted, settings and vendor requests cannot authorize
+    // movement through a possible cast. Unknown reads hold, not combat; a
+    // positively observed fight still hands control back to defence immediately.
+    private static SkinPostClickGuard SkinPostClickSafety(WowBReader reader, GreenMagic.Memory memory,
+        IntPtr hwnd, uint map, WowBObservedUnit expectedPlayer, out string reason)
+    {
+        reason = "STOP requested";
+        if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested) return SkinPostClickGuard.Stop;
+        reason = "client attachment or window changed";
+        if (ObjectManager.Wow != memory || ObjectManager.WowB != reader || memory.WindowHandle != hwnd ||
+            !reader.ExperimentalGrindActive) return SkinPostClickGuard.UnsafeSession;
+        reason = "death/ghost checkpoint";
+        if (CheckDeathCheckpoint(trackerOnly: true, deferUnconfirmed: true)) return SkinPostClickGuard.Stop;
+        if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested)
+        { reason = "STOP requested"; return SkinPostClickGuard.Stop; }
+        bool playerRead = reader.TryRead70888RecoveryPlayer(out WowBObservedUnit currentPlayer, out uint hp, out _) &&
+            currentPlayer.Guid == expectedPlayer.Guid && currentPlayer.RecordAddress == expectedPlayer.RecordAddress &&
+            currentPlayer.UnitAddress == expectedPlayer.UnitAddress;
+        bool ghost = false;
+        bool ghostRead = playerRead && WowBGrindFactions.TryReadGhostFlagCandidate(memory, reader, currentPlayer, out ghost);
+        if (playerRead && (hp == 0 || (ghostRead && ghost)))
+        {
+            reason = "zero health or ghost candidate";
+            if (!CheckDeathCheckpoint(trackerOnly: true)) Stop();
+            return SkinPostClickGuard.Stop;
+        }
+        bool mapRead = reader.TryReadMapId(out uint currentMap) && currentMap != uint.MaxValue;
+        if (mapRead && currentMap != map)
+        { reason = "map changed"; return SkinPostClickGuard.UnsafeSession; }
+        bool combatRead = TryReadGatherCombat(out bool fighting);
+        if (combatRead && fighting)
+        { reason = "combat candidate observed; yielding to defence"; return SkinPostClickGuard.Combat; }
+        if (ObjectManager.Wow != memory || ObjectManager.WowB != reader || memory.WindowHandle != hwnd ||
+            !reader.ExperimentalGrindActive)
+        { reason = "client attachment or window changed"; return SkinPostClickGuard.UnsafeSession; }
+        if (!mapRead || !combatRead || !playerRead || !ghostRead)
+        {
+            reason = !mapRead ? "map unreadable" : !playerRead ? "player identity/health unreadable" :
+                !ghostRead ? "ghost state unreadable" : "player/combat state unreadable";
+            return SkinPostClickGuard.Unknown;
+        }
+        reason = "safe";
+        return SkinPostClickGuard.Safe;
+    }
+
     // 70938 only: two posted attempts at most, and only retry after a whole
     // observation window of readable idle samples without a cast candidate.
     private static void TrySkin70938(IntPtr hwnd, WowBReader reader, GreenMagic.Memory memory,
@@ -4168,14 +4222,52 @@ internal static class GrindRunner
             var progress = new WowBSkinCastProgress();
             int started = Environment.TickCount;
             WowBSkinCastProgress.Result result;
-            do
+            string lastHoldReason = "";
+            while (true)
             {
-                if (!SkinQuiet(reader, memory, map, nearby)) return;
-                var state = WowBGatherCastResearch.Observe(memory, reader, castPlayer, out uint start, out uint end);
-                if (!SkinQuiet(reader, memory, map, nearby)) return;
-                result = progress.Update(state, start, end, unchecked(Environment.TickCount - started));
-                if (result == WowBSkinCastProgress.Result.Waiting && ClickAimAbort.Wait(200)) return;
-            } while (result == WowBSkinCastProgress.Result.Waiting);
+                SkinPostClickGuard before = SkinPostClickSafety(reader, memory, hwnd, map, castPlayer, out string whyBefore);
+                uint start = 0, end = 0;
+                var state = before == SkinPostClickGuard.Safe
+                    ? WowBGatherCastResearch.Observe(memory, reader, castPlayer, out start, out end)
+                    : WowBGatherCastResearch.Observation.Unknown;
+                SkinPostClickGuard after = SkinPostClickSafety(reader, memory, hwnd, map, castPlayer, out string whyAfter);
+                SkinPostClickGuard guard = before == SkinPostClickGuard.Stop || after == SkinPostClickGuard.Stop
+                    ? SkinPostClickGuard.Stop
+                    : before == SkinPostClickGuard.UnsafeSession || after == SkinPostClickGuard.UnsafeSession
+                    ? SkinPostClickGuard.UnsafeSession
+                    : before == SkinPostClickGuard.Combat || after == SkinPostClickGuard.Combat
+                    ? SkinPostClickGuard.Combat
+                    : before == SkinPostClickGuard.Unknown || after == SkinPostClickGuard.Unknown
+                    ? SkinPostClickGuard.Unknown : SkinPostClickGuard.Safe;
+                string why = after == guard ? whyAfter : whyBefore;
+                if (guard == SkinPostClickGuard.Stop || guard == SkinPostClickGuard.Combat)
+                { Logging.Write("[Skin] post-click hold interrupted: " + why + "; cast and loot unverified"); return; }
+                if (guard == SkinPostClickGuard.UnsafeSession)
+                {
+                    Logging.Write("[Skin] post-click hold stopped: " + why + "; cast and loot unverified");
+                    Stop(); return;
+                }
+                if (guard != SkinPostClickGuard.Safe) state = WowBGatherCastResearch.Observation.Unknown;
+                int elapsed = unchecked(Environment.TickCount - started);
+                result = progress.Update(state, start, end, elapsed);
+                if (progress.CanRelease(result, guard == SkinPostClickGuard.Safe)) break;
+                if (WowBSkinCastProgress.HoldLimitReached(elapsed))
+                {
+                    Logging.Write("[Skin] post-click hold reached 12 seconds without safe stable idle; stopping to avoid interrupting a possible cast; cast and loot unverified");
+                    Stop(); return;
+                }
+                string holdReason = guard == SkinPostClickGuard.Unknown ? why :
+                    state == WowBGatherCastResearch.Observation.Unknown || state == WowBGatherCastResearch.Observation.Mining
+                    ? "cast state unreadable or different" : "";
+                if (holdReason != lastHoldReason)
+                {
+                    if (holdReason.Length != 0) Logging.Write("[Skin] post-click holding without input: " + holdReason);
+                    else if (lastHoldReason.Length != 0) Logging.Write("[Skin] post-click safety reads recovered; continuing cast observation");
+                    lastHoldReason = holdReason;
+                }
+                if (ClickAimAbort.Wait(200) || _stop || RouteRunner.StopRequested)
+                { Logging.Write("[Skin] post-click hold interrupted: STOP requested; cast and loot unverified"); return; }
+            }
             if (result == WowBSkinCastProgress.Result.CandidateCleared)
             {
                 Logging.Write("[Skin] ID-10768 cast-like candidate completed its observed interval and cleared; skinning success and loot remain unverified");

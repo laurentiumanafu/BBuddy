@@ -31,6 +31,29 @@ static class Program
         p = new WowBSkinCastProgress(); p.Update(o,100,3100,0);
         Check(p.Update(o,100,3100,6000)==WowBSkinCastProgress.Result.Waiting,"active past fallback still holds");
         Check(p.Update(o,100,3100,12000)==WowBSkinCastProgress.Result.ActiveTimeout,"stuck active bounded and uncertain");
+        // Post-click guard failures are unknown, not permission to resume or retry.
+        p = new WowBSkinCastProgress();
+        var r = p.Update(unknown,0,0,4);
+        Check(!p.CanRelease(r, false), "immediate unknown guard holds");
+        r = p.Update(idle,0,0,200);
+        Check(!p.CanRelease(r, true), "one idle after unknown still holds");
+        r = p.Update(idle,0,0,6000);
+        Check(p.CanRelease(r, true) && !p.ConfirmedNoCast, "recovered idle permits release but no blind retry");
+        Check(!p.CanRelease(r, false), "unknown guard overrides even a fallback result");
+        p = new WowBSkinCastProgress();
+        r = p.Update(unknown,0,0,6000);
+        Check(!p.CanRelease(r, true) && !WowBSkinCastProgress.HoldLimitReached(6000), "unknown past fallback keeps holding");
+        r = p.Update(unknown,0,0,12000);
+        Check(!p.CanRelease(r, true) && WowBSkinCastProgress.HoldLimitReached(12000), "persistent unknown stops at hard limit");
+        p = new WowBSkinCastProgress();
+        p.Update(o,100,3100,0); r = p.Update(o,100,3100,12000);
+        Check(!p.CanRelease(r, true) && WowBSkinCastProgress.HoldLimitReached(12000), "active cast timeout does not resume movement");
+        p = new WowBSkinCastProgress();
+        p.Update(idle,0,0,0); r = p.Update(idle,0,0,6000);
+        Check(p.CanRelease(r, true) && p.ConfirmedNoCast, "known idle still allows guarded retry");
+        p = new WowBSkinCastProgress();
+        p.Update(o,100,3100,200); p.Update(idle,0,0,3200); r = p.Update(idle,0,0,4200);
+        Check(p.CanRelease(r, true) && p.SawCast && !p.ConfirmedNoCast, "candidate clear releases without retry");
         Console.WriteLine("Synthetic skin cast progress fixtures passed; no real client used.");
     }
 }

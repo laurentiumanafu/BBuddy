@@ -14,7 +14,14 @@ internal sealed class WowBSkinCastProgress
     // Only stable idle observations with no intervening unknown/mining/cast
     // permit a second interaction. A cast candidate is never proof of loot.
     internal bool SawCast => seen;
+    internal bool StableIdle => idleCount >= 2;
     internal bool ConfirmedNoCast => !seen && !uncertain && idleCount >= 2;
+
+    // A timeout or a transiently unreadable guard must not release the caller
+    // into movement. The hard limit is enforced separately by stopping the run.
+    internal bool CanRelease(Result result, bool guardSafe) => guardSafe && StableIdle &&
+        (result == Result.CandidateCleared || result == Result.Fallback);
+    internal static bool HoldLimitReached(int elapsed) => elapsed >= MaxHoldMs;
 
     internal Result Update(WowBGatherCastResearch.Observation state, uint start, uint end, int elapsed)
     {
