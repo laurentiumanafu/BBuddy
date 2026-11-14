@@ -20,6 +20,13 @@ MARKERS = {
     0xD6C5BC: "E8BF1A8101", 0xD6C5E0: "8B80C00A0000",
     0x257FB96: "486390C00A0000", 0x257FBA4: "4C8D8090040000", 0x257FBB0: "498B00",
     0x257FBE6: "4038A880940000", 0x257FBF9: "0FB6B8047D0000", 0x257FC04: "83C723",
+    # Cooldown research anchors only; no runtime semantics are implied.
+    0x15DF02A: "8B164C8D7E084D8BC7E858332C01",
+    0x28A241E: "4C8D4C24604869C8B8000000488D05AFA304024533C04803C8",
+    0x1F51104: "448BF8488B791040F6C70175054885FF7503",
+    0x1F51133: "3977100F858C0000008B45603947140F8580000000",
+    0x1F51166: "8B471C448D0401",
+    0x1F51364: "488B7F08",
 }
 
 
@@ -75,6 +82,12 @@ def check(path):
         (0x257E0A3, 3, 7, 0x6D6A500), # bag identity table
         (0x26E1320, 1, 5, 0x21796E0), # inventory lookup call
         (0xD6C5BC, 1, 5, 0x257E080),  # identity helper call
+        (0x15F96A9, 3, 7, 0x15DE750), # GetSpellCooldown registration handler
+        (0x15F96B5, 3, 7, 0x4173710), # GetSpellCooldown name
+        (0x15DF033, 1, 5, 0x28A2390), # cooldown output helper
+        (0x28A242A, 3, 7, 0x48EC7E0), # indexed candidate state array
+        (0x28A2480, 1, 5, 0x1F50E20), # cooldown calculation helper
+        (0x1F51391, 1, 5, 0x27BEE40), # additional cooldown path
     ]:
         if relative(rva, displacement, length) != target:
             raise ValueError(f"Relative target mismatch at 0x{rva:X}")
