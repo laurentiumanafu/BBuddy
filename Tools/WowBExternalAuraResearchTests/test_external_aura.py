@@ -50,8 +50,8 @@ class ExternalResearch(unittest.TestCase):
 
     def test_identity_cancel_and_invalidation(self):
         capture = part(S, 'internal static string Capture(', '\n}')
-        self.assertLess(capture.index('StableWithBar(memory, reader, player, target, snapshot.TargetGuid, bar, out why)', capture.index('for (int i')), capture.index('ReadExternalCandidate(memory, player.UnitAddress'))
-        self.assertGreater(capture.index('StableWithBar(memory, reader, player, target, snapshot.TargetGuid, bar, out why)', capture.index('ReadExternalCandidate(memory, player.UnitAddress')), capture.index('ReadExternalCandidate(memory, player.UnitAddress'))
+        self.assertLess(capture.index('StableWithBar(memory, reader, player, target, snapshot.TargetGuid, bar, out why, playerOnly)', capture.index('for (int i')), capture.index('ReadExternalCandidate(memory, player.UnitAddress'))
+        self.assertGreater(capture.index('StableWithBar(memory, reader, player, target, snapshot.TargetGuid, bar, out why, playerOnly)', capture.index('ReadExternalCandidate(memory, player.UnitAddress')), capture.index('ReadExternalCandidate(memory, player.UnitAddress'))
         self.assertIn('cancelled during read; last sample discarded', capture)
         self.assertIn('priorExternal = external;', capture)
         self.assertIn('previous baseline discarded', capture)

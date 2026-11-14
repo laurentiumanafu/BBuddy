@@ -180,9 +180,12 @@
             <StackPanel Margin="12">
                 <TextBlock FontWeight="Bold" Text="70707/70755/70790/70862/70888/70938 spell-state research (read-only)" Margin="0,0,0,8"/>
                 <TextBlock TextWrapping="Wrap" Margin="0,0,0,8"
-                           Text="Stop the bot. Select a target before recording if you need target data, then start the trace. Wait for the Recording message, return to the game, wait about five seconds and manually cast one spell once. Keep the same character and target selected."/>
+                           Text="Stop the bot. Select a target before recording if you need target data, then start the trace. Wait for the Recording message, return to the game, wait about five seconds and manually cast one spell once. Keep the same character. Keep the same target unless player-only mode is checked."/>
                 <TextBlock TextWrapping="Wrap" Margin="0,0,0,10"
                            Text="The trace samples raw player data and, when available, the selected NPC. It does not press keys, use Lua, or identify cooldowns or auras. The data may contain GUIDs, process addresses and other sensitive information."/>
+                <CheckBox x:Name="chkPlayerOnlyResearch" IsChecked="False" Margin="0,0,0,8"
+                          Content="Player only: allow target changes (e.g. skinning)"
+                          ToolTip="Records player data only; changing selection will not stop the trace. The bot must still be stopped."/>
                 <CheckBox x:Name="chkExternalAuraResearch" IsChecked="False" Margin="0,0,0,8"
                           Content="Also record bounded external aura candidate (70862/70888/70938 only)"
                           ToolTip="Read-only research; captures additional raw memory that may be sensitive. This does not identify buffs or change gameplay."/>

@@ -330,3 +330,25 @@ The change is an experimental reduction in corner cutting, not proof that the
 reported pit is safe. Observe a supervised retest, particularly the same ravine;
 if it still occurs, save the log and coordinates or a screenshot. Do not claim a
 Windows or live-game validation from source/fixture tests.
+
+### 2026-11-14: skinning cast recording ended on target change
+
+The user requested waiting for skinning cast completion instead of the current
+six-second post-click hold. `20261114-085052-3d11bab3a555419786bb14fa2245d5c6.txt`
+is labelled skinning cast but ends at sample 2 (0.499 s), because the target GUID
+changed; the next sample was discarded. The observed player mining-candidate
+cluster (+0x3C0/+0x3EC/+0x418/+0x41C) is zero in its baseline and has no
+changes in the three retained samples. The analyzer reports zero cast-like
+patterns. The separate `20261114-085116-6ed2fa4cf5bb47c6ace0c5f867d241b9.txt`
+control ran 100 samples. The first trace neither captures a demonstrated cast
+start/clear nor establishes that skinning uses those mining offsets. Do not
+infer a skinning spell ID, duration, completed cast, or skin loot from it.
+
+Combat Research now offers an opt-in, default-off player-only trace mode. It
+records no selected target window and allows selection changes, while retaining
+build, attachment, player identity, stopped-bot, action-bar and cancellation
+checks. The original target-tracked mode is unchanged. Collect a new full trace
+with a manually initiated skinning cast and a quiet control, preferably another
+cast for comparison. The gameplay skinning wait is intentionally unchanged
+until a reproducible skinning start/clear candidate is supported by evidence;
+even an observed clear does not prove cast success or loot.

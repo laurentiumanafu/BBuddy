@@ -181,7 +181,32 @@ internal static class CombatResearchTests
             path = Directory.GetFiles(Path.Combine(folder, "Logs", "CombatResearch"), "*.txt").Single(p => File.ReadAllText(p).Contains("label=target change"));
             data = File.ReadAllText(path);
             Check(data.Contains("sample=0 ") && !data.Contains("sample=1 ") && data.Contains("last sample discarded"), "no mixed-target sample written");
+            // Opt-in player-only capture ignores selection changes but never reads
+            // a target window; it still keeps local identity and stopped-bot guards.
             mem.Guid(module + Wow70707Offsets.PlayerTargetGuid, target);
+            reads = 0;
+            mem.OnRead = (address, count) =>
+            {
+                if (address == playerUnit && count == WowBCombatResearch.WindowSize && ++reads == 2)
+                    mem.Guid(module + Wow70707Offsets.PlayerTargetGuid, new WowBGuid(99, 88));
+            };
+            result = WowBCombatResearch.Capture("player-only selection change", CancellationToken.None, 3, 10, playerOnly: true);
+            mem.OnRead = null;
+            Check(result.Contains("completed: 3 sample(s)"), "player-only trace tolerates a changing target");
+            path = Directory.GetFiles(Path.Combine(folder, "Logs", "CombatResearch"), "*.txt").Single(p => File.ReadAllText(p).Contains("label=player-only selection change"));
+            data = File.ReadAllText(path);
+            Check(data.Contains("Player-only mode") && data.Contains("sample=2 ") && !data.Contains("target+0x0000 baseline"), "player-only trace identifies itself and never samples target");
+            mem.Guid(module + Wow70707Offsets.PlayerTargetGuid, target);
+            reads = 0;
+            mem.OnRead = (address, count) =>
+            {
+                if (address == playerUnit && count == WowBCombatResearch.WindowSize && ++reads == 2)
+                    mem.U64(playerUnit + WowBOffsets.UnitObjectBackPtrOffset, targetRecord);
+            };
+            result = WowBCombatResearch.Capture("player-only identity change", CancellationToken.None, 3, 10, playerOnly: true);
+            mem.OnRead = null;
+            Check(result.Contains("local player identity or vtable unavailable or changed") && result.Contains("1 sample(s)"), "player-only identity change discards sample");
+            mem.U64(playerUnit + WowBOffsets.UnitObjectBackPtrOffset, playerRecord);
             reads = 0;
             mem.OnRead = (address, count) =>
             {

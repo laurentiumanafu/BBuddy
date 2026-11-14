@@ -83,7 +83,9 @@ namespace CopilotBuddy.UI
             btnCancelCombatResearch.IsEnabled = true;
             string label = txtCombatResearchLabel.Text;
             bool includeExternalArray = chkExternalAuraResearch.IsChecked == true;
+            bool playerOnly = chkPlayerOnlyResearch.IsChecked == true;
             chkExternalAuraResearch.IsEnabled = false;
+            chkPlayerOnlyResearch.IsEnabled = false;
             lblCombatResearch.Text = "Preparing and checking identity; wait for Recording before returning to the game.";
             try
             {
@@ -91,8 +93,10 @@ namespace CopilotBuddy.UI
                     onStarted: () => Dispatcher.BeginInvoke(new Action(() =>
                     {
                         if (!cancellation.IsCancellationRequested)
-                            lblCombatResearch.Text = "Recording for 25 seconds. Return to the game, wait about 5 seconds, then manually cast once; keep the same target.";
-                    })), includeExternalArray: includeExternalArray));
+                            lblCombatResearch.Text = playerOnly
+                                ? "Recording player only for 25 seconds. Return to the game, wait about 5 seconds, then manually cast or skin once."
+                                : "Recording for 25 seconds. Return to the game, wait about 5 seconds, then manually cast once; keep the same target.";
+                    })), includeExternalArray: includeExternalArray, playerOnly: playerOnly));
                 lblCombatResearch.Text = result;
                 Logging.Write("[Combat research] " + result);
             }
@@ -104,6 +108,7 @@ namespace CopilotBuddy.UI
                 cancellation.Dispose();
                 btnCombatResearch.IsEnabled = true;
                 chkExternalAuraResearch.IsEnabled = true;
+                chkPlayerOnlyResearch.IsEnabled = true;
                 btnCancelCombatResearch.IsEnabled = false;
             }
         }
