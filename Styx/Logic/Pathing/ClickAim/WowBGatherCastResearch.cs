@@ -5,8 +5,8 @@ using Styx.WoWInternals;
 namespace Styx.Logic.Pathing;
 
 /// <summary>
-/// Experimental 70938 ID-3564 mining-pattern observer. Read-only, not a
-/// general casting API or proof of cast completion, loot or failure.
+/// Experimental 70938 ID-3564 mining and ID-10768 skinning pattern observer.
+/// Read-only; not a general casting API or proof of completion, loot or failure.
 /// </summary>
 internal static class WowBGatherCastResearch
 {
@@ -28,6 +28,20 @@ internal static class WowBGatherCastResearch
                unchecked(end - start) == 3200U;
     }
 
+    // One user-labelled skinning recording showed both ID words 10768 and
+    // a 3000-unit interval. Other ranks, haste and interruptions are unknown.
+    internal static bool MatchesSkinning(byte[]? data, out uint start, out uint end)
+    {
+        start = end = 0;
+        if (data == null || data.Length != WindowSize) return false;
+        uint first = BitConverter.ToUInt32(data, 0x00);
+        uint second = BitConverter.ToUInt32(data, 0x2C);
+        start = BitConverter.ToUInt32(data, 0x58);
+        end = BitConverter.ToUInt32(data, 0x5C);
+        return first == 10768U && second == first && start != 0 && end != 0 &&
+               unchecked(end - start) == 3000U;
+    }
+
     internal static bool TryBegin(Memory? memory, WowBReader? reader, out WowBObservedUnit player)
     {
         player = default;
@@ -41,7 +55,7 @@ internal static class WowBGatherCastResearch
         catch { player = default; return false; }
     }
 
-    internal enum Observation { Unknown, Idle, Mining }
+    internal enum Observation { Unknown, Idle, Mining, Skinning }
 
     // Stable zeros are only a narrow candidate for inactivity. Other or
     // partially updated cast clusters are Unknown, never an absent cast.
@@ -52,6 +66,9 @@ internal static class WowBGatherCastResearch
         if (Matches(data, out start, out end))
             return BitConverter.ToUInt32(data, 0x64) == 0 && BitConverter.ToUInt32(data, 0x70) == 0 &&
                    BitConverter.ToUInt32(data, 0x74) == 0 ? Observation.Mining : Observation.Unknown;
+        if (MatchesSkinning(data, out start, out end))
+            return BitConverter.ToUInt32(data, 0x64) == 0 && BitConverter.ToUInt32(data, 0x70) == 0 &&
+                   BitConverter.ToUInt32(data, 0x74) == 0 ? Observation.Skinning : Observation.Unknown;
         if (BitConverter.ToUInt32(data, 0) == 0 && BitConverter.ToUInt32(data, 0x2C) == 0 &&
             BitConverter.ToUInt32(data, 0x58) == 0 && BitConverter.ToUInt32(data, 0x5C) == 0 &&
             BitConverter.ToUInt32(data, 0x64) == 0 && BitConverter.ToUInt32(data, 0x70) == 0 &&
@@ -60,7 +77,11 @@ internal static class WowBGatherCastResearch
     }
 
     internal static Observation Observe(Memory memory, WowBReader reader, WowBObservedUnit player)
+        => Observe(memory, reader, player, out _, out _);
+
+    internal static Observation Observe(Memory memory, WowBReader reader, WowBObservedUnit player, out uint start, out uint end)
     {
+        start = end = 0;
         try
         {
             if (!reader.IsExperimental70938 || !reader.ExperimentalGrindActive ||
@@ -75,6 +96,7 @@ internal static class WowBGatherCastResearch
             if (one == Observation.Unknown || one != two || start1 != start2 || end1 != end2 ||
                 !WowBGrindFactions.TraceIdentity70707(memory, reader, player, true) ||
                 ObjectManager.Wow != memory || ObjectManager.WowB != reader || !reader.ExperimentalGrindActive) return Observation.Unknown;
+            start = start1; end = end1;
             return one;
         }
         catch { return Observation.Unknown; }

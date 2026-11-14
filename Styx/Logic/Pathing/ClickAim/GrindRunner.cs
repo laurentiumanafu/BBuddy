@@ -4112,6 +4112,12 @@ internal static class GrindRunner
         { Logging.Write("[Skin] right-click withheld: could not position the client cursor"); return; }
         if (ClickAimAbort.Wait(200) || _stop) return;
         bool hoverRead = reader.TryReadMouseoverGuidCandidate(out WowBGuid skinHover);
+        // A clear pre-click baseline and the same validated player are required;
+        // other builds and uncertain reads retain the old bounded wait.
+        WowBObservedUnit castPlayer = default;
+        bool castReady = WowBGatherCastResearch.TryBegin(memory, reader, out castPlayer) &&
+            castPlayer.Guid == playerGuid &&
+            WowBGatherCastResearch.Observe(memory, reader, castPlayer) == WowBGatherCastResearch.Observation.Idle;
         bool sent = ClickAimInput.ConfirmedRightClick(hwnd, pixelX, pixelY, width, height, () =>
             memory.WindowHandle == hwnd && SkinCorpseCurrent(reader, memory, map, original, playerGuid, out _, out _, nearby) &&
             reader.ReadTargetGuid() == original.Guid && reader.TryReadMouseoverGuidCandidate(out WowBGuid hover) && hover == original.Guid &&
@@ -4124,12 +4130,38 @@ internal static class GrindRunner
         }
         _clicks++;
         Logging.Write("[Skin] requested one right-click on " + (nearby ? "nearby " : "post-loot ") + "confirmed beast " + original.Guid
-            + "; ownership, loot state, skinning cast and items are not verified");
+            + "; ownership, loot state and items are not verified");
 
         // No turns or movement while a possible cast/auto-loot runs. Yield promptly
         // to combat, map changes, death, vendor requests and user STOP.
-        for (int waited = 0; waited < 6000; waited += 200)
-            if (ClickAimAbort.Wait(200) || !SkinQuiet(reader, memory, map, nearby)) return;
+        if (!castReady)
+        {
+            Logging.Write("[Skin] 70938 cast baseline unavailable; holding for the existing 6-second fallback");
+            for (int waited = 0; waited < 6000; waited += 200)
+                if (ClickAimAbort.Wait(200) || !SkinQuiet(reader, memory, map, nearby)) return;
+        }
+        else
+        {
+            var progress = new WowBSkinCastProgress();
+            int started = Environment.TickCount;
+            WowBSkinCastProgress.Result result;
+            do
+            {
+                if (!SkinQuiet(reader, memory, map, nearby)) return;
+                var state = WowBGatherCastResearch.Observe(memory, reader, castPlayer, out uint castStart, out uint castEnd);
+                if (!SkinQuiet(reader, memory, map, nearby)) return;
+                result = progress.Update(state, castStart, castEnd, unchecked(Environment.TickCount - started));
+                if (result == WowBSkinCastProgress.Result.Waiting && ClickAimAbort.Wait(200)) return;
+            } while (result == WowBSkinCastProgress.Result.Waiting);
+            if (result == WowBSkinCastProgress.Result.ActiveTimeout)
+            {
+                Logging.Write("[Skin] cast-like candidate did not clear reliably within 12 seconds; leaving selection unchanged, result unknown");
+                return;
+            }
+            Logging.Write(result == WowBSkinCastProgress.Result.CandidateCleared
+                ? "[Skin] ID-10768 cast-like candidate cleared after the observed interval; skinning success and loot remain unverified"
+                : "[Skin] cast observation was absent or uncertain; 6-second fallback elapsed, skinning success and loot remain unverified");
+        }
         if (SkinQuiet(reader, memory, map, nearby) && reader.ReadTargetGuid() == original.Guid)
             DismissRejectedSelection(hwnd, reader, playerGuid, original.Guid);
     }

@@ -1,0 +1,32 @@
+using System;
+using Styx.Logic.Pathing;
+namespace Styx.Logic.Pathing { internal static class WowBGatherCastResearch { internal enum Observation { Unknown, Idle, Mining, Skinning } } }
+static class Program
+{
+    static void Check(bool value, string label) { if (!value) throw new Exception(label); }
+    static void Main()
+    {
+        var o = WowBGatherCastResearch.Observation.Skinning;
+        var idle = WowBGatherCastResearch.Observation.Idle;
+        var unknown = WowBGatherCastResearch.Observation.Unknown;
+        var p = new WowBSkinCastProgress();
+        Check(p.Update(idle,0,0,0)==WowBSkinCastProgress.Result.Waiting,"initial idle waits");
+        Check(p.Update(o,100,3100,200)==WowBSkinCastProgress.Result.Waiting,"start observed");
+        Check(p.Update(o,100,3100,2800)==WowBSkinCastProgress.Result.Waiting,"active not complete");
+        Check(p.Update(idle,0,0,3200)==WowBSkinCastProgress.Result.Waiting,"first clear needs settling");
+        Check(p.Update(idle,0,0,3400)==WowBSkinCastProgress.Result.Waiting,"two clears still settle");
+        Check(p.Update(idle,0,0,4200)==WowBSkinCastProgress.Result.CandidateCleared,"full interval and stable clear");
+        p = new WowBSkinCastProgress(); p.Update(o,100,3100,200); p.Update(idle,0,0,1000);
+        Check(p.Update(idle,0,0,6000)==WowBSkinCastProgress.Result.Fallback,"early clear is not completion");
+        p = new WowBSkinCastProgress(); p.Update(o,100,3100,200); p.Update(unknown,0,0,1000); p.Update(idle,0,0,3200);
+        Check(p.Update(idle,0,0,6000)==WowBSkinCastProgress.Result.Fallback,"unknown read makes result uncertain");
+        p = new WowBSkinCastProgress(); p.Update(o,100,3100,0); p.Update(o,200,3200,1000); p.Update(idle,0,0,3000);
+        Check(p.Update(idle,0,0,6000)==WowBSkinCastProgress.Result.Fallback,"cast identity change is not completion");
+        p = new WowBSkinCastProgress();
+        Check(p.Update(idle,0,0,6000)==WowBSkinCastProgress.Result.Fallback,"missing cast retains fallback");
+        p = new WowBSkinCastProgress(); p.Update(o,100,3100,0);
+        Check(p.Update(o,100,3100,6000)==WowBSkinCastProgress.Result.Waiting,"active past fallback still holds");
+        Check(p.Update(o,100,3100,12000)==WowBSkinCastProgress.Result.ActiveTimeout,"stuck active bounded and uncertain");
+        Console.WriteLine("Synthetic skin cast progress fixtures passed; no real client used.");
+    }
+}

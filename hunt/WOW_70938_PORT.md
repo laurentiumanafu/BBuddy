@@ -352,3 +352,26 @@ with a manually initiated skinning cast and a quiet control, preferably another
 cast for comparison. The gameplay skinning wait is intentionally unchanged
 until a reproducible skinning start/clear candidate is supported by evidence;
 even an observed clear does not prove cast success or loot.
+
+### 2026-11-14: 70938 single skinning cast candidate
+
+The player-only `20261114-090130-e060f397e03e4f38af627879a9372e01.txt`
+recorded 100 samples. In the one manually reported skinning interaction, at
+6.00 s the player +0x3C0 and +0x3EC words became 10768, while +0x418 and
++0x41C became 0x00A8D1A8 and 0x00A8DD60 (difference 3000). The four fields
+cleared at 9.01 s. These transitions were absent in the previous no-cast
+control. This is one trace, not authoritative proof of spell identity, success,
+interrupt behavior, other ranks, haste, items, or offsets across builds.
+
+The 70938-only cast observer now recognizes that exact double-read pattern and
+keeps other or partial clusters Unknown. Post-loot and nearby skinning require
+a stable idle/player baseline before the guarded click; after it they watch for
+the same candidate, then a stable clear following at least 2.6 s of observed
+active time and a 1 s loot-settle hold. Any uncertain reading, early clear or
+candidate change prevents a completion inference and retains the six-second
+fallback once the candidate is clear. If an observed candidate never clears,
+the wait is bounded at 12 seconds and selection cleanup is withheld; that limit
+does not establish that the cast stopped. Other builds and unknown baseline use
+the old six-second behavior. Combat, STOP, map/attachment, death and vendor
+guards remain active during the wait. Candidate clearance is not proof of
+completed skinning or received items; this needs a supervised live test.

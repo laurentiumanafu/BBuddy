@@ -60,6 +60,14 @@ namespace Styx.Logic.Pathing
             ClickAimAbort.Requested=false; RouteRunner.StopRequested=false; GatherSettings.Skinning=true; GatherSettings.SkinNearby=false; GrindRunner.Reset();
         }
     }
+    internal static class WowBGatherCastResearch
+    {
+        internal enum Observation { Unknown, Idle, Mining, Skinning }
+        internal static bool TryBegin(GreenMagic.Memory? m, WowBReader? r, out WowBObservedUnit p) { p=default; return false; }
+        internal static Observation Observe(GreenMagic.Memory m, WowBReader r, WowBObservedUnit p) => Observation.Unknown;
+        internal static Observation Observe(GreenMagic.Memory m, WowBReader r, WowBObservedUnit p, out uint start, out uint end)
+        { start=end=0; return Observation.Unknown; }
+    }
     internal static class ClickAimCalibration { internal static string DefaultPath = Path.Combine(Path.GetTempPath(), "bbuddy-skinning-tests-" + Guid.NewGuid(), "config"); }
     internal static class ClickAimUi { internal static bool Running, Paused; }
     internal static class WowBKnownMerchants

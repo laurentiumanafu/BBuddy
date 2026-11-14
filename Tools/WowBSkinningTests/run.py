@@ -27,5 +27,6 @@ with tempfile.TemporaryDirectory(prefix='wowb-skinning-tests-') as folder:
     (folder/'Fixture.csproj').write_text(project)
     (folder/'Fixture.cs').write_text(fixture)
     (folder/'WowBSkinning.cs').write_text((src/'WowBSkinning.cs').read_text(encoding='utf-8-sig'))
+    (folder/'WowBSkinCastProgress.cs').write_text((src/'WowBSkinCastProgress.cs').read_text(encoding='utf-8-sig'))
     (folder/'GatherSettings.cs').write_text((src/'GatherSettings.cs').read_text(encoding='utf-8-sig'))
     subprocess.run(['dotnet', 'run', '--project', str(folder/'Fixture.csproj')], check=True)

@@ -58,6 +58,19 @@ static class Program
         m.OnRead=n=> { if(n==2) Put(m.Data,0x58,10001); };m.Reads=0;
         Check(WowBGatherCastResearch.Observe(m,r,player) == WowBGatherCastResearch.Observation.Unknown,"unstable double read rejected");
         m.OnRead=null;Put(m.Data,0x58,10000);m.Unreadable=true;Check(WowBGatherCastResearch.Observe(m,r,player) == WowBGatherCastResearch.Observation.Unknown,"unreadable is not a negative cast verdict");m.Unreadable=false;
+        // Sanitized fields from the user's single 70938 skinning recording.
+        m.Data=new byte[0x78]; Put(m.Data,0,10768); Put(m.Data,0x2C,10768);
+        Put(m.Data,0x58,0x00A8D1A8); Put(m.Data,0x5C,0x00A8DD60);
+        Check(WowBGatherCastResearch.Observe(m,r,player,out start,out end) == WowBGatherCastResearch.Observation.Skinning &&
+              start==0x00A8D1A8 && end==0x00A8DD60, "recorded skinning candidate classified");
+        Put(m.Data,0x5C,0x00A8DD61);
+        Check(WowBGatherCastResearch.Observe(m,r,player) == WowBGatherCastResearch.Observation.Unknown, "unverified skinning duration rejected");
+        Put(m.Data,0x5C,0x00A8DD60); Put(m.Data,0x2C,3564);
+        Check(WowBGatherCastResearch.Observe(m,r,player) == WowBGatherCastResearch.Observation.Unknown, "mismatched skin words rejected");
+        Put(m.Data,0x2C,10768); Put(m.Data,0x64,1);
+        Check(WowBGatherCastResearch.Observe(m,r,player) == WowBGatherCastResearch.Observation.Unknown, "other active cluster is unknown");
+        m.Data=new byte[0x78];
+        Check(WowBGatherCastResearch.Observe(m,r,player) == WowBGatherCastResearch.Observation.Idle, "clear cluster after candidate");
         WowBGrindFactions.Stable=false;Check(WowBGatherCastResearch.Observe(m,r,player) == WowBGatherCastResearch.Observation.Unknown,"identity change rejected");WowBGrindFactions.Stable=true;
         r.IsExperimental70938=false;Check(WowBGatherCastResearch.Observe(m,r,player) == WowBGatherCastResearch.Observation.Unknown,"other build rejected");r.IsExperimental70938=true;
         r.ExperimentalGrindActive=false;Check(!WowBGatherCastResearch.TryBegin(m,r,out _) && WowBGatherCastResearch.Observe(m,r,player) == WowBGatherCastResearch.Observation.Unknown,"inactive session rejected");
