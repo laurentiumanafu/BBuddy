@@ -464,3 +464,26 @@ The bot still resumes only after two alive observations and a safe action bar.
 The change uses posted messages rather than moving the user's desktop cursor;
 its actual effect in the game is unverified and it may still fail for reasons
 unrelated to button-down duration. Other builds retain their no-retry policy.
+
+### 2026-11-14: corpse route stalled after substantial progress
+
+In `2026-11-14_2057_2020.log`, the bot recorded the 0-health checkpoint,
+posted release, confirmed a ghost candidate and began a 1322 yd corpse route.
+It stalled once near `(-8882,-4832)`, tried two mesh relocations and resumed
+the corpse route. After travelling hundreds of yards further it stalled near
+`(-8245,-4339)`. The next relocation search returned zero sampled candidates:
+it still required points to be within 50 yd of the *first* stuck-area anchor,
+while also requiring them within 50 yd of the ghost's new position. Those two
+search circles no longer overlapped. The log does not prove what caused either
+movement stall, or whether a new location will be physically clear.
+
+Ghost recovery now keeps separate, bounded relocation budgets for distinct
+stuck areas. A fresh ghost position more than 40 yd from all previous anchors
+starts a new local area; returning to an old area preserves its prior tried
+points and five-attempt budget. At most 12 areas and the existing 15-minute
+route deadline are allowed. Each candidate is still bounded by the original
+50 yd local mesh search and complete-path validation; STOP, attachment, map,
+confirmed ghost and corpse-range checks remain in force. If no safe candidate
+exists, or budgets or the deadline are exhausted, recovery still stops rather
+than walking blindly. This change is not proof that the route or resurrection
+will succeed; live testing is required.

@@ -1,0 +1,104 @@
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using Styx.Helpers;
+using Styx.Logic.Pathing;
+using GreenMagic;
+using Styx.WoWInternals;
+
+namespace Styx.Helpers { internal static class Logging { internal static void Write(string text) { } } }
+namespace GreenMagic { internal sealed class Memory { } }
+namespace Styx.WoWInternals { internal sealed class WowBReader { } }
+namespace Styx.Logic.Pathing
+{
+    internal readonly struct WoWPoint
+    {
+        internal readonly float X, Y, Z;
+        internal WoWPoint(float x, float y, float z = 0) { X = x; Y = y; Z = z; }
+    }
+    internal sealed class RoutePoint { internal double X, Y, Z; internal string Kind = ""; }
+    internal sealed class ClickAimMover { }
+    internal static class ClickAimMath { internal static double Len(double x, double y) => Math.Sqrt(x*x + y*y); }
+    internal static class WowBCorpseSpotPolicy
+    {
+        internal const double ArrivalRadius = 30;
+        internal static bool InRange(WoWPoint p, WoWPoint corpse, double radius) => ClickAimMath.Len(p.X - corpse.X, p.Y - corpse.Y) <= radius;
+    }
+    internal static class WowBDeathCheckpoint
+    { internal readonly struct Candidate { internal readonly uint Map; internal readonly WoWPoint Position; internal Candidate(WoWPoint p) { Map = 0; Position = p; } } }
+    internal static class MeshRelocate
+    {
+        internal const int Attempts = 5;
+        internal static readonly List<(double X, double Y, int Tried)> Picks = new();
+        internal static bool TryPick(uint map, double originX, double originY, IList<RoutePoint> tried,
+            Func<double,double,bool> excluded, Func<bool> interrupted, out RoutePoint point)
+        {
+            point = new RoutePoint();
+            Picks.Add((originX, originY, tried.Count));
+            if (interrupted() || ClickAimMath.Len(WowBCorpseRecovery.Position.X - originX, WowBCorpseRecovery.Position.Y - originY) > 50) return false;
+            point = new RoutePoint { X = originX + 6 + tried.Count * 6, Y = originY, Kind = "Relocate" };
+            return true;
+        }
+    }
+    internal static class WowBCorpseRecovery
+    {
+        private enum State { Unknown, Ghost }
+        private const int RouteLimitMs = 15 * 60 * 1000;
+        internal static WoWPoint Position;
+        internal static bool Active, Ghost;
+        internal static readonly Queue<(string Kind, bool Arrived, float X, float Y, bool Stop)> Walks = new();
+        internal static int WalkCount;
+        private static bool Allowed(Memory m, WowBReader r, IntPtr h, Func<bool> running) => running() && Active;
+        private static State ReadState(Memory m, WowBReader r, IntPtr h, WowBDeathCheckpoint.Candidate c, Func<bool> running, out WoWPoint p)
+        { p = Position; return Active && Ghost && running() ? State.Ghost : State.Unknown; }
+        private static bool WalkGhostTo(Memory m, WowBReader r, IntPtr h, WowBDeathCheckpoint.Candidate c, Func<bool> running,
+            ClickAimMover mover, RoutePoint goal, int started, bool stopNearCorpse)
+        {
+            WalkCount++;
+            if (Walks.Count == 0) return false;
+            var step = Walks.Dequeue();
+            if (step.Kind != goal.Kind) throw new Exception("unexpected goal " + goal.Kind);
+            Position = new WoWPoint(step.X, step.Y);
+            if (step.Stop) Active = false;
+            return step.Arrived;
+        }
+        // RELOCATION_METHOD
+        private static void Check(bool ok, string name) { if (!ok) throw new Exception(name); }
+        private static void Reset() { Position = new WoWPoint(0,0); Active = Ghost = true; WalkCount = 0; Walks.Clear(); MeshRelocate.Picks.Clear(); }
+        private static bool Run(int started) => WalkGhostWithRelocation(new Memory(), new WowBReader(), IntPtr.Zero,
+            new WowBDeathCheckpoint.Candidate(new WoWPoint(1000,0)), () => Active, new ClickAimMover(),
+            new RoutePoint { X = 1000, Kind = "Corpse" }, started);
+        public static void Main()
+        {
+            Reset();
+            Walks.Enqueue(("Corpse", false, 0, 0, false));
+            Walks.Enqueue(("Relocate", false, 0, 0, false));
+            Walks.Enqueue(("Relocate", true, 10, 0, false));
+            Walks.Enqueue(("Corpse", false, 600, 0, false));
+            Walks.Enqueue(("Relocate", true, 610, 0, false));
+            Walks.Enqueue(("Corpse", true, 975, 0, false));
+            Check(Run(Environment.TickCount), "long corpse route uses a new local anchor");
+            Check(MeshRelocate.Picks.Count == 3 && MeshRelocate.Picks[0].X == 0 && MeshRelocate.Picks[1].Tried == 1 &&
+                MeshRelocate.Picks[2].X == 600 && MeshRelocate.Picks[2].Tried == 0, "new area has fresh local budget");
+            Reset(); Check(!Run(Environment.TickCount), "stationary failure eventually ends");
+            Check(MeshRelocate.Picks.Count == 5 && WalkCount == 6, "five failures per local area");
+            Reset(); Walks.Enqueue(("Corpse", false, 0, 0, false)); Walks.Enqueue(("Relocate", false, 0, 0, true));
+            Check(!Run(Environment.TickCount) && MeshRelocate.Picks.Count == 1, "STOP after relocation");
+            Reset(); Ghost = false; Check(!Run(Environment.TickCount) && MeshRelocate.Picks.Count == 0, "unknown ghost prevents relocation");
+            Reset(); Check(!Run(unchecked(Environment.TickCount - RouteLimitMs)) && MeshRelocate.Picks.Count == 0, "15 minute route limit");
+            var regions = new WowBCorpseRelocationRegions();
+            Check(regions.TrySelect(0, 0, out var first, out _, out _) && first != null, "first area");
+            first!.Attempts = 3; first.Tried.Add(new RoutePoint());
+            Check(regions.TrySelect(600, 0, out var second, out bool changed, out bool created) && second != null && changed && created, "new area");
+            Check(regions.TrySelect(3, 0, out var back, out changed, out created) && back == first && changed && !created && back!.Attempts == 3 && back.Tried.Count == 1,
+                "returning to old area keeps its budget and tried points");
+            Check(!regions.TrySelect(double.NaN, 0, out _, out _, out _), "invalid coordinate rejected");
+            regions = new WowBCorpseRelocationRegions();
+            for (int i = 0; i < WowBCorpseRelocationRegions.MaxRegions; i++)
+                Check(regions.TrySelect(i * 100, 0, out _, out _, out _), "bounded new regions");
+            Check(!regions.TrySelect(2000, 0, out _, out _, out _), "new region limit");
+            Check(regions.TrySelect(0, 0, out _, out _, out _), "old region accessible at limit");
+            Console.WriteLine("Synthetic corpse relocation fixtures passed; no real client or mesh used.");
+        }
+    }
+}

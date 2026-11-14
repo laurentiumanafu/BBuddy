@@ -189,19 +189,36 @@ internal static class WowBCorpseRecovery
         if (Interrupted() || ReadState(memory, reader, hwnd, checkpoint, running, out WoWPoint origin) != State.Ghost) return false;
         if (WowBCorpseSpotPolicy.InRange(origin, checkpoint.Position, WowBCorpseSpotPolicy.ArrivalRadius)) return true;
 
-        var tried = new List<RoutePoint>();
+        var regions = new WowBCorpseRelocationRegions();
         Logging.Write("[Corpse] corpse leg did not complete; trying up to " + MeshRelocate.Attempts +
-            " alternate mesh locations before retrying the route (no obstacle is assumed)");
-        for (int attempt = 1; attempt <= MeshRelocate.Attempts; attempt++)
+            " alternate mesh locations per stuck area before retrying the route (no obstacle is assumed)");
+        while (true)
         {
-            if (Interrupted()) return false;
-            if (!MeshRelocate.TryPick(checkpoint.Map, origin.X, origin.Y, tried, (_, _) => false, Interrupted, out RoutePoint alternate))
+            if (Interrupted() || ReadState(memory, reader, hwnd, checkpoint, running, out WoWPoint current) != State.Ghost) return false;
+            if (WowBCorpseSpotPolicy.InRange(current, checkpoint.Position, WowBCorpseSpotPolicy.ArrivalRadius)) return true;
+            if (!regions.TrySelect(current.X, current.Y, out WowBCorpseRelocationRegions.Region? region, out bool changed, out bool created) || region == null)
+            {
+                Logging.Write("[Corpse] stuck-area limit reached or ghost position invalid; stopping rather than retrying indefinitely");
+                return false;
+            }
+            if (changed)
+                Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                    "[Corpse] {0} stuck area {1}/{2} around ({3:F1}, {4:F1}); {5}/{6} local relocations already tried",
+                    created ? "new" : "revisited", region.Number, WowBCorpseRelocationRegions.MaxRegions,
+                    region.X, region.Y, region.Attempts, MeshRelocate.Attempts));
+            if (region.Attempts >= MeshRelocate.Attempts)
+            {
+                Logging.Write("[Corpse] this stuck area's alternate mesh locations were exhausted; stopping");
+                return false;
+            }
+            if (!MeshRelocate.TryPick(checkpoint.Map, region.X, region.Y, region.Tried, (_, _) => false, Interrupted, out RoutePoint alternate))
             {
                 if (!Interrupted()) Logging.Write("[Corpse] no additional alternate location could be validated on the mesh");
                 return false;
             }
             if (Interrupted()) return false;
-            tried.Add(alternate);
+            region.Tried.Add(alternate);
+            int attempt = ++region.Attempts;
             Logging.Write(string.Format(CultureInfo.InvariantCulture,
                 "[Corpse] relocation {0}/{1}: walking to ({2:F1}, {3:F1}) on the mesh",
                 attempt, MeshRelocate.Attempts, alternate.X, alternate.Y));
@@ -218,8 +235,6 @@ internal static class WowBCorpseRecovery
             Logging.Write("[Corpse] relocation " + attempt + "/" + MeshRelocate.Attempts + ": arrived; retrying the corpse route");
             if (WalkGhostTo(memory, reader, hwnd, checkpoint, running, mover, goal, started, true)) return true;
         }
-        if (!Interrupted()) Logging.Write("[Corpse] alternate mesh locations did not complete the corpse route");
-        return false;
     }
 
     // Mesh-only movement to a candidate; never use a partial/long path as a shortcut.
