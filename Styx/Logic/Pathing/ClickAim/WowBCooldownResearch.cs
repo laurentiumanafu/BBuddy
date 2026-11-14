@@ -8,8 +8,9 @@ using GreenMagic;
 
 namespace Styx.Logic.Pathing;
 
-// Research only. The two candidate heads and node layout are static leads,
-// not a cooldown API. No result from this class is used by the rotation.
+// The two candidate heads and node layout remain experimental static leads,
+// not a complete cooldown API. The rotation uses only a narrow observed
+// Stormstrike transition and falls back to its estimate on uncertainty.
 internal static class WowBCooldownResearch
 {
     private const ulong CandidateRva = 0x48EC7E0, UserLimit = 0x00007FFFFFFFFFFFUL;
@@ -31,7 +32,27 @@ internal static class WowBCooldownResearch
         catch { return "cooldown candidate unknown: read exception"; }
     }
 
-    private static string? ReadPass(Memory memory, CancellationToken cancel, Stopwatch watch)
+    // Same bounded double-read as the recorder; an empty successful result is
+    // not a readiness claim. Callers must separately validate player/session/map.
+    internal static bool TryReadStormstrike(Memory memory, CancellationToken cancel, out List<WowBStormstrikeReset.Node> nodes)
+    {
+        nodes = new List<WowBStormstrikeReset.Node>();
+        try
+        {
+            if (memory.ImageBase64 < 0x10000 || memory.ImageBase64 > UserLimit - CandidateRva - 2 * Stride) return false;
+            using var uncached = memory.TemporaryCacheState(false);
+            var watch = Stopwatch.StartNew();
+            var firstNodes = new List<WowBStormstrikeReset.Node>();
+            string? first = ReadPass(memory, cancel, watch, firstNodes);
+            string? second = first == null ? null : ReadPass(memory, cancel, watch);
+            if (first == null || second == null || first != second || cancel.IsCancellationRequested || watch.ElapsedMilliseconds > BudgetMs) return false;
+            nodes = firstNodes;
+            return true;
+        }
+        catch { return false; }
+    }
+
+    private static string? ReadPass(Memory memory, CancellationToken cancel, Stopwatch watch, List<WowBStormstrikeReset.Node>? stormNodes = null)
     {
         var text = new StringBuilder();
         for (int state = 0; state < 2; state++)
@@ -52,6 +73,8 @@ internal static class WowBCooldownResearch
                     !memory.IsCommittedReadableRange64(node, NodeSize)) return null;
                 byte[]? bytes = memory.ReadBytes64(node, NodeSize);
                 if (bytes == null || bytes.Length != NodeSize) return null;
+                if (stormNodes != null && BitConverter.ToUInt32(bytes, 0x10) == 17364)
+                    stormNodes.Add(new WowBStormstrikeReset.Node(state, node, bytes));
                 text.Append(" [0x").Append(node.ToString("X", CultureInfo.InvariantCulture));
                 for (int offset = 0x10; offset <= 0x40; offset += 4)
                     text.Append(' ').Append(offset.ToString("X2", CultureInfo.InvariantCulture)).Append('=')

@@ -39,4 +39,28 @@ class Stormstrike(unittest.TestCase):
         self.assertLess(s.index('ClickAimInput.TapKey(hwnd, meleeHit.KeyVk, 40)'),s.index('ClickAimClassRotation.Defer'))
         self.assertNotIn('Thread.Sleep(8000)',s)
         self.assertNotIn('ClickAimKeySteer.Face(',s)
+    def test_reset_is_a_narrow_guarded_override_not_a_general_ready_read(self):
+        policy = (ROOT/'Styx/Logic/Pathing/ClickAim/WowBStormstrikeReset.cs').read_text()
+        research = (ROOT/'Styx/Logic/Pathing/ClickAim/WowBCooldownResearch.cs').read_text()
+        for text in ('MinClearSpacingMs = 100', 'elapsed >= WindowMs', 'previousStarts.Contains(node.Start)',
+                     'node.Duration != 8000', 'node.SameExceptDuration(active)', 'same != 1',
+                     'if (nodes == null', 'ResetCandidate = true', 'Address != other.Address'):
+            self.assertIn(text, policy)
+        for text in ('TryReadStormstrike', 'TemporaryCacheState(false)', 'first != second',
+                     'IsCommittedReadableRange64', 'visited.Add(node)', 'watch.ElapsedMilliseconds > BudgetMs'):
+            self.assertIn(text, research)
+        guard = FIGHT[FIGHT.index('private static bool TryStormstrikeCandidate'):FIGHT.index('private static string Fight(')]
+        for text in ('reader.IsExperimental70938', 'reader.ExperimentalGrindActive', 'ObjectManager.Wow != memory',
+                     'beforeMap != map', 'afterMap != map', 'TraceIdentity70707', 'ClickAimAbort.Requested',
+                     'RouteRunner.StopRequested', 'TryReadStormstrike'):
+            self.assertIn(text, guard)
+        self.assertGreaterEqual(guard.count('TraceIdentity70707'), 2)
+        self.assertIn('stormReset.Observe(readable ? nodes : null', FIGHT)
+        self.assertIn('if (!stormReset.ResetCandidate) return false;', FIGHT)
+        self.assertIn('ObserveStormReset(); // Fresh', FIGHT)
+        self.assertIn('stormReset.Begin(stormBaseline', FIGHT)
+        self.assertIn('stormstrike70938 && StormResetReady()', FIGHT)
+        self.assertIn('&& !StormResetReady())', FIGHT)
+        self.assertIn('ClickAimAbort.Wait(Math.Min(125, remaining))', FIGHT)
+        self.assertNotIn('_rotationCooldowns.Remove', FIGHT)
 if __name__ == '__main__': unittest.main()

@@ -6049,6 +6049,29 @@ internal static class GrindRunner
         catch { return false; }
     }
 
+    // A stable list read is still only a candidate. Bind each sample to the
+    // same active 70938 session, map and player before it can affect the timer.
+    private static bool TryStormstrikeCandidate(WowBReader reader, GreenMagic.Memory memory,
+        WowBObservedUnit player, uint map, out List<WowBStormstrikeReset.Node> nodes)
+    {
+        nodes = new List<WowBStormstrikeReset.Node>();
+        try
+        {
+            using var uncached = memory.TemporaryCacheState(false);
+            if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested || !reader.IsExperimental70938 ||
+                !reader.ExperimentalGrindActive || ObjectManager.Wow != memory || ObjectManager.WowB != reader ||
+                !reader.TryReadMapId(out uint beforeMap) || beforeMap != map ||
+                !WowBGrindFactions.TraceIdentity70707(memory, reader, player, true) ||
+                !WowBCooldownResearch.TryReadStormstrike(memory, CancellationToken.None, out nodes) ||
+                !WowBGrindFactions.TraceIdentity70707(memory, reader, player, true) ||
+                !reader.TryReadMapId(out uint afterMap) || afterMap != map ||
+                _stop || ClickAimAbort.Requested || RouteRunner.StopRequested || !reader.ExperimentalGrindActive ||
+                ObjectManager.Wow != memory || ObjectManager.WowB != reader) return false;
+            return true;
+        }
+        catch { nodes = new List<WowBStormstrikeReset.Node>(); return false; }
+    }
+
     /// <summary>
     /// One fight using a hotbar-only class priority or the legacy generic selector.
     /// Healing, estimated DoT timing and optional instants share the existing
@@ -6159,11 +6182,33 @@ internal static class GrindRunner
         ClickAimAction? auto = ClickAimCombat.AutoAttack(bar);          // Attack (6603)
         ClickAimAction? dot = rotation.Dot;
         ClickAimAction? meleeHit = rotation.Melee;
+        var stormReset = new WowBStormstrikeReset();
+        WowBObservedUnit stormPlayer = default;
+        uint stormMap = uint.MaxValue;
+        void ObserveStormReset()
+        {
+            if (!stormReset.Armed) return;
+            bool wasCandidate = stormReset.ResetCandidate;
+            bool readable = TryStormstrikeCandidate(reader, fightMemory, stormPlayer, stormMap, out List<WowBStormstrikeReset.Node> nodes);
+            stormReset.Observe(readable ? nodes : null, Environment.TickCount);
+            if (!wasCandidate && stormReset.ResetCandidate)
+                Logging.Write("[Grind] Stormstrike 8000-to-zero candidate observed twice after this attempt; allowing an early guarded retry after the normal cast settle (cooldown and proc unverified)");
+            else if (!stormReset.Armed && !_stop && !ClickAimAbort.Requested && !RouteRunner.StopRequested)
+                Logging.Write(readable
+                    ? "[Grind] Stormstrike reset pattern changed, disappeared, conflicted or timed out; keeping the 8-second estimate"
+                    : "[Grind] Stormstrike reset candidate unreadable or session changed; keeping the 8-second estimate");
+        }
+        bool StormResetReady()
+        {
+            if (!stormReset.ResetCandidate) return false;
+            ObserveStormReset(); // Fresh, identity-checked sample immediately before permission.
+            return stormReset.ResetCandidate;
+        }
         bool damageWasDot = damage != null && damage.IsDot;
         Logging.Write("[Grind] hotbar rotation: " + rotation.Class + " (requested " + ClickAimSettings.RotationClass
             + "); damage=" + (damage?.Name ?? "none") + ", extra=" + (rotation.Supplemental?.Name ?? "none")
             + ", DoT=" + (dot?.Name ?? "none") + ", melee=" + (meleeHit?.Name ?? "none")
-            + ", heal=" + (heal?.Name ?? "none") + ". Cooldowns and DoT duration are estimates, not client state.");
+            + ", heal=" + (heal?.Name ?? "none") + ". Cooldowns and DoT duration are estimates; 70938 Stormstrike can use an experimental early-reset candidate.");
 
         /* How far the damage spell actually reaches. Every spell used to be treated as a 28 yd
          * cast, so a cat stood 25 yd off a mob pressing a 5 yd Claw - the user's "the bot thinks
@@ -6253,6 +6298,7 @@ internal static class GrindRunner
 
             WowBObservedUnit me;
             if (!snap.TryGetLocalPlayer(out me)) break;
+            if (stormReset.Armed) ObserveStormReset();
             double d = ClickAimMath.Len(target.Location.X - me.Location.X, target.Location.Y - me.Location.Y);
             double defenceLimit = remoteDefence ? RemoteDefenceRadius + 3.0 : target.Guid == _focusedFightGuid
                 ? Math.Max(GatherDefenceRadius + 3.0, castRange) : GatherDefenceRadius + 3.0;
@@ -7270,7 +7316,8 @@ internal static class GrindRunner
                 ? Math.Max(PowerForCast(meleeHit, 10), ClickAimClassRotation.StormstrikePowerFloor70938)
                 : PowerForCast(meleeHit, 10);
             if (meleeHit != null && !unmeasuredRage && (stormstrike70938 || !swinging || sinceDamageMs >= MeleePressMs)
-                && ClickAimClassRotation.Ready(_rotationCooldowns, rotation.MeleeGroup, Environment.TickCount)
+                && (ClickAimClassRotation.Ready(_rotationCooldowns, rotation.MeleeGroup, Environment.TickCount) ||
+                    (stormstrike70938 && StormResetReady()))
                 && (rotation.MeleeIntervalMs == 0 || myMana >= meleePower)
                 && (!stormstrike70938 || (meleeHit.KeyVk != 0 &&
                     rotation.MeleeIntervalMs == ClickAimClassRotation.StormstrikeInterval70938Ms &&
@@ -7283,8 +7330,15 @@ internal static class GrindRunner
                 { return YieldForTargetChange(reader, fightMemory, defenceTarget); }
                 if (!meleeHit.IsDamage) return "melee ability role changed; attack withheld";
                 if (!ResourceInputStillAllowed(reader)) continue;
+                List<WowBStormstrikeReset.Node>? stormBaseline = null;
+                uint baselineMap = uint.MaxValue;
                 if (stormstrike70938)
                 {
+                    // Snapshot before the key to distinguish this attempt from
+                    // old persistent nodes. A failed baseline keeps the estimate.
+                    if (reader.TryReadMapId(out baselineMap) && baselineMap != uint.MaxValue &&
+                        TryStormstrikeCandidate(reader, fightMemory, me, baselineMap, out List<WowBStormstrikeReset.Node> baseline))
+                        stormBaseline = baseline;
                     // Re-read target, player, range and mana just before the key;
                     // a recent swing, stale coordinates or an estimated timer is
                     // not proof that the current client can accept this cast.
@@ -7302,7 +7356,7 @@ internal static class GrindRunner
                     double hz = hitTarget.Location.Z - hitPlayer.Location.Z;
                     double hitDistance = Math.Sqrt(hx * hx + hy * hy + hz * hz);
                     if (!double.IsFinite(hitDistance) || hitDistance > ClickAimCombat.MeleeRangeYd ||
-                        !ClickAimClassRotation.Ready(_rotationCooldowns, rotation.MeleeGroup, Environment.TickCount) ||
+                        (!ClickAimClassRotation.Ready(_rotationCooldowns, rotation.MeleeGroup, Environment.TickCount) && !StormResetReady()) ||
                         !meleeHit.IsDamage ||
                         !FightAttackInputAllowed(reader, fightMemory, defenceTarget, expectedPull, !defenceOnly || defenceFactionFilter, defenceOnly, !defenceOnly)) continue;
                     myMana = hitSelf.Power;
@@ -7311,7 +7365,13 @@ internal static class GrindRunner
                 if (stormstrike70938) lastCastMs = Environment.TickCount;
                 ClickAimClassRotation.Defer(_rotationCooldowns, rotation.MeleeGroup, rotation.MeleeIntervalMs, Environment.TickCount);
                 if (stormstrike70938)
-                    Logging.Write("[Grind] Stormstrike key attempted in melee; 8-second estimate started (client cooldown and cast success unverified)");
+                {
+                    stormPlayer = me; stormMap = baselineMap;
+                    stormReset.Begin(stormBaseline, Environment.TickCount);
+                    Logging.Write("[Grind] Stormstrike key attempted in melee; 8-second estimate started (client cooldown and cast success unverified)" +
+                        (stormReset.Armed ? "; watching for a matching early-reset candidate" : "; reset baseline unavailable or already active"));
+                    ObserveStormReset();
+                }
                 if (keyOneMacro && ClickAimClassRotation.IsAnyShock(meleeHit))
                 {
                     if (TryFightKeyOneMacro(hwnd, reader, fightMemory, macroPlayer, expectedPull, macroMap,
@@ -7331,7 +7391,22 @@ internal static class GrindRunner
 
             /* Nothing was sent this pass: wait out the swing instead of spinning. A level-1
              * swing lands every ~3 s and the loop would otherwise pass here ten times a second. */
-            Thread.Sleep(attacked ? AttackSettleMs : MeleeWaitMs);
+            int settleMs = attacked ? AttackSettleMs : MeleeWaitMs;
+            if (!stormReset.Armed) Thread.Sleep(settleMs);
+            else
+            {
+                // The observed active window can be shorter than one attack
+                // settle. Sample without sending inputs during the same wait;
+                // never extend it into an eight-second cooldown sleep.
+                int waitStart = Environment.TickCount;
+                while (!_stop && !ClickAimAbort.Requested && !RouteRunner.StopRequested)
+                {
+                    int remaining = settleMs - unchecked(Environment.TickCount - waitStart);
+                    if (remaining <= 0) break;
+                    if (ClickAimAbort.Wait(Math.Min(125, remaining))) break;
+                    if (stormReset.Armed) ObserveStormReset();
+                }
+            }
 
             WowBWorldSnapshot? afterSwing;
             if (!Capture(out afterSwing) || afterSwing == null || !afterSwing.TryGetSelectedTarget(out target))

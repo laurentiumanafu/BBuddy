@@ -1,7 +1,9 @@
 # 70938 cooldown static research
 
-This is **research only**, not a runtime reader. No Lua bridge, game function
-calls, injection, writes, or gameplay behavior are added. All RVAs below refer to
+The static paths and recorder are research, not a complete cooldown API. An
+experimental runtime check now uses only the narrow early-reset transition
+noted below; unknown reads fall back to the existing estimate. No Lua bridge,
+game function calls, injection or game-memory writes are used. All RVAs below refer to
 the decoded 1.60.1.70938 x64 image with SHA-256
 `436a1b0dc17006895d46b1619dff45c84b683d37e2b24a458cdec333f2accb3a`.
 Run `python Tools/check_wow70938_image.py <decoded-exe>` to verify selected
@@ -61,9 +63,9 @@ down. Record the visible UI result and approximate event times for each. Repeat
 across several uses and a fresh session. A reset must be visibly confirmed, not
 assumed merely because a key was pressed. Test unreadable/changed-session
 handling separately. Do not substitute a guessed timer or an incomplete list
-for live data. Existing eight-second attempt estimates remain in the rotation
-and **cannot detect early resets**; until validated, the requested live cooldown
-behavior is not implemented.
+for a complete live result. The rotation retains its eight-second attempt
+estimate and additionally recognizes one guarded early-reset candidate as
+explained below. It is not a general live cooldown reader.
 
 ## Four supplied recordings (2026-11-14)
 
@@ -128,14 +130,34 @@ and exact reset time are not independently timestamped in the trace.
   long gaps, duplicate signatures, category entries and disappearance
   conservatively. Its field match does not itself prove node identity.
 
-This is the best reset lead so far, but the effective cooldown still depends on
-other static paths, categories and global cooldown behavior that are not read by
-this candidate. It is not yet safe to equate zero or missing nodes with actual
-readiness, nor to claim all resets can be detected. The rotation still uses the
-8-second attempt estimate and cannot exploit this observed early transition.
-A repeated controlled early-reset recording with approximate visible event
-times, plus successful use after the reset and a fresh-session comparison,
-would help distinguish the field change from unrelated removal or timing.
+The user confirmed that Stormstrike was successfully cast again before eight
+seconds elapsed during this recording. The effective cooldown can still depend
+on other static paths, categories and global cooldown behavior that are not read
+by this candidate; zero or missing nodes alone are not general readiness.
+
+### Experimental 70938 rotation check
+
+When Stormstrike is configured as **Damage**, the combat loop takes a bounded,
+uncached, double-read list snapshot before its own attempted key. If the
+baseline is complete and contains no nonzero Stormstrike spell duration, it
+watches for a new 17364 spell-specific 8000 candidate with a start-like value
+not in the baseline. It must then see the **same node, state, start and other
+captured fields** change to zero, followed by another matching zero observation
+at least 100 ms later. The loop re-reads it before an early key attempt. It
+samples while the ordinary post-attack settle is waiting, and validates the
+70938 attachment, active session, original player identity and map around
+each snapshot. Other attack, target, faction, range, mana, healing and 1.8 s
+cast-settle safeguards remain in force. The key attempt, candidate observation
+and fallback are logged; no cast or proc is claimed as confirmed.
+
+Missing, stale, ambiguous, changing, unreadable or different nodes, a missed
+active window, or a session/map/identity change do **not** mean ready; the
+existing eight-second attempt estimate remains in effect. This means immediate
+resets, the separate disappearance pattern seen around 21.539 s, resets between
+fights and external/manual casts may be missed. The two static candidate lists
+are not established as exhaustive, and even the matching transition may not
+reflect every effective spell or global cooldown. This remains experimental,
+not a complete live cooldown reader. Client testing and log review are needed.
 
 ## Manual recording procedure
 

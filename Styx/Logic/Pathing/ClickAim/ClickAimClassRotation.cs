@@ -84,8 +84,9 @@ internal static class ClickAimClassRotation
         return found;
     }
 
-    // 70938 timing is an estimate from published data and one user trace, not
-    // a readable per-spell cooldown; failed attempts can also start this timer.
+    // 70938 timing remains an attempt estimate; failed attempts can start it.
+    // A separate experimental transition check may allow an early retry, but
+    // is not a complete readable per-spell cooldown.
     internal const int StormstrikeId = 17364, StormstrikeInterval70938Ms = 8000;
     internal const uint StormstrikePowerFloor70938 = 125;
     internal const string StormstrikeCooldownGroup70938 = "Stormstrike-70938";

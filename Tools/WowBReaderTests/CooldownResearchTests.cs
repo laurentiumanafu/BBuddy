@@ -15,19 +15,27 @@ internal static class CooldownResearchTests
         mem.U64(node + 8, 1); mem.U32(node + 0x10, 17364); mem.U32(node + 0x20, 8000);
         string observed = WowBCooldownResearch.Capture(mem, CancellationToken.None);
         Check(observed.Contains("stable (research only") && observed.Contains("10=000043D4") && observed.Contains("20=00001F40"), "stable candidate");
+        Check(WowBCooldownResearch.TryReadStormstrike(mem, CancellationToken.None, out var nodes) &&
+            nodes.Count == 1 && nodes[0].Address == node && nodes[0].Duration == 8000, "typed stable snapshot");
         mem.U64(node + 8, node);
+        Check(!WowBCooldownResearch.TryReadStormstrike(mem, CancellationToken.None, out _), "typed snapshot rejects cycle");
         Check(WowBCooldownResearch.Capture(mem, CancellationToken.None).Contains("unknown"), "cycle rejected");
         mem.U64(node + 8, 1);
         mem.ReadableRangeAllowed = false;
         Check(WowBCooldownResearch.Capture(mem, CancellationToken.None).Contains("unknown"), "unreadable rejected");
+        Check(!WowBCooldownResearch.TryReadStormstrike(mem, CancellationToken.None, out _), "typed unreadable rejected");
         mem.ReadableRangeAllowed = true;
         int reads = 0;
         mem.OnRead = (address, count) => { if (address == node && ++reads == 2) mem.U32(node + 0x20, 7000); };
         Check(WowBCooldownResearch.Capture(mem, CancellationToken.None).Contains("unknown"), "changed node rejected");
+        mem.OnRead = null; mem.U32(node + 0x20, 8000); reads = 0;
+        mem.OnRead = (address, count) => { if (address == node && ++reads == 2) mem.U32(node + 0x20, 7000); };
+        Check(!WowBCooldownResearch.TryReadStormstrike(mem, CancellationToken.None, out _), "typed changing node rejected");
         mem.OnRead = null;
         using var cancelled = new CancellationTokenSource();
         cancelled.Cancel();
         Check(WowBCooldownResearch.Capture(mem, cancelled.Token).Contains("unknown"), "cancelled rejected");
+        Check(!WowBCooldownResearch.TryReadStormstrike(mem, cancelled.Token, out _), "typed cancelled rejected");
     }
 }
 #endif

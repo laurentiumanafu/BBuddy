@@ -1,0 +1,55 @@
+using System;
+using Styx.Logic.Pathing;
+using Node = Styx.Logic.Pathing.WowBStormstrikeReset.Node;
+static class Program
+{
+    static void Check(bool ok, string label) { if (!ok) throw new Exception(label); }
+    static Node Make(ulong address, uint start, uint duration, int state = 0, uint category = 0, uint categoryDuration = 0)
+    {
+        byte[] bytes = new byte[0x44];
+        void Set(int offset, uint value) => BitConverter.GetBytes(value).CopyTo(bytes, offset);
+        Set(0x10, 17364); Set(0x18, 0x3F800000); Set(0x1C, start); Set(0x20, duration);
+        Set(0x28, start); Set(0x34, start); Set(0x38, category); Set(0x3C, categoryDuration);
+        if (category != 0) Set(0x40, start);
+        return new Node(state, address, bytes);
+    }
+    static void Main()
+    {
+        var old = Make(0x10000, 50, 0);
+        var active = Make(0x20000, 100, 8000);
+        var clear = Make(0x20000, 100, 0);
+        var gcd = Make(0x30000, 100, 0, 0, 133, 1500);
+        var p = new WowBStormstrikeReset();
+        p.Begin(new[] { old }, 1000); Check(p.Armed, "idle baseline arms");
+        p.Observe(new[] { gcd }, 1100); Check(!p.ResetCandidate, "gcd not active spell cooldown");
+        p.Observe(new[] { gcd, active }, 1200); Check(!p.ResetCandidate, "8000 does not mean ready");
+        p.Observe(new[] { gcd, clear }, 1300); Check(!p.ResetCandidate, "one clear insufficient");
+        p.Observe(new[] { gcd, clear }, 1399); Check(!p.ResetCandidate, "clears need spacing");
+        p.Observe(new[] { gcd, clear }, 1400); Check(p.ResetCandidate, "matched early clear");
+        p.Observe(new[] { gcd, clear }, 1500); Check(p.ResetCandidate, "fresh check retains candidate");
+        p.Observe(null, 1600); Check(!p.Armed && !p.ResetCandidate, "unknown cancels permission");
+        p.Begin(null, 0); Check(!p.Armed, "unknown baseline");
+        p.Begin(new[] { active }, 0); Check(!p.Armed, "active baseline withheld");
+        p.Begin(new[] { old }, 0); p.Observe(new[] { Make(0x10000, 50, 8000) }, 100);
+        Check(!p.Armed, "stale start cannot be new cast");
+        p.Begin(Array.Empty<Node>(), 0); p.Observe(new[] { clear }, 100); p.Observe(new[] { clear }, 300);
+        Check(p.Armed && !p.ResetCandidate, "clear without observed active is unknown");
+        p.Begin(Array.Empty<Node>(), 0); p.Observe(new[] { active }, 100); p.Observe(Array.Empty<Node>(), 200);
+        Check(!p.Armed && !p.ResetCandidate, "absence is not reset");
+        p.Begin(Array.Empty<Node>(), 0); p.Observe(new[] { active }, 100); p.Observe(new[] { Make(0x20008, 100, 0) }, 200);
+        Check(!p.Armed, "changed address is not same node");
+        p.Begin(Array.Empty<Node>(), 0); p.Observe(new[] { active }, 100); p.Observe(new[] { Make(0x20000, 101, 0) }, 200);
+        Check(!p.Armed, "changed start is not same node");
+        p.Begin(Array.Empty<Node>(), 0); p.Observe(new[] { active, active }, 100); Check(!p.Armed, "ambiguous active nodes");
+        p.Begin(Array.Empty<Node>(), 0); p.Observe(new[] { active }, 100); p.Observe(new[] { clear, clear }, 200);
+        Check(!p.Armed, "ambiguous clear nodes");
+        p.Begin(Array.Empty<Node>(), 0); p.Observe(new[] { active }, 100); p.Observe(new[] { clear }, 200);
+        p.Observe(new[] { active }, 300); Check(!p.Armed, "reactivation cancels");
+        p.Begin(Array.Empty<Node>(), 0); p.Observe(new[] { active }, 100); p.Observe(new[] { active }, 8000);
+        Check(!p.Armed, "window bounded");
+        p.Begin(Array.Empty<Node>(), int.MaxValue - 200); p.Observe(new[] { active }, unchecked(int.MaxValue - 100));
+        p.Observe(new[] { clear }, unchecked(int.MaxValue + 10)); p.Observe(new[] { clear }, unchecked(int.MaxValue + 120));
+        Check(p.ResetCandidate, "tick wrap safe");
+        Console.WriteLine("Synthetic Stormstrike reset fixtures passed; no real client used.");
+    }
+}
