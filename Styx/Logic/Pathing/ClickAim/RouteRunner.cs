@@ -26,6 +26,9 @@ public static class RouteRunner
 {
     private const int LegTimeoutMs = 90000;
     private const double StepTolerance = 2.5;
+    // Intermediate bends need a tighter radius than ordinary arrival. A 2.5 yd
+    // radius plus a running turn can cut well inside a Detour corner.
+    internal const double MeshCornerTolerance = 0.9;
 
     /// <summary>
     /// How long one polyline point gets when the leg is mesh-routed. Shorter than
@@ -424,10 +427,35 @@ public static class RouteRunner
                 }
 
                 bool lastPoint = p == follow.Length - 1;
+                bool corner = mover.KeyMode && IsMeshCorner(follow, p);
                 if (mover.KeyMode) ClickAimKeySteer.BeginMeshPoint();
-                if (ClickAimPilot.WalkTo(mover, follow[p], StepTolerance, MeshPointTimeoutMs,
-                                         false, true, !lastPoint, InterruptDuringWalk))
+                bool arrived;
+                bool oldTurnInPlace = mover.TurnInPlaceForKeyMode;
+                bool oldRequireFacing = mover.RequireFacingForKeyMode;
+                try
+                {
+                    // Do not arc through a bend while steering toward the next point.
+                    // In key mode a missing facing must stop rather than walk blind.
+                    if (mover.KeyMode)
+                    {
+                        mover.TurnInPlaceForKeyMode = true;
+                        mover.RequireFacingForKeyMode = true;
+                    }
+                    arrived = ClickAimPilot.WalkTo(mover, follow[p], corner ? MeshCornerTolerance : StepTolerance,
+                                                   MeshPointTimeoutMs, false, true, !lastPoint, InterruptDuringWalk);
+                }
+                finally
+                {
+                    mover.TurnInPlaceForKeyMode = oldTurnInPlace;
+                    mover.RequireFacingForKeyMode = oldRequireFacing;
+                }
+                if (arrived)
+                {
+                    // MoveStop can tap the forward key to cancel click-walking. For
+                    // an intermediate key-steered corner only release, never tap W.
+                    if (corner) ClickAimKeySteer.ReleaseHeld();
                     continue;
+                }
                 if (LastRunInterrupted || StopRequested || ClickAimAbort.Requested) return false;
 
                 atPoint = p;
@@ -540,6 +568,20 @@ public static class RouteRunner
             }
         }
         return true;
+    }
+
+    // Resampling preserves corners, but also inserts collinear points. Only
+    // brake at actual changes in direction. Invalid/degenerate geometry is treated
+    // conservatively as a corner instead of being silently skipped.
+    internal static bool IsMeshCorner(WoWPoint[] path, int i)
+    {
+        if (path == null || i <= 0 || i >= path.Length - 1) return false;
+        double ax = path[i].X - path[i - 1].X, ay = path[i].Y - path[i - 1].Y;
+        double bx = path[i + 1].X - path[i].X, by = path[i + 1].Y - path[i].Y;
+        double a = ClickAimMath.Len(ax, ay), b = ClickAimMath.Len(bx, by);
+        if (!double.IsFinite(a) || !double.IsFinite(b) || a < 0.001 || b < 0.001) return true;
+        // >= 10 degrees: real bends brake, tiny float/resampling noise does not.
+        return (ax * bx + ay * by) / (a * b) < 0.984807753;
     }
 
     /// <summary>
@@ -680,7 +722,11 @@ public static class RouteRunner
                                         new WoWPoint(2, 2, 0), new WoWPoint(20, 2, 0) }, 15.0);
         bool keptCorners = corners.Length >= 4 && corners[1].X == 2 && corners[1].Y == 0
                            && corners[2].X == 2 && corners[2].Y == 2;
-        bool ok = keptCorners && ClickAimPilot.WithinArrivalRadius(2.5, 2.5)
+        bool ok = keptCorners && IsMeshCorner(corners, 1) && IsMeshCorner(corners, 2)
+               && !IsMeshCorner(corners, 0) && !IsMeshCorner(corners, corners.Length - 1)
+               && !IsMeshCorner(new[] { new WoWPoint(0, 0, 0), new WoWPoint(1, 0, 0), new WoWPoint(2, 0, 0) }, 1)
+               && IsMeshCorner(new[] { new WoWPoint(0, 0, 0), new WoWPoint(1, 0, 0), new WoWPoint(0, 0, 0) }, 1)
+               && ClickAimPilot.WithinArrivalRadius(2.5, 2.5)
                && !ClickAimPilot.WithinArrivalRadius(2.6, 2.5)
                && !ClickAimPilot.WithinArrivalRadius(double.NaN, 2.5)
                && ValidRayResult(good, 1f, polys, 2, 13UL)

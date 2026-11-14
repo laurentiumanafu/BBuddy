@@ -305,3 +305,28 @@ unreadable position, unknown map, non-ground polygon, STOP or invalid snap.
 This change is diagnostic only: it does not establish the reason for the latest
 failure. Confirm the new marker is in the Windows log and capture the next
 failure's rejection details before changing more navigation behavior.
+
+### 08:40 Badlands: corner following near a ravine
+
+The 2026-11-14 08:40 log contains the guarded-input-diagnostics-v1 sampler
+marker. The user reports repeated falls at the same ravine edge, followed by
+mesh loading and escape. The log does not record the exact edge/corner or prove
+whether the cause was waypoint advancement, steering, mesh geometry, or a
+collision mismatch. Several legs and chases have multi-point paths.
+
+The key-steered mesh route used a 2.5 yd intermediate arrival radius and retained
+forward movement across corners; combat/pool chases advanced within 2 yd. Both
+could cut inside a corner. For directional bends of at least approximately 10
+degrees, use a 0.9 yd corner tolerance and release forward at the corner; steer
+in place on key-steered mesh legs and chases when facing needs correction. Keep
+ordinary intermediate/final tolerances, combat/STOP and facing guards, and
+restore the mover flags after the leg. Intermediate corner braking only releases
+the key, avoiding the click-walk cancellation tap. This can add pauses, and
+inaccurate positions or delayed input may still result in deviation.
+
+This is not a clearance-aware path planner: Detour's path may itself hug or
+cross a hazardous edge, and mesh rays don't prove physical cliff clearance.
+The change is an experimental reduction in corner cutting, not proof that the
+reported pit is safe. Observe a supervised retest, particularly the same ravine;
+if it still occurs, save the log and coordinates or a screenshot. Do not claim a
+Windows or live-game validation from source/fixture tests.

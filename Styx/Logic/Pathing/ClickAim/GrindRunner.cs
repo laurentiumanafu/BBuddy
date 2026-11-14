@@ -5517,9 +5517,14 @@ internal static class GrindRunner
         }
 
         WoWPoint[] follow = watch.Path;
-        while (watch.Point < follow.Length - 1
-            && ClickAimMath.Len(follow[watch.Point].X - px, follow[watch.Point].Y - py) <= 2.0)
+        while (watch.Point < follow.Length - 1)
         {
+            bool corner = RouteRunner.IsMeshCorner(follow, watch.Point);
+            double tolerance = corner ? RouteRunner.MeshCornerTolerance : 2.0;
+            if (ClickAimMath.Len(follow[watch.Point].X - px, follow[watch.Point].Y - py) > tolerance)
+                break;
+            // Brake at a bend before steering toward the following segment.
+            if (corner) ClickAimKeySteer.ReleaseHeld();
             watch.Point++;
             watch.BestPointDistance = double.PositiveInfinity;
             watch.LastProgressMs = Environment.TickCount;
@@ -5547,7 +5552,7 @@ internal static class GrindRunner
         if (combatMoveAllowed != null && !combatMoveAllowed())
         { ClickAimKeySteer.ReleaseHeld(); why = "defensive movement guard changed"; return false; }
         double remaining;
-        if (!ClickAimKeySteer.Steer(point.X, point.Y, hwnd, true, out remaining, true))
+        if (!ClickAimKeySteer.Steer(point.X, point.Y, hwnd, true, out remaining, true, true))
         { ClickAimKeySteer.ReleaseHeld(); why = "mesh-point steering failed"; return false; }
         ClickAimAbort.Wait(90);
         return true;
