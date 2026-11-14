@@ -287,3 +287,21 @@ destination. A completed fight or confirmed resurrection resets the Grind roam
 failure streak; five fresh failed sampling rounds still stop rather than moving
 without a verified destination. C# fixture code models both formats, interrupts
 and relocation, but no .NET SDK/Windows client was available here to execute it.
+
+### 07:59 Badlands follow-up: missing sampler diagnostics
+
+`2026-11-14_0759_17548.log` shows a profile-free map 0 run continuing through
+16 fights, with movement/mesh paths and unverified loot/skin interactions, then
+five failed local-destination attempts at 08:10:22–08:10:30. It contains no
+`sampling rejections`, `sampling unavailable`, or `mesh sampling failed`
+details from the 2ed0f75 sampler. This is consistent with either an older
+running build or an unlogged early return in that sampler (player X/Y or Z
+unreadable, or a transient reader/map check); it does not prove which.
+
+Add an explicit format-aware sampler revision marker when profile-free roaming
+starts, and log each formerly silent X/Y, Z, or transient map/reader early
+return. The checks remain fail-closed and do not authorize movement on an
+unreadable position, unknown map, non-ground polygon, STOP or invalid snap.
+This change is diagnostic only: it does not establish the reason for the latest
+failure. Confirm the new marker is in the Windows log and capture the next
+failure's rejection details before changing more navigation behavior.

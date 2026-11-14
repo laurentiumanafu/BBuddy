@@ -74,6 +74,7 @@ internal sealed class MeshRoam
             int radius = GatherSettings.RoamRadiusYd;
             if (radius < 100 || radius > 3000) { Logging.Write("[Roam] invalid roaming radius"); return false; }
             roam = new MeshRoam(reader, map, snap, radius);
+            Logging.Write("[Roam] sampler revision: format-aware-v2 (2ed0f75), guarded-input-diagnostics-v1");
             Logging.Write(string.Format(CultureInfo.InvariantCulture,
                 "[Roam] map {0}, starting at ({1:F1}, {2:F1}, {3:F1}); random destinations within {4:F0} yd of start. "
                 + "Zone borders are unknown; combat, resource and route detours can go beyond this radius.",
@@ -89,9 +90,13 @@ internal sealed class MeshRoam
     internal bool TryNext(out RoutePoint point)
     {
         point = new RoutePoint();
-        if (ClickAimAbort.Requested || !MapCurrent() || !ClickAimPositions.TryRead(out double x, out double y)) return false;
+        if (ClickAimAbort.Requested) return false;
+        if (!MapCurrent()) { Logging.Write("[Roam] sampling unavailable: map or reader was not confirmed before sampling"); return false; }
+        if (!ClickAimPositions.TryRead(out double x, out double y))
+        { Logging.Write("[Roam] sampling unavailable: player X/Y unreadable; no movement authorized"); return false; }
         double z = ClickAimPositions.Z();
-        if (!double.IsFinite(z)) return false;
+        if (!double.IsFinite(z))
+        { Logging.Write("[Roam] sampling unavailable: player Z unreadable; no movement authorized"); return false; }
         try
         {
             var nav = Navigator.TripperNavigator;
@@ -106,7 +111,8 @@ internal sealed class MeshRoam
             var rejectedAreas = new SortedDictionary<byte, int>();
             for (int i = 0; i < CandidateCount && !ClickAimAbort.Requested; i++)
             {
-                if (!MapCurrent()) return false;
+                if (!MapCurrent())
+                { Logging.Write("[Roam] sampling interrupted: map or reader not confirmed during sampling"); return false; }
                 if (!nav.FindRandomPoint(_map, from, StepRadiusYd, out Vector3 next)) { random++; continue; }
                 if (!float.IsFinite(next.X) || !float.IsFinite(next.Y) || !float.IsFinite(next.Z)
                     || !WithinAnchor(next.X, next.Y, _anchor.X, _anchor.Y, _radius)) { bounds++; continue; }
@@ -132,13 +138,17 @@ internal sealed class MeshRoam
                     rejectedAreas[area] = count + 1;
                     continue;
                 }
-                if (ClickAimAbort.Requested || !MapCurrent()) return false;
+                if (ClickAimAbort.Requested) return false;
+                if (!MapCurrent())
+                { Logging.Write("[Roam] destination discarded: map or reader not confirmed after sampling"); return false; }
                 point = new RoutePoint { X = endSnap.X, Y = endSnap.Y, Z = endSnap.Z, Kind = "Roam" };
                 _recent.Add(endSnap);
                 if (_recent.Count > RecentLimit) _recent.RemoveAt(0);
                 return true;
             }
-            if (!ClickAimAbort.Requested && MapCurrent())
+            if (!ClickAimAbort.Requested && !MapCurrent())
+            { Logging.Write("[Roam] sampling interrupted: map or reader not confirmed after sampling"); return false; }
+            if (!ClickAimAbort.Requested)
             {
                 var areas = new List<string>();
                 foreach (var pair in rejectedAreas) areas.Add(pair.Key.ToString(CultureInfo.InvariantCulture) + ":" + pair.Value.ToString(CultureInfo.InvariantCulture));

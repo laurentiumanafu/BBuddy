@@ -18,6 +18,12 @@ class RoamFormat(unittest.TestCase):
         for file in ['GrindRunner.cs', 'GatherRunner.cs']:
             src = (root / 'Styx/Logic/Pathing/ClickAim' / file).read_text()
             self.assertIn('could not find a local mesh destination after five tries; stopping', src)
+    def test_build_marker_and_early_failures_reported(self):
+        roam = (root / 'Styx/Logic/Pathing/ClickAim/MeshRoam.cs').read_text()
+        for text in ('sampler revision: format-aware-v2 (2ed0f75), guarded-input-diagnostics-v1',
+                     'player X/Y unreadable; no movement authorized', 'player Z unreadable; no movement authorized',
+                     'map or reader was not confirmed before sampling', 'map or reader not confirmed after sampling'):
+            self.assertIn(text, roam)
     def test_combat_and_revival_reset_old_failures(self):
         src = (root / 'Styx/Logic/Pathing/ClickAim/GrindRunner.cs').read_text()
         fight = src[src.index('                if (TryEngage(hwnd, out combatReport))'):src.index('                if (combatReport.Length > 0)')]
@@ -26,6 +32,6 @@ class RoamFormat(unittest.TestCase):
     def test_fixture_cases_present(self):
         fixture = (root / 'Tools/MeshRoamTests/Fixture.cs.txt').read_text()
         for case in ('v16 area 11 sampled', 'v16 water denied and counted', 'legacy area 11 portal denied',
-                     'legacy ground accepted', 'unloaded tile denied', 'stop during sampling', 'map change during sampling'):
+                     'legacy ground accepted', 'unloaded tile denied', 'unreadable XY reported', 'unreadable Z reported', 'stop during sampling', 'map change during sampling'):
             self.assertIn(case, fixture)
 if __name__ == '__main__': unittest.main()
