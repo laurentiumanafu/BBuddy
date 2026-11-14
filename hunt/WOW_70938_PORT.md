@@ -375,3 +375,38 @@ does not establish that the cast stopped. Other builds and unknown baseline use
 the old six-second behavior. Combat, STOP, map/attachment, death and vendor
 guards remain active during the wait. Candidate clearance is not proof of
 completed skinning or received items; this needs a supervised live test.
+
+### 2026-11-14 supplied traces: Stormstrike cooldown investigation
+
+The two user recordings contain 100 samples each. The no-cooldown trace is
+labelled `Stormstrike No Cooldown`; the other is `Stormstrike Cooldown`, with
+a subsequent skinning interaction. In the latter, at 6.762 s player+0x03C0
+briefly changed to 17364 (the bar's Stormstrike ID) and cleared at 7.012 s.
+The matching cast cluster did not contain a complete/consistent timing tuple,
+so it is an observed spell-ID occurrence, not proof of a successful cast.
+The 10768 cluster later at 22.53–22.78 s is consistent with the separately
+recorded skinning pattern; its clear is not captured before the end of the run.
+
+At 7.012 s player+0x1C14 changed from zero to 0x00AFF1A4 while the candidate
+client clock +0x1C10 was 0x00AFDE8F: a difference of 4885. +0x1C14 cleared at
+12.020 s (5.008 s later). It did not change in the no-cooldown recording. The
+correlation is insufficient to identify a Stormstrike cooldown, prove units,
+or distinguish another timer such as mana regeneration's five-second rule.
+Player mana-like words and combat were also changing. Do not read +0x1C14 as a
+cooldown, or infer that five seconds is Stormstrike's cooldown.
+
+WoW Forever references report an **8-second** Stormstrike cooldown:
+https://www.wowhead.com/forever/spell=17364/stormstrike and
+https://www.icy-veins.com/wow-forever/enhancement-shaman-melee-dps-pve-rotation-cooldowns-abilities.
+Another database page still displays 6 seconds while noting a change to 8:
+https://wow-forever.gg/db/spells/17364-stormstrike/. Sources can lag or reflect
+client/hotfix differences. Eight seconds is an external reference, not a
+cooldown duration established by the provided runtime recordings.
+
+No combat-input policy or offsets changed in this investigation. The trace
+analyzer reports this 1C10/1C14 pair as a timer-like pattern with unknown
+meaning, not a cooldown. For a stronger client-specific test, record a clean
+use of Stormstrike with a durable target, no other casts or movement, and
+include a visible timestamp when it becomes usable; repeat once and compare.
+An idle/no-cooldown control should also be stationary. A separate mana-spending
+spell would help test whether the five-second pattern is generic.

@@ -2,7 +2,7 @@
 import tempfile
 import unittest
 from pathlib import Path
-from analyze_combat_trace import read_trace, candidate_events, trace_label, player_offsets_not_in_control
+from analyze_combat_trace import read_trace, candidate_events, timer_candidate_events, trace_label, player_offsets_not_in_control
 
 
 class TraceTests(unittest.TestCase):
@@ -83,6 +83,25 @@ class TraceTests(unittest.TestCase):
         self.assertEqual(candidate_events(changes), [])
         del changes[('player', 0x3e8)]
         self.assertEqual(candidate_events(changes), [])
+
+    def test_timer_like_candidate_is_not_called_a_cooldown(self):
+        changes = {('player', 0x1C10): [(7.0, 9000, 10000), (12.0, 14800, 15000)],
+                   ('player', 0x1C14): [(7.0, 0, 14900), (12.0, 14900, 0)]}
+        events = timer_candidate_events(changes)
+        self.assertEqual(len(events), 1)
+        self.assertIn('difference=4900', events[0][1])
+        self.assertIn('cleared 5.00s later', events[0][1])
+        self.assertIn('unverified units/meaning', events[0][1])
+        self.assertNotIn('cooldown', events[0][1])
+        changes[('player', 0x1C14)][1] = (12.0, 14000, 0)
+        self.assertNotIn('cleared', timer_candidate_events(changes)[0][1])
+        changes[('player', 0x1C14)][0] = (7.0, 0, 9999)
+        self.assertEqual(timer_candidate_events(changes), [])
+        changes[('player', 0x1C10)] = [(7.0, 0xFFFFFF00, 0xFFFFFF00)]
+        changes[('player', 0x1C14)][0] = (7.0, 0, 0x000000F4)
+        self.assertIn('difference=500', timer_candidate_events(changes)[0][1])
+        del changes[('player', 0x1C10)]
+        self.assertEqual(timer_candidate_events(changes), [])
 
     def test_new_registered_build_headers(self):
         with tempfile.TemporaryDirectory() as folder:

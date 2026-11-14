@@ -137,6 +137,31 @@ def candidate_events(changes):
     return results
 
 
+def timer_candidate_events(changes):
+    """Report a correlated timer-like word, never a verified cooldown or spell.
+
+    A single 70938 combat trace showed +0x1C14 populate near the continuously
+    changing +0x1C10 and later clear. These are non-atomic raw samples; values
+    can describe unrelated mechanisms, including a general combat timer.
+    """
+    events = changes.get(("player", 0x1C14), [])
+    clock = {t: new for t, _, new in changes.get(("player", 0x1C10), [])}
+    found = []
+    for i, (t, old, deadline) in enumerate(events):
+        if old != 0 or deadline == 0 or t not in clock:
+            continue
+        delta = (deadline - clock[t]) & 0xFFFFFFFF
+        if not 0 < delta <= 60000:
+            continue
+        detail = f"player +0x1C14 timer-like word set; +0x1C10 difference={delta} (unverified units/meaning)"
+        if i + 1 < len(events):
+            later, prior, new = events[i + 1]
+            if prior == deadline and new == 0 and 0 <= later - t <= 60:
+                detail += f"; cleared {later - t:.2f}s later"
+        found.append((t, detail))
+    return found
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("trace")
@@ -157,7 +182,7 @@ def main():
         print(f"Control label: {trace_label(args.control)}; samples: {control_count}; end: {control_status}")
         print(f"Player offsets changed here but not in control: {len(new_offsets)} (different conditions can still cause changes)")
         print("  " + (", ".join(f"+0x{x:04X}" for x in new_offsets[:args.max]) if new_offsets else "none"))
-    events = candidate_events(changes)
+    events = sorted(candidate_events(changes) + timer_candidate_events(changes))
     print(f"Observed research patterns: {len(events)} (one-build candidates, not verified state)")
     for time, description in events:
         print(f"  {time:.2f}s {description}")
