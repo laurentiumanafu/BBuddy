@@ -1,0 +1,33 @@
+using System;
+using Styx.Logic.Pathing;
+
+static class Program
+{
+    static void Check(bool b, string message) { if (!b) throw new Exception(message); }
+    static bool Ready(WowBPreMeleeRetry p, long now, double d = 12, double range = 28, uint mana = 60, uint cost = 30)
+        => p.MayTry(now, d, 6.2, range, mana, cost);
+    static void Main()
+    {
+        var p = new WowBPreMeleeRetry();
+        Check(!Ready(p, 5000), "not latched");
+        p.Latch(1000);
+        Check(!Ready(p, 2999), "backoff");
+        Check(!Ready(p, 3000, mana: 29), "insufficient mana");
+        Check(!Ready(p, 3000, cost: 0), "unknown cost");
+        Check(!Ready(p, 3000, d: 6.2), "near melee");
+        Check(!Ready(p, 3000, d: 29), "out of range");
+        Check(!Ready(p, 3000, d: double.NaN), "invalid position");
+        Check(Ready(p, 3000), "one opportunity");
+        p.Reserve();
+        Check(!Ready(p, 6000), "reserved cannot repeat");
+        p.Latch(7000);
+        Check(!Ready(p, 20000), "latch does not reset budget");
+        var close = new WowBPreMeleeRetry();
+        close.Latch(0); close.ObserveDistance(5.2, 5.2);
+        Check(!Ready(close, 4000, d: 12), "reached melee stays latched when target moves away");
+        var early = new WowBPreMeleeRetry();
+        early.ObserveDistance(4, 5.2); early.Latch(1000);
+        Check(!Ready(early, 5000), "initially in melee never retries");
+        Console.WriteLine("Pre-melee retry policy fixture passed");
+    }
+}

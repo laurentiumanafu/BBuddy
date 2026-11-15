@@ -2836,18 +2836,7 @@ internal static class GrindRunner
         return cost + cost / 5;
     }
 
-    /// <summary>
-    /// The spell just pressed and the power in hand before it, waiting for the next read.
-    ///
-    /// On this client the cost is taken from the bar at the END of the cast, and the poll that
-    /// notices the mob's health move can land before that: every Lightning Bolt in the 22:47 log
-    /// printed "mana 150 -> 150, 135 -> 135" because the drop appeared one read later. So the
-    /// press is remembered and the price is measured on the next look.
-    /// </summary>
-    private static int _pendingCastId;
-    private static uint _pendingCastMana;
-
-    /// <summary>Remembers what a spell costs, from a cast that spent power.</summary>
+    /// <summary>Tracks a net power-drop estimate after an attempt, not an authoritative spell cost.</summary>
     private static void LearnCastCost(int spellId, uint before, uint after)
     {
         if (spellId <= 0 || before <= after) return;
@@ -6692,6 +6681,97 @@ internal static class GrindRunner
         catch { return false; }
     }
 
+    // A cost observation is a candidate net power change, not proof of cost.
+    // Require the same active experimental session/player and two matching mana
+    // reads; unsupported/unknown resource types cannot train delayed estimates.
+    private static bool PendingCostSample(WowBReader reader, GreenMagic.Memory memory, WowBObservedUnit expected,
+        out uint power, out uint maxPower, out uint map)
+    {
+        power = maxPower = 0; map = uint.MaxValue;
+        if (!reader.IsExperimental70707 || expected.Guid.IsEmpty || _stop || ClickAimAbort.Requested || RouteRunner.StopRequested) return false;
+        try
+        {
+            using var uncached = memory.TemporaryCacheState(false);
+            if (ObjectManager.Wow != memory || ObjectManager.WowB != reader || !reader.ExperimentalGrindActive ||
+                !reader.TryReadMapId(out uint beforeMap) || beforeMap == uint.MaxValue ||
+                !WowBGrindFactions.TraceIdentity70707(memory, reader, expected, true) ||
+                !reader.TryGetUnitFields(expected.UnitAddress, out WowBReader.WowBUnitFields first) ||
+                !reader.TryGetUnitFields(expected.UnitAddress, out WowBReader.WowBUnitFields second) ||
+                first.Health == 0 || second.Health == 0 || first.PlayerPowerTypeCandidate != 0 || second.PlayerPowerTypeCandidate != 0 ||
+                first.MaxPower == 0 || first.Power > first.MaxPower || first.Power != second.Power || first.MaxPower != second.MaxPower ||
+                !WowBGrindFactions.TraceIdentity70707(memory, reader, expected, true) ||
+                !reader.TryReadMapId(out uint afterMap) || beforeMap != afterMap ||
+                _stop || ClickAimAbort.Requested || RouteRunner.StopRequested || ObjectManager.Wow != memory || ObjectManager.WowB != reader) return false;
+            power = second.Power; maxPower = second.MaxPower; map = afterMap;
+            return true;
+        }
+        catch { return false; }
+    }
+
+    // This grants only one optional retry before melee. All observations remain
+    // candidates; a keypress is not proof of a cast or clear line of sight.
+    private static bool PreMeleeRetrySample(IntPtr hwnd, WowBReader reader, GreenMagic.Memory memory,
+        WowBObservedUnit expectedPlayer, WowBObservedUnit expectedTarget, uint expectedMap,
+        ClickAimAction spell, uint requiredMana, double minimumDistance, bool defenceOnly, bool defenceFactionFilter,
+        out uint freshMana)
+    {
+        freshMana = 0;
+        if (!reader.IsExperimental70938 || hwnd == IntPtr.Zero || expectedMap == uint.MaxValue ||
+            expectedPlayer.Guid.IsEmpty || expectedTarget.Guid.IsEmpty || requiredMana == 0 ||
+            !spell.IsDamage || spell.IsDot || spell.IsMelee || spell.KeyVk == 0 || spell.RangeYd <= minimumDistance ||
+            ClickAimClassRotation.IsAnyShock(spell) || ClickAimClassRotation.IsLightningBolt(spell) ||
+            ClickAimSettings.UseKeyOneStartAttackMacro || _stop || ClickAimAbort.Requested || RouteRunner.StopRequested) return false;
+        try
+        {
+            using var uncached = memory.TemporaryCacheState(false);
+            if (ObjectManager.Wow != memory || ObjectManager.WowB != reader || memory.WindowHandle != hwnd ||
+                !reader.TryReadMapId(out uint map) || map != expectedMap ||
+                !FightAttackInputAllowed(reader, memory, expectedTarget.Guid, expectedTarget,
+                    !defenceOnly || defenceFactionFilter, defenceOnly, !defenceOnly) ||
+                !Capture(out WowBWorldSnapshot? snap) || snap == null ||
+                !snap.TryGetLocalPlayer(out WowBObservedUnit player) || player.Guid != expectedPlayer.Guid ||
+                player.UnitAddress != expectedPlayer.UnitAddress || player.RecordAddress != expectedPlayer.RecordAddress ||
+                !snap.TryGetSelectedTarget(out WowBObservedUnit target) || target.Guid != expectedTarget.Guid ||
+                target.UnitAddress != expectedTarget.UnitAddress || target.RecordAddress != expectedTarget.RecordAddress ||
+                target.IsLocalPlayer || target.HasPlayerVtable ||
+                !reader.TryGetUnitFields(player.UnitAddress, out WowBReader.WowBUnitFields self) ||
+                self.Health == 0 || self.PlayerPowerTypeCandidate != 0 || self.MaxPower == 0 || self.Power < requiredMana || self.Power > self.MaxPower ||
+                !reader.TryGetUnitFields(target.UnitAddress, out WowBReader.WowBUnitFields mob) ||
+                !DefenceFieldsValid(mob.Health, mob.UnitFlags, _notViable.Contains(target.Guid))) return false;
+            bool Geometry(WowBObservedUnit p, WowBObservedUnit t)
+            {
+                double dx = t.Location.X - p.Location.X, dy = t.Location.Y - p.Location.Y, dz = t.Location.Z - p.Location.Z;
+                double planar = Math.Sqrt(dx * dx + dy * dy), distance = Math.Sqrt(dx * dx + dy * dy + dz * dz);
+                return double.IsFinite(planar) && double.IsFinite(distance) && planar > minimumDistance && distance <= spell.RangeYd &&
+                    ClickAimKeySteer.TryReadFacing(out double facing) &&
+                    Math.Abs(ClickAimMath.WrapDeg(ClickAimMath.HeadingDeg(dx, dy) - facing * 180.0 / Math.PI)) <= 30.0;
+            }
+            if (!Geometry(player, target)) return false;
+            bool slotCurrent = false;
+            foreach (ClickAimAction current in ClickAimCombat.ReadBar(reader))
+                if (current.Slot == spell.Slot && current.Raw == spell.Raw && current.Id == spell.Id && current.KeyVk == spell.KeyVk && current.IsDamage)
+                { slotCurrent = true; break; }
+            if (!slotCurrent || !spell.IsDamage || ClickAimSettings.UseKeyOneStartAttackMacro ||
+                !reader.TryReadMapId(out map) || map != expectedMap ||
+                !FightAttackInputAllowed(reader, memory, expectedTarget.Guid, expectedTarget,
+                    !defenceOnly || defenceFactionFilter, defenceOnly, !defenceOnly) ||
+                !Capture(out WowBWorldSnapshot? finalSnap) || finalSnap == null ||
+                !finalSnap.TryGetLocalPlayer(out WowBObservedUnit finalPlayer) || finalPlayer.Guid != player.Guid ||
+                finalPlayer.UnitAddress != player.UnitAddress || finalPlayer.RecordAddress != player.RecordAddress ||
+                !finalSnap.TryGetSelectedTarget(out WowBObservedUnit finalTarget) || finalTarget.Guid != target.Guid ||
+                finalTarget.UnitAddress != target.UnitAddress || finalTarget.RecordAddress != target.RecordAddress ||
+                finalTarget.IsLocalPlayer || finalTarget.HasPlayerVtable || !Geometry(finalPlayer, finalTarget) ||
+                !reader.TryGetUnitFields(player.UnitAddress, out self) || self.Health == 0 ||
+                self.PlayerPowerTypeCandidate != 0 || self.MaxPower == 0 || self.Power < requiredMana || self.Power > self.MaxPower ||
+                !reader.TryGetUnitFields(target.UnitAddress, out mob) || !DefenceFieldsValid(mob.Health, mob.UnitFlags, _notViable.Contains(target.Guid)) ||
+                !reader.TryReadMapId(out map) || map != expectedMap || reader.ReadTargetGuid() != expectedTarget.Guid ||
+                _stop || ClickAimAbort.Requested || RouteRunner.StopRequested || ObjectManager.Wow != memory || ObjectManager.WowB != reader) return false;
+            freshMana = self.Power;
+            return true;
+        }
+        catch { return false; }
+    }
+
     /// <summary>
     /// One fight using a hotbar-only class priority or the legacy generic selector.
     /// Healing, estimated DoT timing and optional instants share the existing
@@ -6714,8 +6794,13 @@ internal static class GrindRunner
 
 
 
-        _pendingCastId = 0;                 // a cast remembered from the last fight is not evidence
+        // Delayed cost evidence belongs to this fight only, never a previous target.
+        int pendingCastId = 0;
+        uint pendingCastMana = 0, pendingCastMax = 0, pendingCastMap = uint.MaxValue;
+        long pendingCastAt = 0;
+        WowBObservedUnit pendingCastPlayer = default;
         bool castEverObservedEffect = false; // power or target health changed after a cast attempt
+        var preMeleeRetry = new WowBPreMeleeRetry();
         bool melee = false;                 // set when casting is shown not to work
         bool announced = false;
         int healFailures = 0;               // presses of the heal key that changed nothing
@@ -6798,6 +6883,8 @@ internal static class GrindRunner
             ? () => RemoteDefenceMovementAllowed(reader, fightMemory, expectedPull, selectedRemoteFallback) : null;
         List<ClickAimAction> bar = ClickAimCombat.ReadBar(reader);
         ClickAimRotationPlan rotation = ClickAimClassRotation.Build(ClickAimSettings.RotationClass, bar, reader.IsExperimental70938);
+        uint retryMap = uint.MaxValue;
+        if (reader.IsExperimental70938 && reader.TryReadMapId(out uint startRetryMap)) retryMap = startRetryMap;
         ClickAimAction? damage = rotation.Damage;
         ClickAimAction? heal = rotation.Heal;
         ClickAimAction? auto = ClickAimCombat.AutoAttack(bar);          // Attack (6603)
@@ -6927,6 +7014,7 @@ internal static class GrindRunner
             if (!snap.TryGetLocalPlayer(out me)) break;
             if (stormReset.Armed) ObserveStormReset();
             double d = ClickAimMath.Len(target.Location.X - me.Location.X, target.Location.Y - me.Location.Y);
+            preMeleeRetry.ObserveDistance(d, MeleeEngageYd);
             double defenceLimit = remoteDefence ? RemoteDefenceRadius + 3.0 : target.Guid == _focusedFightGuid
                 ? Math.Max(GatherDefenceRadius + 3.0, castRange) : GatherDefenceRadius + 3.0;
             if (defenceOnly && (!double.IsFinite(d) || d > defenceLimit))
@@ -7095,11 +7183,19 @@ internal static class GrindRunner
              * let the 22:47 shaman press a heal with 13 power. */
             if (myMana > _manaPeak) _manaPeak = myMana;
 
-            /* The price of the spell pressed last time, measured now (see _pendingCastId). */
-            if (_pendingCastId != 0)
+            // Delayed power drops are only net-spend estimates. Discard them
+            // on unreadable/changed identity, map, mana type, maximum or session;
+            // never carry an ambiguous pending observation into another fight.
+            if (pendingCastId != 0)
             {
-                LearnCastCost(_pendingCastId, _pendingCastMana, myMana);
-                _pendingCastId = 0;
+                int costId = pendingCastId;
+                pendingCastId = 0;
+                long age = Environment.TickCount64 - pendingCastAt;
+                if (age >= 0 && age <= 8000 && me.Guid == pendingCastPlayer.Guid &&
+                    me.UnitAddress == pendingCastPlayer.UnitAddress && me.RecordAddress == pendingCastPlayer.RecordAddress &&
+                    PendingCostSample(reader, fightMemory, pendingCastPlayer, out uint observedPower, out uint observedMax, out uint observedMap) &&
+                    observedMap == pendingCastMap && observedMax == pendingCastMax)
+                    LearnCastCost(costId, pendingCastMana, observedPower);
             }
             double myPercent = myMaxHealth > 0 ? myHealth * 100.0 / myMaxHealth : 100.0;
 
@@ -7580,7 +7676,22 @@ internal static class GrindRunner
             bool hunterTooClose = rotation.Class == ClickAimRotationClass.Hunter && d < 8.0;
             bool shockReady = ClickAimClassRotation.Ready(_rotationCooldowns, rotation.DamageGroup, Environment.TickCount);
             bool shockMelee = !melee && ClickAimClassRotation.PreferShockMelee(shockAutoPlan, shockReady);
-            bool canCast = (maelstromCast || (!melee && !shockMelee)) && castDamage != null && !castDamage.IsMelee && !hunterTooClose && myMana >= needForCast;
+            // Only ordinary caster rotations are eligible. In particular never
+            // modify the Shaman Shock/Stormstrike/Maelstrom or key-one paths.
+            bool retryClass = rotation.Class == ClickAimRotationClass.Druid || rotation.Class == ClickAimRotationClass.Mage ||
+                rotation.Class == ClickAimRotationClass.Priest || rotation.Class == ClickAimRotationClass.Warlock;
+            double retryMinimum = MeleeEngageYd + 1.0;
+            bool retryCast = reader.IsExperimental70938 && retryClass && melee && !maelstromCast && !supplemental &&
+                !keyOneMacro && !ClickAimSettings.UseKeyOneStartAttackMacro && !attackPressed && !meleeSwinging &&
+                lastAttackPressMs == 0 && lastMeleeClickMs == 0 && !preserveAttackAfterHeal && !unmeasuredRage &&
+                damage != null && castDamage == damage && damage.IsDamage && !damage.IsDot && !damage.IsMelee &&
+                !ClickAimClassRotation.IsAnyShock(damage) && !ClickAimClassRotation.IsLightningBolt(damage) &&
+                _castCosts.TryGetValue(damage.Id, out uint estimatedCost) && estimatedCost > 0 &&
+                ClickAimClassRotation.Ready(_rotationCooldowns, rotation.DamageGroup, Environment.TickCount) &&
+                (lastCastMs == 0 || unchecked(Environment.TickCount - lastCastMs) >= ClickAimCombat.CastSettleMs) &&
+                (lastHealMs == 0 || unchecked(Environment.TickCount - lastHealMs) >= ClickAimCombat.CastSettleMs) &&
+                preMeleeRetry.MayTry(Environment.TickCount64, d, retryMinimum, damage.RangeYd, myMana, needForCast);
+            bool canCast = (maelstromCast || (!melee && !shockMelee) || retryCast) && castDamage != null && !castDamage.IsMelee && !hunterTooClose && myMana >= needForCast;
 
             if (!canCast && !melee && damage != null && !damage.IsMelee && myMana < PowerForCast(damage, 10)
                 && !powerShortLogged)
@@ -7629,6 +7740,7 @@ internal static class GrindRunner
 
             if (canCast)
             {
+                if (retryCast) preMeleeRetry.Reserve(); // one opportunity even if facing or a final guard fails
                 /* Stop moving before the key. The client answers a cast begun while walking
                  * with "cannot do that while moving" and does nothing, which is what the
                  * user saw in this run's chat. */
@@ -7650,6 +7762,13 @@ internal static class GrindRunner
                     continue;
                 }
 
+                // Snapshot the candidate baseline before the final input guards.
+                // The optional key-one follow-up can spend power of its own, so
+                // it must never feed the delayed single-spell estimate.
+                uint baselinePower = 0, baselineMax = 0, baselineMap = uint.MaxValue;
+                bool canTrackCost = !(keyOneMacro && ClickAimClassRotation.IsAnyShock(castDamage!)) &&
+                    PendingCostSample(reader, fightMemory, me, out baselinePower, out baselineMax, out baselineMap);
+                long baselineAt = Environment.TickCount64;
                 if (!FightAttackInputAllowed(reader, fightMemory, defenceTarget, expectedPull, !defenceOnly || defenceFactionFilter, defenceOnly, !defenceOnly))
                 { return YieldForTargetChange(reader, fightMemory, defenceTarget); }
                 if (maelstromCast || supplemental ? !castDamage!.IsDamage : (damageWasDot ? !castDamage!.IsDot || !ClickAimSettings.UseDamageOverTime : !castDamage!.IsDamage))
@@ -7661,13 +7780,27 @@ internal static class GrindRunner
                 if (maelstromCast && (bolt == null || Environment.TickCount64 < _maelstromBoltNextAttempt ||
                     !MaelstromBoltAllowed(hwnd, reader, fightMemory, maelstromPlayer, expectedPull, maelstromMap, bolt, boltPower,
                         !defenceOnly || defenceFactionFilter, defenceOnly, !defenceOnly))) continue;
+                if (retryCast)
+                {
+                    if (attackPressed || meleeSwinging || keyOneMacro || lastAttackPressMs != 0 || lastMeleeClickMs != 0 ||
+                        !PreMeleeRetrySample(hwnd, reader, fightMemory, me, expectedPull, retryMap, castDamage!,
+                            needForCast, retryMinimum, defenceOnly, defenceFactionFilter, out uint retryMana))
+                    { Logging.Write("[Grind] guarded pre-melee cast retry withheld; keeping melee fallback"); continue; }
+                    myMana = retryMana;
+                    Logging.Write("[Grind] attempting the single guarded pre-melee cast retry; cast result and line of sight remain unverified");
+                }
                 lastCastMs = Environment.TickCount;
                 // Instant Shock or the experimental proc does not prove Attack stopped.
                 if (!shockAutoPlan && !maelstromCast) meleeSwinging = false;
-                uint manaBefore = myMana;
+                if (retryCast && canTrackCost && baselinePower != myMana) canTrackCost = false;
+                uint manaBefore = canTrackCost ? baselinePower : myMana;
                 int mobBeforeHealth = lastHealth;
-                _pendingCastId = castDamage!.Id;
-                _pendingCastMana = manaBefore;
+                pendingCastId = 0;
+                if (canTrackCost)
+                {
+                    pendingCastId = castDamage!.Id; pendingCastMana = baselinePower; pendingCastMax = baselineMax;
+                    pendingCastMap = baselineMap; pendingCastAt = baselineAt; pendingCastPlayer = me;
+                }
                 if (maelstromCast) _maelstromBoltNextAttempt = Environment.TickCount64 + WowBMaelstromWeapon.AttemptBackoffMs;
                 ClickAimInput.TapKey(hwnd, castDamage!.KeyVk, 40);
                 if (maelstromCast)
@@ -7776,9 +7909,10 @@ internal static class GrindRunner
                 if (castFailures >= 3)
                 {
                     melee = true;
+                    preMeleeRetry.Latch(Environment.TickCount64);
                     Logging.Write(castEverObservedEffect
                         ? "[Grind] the last 3 cast attempts had no observed effect even while facing the target - "
-                          + "closing to melee for the rest of this fight"
+                          + "closing to melee; one guarded retry may be allowed before arrival"
                         : "[Grind] this key has had no observed effect this fight - switching to auto-attack "
                           + "rather than standing still");
                 }
@@ -7816,9 +7950,10 @@ internal static class GrindRunner
                  * which is the "DPS is lost" the user reported. A player does not stop swinging
                  * to start a 2.5 s cast in melee at level 3, and neither does this now. */
                 melee = true;
+                preMeleeRetry.Latch(Environment.TickCount64);
                 Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                    "[Grind] melee from here FOR THE REST OF THIS FIGHT - casting is {0} (damage spell {1}{2}, "
-                    + "power {3}, {4} failed cast(s)); a swing that is running stays running",
+                    "[Grind] melee fallback latched - casting is {0} (damage spell {1}{2}, "
+                    + "power {3}, {4} failed cast(s)); at most one guarded retry may be allowed before reaching melee",
                     whyCasting,
                     damage == null ? "none on the bar" : damage.Name,
                     meleeHit == null ? "" : " and " + meleeHit.Name + (unmeasuredRage ? " withheld" : " to press at arm's length"),
@@ -7992,6 +8127,10 @@ internal static class GrindRunner
                     (lastCastMs == 0 || unchecked(Environment.TickCount - lastCastMs) >= ClickAimCombat.CastSettleMs) &&
                     (lastHealMs == 0 || unchecked(Environment.TickCount - lastHealMs) >= ClickAimCombat.CastSettleMs))))
             {
+                uint meleeBaselinePower = 0, meleeBaselineMax = 0, meleeBaselineMap = uint.MaxValue;
+                bool trackMeleeCost = rotation.MeleeIntervalMs > 0 && !(keyOneMacro && ClickAimClassRotation.IsAnyShock(meleeHit)) &&
+                    PendingCostSample(reader, fightMemory, me, out meleeBaselinePower, out meleeBaselineMax, out meleeBaselineMap);
+                long meleeBaselineAt = Environment.TickCount64;
                 if (!FightAttackInputAllowed(reader, fightMemory, defenceTarget, expectedPull, !defenceOnly || defenceFactionFilter, defenceOnly, !defenceOnly))
                 { return YieldForTargetChange(reader, fightMemory, defenceTarget); }
                 if (!meleeHit.IsDamage) return "melee ability role changed; attack withheld";
@@ -8046,7 +8185,12 @@ internal static class GrindRunner
                     else
                         Logging.Write("[Grind] key 1 follow-up withheld after a Shock attempt; rechecking the fight");
                 }
-                if (rotation.MeleeIntervalMs > 0) { _pendingCastId = meleeHit.Id; _pendingCastMana = myMana; }
+                pendingCastId = 0;
+                if (trackMeleeCost)
+                {
+                    pendingCastId = meleeHit.Id; pendingCastMana = meleeBaselinePower; pendingCastMax = meleeBaselineMax;
+                    pendingCastMap = meleeBaselineMap; pendingCastAt = meleeBaselineAt; pendingCastPlayer = me;
+                }
                 MarkFocusedAttack(target);
                 presses++;
                 _presses++;

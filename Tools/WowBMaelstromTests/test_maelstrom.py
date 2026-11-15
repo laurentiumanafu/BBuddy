@@ -30,7 +30,10 @@ class Maelstrom(unittest.TestCase):
         self.assertIn('if (experimental70938)', ROT)
         fight = FIGHT[FIGHT.index('private static string Fight('):]
         self.assertEqual(fight.count('MaelstromBoltAllowed(hwnd, reader, fightMemory'), 2)
-        self.assertIn('(maelstromCast || (!melee && !shockMelee))', fight)
+        self.assertIn('(maelstromCast || (!melee && !shockMelee) || retryCast)', fight)
+        retry = fight[fight.index('bool retryClass ='):fight.index('bool canCast =')]
+        self.assertIn('!ClickAimClassRotation.IsLightningBolt(damage)', retry)
+        self.assertIn('!maelstromCast', retry)
         self.assertIn('if (supplemental || maelstromCast)', fight)
         self.assertIn('if (maelstromCast) _maelstromBoltNextAttempt', fight)
         before = fight.index('if (maelstromCast && (bolt == null')
