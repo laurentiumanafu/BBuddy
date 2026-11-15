@@ -1,0 +1,53 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Text.Json;
+using Styx.Logic.Pathing;
+using Styx.WoWInternals;
+using G = Styx.Logic.Pathing.WowBMailGridCalibration;
+using L = Styx.Logic.Pathing.WowBMailGridLookup;
+namespace Styx.Logic.Pathing { static class ClickAimCalibration { public static string DefaultPath => "Settings/cal.txt"; } }
+static class Fixture
+{
+    static void Check(bool b, string why) { if (!b) throw new Exception(why); }
+    static (G.Result, List<L.Bag>) Sample()
+    {
+        var g = new G.Result { Player = "player", Width = 600, Height = 600, Columns = 10, AnchorX = 100, AnchorY = 200,
+            PitchX = 40, PitchY = 40, BackpackFirstOrdinal = -8, BackpackVisibleSlots = 20 };
+        var bags = new List<L.Bag>();
+        for (int i = 0; i < 4; i++)
+        {
+            var id = new WowBGuid((ulong)i+1, 7); var slots = new WowBGuid[12]; slots[0] = new WowBGuid((ulong)i+10, 3);
+            bags.Add(new L.Bag { Candidate = i, Identity = id, Slots = slots });
+            g.Bags.Add(new G.SavedBag { Candidate = i, Identity = id.ToString(), Count = 12, FirstOrdinal = 12 + 12*i });
+        }
+        bags.Add(new L.Bag { Candidate = 4, Unknown = true }); g.Bags.Add(new G.SavedBag { Candidate = 4, Unknown = true });
+        return (g, bags);
+    }
+    static void Main()
+    {
+        var (g,b) = Sample();
+        Check(L.Validate(g, "player", 600, 600, b), "valid research geometry");
+        Check(L.TryMatch(g,b,180,240,out var hit) && hit.Candidate == 0 && hit.Slot == 0 && !hit.Item.IsEmpty,"candidate zero item");
+        Check(!L.TryMatch(g,b,180,200,out _),"backpack is excluded");
+        Check(!L.TryMatch(g,b,220,240,out _),"empty slot rejected");
+        Check(!L.TryMatch(g,b,192,240,out _),"off-center rejected");
+        Check(!L.Validate(g,"other",600,600,b) && !L.Validate(g,"player",601,600,b),"player and size match");
+        var (other,changed) = Sample(); changed[0].Identity = new WowBGuid(55,7);
+        Check(!L.Validate(g,"player",600,600,changed) && !L.Same(b,changed),"changed bag rejected");
+        (other,changed) = Sample(); changed[0].Slots[0] = new WowBGuid(99,3);
+        Check(!L.Same(b,changed),"changed slot rejected");
+        (other,changed) = Sample(); other.Bags[0].FirstOrdinal = 11;
+        Check(!L.Validate(other,"player",600,600,changed),"backpack overlap rejected");
+        (other,changed) = Sample(); other.PitchX = double.NaN;
+        Check(!L.Validate(other,"player",600,600,changed),"invalid geometry rejected");
+        (other,changed) = Sample(); other.Bags[4] = new G.SavedBag { Candidate=4, Identity=new WowBGuid(90,7).ToString(), Count=12, FirstOrdinal=60 };
+        changed[4] = new L.Bag {Candidate=4, Identity=new WowBGuid(90,7), Slots=new WowBGuid[12]}; changed[4].Slots[0] = new WowBGuid(90,3);
+        Check(L.Validate(other,"player",600,600,changed),"known fifth candidate metadata accepted");
+        Check(!L.TryMatch(other,changed,100,440,out _),"unknown fifth bag meaning never clicked");
+        string path = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".json");
+        try { File.WriteAllText(path,JsonSerializer.Serialize(g)); Check(L.TryLoad(path,"player",600,600,b,out _),"load valid grid"); File.WriteAllText(path,"{}"); Check(!L.TryLoad(path,"player",600,600,b,out _),"reject malformed grid"); }
+        finally { File.Delete(path); }
+        Console.WriteLine("Synthetic grid lookup passed; UI/item/attachment semantics remain unverified.");
+    }
+}

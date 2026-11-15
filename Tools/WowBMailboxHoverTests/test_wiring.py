@@ -42,7 +42,7 @@ class MailboxHoverWiring(unittest.TestCase):
     def test_send_tab_is_separate_explicit_single_click(self):
         self.assertIn('btnMailTabTest_Click', xaml)
         self.assertIn('Do not hover the Send button', xaml)
-        code = ui[ui.index('private async void btnMailTabTest_Click'):ui.index('private sealed class MailGridPointRow')]
+        code = ui[ui.index('private async void btnMailTabTest_Click'):ui.index('private async void btnMailRecipientTest_Click')]
         for guard in ('MessageBoxButton.YesNo', 'ClickAimUi.Running', 'ClickAimUi.Paused', 'ClickAimAbort.Generation',
                       'cancel.IsCancellationRequested', 'Task.Delay(3000, cancel.Token)', 'ClickSafetyCandidate',
                       'MailHoverSameSession', 'DiagnosticLeftClick', 'mailbox and tab state not verified'):
@@ -59,7 +59,7 @@ class MailboxHoverWiring(unittest.TestCase):
 
     def test_recipient_test_is_supervised_and_does_not_send(self):
         self.assertIn('btnMailRecipientTest_Click', xaml)
-        code = ui[ui.index('private async void btnMailRecipientTest_Click'):ui.index('private sealed class MailGridPointRow')]
+        code = ui[ui.index('private async void btnMailRecipientTest_Click'):ui.index('private static bool CaptureMailAttachment')]
         for guard in ('txtMailRecipient.Text', 'ValidForTest', 'MessageBoxButton.YesNo', 'ClickAimUi.Running', 'ClickAimUi.Paused',
                       'ClickAimAbort.Generation', 'cancel.IsCancellationRequested', 'Task.Delay(3000, cancel.Token)',
                       'Task.Delay(1000, cancel.Token)', 'MailHoverSameSession', 'ClickSafetyCandidate',
