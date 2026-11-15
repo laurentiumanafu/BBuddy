@@ -361,9 +361,13 @@ internal static class WowBContainerResearchProbe
                 bool sameObject = prior != null && prior.Guid == guid && prior.Data == data && prior.Count == count;
                 text.AppendFormat(CultureInfo.InvariantCulture, "container-candidate[{0}] identity={1} object=0x{2:X} raw+0xAC0={3}; second-qword high-six-zero={4}; previous={5}. NOT verified capacity/free slots.\n",
                     i, guid, data, count, zeroTags, sameObject ? "comparable" : "none or changed identity/size");
-                if (!sameObject)
+                // Keep a complete raw observation for each stopped snapshot, not
+                // just differences, so manual mailbox/attachment experiments can
+                // be compared offline even if intermediate logs are missing.
+                // This is diagnostic data only, never proof of slot identity.
+                if (!active || !sameObject)
                     text.AppendFormat(CultureInfo.InvariantCulture, "  raw+0x488 candidate 16-byte entries={0}\n", Convert.ToHexString(slots!));
-                else
+                if (sameObject)
                 {
                     int changed = 0;
                     for (int j = 0; j < (int)count; j++)

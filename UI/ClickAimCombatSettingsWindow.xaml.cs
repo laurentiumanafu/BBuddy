@@ -267,6 +267,7 @@ namespace CopilotBuddy.UI
 
             chkAutoSell.IsChecked = ClickAimSettings.AutoSell;
             chkTownReturn.IsChecked = ClickAimSettings.UseTownReturn;
+            txtMailRecipient.Text = ClickAimSettings.MailRecipient;
             txtSellAfter.Text = Text(ClickAimSettings.SellAfterLoots);
             txtVendorWait.Text = Text(ClickAimSettings.VendorWaitMs);
             txtVendorSearch.Text = Text(ClickAimSettings.VendorSearchYd);
@@ -336,6 +337,18 @@ namespace CopilotBuddy.UI
                 System.Windows.MessageBox.Show("Stop the bot before changing the town return option.", "Combat settings", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return false;
             }
+            string mailRecipient = (txtMailRecipient.Text ?? string.Empty).Trim();
+            if (!ClickAimSettings.ValidMailRecipient(mailRecipient))
+            {
+                System.Windows.MessageBox.Show("Mail recipient must be at most 64 characters and cannot contain control characters, # or =.", "Combat settings", MessageBoxButton.OK, MessageBoxImage.Warning);
+                txtMailRecipient.Focus();
+                return false;
+            }
+            if ((ClickAimUi.Running || ClickAimUi.Paused) && mailRecipient != ClickAimSettings.MailRecipient)
+            {
+                System.Windows.MessageBox.Show("Stop the bot before changing the mail recipient.", "Combat settings", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return false;
+            }
             _shamanTotemOptions.Apply();
             if (cmbRotation.SelectedItem is ClickAimRotationClass selectedRotation)
                 ClickAimSettings.RotationClass = selectedRotation;
@@ -356,6 +369,7 @@ namespace CopilotBuddy.UI
 
             ClickAimSettings.AutoSell = chkAutoSell.IsChecked == true;
             ClickAimSettings.UseTownReturn = chkTownReturn.IsChecked == true;
+            ClickAimSettings.MailRecipient = mailRecipient;
             ClickAimSettings.SellAfterLoots = sellAfter;
             ClickAimSettings.VendorWaitMs = vendorWait;
             ClickAimSettings.VendorSearchYd = vendorSearch;

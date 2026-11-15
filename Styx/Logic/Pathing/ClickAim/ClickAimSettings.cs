@@ -111,6 +111,14 @@ internal static class ClickAimSettings
     public static bool AutoSell = true;
     // 70938 Grind only: use a directly bound Astral Recall or Hearthstone.
     public static bool UseTownReturn;
+    // Stored for future 70938 mailbox support. Saving a name does not enable mailing.
+    public static string MailRecipient = "";
+    internal static bool ValidMailRecipient(string value)
+    {
+        if (value == null || value.Length > 64 || value != value.Trim()) return false;
+        foreach (char c in value) if (char.IsControl(c) || c == '=' || c == '#') return false;
+        return true; // blank is allowed; client-side name validity is not inferred here
+    }
 
     /// <summary>
     /// On older WowB builds, sell after this many corpse interactions; 0 disables
@@ -186,6 +194,7 @@ internal static class ClickAimSettings
         RestMs = 20000;
         AutoSell = true;
         UseTownReturn = false;
+        MailRecipient = "";
         SellAfterLoots = 40;
         VendorWaitMs = 2500;
         VendorSearchYd = 25;
@@ -202,6 +211,7 @@ internal static class ClickAimSettings
         // Missing or malformed files never carry a previous macro opt-in.
         UseKeyOneStartAttackMacro = false;
         UseTownReturn = false;
+        MailRecipient = "";
         UseShamanTotemMacro = ShamanTotemEarth = ShamanTotemHealing = ShamanTotemMana = false;
         ShamanTotemMacroKey = 2; ShamanTotemMacroPresses = 2;
         string path;
@@ -348,6 +358,11 @@ internal static class ClickAimSettings
             UseTownReturn = flag;
             return true;
         }
+        if (string.Equals(key, "MailRecipient", StringComparison.OrdinalIgnoreCase))
+        {
+            MailRecipient = ValidMailRecipient(value) ? value : "";
+            return true;
+        }
         if (string.Equals(key, "SellAfterLoots", StringComparison.OrdinalIgnoreCase))
         {
             if (hasNumber) SellAfterLoots = number;
@@ -438,6 +453,8 @@ internal static class ClickAimSettings
         text.AppendLine("RestMs = " + RestMs.ToString(CultureInfo.InvariantCulture));
         text.AppendLine("AutoSell = " + (AutoSell ? "true" : "false"));
         text.AppendLine("UseTownReturn = " + (UseTownReturn ? "true" : "false"));
+        text.AppendLine("# Saved for future mailbox support; saving this name does not enable mailing.");
+        text.AppendLine("MailRecipient = " + (ValidMailRecipient(MailRecipient) ? MailRecipient : ""));
         text.AppendLine("SellAfterLoots = " + SellAfterLoots.ToString(CultureInfo.InvariantCulture));
         text.AppendLine("VendorWaitMs = " + VendorWaitMs.ToString(CultureInfo.InvariantCulture));
         text.AppendLine("VendorSearchYd = " + VendorSearchYd.ToString(CultureInfo.InvariantCulture));
@@ -524,6 +541,8 @@ internal static class ClickAimSettings
         check(!UseTownReturn, "townReturnDefaultOff");
         check(Apply("UseTownReturn", "true") && UseTownReturn, "townReturnOptIn");
         check(Apply("UseTownReturn", "nonsense") && !UseTownReturn, "townReturnMalformedOff");
+        check(MailRecipient == "" && Apply("MailRecipient", "Éowyn-Realm") && MailRecipient == "Éowyn-Realm", "mailRecipient");
+        check(Apply("MailRecipient", "x\nAutoSell = true") && MailRecipient == "", "mailRecipientRejectControls");
         check(Apply("SellAfterLoots", "7") && SellAfterLoots == 7, "applySellAfter");
         check(Apply("VendorWaitMs", "900") && VendorWaitMs == 900, "applyVendorWait");
         check(Apply("VendorSearchYd", "12") && VendorSearchYd == 12, "applyVendorSearch");

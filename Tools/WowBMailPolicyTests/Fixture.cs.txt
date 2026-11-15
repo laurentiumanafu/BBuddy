@@ -1,0 +1,35 @@
+using System;
+using System.Collections.Generic;
+using Styx.WoWInternals;
+using Styx.Logic.Pathing;
+using P = Styx.Logic.Pathing.WowBMailBatchPolicy;
+static class Fixture
+{
+    static P.Slot Slot(int bag,int i,ulong id) => new P.Slot(bag,i,new WowBGuid(id,1));
+    static void Check(bool b,string why) { if (!b) throw new Exception(why); }
+    static void Main()
+    {
+        var all=new List<P.Slot> {Slot(0,0,1),Slot(4,0,2)};
+        for(int i=0;i<17;i++) all.Add(Slot(1+i%3,i,(ulong)(10+i)));
+        Check(P.Plan(false, all,out _) == P.Selection.Unknown,"unknown inventory cannot plan");
+        Check(P.Plan(true, all,out var batch) == P.Selection.Batch && batch.Count==12,"first batch capped at twelve");
+        foreach(var item in batch) Check(item.Candidate>=1 && item.Candidate<=3,"excluded bags never selected");
+        var after = new List<P.Slot>(all);
+        foreach(var item in batch) after.RemoveAll(s => s.Item == item.Item);
+        Check(P.AfterSend(P.SendEvidence.Accepted,true,true,batch,after,0)==P.Decision.Progress,"acknowledged disappearance progresses");
+        Check(P.AfterSend(P.SendEvidence.Unknown,true,true,batch,after,0)==P.Decision.Hold,"disappearance is not an acknowledgement");
+        Check(P.AfterSend(P.SendEvidence.Accepted,true,false,batch,after,0)==P.Decision.Hold,"pending attachments cannot succeed");
+        Check(P.AfterSend(P.SendEvidence.Accepted,false,true,batch,after,0)==P.Decision.Hold,"unreadable inventory holds");
+        Check(P.AfterSend(P.SendEvidence.Rejected,true,true,batch,all,0)==P.Decision.Retry,"first confirmed failure retries");
+        Check(P.AfterSend(P.SendEvidence.Rejected,true,true,batch,all,1)==P.Decision.Retry,"second confirmed failure retries");
+        Check(P.AfterSend(P.SendEvidence.Rejected,true,true,batch,all,2)==P.Decision.ReturnToProfile,"third confirmed failure returns");
+        Check(P.AfterSend(P.SendEvidence.Rejected,true,true,batch,after,2)==P.Decision.Hold,"partial or unknown failure does not retry or return blindly");
+        after.Add(Slot(0,5,batch[0].Item.Low));
+        Check(P.AfterSend(P.SendEvidence.Accepted,true,true,batch,after,0)==P.Decision.Hold,"moved into an excluded candidate is not gone");
+        Check(P.Plan(true,new List<P.Slot>{Slot(0,0,1),Slot(4,0,2)},out _)==P.Selection.Empty,"only excluded bags is empty for mailing");
+        Check(P.Plan(true,new List<P.Slot>{Slot(1,0,1),Slot(2,1,1)},out _)==P.Selection.Unknown,"duplicate item identity");
+        Check(P.Plan(true,new List<P.Slot>{Slot(1,0,1),Slot(1,0,2)},out _)==P.Selection.Unknown,"duplicate slot");
+        Check(P.Plan(true,new List<P.Slot>{Slot(5,0,1)},out _)==P.Selection.Unknown,"unknown candidate");
+        Console.WriteLine("Synthetic mail batch policy passed; no live reader or mailing is wired.");
+    }
+}

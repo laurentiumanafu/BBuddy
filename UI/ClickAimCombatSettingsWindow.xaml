@@ -232,6 +232,11 @@
                     <CheckBox x:Name="chkAutoSell" Margin="0,0,0,8" Content="Go to the vendor and sell when the bags are due"/>
                     <CheckBox x:Name="chkTownReturn" Margin="0,0,0,4" Content="Use Astral Recall / Hearthstone before the vendor trip (70938 Grind)"/>
                     <TextBlock Margin="20,0,0,8" TextWrapping="Wrap" FontSize="11" Text="Off: use the mesh to walk to a vendor on this map. On: put Astral Recall (Shaman) or Hearthstone (other classes) directly on a default-bound first-bar slot 1–12, and set the correct class under Combat. Bind home near a saved vendor. Experimental cast and sale detection; no automatic mail."/>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                        <TextBlock Text="Mail recipient (saved for future use):" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <TextBox x:Name="txtMailRecipient" Width="180" MaxLength="64" ToolTip="Automatic mailing is not implemented yet. This name is saved but will not be used to send mail."/>
+                    </StackPanel>
+                    <TextBlock Margin="0,0,0,8" TextWrapping="Wrap" FontSize="11" Text="Mailing is not active: bag candidate-to-screen mapping and mailbox state must be verified first. Saving a recipient will not send mail."/>
                 </StackPanel>
 
                 <TextBlock Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2" VerticalAlignment="Center" Margin="0,0,8,8"
