@@ -1,0 +1,32 @@
+using System;
+using System.Collections.Generic;
+using Styx.WoWInternals;
+using T = Styx.Logic.Pathing.WowBMailCandidateTable;
+
+static class Fixture
+{
+    static void Check(bool b, string why) { if (!b) throw new Exception(why); }
+    static void Put(byte[] b, int offset, WowBGuid g)
+    { Array.Copy(BitConverter.GetBytes(g.Low), 0, b, offset, 8); Array.Copy(BitConverter.GetBytes(g.High), 0, b, offset + 8, 8); }
+    static void Main()
+    {
+        var data = new byte[T.Size]; var item = new WowBGuid(101, 7); var bag = new WowBGuid(201, 7);
+        var expected = new List<T.Expected> { new T.Expected(item, bag) };
+        Check(T.Matches(data, new List<T.Expected>()), "empty-like observation");
+        Check(!T.Matches(data, expected), "missing expected");
+        Put(data, 0, item); Put(data, 16, bag); data[32] = 10;
+        Check(T.Matches(data, expected), "one correlated record");
+        Check(!T.Matches(data, new List<T.Expected>()), "extra record");
+        Check(!T.Matches(data, new List<T.Expected> { new T.Expected(item, new WowBGuid(202,7)) }), "wrong bag");
+        Put(data, 40, item); Put(data, 56, bag);
+        Check(!T.Matches(data, expected), "duplicate record");
+        Array.Clear(data, 40, 40); data[40+32] = 1;
+        Check(!T.Matches(data, expected), "partial nonzero record unknown");
+        Check(!T.Matches(new byte[10], expected), "truncated table unknown");
+        Check(!T.Matches(null, expected) && !T.Matches(data, null), "unreadable input unknown");
+        var many = new List<T.Expected>();
+        for (int i = 0; i < 13; i++) many.Add(new T.Expected(new WowBGuid((ulong)i+1,7),bag));
+        Check(!T.Matches(data, many), "limit twelve");
+        Console.WriteLine("Synthetic candidate table tests passed; live semantics remain experimental.");
+    }
+}

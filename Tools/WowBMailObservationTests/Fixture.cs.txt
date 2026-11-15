@@ -19,20 +19,22 @@ namespace Styx.WoWInternals
     sealed class WowBReader
     {
         public struct WowBPoolObject { public ulong RecordPtr; }
-        public int ExperimentalBuildNumber=70938; public bool RecordCurrent=true; public WowBObservedUnit Player;
+        public int ExperimentalBuildNumber=70938; public bool RecordCurrent=true, ExperimentalGrindActive=true; public WowBObservedUnit Player;
         public bool IsPoolRecordCurrent(WowBPoolObject r)=>RecordCurrent;
         public bool TryCaptureWorldSnapshot(out WowBWorldSnapshot? s) { s=new WowBWorldSnapshot { Player=Player }; return true; }
     }
 }
 namespace Styx.Logic.Pathing
 {
+    static class ClickAimAbort { public static bool Requested; }
+    static class RouteRunner { public static bool StopRequested; }
     static class Fixture
     {
         private const ulong SlotsOffset=0x488, CapacityOffset=0xAC0;
         private const int CandidateIdentities=5, SlotStride=16, MaxSlots=64;
         // __CANDIDATE_TYPES__
         private static bool Safe=true;
-        private static bool SamePlayer(Memory m,WowBReader r,WowBObservedUnit p,bool active)=>Safe && p.Guid==r.Player.Guid && !active;
+        private static bool SamePlayer(Memory m,WowBReader r,WowBObservedUnit p,bool active)=>Safe && p.Guid==r.Player.Guid && (!active || r.ExperimentalGrindActive);
         private static bool Signatures(Memory m,int build,out string result) { result=""; return build==70938; }
         private static bool Same(byte[]? a,byte[]? b) => a!=null && b!=null && Convert.ToHexString(a)==Convert.ToHexString(b);
         private static WowBGuid GuidAt(byte[] b,int i)=>new WowBGuid(BitConverter.ToUInt64(b,i),BitConverter.ToUInt64(b,i+8));
@@ -54,17 +56,23 @@ namespace Styx.Logic.Pathing
             }
             for(int i=0;i<=3;i++) SetBag(i);
             m.Bytes[table]=(byte[])ids.Clone();
-            Check(TryBuildMailObservation(m,r,p,table,ids,bags,out var result) && result!.Count==5 && result[0].CandidateIndex==0 && result[3].CandidateIndex==3 && result[4].Unknown,"includes candidate 0 and flags candidate 4 unknown");
+            Check(TryBuildMailObservation(m,r,p,table,ids,bags,false,out var result) && result!.Count==5 && result[0].CandidateIndex==0 && result[3].CandidateIndex==3 && result[4].Unknown,"includes candidate 0 and flags candidate 4 unknown");
             Check(result![0].Slots[0]==new WowBGuid(100,9) && result[0].Slots[1].IsEmpty,"full item identities and zero retained");
+            Check(TryBuildMailObservation(m,r,p,table,ids,bags,true,out _) ,"active observation allowed only in active session");
+            ClickAimAbort.Requested=true;
+            Check(!TryBuildMailObservation(m,r,p,table,ids,bags,true,out _),"active STOP rejects observation");
+            ClickAimAbort.Requested=false; RouteRunner.StopRequested=true;
+            Check(!TryBuildMailObservation(m,r,p,table,ids,bags,true,out _),"active route stop rejects observation");
+            RouteRunner.StopRequested=false;
             SetBag(4); m.Bytes[table]=(byte[])ids.Clone();
-            Check(TryBuildMailObservation(m,r,p,table,ids,bags,out result) && !result![4].Unknown && result[4].Slots[0]==new WowBGuid(104,9),"nonzero candidate 4 is included if resolved");
-            bags[4]=null; Check(!TryBuildMailObservation(m,r,p,table,ids,bags,out _),"unresolved nonzero extra bag fails closed");
+            Check(TryBuildMailObservation(m,r,p,table,ids,bags,false,out result) && !result![4].Unknown && result[4].Slots[0]==new WowBGuid(104,9),"nonzero candidate 4 is included if resolved");
+            bags[4]=null; Check(!TryBuildMailObservation(m,r,p,table,ids,bags,false,out _),"unresolved nonzero extra bag fails closed");
             Array.Clear(ids,4*16,16); m.Bytes[table]=(byte[])ids.Clone();
-            m.Bytes[bags[2]!.Data+SlotsOffset][0]++; Check(!TryBuildMailObservation(m,r,p,table,ids,bags,out _),"changed bag rejected"); m.Bytes[bags[2]!.Data+SlotsOffset][0]--;
-            var saved=bags[2]; bags[2]=null; Check(!TryBuildMailObservation(m,r,p,table,ids,bags,out _),"unresolved candidate rejected"); bags[2]=saved;
-            m.Bytes[table][16]++; Check(!TryBuildMailObservation(m,r,p,table,ids,bags,out _),"changed identity table rejected"); m.Bytes[table][16]--;
-            Safe=false; Check(!TryBuildMailObservation(m,r,p,table,ids,bags,out _),"session change rejected"); Safe=true;
-            r.RecordCurrent=false; Check(!TryBuildMailObservation(m,r,p,table,ids,bags,out _),"stale pool record rejected");
+            m.Bytes[bags[2]!.Data+SlotsOffset][0]++; Check(!TryBuildMailObservation(m,r,p,table,ids,bags,false,out _),"changed bag rejected"); m.Bytes[bags[2]!.Data+SlotsOffset][0]--;
+            var saved=bags[2]; bags[2]=null; Check(!TryBuildMailObservation(m,r,p,table,ids,bags,false,out _),"unresolved candidate rejected"); bags[2]=saved;
+            m.Bytes[table][16]++; Check(!TryBuildMailObservation(m,r,p,table,ids,bags,false,out _),"changed identity table rejected"); m.Bytes[table][16]--;
+            Safe=false; Check(!TryBuildMailObservation(m,r,p,table,ids,bags,false,out _),"session change rejected"); Safe=true;
+            r.RecordCurrent=false; Check(!TryBuildMailObservation(m,r,p,table,ids,bags,false,out _),"stale pool record rejected");
             Console.WriteLine("Synthetic observed bag reader checks passed; no game validation.");
         }
     }

@@ -325,6 +325,19 @@ internal static class WowBContainerResearchProbe
         return bags != null;
     }
 
+    // Experimental active-session observation, not permission for input.
+    // A caller must still gate every action on combat, STOP, map and focus.
+    internal static bool TryCaptureActiveMailBags(Memory memory, WowBReader reader, WowBObservedUnit player,
+        out List<MailBagObservation>? bags)
+    {
+        bags = null;
+        if (!reader.IsExperimental70938 || !reader.ExperimentalGrindActive || !ClickAimUi.Running || ClickAimUi.Paused ||
+            ClickAimAbort.Requested || RouteRunner.StopRequested) return false;
+        CaptureCore(memory, reader, player, out _, out bags, true, true);
+        if (!reader.ExperimentalGrindActive || ClickAimAbort.Requested || RouteRunner.StopRequested) bags = null;
+        return bags != null;
+    }
+
     private static string CaptureCore(Memory memory, WowBReader reader, WowBObservedUnit player,
         out (int CandidateSize, int ZeroTags, int Resolved, int ZeroIdentities, int OrdinarySize, int OrdinaryZeroTags, int Unclassified)? subtotal,
         out List<MailBagObservation>? mailBags, bool active, bool captureMailBags)
@@ -461,8 +474,8 @@ internal static class WowBContainerResearchProbe
             bool complete = allResolved && (resolved > 0 || reader.UsesOrdinaryBagPolicy);
             if (complete) subtotal = (sizeSum, zeroSum, resolved, zeroIdentities, ordinarySize, ordinaryZero, unclassified);
             if (!active) { _previousMemory = memory; _previousReader = reader; _previousPlayer = player.Guid; _previous = next; _lastComplete = complete; }
-            if (captureMailBags && !active && reader.IsExperimental70938 &&
-                TryBuildMailObservation(memory, reader, player, table, identityBytes, next, out List<MailBagObservation>? observed))
+            if (captureMailBags && reader.IsExperimental70938 &&
+                TryBuildMailObservation(memory, reader, player, table, identityBytes, next, active, out List<MailBagObservation>? observed))
                 mailBags = observed;
             text.AppendLine("Container code markers after: " + markerAfter + "; unreadable is not confirmation of a match.");
             text.AppendLine("Container reads are non-atomic; unresolved/zero candidates are unknown. Grind may use the subtotal experimentally for selling on 70707/70755/70790/70862/70888/70938.");
@@ -472,7 +485,7 @@ internal static class WowBContainerResearchProbe
     }
 
     private static bool TryBuildMailObservation(Memory memory, WowBReader reader, WowBObservedUnit player,
-        ulong table, byte[] identities, Candidate?[] candidates, out List<MailBagObservation>? observations)
+        ulong table, byte[] identities, Candidate?[] candidates, bool active, out List<MailBagObservation>? observations)
     {
         observations = null;
         var seenBags = new HashSet<WowBGuid>();
@@ -520,11 +533,12 @@ internal static class WowBContainerResearchProbe
                 !reader.IsPoolRecordCurrent(bag.Record)) return false;
         }
         if (!Same(identities, memory.ReadBytes64(table, CandidateIdentities * SlotStride)) ||
-            !Signatures(memory, reader.ExperimentalBuildNumber, out _) || !SamePlayer(memory, reader, player, false) ||
+            !Signatures(memory, reader.ExperimentalBuildNumber, out _) || !SamePlayer(memory, reader, player, active) ||
+            (active && (!reader.ExperimentalGrindActive || ClickAimAbort.Requested || RouteRunner.StopRequested)) ||
             !reader.TryCaptureWorldSnapshot(out WowBWorldSnapshot? world) || world == null ||
             !world.TryGetLocalPlayer(out WowBObservedUnit final) || final.Guid != player.Guid ||
             final.UnitAddress != player.UnitAddress || final.RecordAddress != player.RecordAddress ||
-            !SamePlayer(memory, reader, final, false)) return false;
+            !SamePlayer(memory, reader, final, active)) return false;
         observations = observed;
         return true;
     }

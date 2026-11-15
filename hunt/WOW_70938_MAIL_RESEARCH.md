@@ -126,6 +126,33 @@ that a given entry is an attachment, that it is mailable or that the UI/send
 state is safe. It remains disconnected from automation; all reads are
 non-atomic. This extension has not been built or run on Windows here.
 
+### Experimental active-read building blocks
+
+At the user's request to proceed with experimental automation, the candidate-bag
+reader now also has an explicit 70938 active-Grind-only entry point. It uses the
+same bounded container checks, requires the original player, active session,
+STOP and route guards, and leaves zero identities Unknown. The existing stopped
+research entry point is unchanged. A separate active-only, double-read raw mail
+candidate table reader requires a caller-supplied safety predicate, build,
+player, code marker, and stable readable bytes. Neither reader sends input.
+
+`WowBMailCandidateTable` is a pure correlation helper: it compares complete
+40-byte records against at most 12 expected nonzero item/bag pairs, rejects
+partial, unmatched and duplicate records, and accepts a zero-like record only
+when all 40 bytes are zero. This is an experimental interpretation of a single
+live trace, not verified attachment identity, UI state, recipient, or send
+acknowledgement. Synthetic C# fixtures were added but have not been run here
+(no .NET SDK). These building blocks are not connected to the town workflow.
+
+**Still unfinished:** persistent calibration for the mailbox object and both
+UI buttons, actual guarded input and mailbox interaction, integration after
+selling, a live recipient/readback strategy, and outcome verification. The
+existing recorded mailbox point is a standing location, not an object or a
+screen coordinate, and no Send button coordinate is calibrated. No automatic
+mail is enabled. Candidate 4 remains Unknown, so candidates 0–3 cannot prove
+all equipped bags are exhausted. Unknown or interrupted sends must never be
+blindly repeated; profile return still depends on same-map mesh availability.
+
 ## Further evidence and integration
 
 Two user screenshots `img1backpackopen.png` and `itemsattached.png` are 1919×1079 and show the same **Combined Backpack** and Send Mail tab, one empty and one containing 12 attachments. The combined bag is one continuous grid and does not visually delineate the backpack from equipped bags; the screenshot alone does not map candidate indexes to GUI cells. The Send Mail tab, recipient field, attachment grid and Send button are visible, but screenshots do not prove their live state or focus, and screen positions may shift with resolution, UI scale, window layout, bag configuration or addons. The example recipient field is blank; the attached screenshot is not evidence of a successful send. Do not hardcode these coordinates for clicking.

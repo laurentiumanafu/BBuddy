@@ -169,6 +169,33 @@ internal static class WowBInventoryProbe
         }
     }
 
+    // Active Grind-only experimental snapshot. No send/selection is authorized;
+    // missing candidate identities stay Unknown, including candidate 4.
+    internal static bool TryReadActiveMailCandidateBags(Memory memory, WowBReader reader, WowBGuid expected,
+        out List<WowBContainerResearchProbe.MailBagObservation>? bags)
+    {
+        bags = null;
+        lock (Gate)
+        {
+            if (expected.IsEmpty || !reader.IsExperimental70938 || !reader.ExperimentalGrindActive ||
+                !ClickAimUi.Running || ClickAimUi.Paused || ClickAimAbort.Requested || RouteRunner.StopRequested ||
+                ObjectManager.Wow != memory || ObjectManager.WowB != reader || !memory.Is64BitTarget) return false;
+            try
+            {
+                using var uncached = memory.TemporaryCacheState(false);
+                if (!reader.TryCaptureWorldSnapshot(out WowBWorldSnapshot? world) || world == null ||
+                    !world.TryGetLocalPlayer(out WowBObservedUnit player) || player.Guid != expected || !ValidPlayer(memory, reader, player) ||
+                    !WowBContainerResearchProbe.TryCaptureActiveMailBags(memory, reader, player, out bags) || bags == null ||
+                    !reader.ExperimentalGrindActive || !ClickAimUi.Running || ClickAimUi.Paused || ClickAimAbort.Requested ||
+                    RouteRunner.StopRequested || ObjectManager.Wow != memory || ObjectManager.WowB != reader ||
+                    !reader.TryReadTraceLocalGuid(out WowBGuid final) || final != expected)
+                { bags = null; return false; }
+                return true;
+            }
+            catch { bags = null; return false; }
+        }
+    }
+
     internal static List<WowBContainerResearchProbe.BagChoice> ObservedBags()
     {
         lock (Gate)
