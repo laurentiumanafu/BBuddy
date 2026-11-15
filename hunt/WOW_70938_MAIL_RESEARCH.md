@@ -23,10 +23,12 @@ background recipient focus and client behavior are not verified. A held mouse
 button gets a three-second grace period before any input; no input is sent while
 unsafe. After a matching mailbox hover and posted interaction, the log reports
 bag/grid/table checks and whether tab button messages were posted. A posted
-click is not proof of a visible frame or tab. For every nonempty batch, including
-after each observed send, the experiment clicks the tab, waits one second and
-posts the recipient again; it cannot read back or clear the recipient field. It
-attaches at most 12 candidate 0–3 raw slots and compares the mail record
+click is not proof of a visible frame or tab. The experiment clicks the Send
+Mail tab only for the first batch, waits one second and posts the recipient.
+After each send it waits at least one second and checks for observed send
+progress. If another batch remains, it posts the recipient again directly,
+without clicking the tab; it cannot read back or clear the recipient field. It
+does not retype after the final batch. It attaches at most 12 candidate 0–3 raw slots and compares the mail record
 candidate after each click. It sends once per batch, then requires a stable
 zero-like candidate table and disappearance of the actually observed attached
 raw IDs from observed bag candidates before attempting another batch. A single

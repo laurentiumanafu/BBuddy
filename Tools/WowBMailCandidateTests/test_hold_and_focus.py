@@ -34,6 +34,13 @@ class Wiring(unittest.TestCase):
   self.assertLess(loop.index('foreach (char c in recipient)'),loop.index('Left(hwnd, ui.SendX'))
   self.assertLess(loop.index('Left(hwnd, ui.SendX'),loop.index('batches++;'))
   self.assertEqual(loop.count('Left(hwnd, ui.SendX'),1)
+  tab = loop[loop.index('if (batches == 0)'):loop.index('int generation = ClickAimAbort.Generation')]
+  self.assertEqual(tab.count('Left(hwnd, ui.TabX'),1)
+  self.assertIn('else',tab)
+  self.assertIn('posting recipient directly for next batch without clicking the tab',tab)
+  send = loop[loop.index('Left(hwnd, ui.SendX'):loop.index('batches++;')]
+  self.assertLess(send.index('if (!Wait(1000, safe))'),send.index('bool progressed = false'))
+  self.assertLess(send.index('if (!progressed)'),send.index('WowBMailSafetyHold.TryClear'))
   self.assertIn('next nonempty batch will post the recipient again',loop)
  def test_mail_failure_returns_without_replaying_send(self):
   route=g[g.index('private static bool WalkToRecordedMailbox('):g.index('private static bool WaitVendorSafe(')]

@@ -128,12 +128,22 @@ internal static class WowBExperimentalMail
                 { Logging.Write("[Mail] attachment candidate is not empty-like; no tab or send input in this batch."); return false; }
                 if (!WowBMailSafetyHold.TryBegin(out string holdReason))
                 { Logging.Write("[Mail] cannot start composition: " + holdReason + "; mail is held, no tab or send input in this batch."); return false; }
-                Logging.Write("[Mail] bag/grid and empty-like table prechecks passed; attempting recorded Send Mail tab (UI state unverified).");
-                if (!Left(hwnd, ui.TabX, ui.TabY, w, h, background, safe, out string tabReason))
-                { Logging.Write("[Mail] tab click withheld or uncertain: " + tabReason + "; safety: " + (safetyFailure() ?? "client geometry or button-release check") + ". No send input in this batch."); return false; }
-                Logging.Write("[Mail] Send Mail tab click messages posted; tab opening and field focus are not verified.");
-                if (!Wait(1000, safe))
-                { Logging.Write("[Mail] safety changed during the one-second tab wait; no recipient or send input in this batch."); return false; }
+                if (batches == 0)
+                {
+                    Logging.Write("[Mail] bag/grid and empty-like table prechecks passed; attempting recorded Send Mail tab (UI state unverified).");
+                    if (!Left(hwnd, ui.TabX, ui.TabY, w, h, background, safe, out string tabReason))
+                    { Logging.Write("[Mail] tab click withheld or uncertain: " + tabReason + "; safety: " + (safetyFailure() ?? "client geometry or button-release check") + ". No send input in this batch."); return false; }
+                    Logging.Write("[Mail] Send Mail tab click messages posted; tab opening and field focus are not verified.");
+                    if (!Wait(1000, safe))
+                    { Logging.Write("[Mail] safety changed during the one-second tab wait; no recipient or send input in this batch."); return false; }
+                }
+                else
+                {
+                    // After an observed send the user reports the recipient is
+                    // cleared and automatically focused; do not click the tab
+                    // again. The one-second post-send wait happens below.
+                    Logging.Write("[Mail] previous send observed and one-second wait complete; posting recipient directly for next batch without clicking the tab. Field focus and contents are unverified.");
+                }
                 int generation = ClickAimAbort.Generation;
                 foreach (char c in recipient)
                 {
@@ -212,6 +222,11 @@ internal static class WowBExperimentalMail
                 if (!Left(hwnd, ui.SendX, ui.SendY, w, h, background, safe, out string sendReason))
                 { Logging.Write("[Mail] send input withheld or uncertain: " + sendReason + "; no retry. Inspect manually."); return false; }
                 Logging.Write("[Mail] Send button messages posted once; recipient and server acceptance not verified. Never retry an uncertain send.");
+                // At least one second after Send before any later recipient
+                // text. First establish observable progress; never start the
+                // next composition after an uncertain send.
+                if (!Wait(1000, safe))
+                { Logging.Write("[Mail] safety changed during the one-second post-send wait; outcome uncertain, inspection hold retained. No retry."); return false; }
                 bool progressed = false;
                 for (int attempt = 0; attempt < 60 && safe(); attempt++)
                 {
