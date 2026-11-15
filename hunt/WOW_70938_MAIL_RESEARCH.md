@@ -63,6 +63,24 @@ The four leading visual backpack slots were reported locked. The special player 
 
 The parser previously discarded successfully read bags when a later `user category=...` line appeared; the regression test now covers actual log ordering. The player-array change parser reconstructs only complete, same-player, same-array snapshots and refuses inconsistent deltas.
 
+## Offline 70938 mail-code search
+
+`Tools/find_70938_mail_static.py <decoded-exe>` is a read-only, standard-library
+scanner for the **exact recorded** 70938 executable SHA-256. It searches
+section-backed ASCII mail API names and RIP-relative LEA-like byte patterns in
+executable sections, reporting name references and nearby LEA-like targets as
+RVAs. It does not open the process, use Lua, or invoke client functions. It
+rejects a different file instead of applying 70291 addresses to 70938.
+
+A byte-pattern match can be in the middle of another instruction; proximity is
+not proof of a registration, handler, attachment list, UI state or send result.
+Missing matches do not establish absence. Any leads need independent static
+disassembly/dataflow review followed by controlled, repeated live observations,
+including rejected sends. The scanner has been tested on synthetic bytes only;
+the 70938 image was not available in this workspace for this investigation,
+so no 70938 mail handler or runtime state is claimed. Its output can expose
+client internals; review before sharing. No gameplay or mail input is enabled.
+
 ## Further evidence and integration
 
 Two user screenshots `img1backpackopen.png` and `itemsattached.png` are 1919×1079 and show the same **Combined Backpack** and Send Mail tab, one empty and one containing 12 attachments. The combined bag is one continuous grid and does not visually delineate the backpack from equipped bags; the screenshot alone does not map candidate indexes to GUI cells. The Send Mail tab, recipient field, attachment grid and Send button are visible, but screenshots do not prove their live state or focus, and screen positions may shift with resolution, UI scale, window layout, bag configuration or addons. The example recipient field is blank; the attached screenshot is not evidence of a successful send. Do not hardcode these coordinates for clicking.
