@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Text.Json;
 
@@ -46,10 +47,11 @@ internal static class WowBMailGridCalibration
         public List<SavedBag> Bags { get; set; } = new List<SavedBag>();
     }
 
-    // Anchor is the leftmost cell of any full row; Right and Below are the
-    // immediately adjacent cells. Rows before the anchor have negative ordinals.
-    // First/last markers are recorded individually per bag and backpack, not
-    // guessed from inventory order. All size/identity observations remain candidate.
+    // Anchor and FarRight are the first and last cell centers of the SAME
+    // full row. Below is directly beneath Anchor. Measuring horizontal pitch
+    // over the full row reduces the accumulated error near the client edge.
+    // Rows before the anchor have negative ordinals. First/last markers are
+    // recorded per bag and backpack; their identity remains a candidate.
     internal static bool TryBuild(int width, int height, int columns, string player, IReadOnlyList<Bag> bags,
         int backpackSlots, IReadOnlyDictionary<string, Point> points, out Result? result, out string error)
     {
@@ -57,15 +59,24 @@ internal static class WowBMailGridCalibration
         if (width < 200 || height < 200 || columns < 2 || columns > 32 || backpackSlots < 1 || backpackSlots > 64 ||
             string.IsNullOrWhiteSpace(player) || bags == null || bags.Count != 5 || points == null)
         { error = "Invalid client size, column count, backpack size, player or candidate list."; return false; }
-        if (!points.TryGetValue("anchor", out Point anchor) || !points.TryGetValue("right", out Point right) ||
+        if (!points.TryGetValue("anchor", out Point anchor) || !points.TryGetValue("farRight", out Point farRight) ||
             !points.TryGetValue("below", out Point below))
-        { error = "Record the reference, right-neighbor and below-neighbor cell centers."; return false; }
+        { error = "Record the first and last cells of the same full row, and the cell immediately below the first."; return false; }
         bool InClient(Point p) => double.IsFinite(p.X) && double.IsFinite(p.Y) && p.X > 0 && p.Y > 0 && p.X < width - 1 && p.Y < height - 1;
-        if (!InClient(anchor) || !InClient(right) || !InClient(below)) { error = "Grid reference points are outside the client."; return false; }
-        double dx = right.X - anchor.X, dy = below.Y - anchor.Y;
-        if (dx < 10 || dy < 10 || dx > 200 || dy > 200 || Math.Abs(right.Y - anchor.Y) > 5 || Math.Abs(below.X - anchor.X) > 5 ||
-            anchor.X + (columns - 1) * dx >= width - 1)
-        { error = "Grid reference points are not adjacent or the column count extends past the client."; return false; }
+        if (!InClient(anchor) || !InClient(farRight) || !InClient(below))
+        { error = "A reference point is outside the " + width + "×" + height + " game client; refocus the game and re-record it."; return false; }
+        double dx = (farRight.X - anchor.X) / (columns - 1), dy = below.Y - anchor.Y;
+        string dimensions = string.Format(CultureInfo.InvariantCulture,
+            " Client={0}×{1}, columns={2}, first=({3:F0},{4:F0}), last=({5:F0},{6:F0}), below=({7:F0},{8:F0}), pitch=({9:F1},{10:F1}) px.",
+            width, height, columns, anchor.X, anchor.Y, farRight.X, farRight.Y, below.X, below.Y, dx, dy);
+        if (dx < 10 || dx > 200)
+        { error = "Horizontal spacing is outside 10–200 px. Record the first and last cells of one full row and verify the column count." + dimensions; return false; }
+        if (dy < 10 || dy > 200)
+        { error = "Vertical spacing is outside 10–200 px. Record the cell directly below the first cell." + dimensions; return false; }
+        if (Math.Abs(farRight.Y - anchor.Y) > dy * 0.30)
+        { error = "The first and last reference cells are not on the same row. Re-record them at their centers." + dimensions; return false; }
+        if (Math.Abs(below.X - anchor.X) > dx * 0.30)
+        { error = "The below reference cell is not in the first column. Re-record it directly below the first cell." + dimensions; return false; }
         bool TryOrdinal(Point p, out int ordinal)
         {
             ordinal = 0;
@@ -78,14 +89,22 @@ internal static class WowBMailGridCalibration
             ordinal = row * columns + col;
             return true;
         }
+        string rangeError = "";
         bool TryRange(string prefix, int count, out int first)
         {
             first = 0;
-            return points.TryGetValue(prefix + ".first", out Point start) && points.TryGetValue(prefix + ".last", out Point end) &&
-                   TryOrdinal(start, out first) && TryOrdinal(end, out int last) && last - first == count - 1;
+            if (!points.TryGetValue(prefix + ".first", out Point start) || !points.TryGetValue(prefix + ".last", out Point end))
+            { rangeError = prefix + ": record both first and last markers."; return false; }
+            if (!TryOrdinal(start, out first))
+            { rangeError = string.Format(CultureInfo.InvariantCulture, "{0}: first marker ({1:F0},{2:F0}) is off the measured grid or outside the client.", prefix, start.X, start.Y); return false; }
+            if (!TryOrdinal(end, out int last))
+            { rangeError = string.Format(CultureInfo.InvariantCulture, "{0}: last marker ({1:F0},{2:F0}) is off the measured grid or outside the client.", prefix, end.X, end.Y); return false; }
+            if (last - first != count - 1)
+            { rangeError = prefix + ": markers span " + (last - first + 1) + " row-major cells, expected " + count + ". Check first/last and column count."; return false; }
+            return true;
         }
         if (!TryRange("backpack", backpackSlots, out int backpackFirst))
-        { error = "Backpack first/last markers do not match its visible slot count and grid."; return false; }
+        { error = rangeError; return false; }
         var used = new HashSet<int>();
         for (int i = 0; i < backpackSlots; i++) used.Add(backpackFirst + i);
         var seenIndices = new HashSet<int>(); var seenIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -99,9 +118,10 @@ internal static class WowBMailGridCalibration
                 if (bag.Count != 0 || bag.Identity.Length != 0) { error = "Unknown candidate has unexpected data."; return false; }
                 saved.Add(new SavedBag { Candidate = bag.Index, Unknown = true }); continue;
             }
-            if (string.IsNullOrWhiteSpace(bag.Identity) || !seenIds.Add(bag.Identity) || bag.Count < 1 || bag.Count > 64 ||
-                !TryRange("bag" + bag.Index, bag.Count, out int first))
-            { error = "Candidate " + bag.Index + " has an invalid identity, size or first/last markers."; return false; }
+            if (string.IsNullOrWhiteSpace(bag.Identity) || !seenIds.Add(bag.Identity) || bag.Count < 1 || bag.Count > 64)
+            { error = "Candidate " + bag.Index + " has an invalid or duplicated identity or size."; return false; }
+            if (!TryRange("bag" + bag.Index, bag.Count, out int first))
+            { error = rangeError; return false; }
             for (int i = 0; i < bag.Count; i++)
             {
                 int n = first + i;

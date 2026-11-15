@@ -235,9 +235,9 @@ namespace CopilotBuddy.UI
                 _mailGridMemory = memory; _mailGridReader = reader; _mailGridHwnd = hwnd;
                 _mailGridWidth = width; _mailGridHeight = height; _mailGridPlayer = sample.player; _mailGridBags = sample.bags;
                 _mailGridRows.Clear(); _mailGridPoints.Clear(); txtMailGridPreview.Text = "";
-                AddMailGridPoint("anchor", "Reference: leftmost cell in a complete grid row");
-                AddMailGridPoint("right", "Cell immediately to the right of the reference");
-                AddMailGridPoint("below", "Cell immediately below the reference");
+                AddMailGridPoint("anchor", "Reference: LEFTMOST cell in a complete grid row");
+                AddMailGridPoint("farRight", "RIGHTMOST cell in the SAME complete grid row (column 10 if columns=10)");
+                AddMailGridPoint("below", "Cell immediately BELOW the leftmost reference cell");
                 AddMailGridPoint("backpack.first", "Main backpack: first visible slot (including locked slots)");
                 AddMailGridPoint("backpack.last", "Main backpack: last visible slot");
                 foreach (var bag in sample.bags)
@@ -287,7 +287,9 @@ namespace CopilotBuddy.UI
                 row.Recorded = true; cmbMailGridPoint.Items.Refresh();
                 int next = _mailGridRows.FindIndex(item => !item.Recorded);
                 if (next >= 0) cmbMailGridPoint.SelectedIndex = next;
-                lblMailGridStatus.Text = "Recorded " + row.Description + ". " + _mailGridPoints.Count + "/" + _mailGridRows.Count + " points. No input was sent.";
+                lblMailGridStatus.Text = string.Format(CultureInfo.InvariantCulture,
+                    "Recorded {0} at client pixel ({1:F0},{2:F0}) of {3}×{4}. {5}/{6} points. No input was sent.",
+                    row.Description, fx * _mailGridWidth, fy * _mailGridHeight, _mailGridWidth, _mailGridHeight, _mailGridPoints.Count, _mailGridRows.Count);
             }
             catch (Exception ex) { _mailGridBags = null; if (IsLoaded) lblMailGridStatus.Text = "Grid point failed: " + ex.Message; }
             finally
@@ -320,7 +322,7 @@ namespace CopilotBuddy.UI
                         Identity = bag.Unknown ? "" : bag.Bag.ToString(), Count = bag.Slots.Length });
                 if (!WowBMailGridCalibration.TryBuild(_mailGridWidth, _mailGridHeight, columns, _mailGridPlayer.ToString(), bags,
                     backpack, _mailGridPoints, out var result, out string error) || result == null)
-                { lblMailGridStatus.Text = "Calibration not saved: " + error; return; }
+                { lblMailGridStatus.Text = "Calibration not saved: " + error + " Select and re-record only the affected point(s), then validate again; other points remain recorded."; return; }
                 if (!MailGridContextCurrent() || !WowBMailGridCalibration.Save(result, out error))
                 { lblMailGridStatus.Text = "Calibration not saved: " + (error.Length == 0 ? "session changed" : error); return; }
                 var preview = new System.Text.StringBuilder();

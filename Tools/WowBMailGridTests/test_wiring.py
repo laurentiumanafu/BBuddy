@@ -14,6 +14,11 @@ class GridWiring(unittest.TestCase):
   self.assertIn('ResearchOnly { get; set; } = true',p)
   self.assertNotIn('ClickAimInput.',p)
  def test_backpack_and_unknown_are_explicit(self):
-  for s in ('backpack.first','backpack.last','last - first == count - 1','bag.Unknown','Unknown = true','!used.Add(n)','bags.Count != 5'):
+  for s in ('backpack.first','backpack.last','last - first != count - 1','bag.Unknown','Unknown = true','!used.Add(n)','bags.Count != 5'):
    self.assertTrue(s in c or s in p,s)
+ def test_reference_spans_full_row_and_reports_measurements(self):
+  for s in ('"farRight"', '(farRight.X - anchor.X) / (columns - 1)', 'dx * 0.30', 'dy * 0.30', 'Client={0}×{1}', 'rangeError'):
+   self.assertIn(s,p)
+  self.assertIn('RIGHTMOST cell in the SAME',c)
+  self.assertIn('other points remain recorded',c)
 if __name__=='__main__': unittest.main()

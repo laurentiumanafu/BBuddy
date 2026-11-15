@@ -8,7 +8,7 @@ static class Fixture
     static void Check(bool b,string why) { if (!b) throw new Exception(why); }
     static G.Point Point(int col,int row) => new G.Point(100+40*col,200+40*row);
     static Dictionary<string,G.Point> Points() => new() {
-        ["anchor"]=Point(0,0), ["right"]=Point(1,0), ["below"]=Point(0,1),
+        ["anchor"]=Point(0,0), ["farRight"]=Point(9,0), ["below"]=Point(0,1),
         ["backpack.first"]=Point(2,-1), ["backpack.last"]=Point(1,1),
         ["bag0.first"]=Point(2,1), ["bag0.last"]=Point(3,2),
         ["bag1.first"]=Point(4,2), ["bag1.last"]=Point(5,3),
@@ -27,7 +27,15 @@ static class Fixture
         pts=Points(); pts["bag0.last"]=Point(4,2); Check(!Build(pts),"wrong bag span rejected");
         pts=Points(); pts["bag0.first"]=new G.Point(192,247); Check(!Build(pts),"off-center marker rejected");
         pts=Points(); pts.Remove("below"); Check(!Build(pts),"missing marker rejected");
-        pts=Points(); pts["right"]=Point(2,0); Check(!Build(pts),"incorrect pitch and spans rejected");
+        pts=Points(); pts["farRight"]=Point(2,0); Check(!Build(pts),"incorrect far-right reference and spans rejected");
+        pts=Points(); pts["farRight"]=Point(9,1); Check(!Build(pts),"far reference from wrong row rejected");
+        pts=Points(); pts["below"]=Point(1,1); Check(!Build(pts),"below reference from wrong column rejected");
+        pts=Points(); pts["farRight"]=new G.Point(460,208); pts["below"]=new G.Point(108,240);
+        Check(G.TryBuild(470,600,10,"player",Bags(),20,pts,out var edge,out _) && edge!.PitchX==40,"row-end reference handles mild cursor offsets and a grid near the client edge");
+        pts=Points(); pts["anchor"]=new G.Point(100,202); pts["farRight"]=new G.Point(460,202); pts["below"]=new G.Point(100,242);
+        Check(!G.TryBuild(470,402,10,"player",Bags(),20,pts,out _,out var boundsError) && boundsError.Contains("outside the client"),"calculated out-of-client cell rejected even when markers are inside");
+        pts=Points(); pts["farRight"]=Point(9,1);
+        Check(!G.TryBuild(600,600,10,"player",Bags(),20,pts,out _,out var alignmentError) && alignmentError.Contains("same row") && alignmentError.Contains("Client=600×600"),"alignment error provides measurements");
         pts=Points(); Check(!Build(pts,columns:11),"wrong column count rejected");
         pts=Points(); Check(!Build(pts,backpack:16),"locked slots not silently omitted");
         var bags=Bags(); bags[1].Identity="bag0"; Check(!Build(Points(),bags),"duplicate bag identities rejected");
