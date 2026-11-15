@@ -51,6 +51,7 @@ namespace Styx.Logic.Pathing
         private static WowBGuid _vendorAutoPlayer;
         private static WowBReader? _vendorAutoReader;
         private static GreenMagic.Memory? _vendorAutoMemory;
+        private static object? _vendorMailboxPending;
         // __PRODUCTION_PENDING_HELPERS__
         private static readonly WowBBagSellMonitor BagSellMonitor = new WowBBagSellMonitor();
         private static bool UnderAttack() => combat;
@@ -88,6 +89,12 @@ namespace Styx.Logic.Pathing
             ClickAimSettings.AutoSell = false;
             _vendorDue = true; Check(VendorDue(), "manual request is independent of auto-sell");
             _vendorDue = false; _vendorManualPending = true; Check(VendorDue(), "interrupted manual trip remains pending");
+            _vendorManualPending = false; _vendorMailboxPending = new object();
+            Check(VendorDue() && AutoVendorPending(), "mailbox stage remains pending even if auto-selling is off");
+            combat = true; Check(!VendorDue() && AutoVendorPending(), "mailbox walk yields to combat"); combat = false;
+            ClickAimAbort.Requested = true; Check(!VendorDue(), "STOP blocks mailbox route"); ClickAimAbort.Requested = false;
+            _vendorRetryAt = unchecked(Environment.TickCount + 10000); Check(!VendorDue() && AutoVendorPending(), "mailbox retry holds new pulls");
+            _vendorRetryAt = unchecked(Environment.TickCount - 1); Check(VendorDue(), "mailbox route resumes after delay");
             Console.WriteLine("70707 and legacy vendor-due wiring synthetic fixtures passed");
         }
     }

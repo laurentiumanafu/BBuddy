@@ -516,8 +516,14 @@ internal static class GrindRunner
     private static WowBGuid _vendorAutoPlayer;
     private static WowBReader? _vendorAutoReader;
     private static GreenMagic.Memory? _vendorAutoMemory;
+    // Once a sell plan has been replayed, never replay it just because the
+    // following mailbox walk was interrupted. This stage belongs to one live session.
+    private static VendorFile.MailboxPoint? _vendorMailboxPending;
+    private static WowBReader? _vendorMailboxReader;
+    private static GreenMagic.Memory? _vendorMailboxMemory;
+    private static WowBGuid _vendorMailboxPlayer;
 
-    private static bool AutoVendorPending() => _vendorAutoPending && ClickAimSettings.AutoSell && !_vendorImpossible;
+    private static bool AutoVendorPending() => _vendorMailboxPending != null || (_vendorAutoPending && ClickAimSettings.AutoSell && !_vendorImpossible);
     private static void ClearAutoVendorPending()
     {
         _vendorAutoPending = false; _vendorAutoPlayer = default;
@@ -902,6 +908,7 @@ internal static class GrindRunner
         _vendorDue = false;
         _vendorManualPending = false;
         ClearAutoVendorPending();
+        _vendorMailboxPending = null; _vendorMailboxReader = null; _vendorMailboxMemory = null; _vendorMailboxPlayer = default;
         _vendorImpossible = false;
         _vendorRetryAt = 0;
         _lootsSinceTrip = 0;
@@ -1150,7 +1157,7 @@ internal static class GrindRunner
                     }
                     Logging.Write("[Grind] " + combatReport);
                     if (combatReport.StartsWith("the character died", StringComparison.Ordinal)) break;
-                    if (trialReader != null) PollRecentLootAfterFight(hwnd, trialReader);
+                    if (trialReader != null && _vendorMailboxPending == null) PollRecentLootAfterFight(hwnd, trialReader);
                     continue;
                 }
 
@@ -1344,6 +1351,8 @@ internal static class GrindRunner
         finally
         {
             try { mover.MoveStop(); } catch { }
+            // Never let a stopped Grind session affect a later Gather session.
+            _vendorMailboxPending = null; _vendorMailboxReader = null; _vendorMailboxMemory = null; _vendorMailboxPlayer = default;
         }
 
         string bagReport = BagSlotHunt.Report();
@@ -3338,6 +3347,9 @@ internal static class GrindRunner
             Logging.Write("[Grind] automatic vendor request cancelled because auto-selling was disabled");
         }
         if (UnderAttack()) return false;
+        if (_vendorMailboxPending != null)
+            return !ClickAimAbort.Requested && !RouteRunner.StopRequested &&
+                unchecked(Environment.TickCount - _vendorRetryAt) >= 0;
 
         /* Asked for, before anything else: a point recorded in the window during a run has to be
          * usable without restarting it, so a manual request is not blocked by a run that already
@@ -3434,6 +3446,7 @@ internal static class GrindRunner
     /// </summary>
     private static bool VendorTrip(IntPtr hwnd, ClickAimMover mover)
     {
+        if (_vendorMailboxPending != null) return WalkToRecordedMailbox(mover);
         _vendorManualPending |= _vendorDue;
         _vendorDue = false;
         _vendorImpossible = false;
@@ -3619,6 +3632,95 @@ internal static class GrindRunner
         Logging.Write(string.Format(CultureInfo.InvariantCulture,
             "[Grind] vendor replay: {0} of {1} step(s) sent ({2} click(s)). Merchant state and bag contents "
             + "are not verified; this does not confirm a sale.", sent, point.Steps.Count, _sellClicks));
+        if (point.Mailbox != null && vendorReader.IsExperimental70938)
+        {
+            if (!vendorReader.TryReadTraceLocalGuid(out WowBGuid player) || player.IsEmpty ||
+                !AutoVendorIdentityMatches(vendorReader, vendorMemory, player))
+            {
+                Logging.Write("[Mailbox] player identity unavailable after the unverified vendor replay; stopping without walking or replaying the sale.");
+                Stop(); return false;
+            }
+            _vendorMailboxPending = point.Mailbox; _vendorMailboxReader = vendorReader;
+            _vendorMailboxMemory = vendorMemory; _vendorMailboxPlayer = player;
+            Logging.Write("[Mailbox] vendor clicks were sent but sales are unverified. Walking to the recorded mailbox standing point; mailing remains manual.");
+            return WalkToRecordedMailbox(mover);
+        }
+        return true;
+    }
+
+    private static bool WalkToRecordedMailbox(ClickAimMover mover)
+    {
+        VendorFile.MailboxPoint? mailbox = _vendorMailboxPending;
+        WowBReader? reader = _vendorMailboxReader;
+        GreenMagic.Memory? memory = _vendorMailboxMemory;
+        WowBGuid playerGuid = _vendorMailboxPlayer;
+        if (mailbox == null || reader == null || memory == null || !reader.IsExperimental70938)
+        { Logging.Write("[Mailbox] missing session data; stopping without moving."); Stop(); return false; }
+        if (ObjectManager.Wow != memory || ObjectManager.WowB != reader)
+        { Logging.Write("[Mailbox] attachment changed; stopping without moving."); Stop(); return false; }
+        if (reader.TryReadTraceLocalGuid(out WowBGuid current) && !current.IsEmpty &&
+            reader.TryReadTraceLocalGuid(out WowBGuid again) && again == current && current != playerGuid)
+        { Logging.Write("[Mailbox] character changed; stopping without moving."); Stop(); return false; }
+
+        bool Safe()
+        {
+            if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested ||
+                !AutoVendorIdentityMatches(reader, memory, playerGuid) || !reader.ExperimentalGrindActive ||
+                !reader.TryReadMapId(out uint map) || map != mailbox.Map ||
+                !WowBGrindFactions.Experimental70707BarSafe(reader) ||
+                !TryReadGatherCombat(out bool fighting) || fighting ||
+                !reader.TryRead70888RecoveryPlayer(out WowBObservedUnit player, out uint hp, out uint maxHp) ||
+                player.Guid != playerGuid || hp == 0 || maxHp == 0 || hp > maxHp ||
+                !WowBGrindFactions.TryReadGhostFlagCandidate(memory, reader, player, out bool ghost) || ghost)
+                return false;
+            return AutoVendorIdentityMatches(reader, memory, playerGuid) &&
+                reader.TryReadMapId(out uint afterMap) && afterMap == mailbox.Map;
+        }
+
+        if (!Safe())
+        {
+            _vendorRetryAt = unchecked(Environment.TickCount + 500);
+            return false; // existing loop defends if in combat; unknown state holds input
+        }
+        var previousInterrupt = RouteRunner.ShouldInterrupt;
+        bool previousPoll = RouteRunner.PollInterruptDuringWalk;
+        bool previousRequireMesh = RouteRunner.RequireMeshDuringSession;
+        RouteRunner.ShouldInterrupt = () => !Safe();
+        RouteRunner.PollInterruptDuringWalk = true;
+        RouteRunner.RequireMeshDuringSession = true;
+        bool arrived = false;
+        try
+        {
+            var route = new List<RoutePoint> { new RoutePoint { X = mailbox.X, Y = mailbox.Y, Z = mailbox.Z, Kind = "Mailbox", Label = "recorded mailbox" } };
+            arrived = RouteRunner.RunWithinSession(mover, route, 1);
+        }
+        catch (Exception ex) { Logging.Write("[Mailbox] mesh route failed: " + ex.Message); }
+        finally
+        {
+            RouteRunner.ShouldInterrupt = previousInterrupt;
+            RouteRunner.PollInterruptDuringWalk = previousPoll;
+            RouteRunner.RequireMeshDuringSession = previousRequireMesh;
+            ClickAimKeySteer.ReleaseHeld();
+        }
+        if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested) return false;
+        if (RouteRunner.LastRunInterrupted || !Safe())
+        {
+            _vendorRetryAt = unchecked(Environment.TickCount + 500);
+            Logging.Write("[Mailbox] walk interrupted by combat or an unsafe/unreadable state; the mailbox stage remains pending, without repeating vendor clicks.");
+            return false;
+        }
+        if (!arrived || !reader.TryRead70888RecoveryPlayer(out WowBObservedUnit finalPlayer, out uint finalHp, out uint finalMaxHp) ||
+            finalPlayer.Guid != playerGuid || finalHp == 0 || finalMaxHp == 0 || finalHp > finalMaxHp ||
+            !double.IsFinite(finalPlayer.Location.X) || !double.IsFinite(finalPlayer.Location.Y) || !double.IsFinite(finalPlayer.Location.Z) ||
+            ClickAimMath.Len(finalPlayer.Location.X - mailbox.X, finalPlayer.Location.Y - mailbox.Y) > 3.0 ||
+            Math.Abs(finalPlayer.Location.Z - mailbox.Z) > 5.0 || !Safe())
+        {
+            Logging.Write("[Mailbox] no complete mesh route or confirmed arrival at the recorded point; stopping without interaction.");
+            Stop(); return false;
+        }
+        _vendorMailboxPending = null; _vendorMailboxReader = null; _vendorMailboxMemory = null; _vendorMailboxPlayer = default;
+        Logging.Write("[Mailbox] reached the recorded standing point. Mailbox object, sale and bag contents are unverified; stopping so the user can mail manually. No mail was sent.");
+        Stop();
         return true;
     }
 

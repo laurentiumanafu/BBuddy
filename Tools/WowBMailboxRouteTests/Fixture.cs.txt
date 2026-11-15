@@ -1,0 +1,82 @@
+using System;
+using System.Collections.Generic;
+namespace GreenMagic { sealed class Memory {} }
+namespace Styx.WoWInternals
+{
+    struct WowBGuid { public int Value; public bool IsEmpty => Value == 0; public static bool operator ==(WowBGuid a, WowBGuid b) => a.Value == b.Value; public static bool operator !=(WowBGuid a, WowBGuid b) => a.Value != b.Value; public override bool Equals(object? o) => o is WowBGuid g && g == this; public override int GetHashCode() => Value; }
+    struct Point { public double X,Y,Z; }
+    struct WowBObservedUnit { public WowBGuid Guid; public Point Location; }
+    sealed class WowBReader
+    {
+        public bool IsExperimental70938 = true, ExperimentalGrindActive = true;
+        public uint Map = 1, Hp = 100; public WowBObservedUnit Player = new() { Guid = new WowBGuid { Value = 7 }, Location = new Point { X = 10, Y = 20, Z = 5 } };
+        public bool TryReadMapId(out uint map) { map = Map; return true; }
+        public bool TryReadTraceLocalGuid(out WowBGuid guid) { guid=Player.Guid; return true; }
+        public bool TryRead70888RecoveryPlayer(out WowBObservedUnit player, out uint hp, out uint maxHp) { player=Player; hp=Hp; maxHp=100; return true; }
+    }
+    static class ObjectManager { public static GreenMagic.Memory? Wow; public static WowBReader? WowB; }
+}
+namespace Styx.Logic.Pathing
+{
+    using Styx.WoWInternals;
+    static class Logging { public static void Write(string s) {} }
+    static class ClickAimAbort { public static bool Requested; }
+    static class ClickAimKeySteer { public static void ReleaseHeld() {} }
+    static class ClickAimMath { public static double Len(double x,double y) => Math.Sqrt(x*x+y*y); }
+    static class WowBGrindFactions
+    {
+        public static bool Experimental70707BarSafe(WowBReader r) => true;
+        public static bool TryReadGhostFlagCandidate(GreenMagic.Memory m, WowBReader r, WowBObservedUnit p, out bool ghost) { ghost=false; return true; }
+    }
+    sealed class ClickAimMover {}
+    sealed class RoutePoint { public double X,Y,Z; public string Kind="",Label=""; }
+    static class VendorFile { public sealed class MailboxPoint { public uint Map; public double X,Y,Z; } }
+    static class RouteRunner
+    {
+        public static bool StopRequested, PollInterruptDuringWalk, RequireMeshDuringSession, LastRunInterrupted, Result = true, CombatDuringWalk;
+        public static Func<bool>? ShouldInterrupt;
+        public static bool RunWithinSession(ClickAimMover mover, List<RoutePoint> route, int legs)
+        {
+            if (!RequireMeshDuringSession || !PollInterruptDuringWalk) throw new Exception("mesh/interrupt not required");
+            if (CombatDuringWalk) Fixture.Fighting=true;
+            LastRunInterrupted = ShouldInterrupt != null && ShouldInterrupt();
+            return Result && !LastRunInterrupted;
+        }
+    }
+    static class Fixture
+    {
+        static VendorFile.MailboxPoint? _vendorMailboxPending;
+        static WowBReader? _vendorMailboxReader;
+        static GreenMagic.Memory? _vendorMailboxMemory;
+        static WowBGuid _vendorMailboxPlayer;
+        static bool _stop; public static bool Fighting; static int _vendorRetryAt;
+        static bool AutoVendorIdentityMatches(WowBReader r, GreenMagic.Memory m, WowBGuid g) => g == r.Player.Guid;
+        static bool TryReadGatherCombat(out bool fighting) { fighting=Fighting; return true; }
+        static void Stop() { _stop=true; ClickAimAbort.Requested=true; }
+        // __PRODUCTION__
+        static void Check(bool b, string why) { if (!b) throw new Exception(why); }
+        static void Reset()
+        {
+            _stop=false; ClickAimAbort.Requested=false; RouteRunner.StopRequested=false; RouteRunner.LastRunInterrupted=false;
+            RouteRunner.Result=true; RouteRunner.CombatDuringWalk=false; Fighting=false;
+            _vendorMailboxReader=new WowBReader(); _vendorMailboxMemory=new GreenMagic.Memory(); _vendorMailboxPlayer=new WowBGuid { Value=7 };
+            ObjectManager.WowB=_vendorMailboxReader; ObjectManager.Wow=_vendorMailboxMemory;
+            _vendorMailboxPending=new VendorFile.MailboxPoint { Map=1, X=10, Y=20, Z=5 };
+        }
+        public static void Main()
+        {
+            Reset(); var prior = new Func<bool>(() => false); RouteRunner.ShouldInterrupt=prior;
+            Check(WalkToRecordedMailbox(new ClickAimMover()) && _stop && _vendorMailboxPending == null, "arrival stops for manual mail");
+            Check(RouteRunner.ShouldInterrupt == prior && !RouteRunner.RequireMeshDuringSession && !RouteRunner.PollInterruptDuringWalk, "restore route controls");
+            Reset(); Fighting=true; Check(!WalkToRecordedMailbox(new ClickAimMover()) && !_stop && _vendorMailboxPending != null, "combat yields");
+            Fighting=false; Check(WalkToRecordedMailbox(new ClickAimMover()) && _stop, "resume after combat");
+            Reset(); RouteRunner.CombatDuringWalk=true; Check(!WalkToRecordedMailbox(new ClickAimMover()) && !_stop && _vendorMailboxPending != null, "interrupt retains stage");
+            Reset(); _vendorMailboxReader!.Map=2; Check(!WalkToRecordedMailbox(new ClickAimMover()) && !_stop && _vendorMailboxPending != null, "map mismatch does not move");
+            Reset(); _vendorMailboxReader!.Player.Guid=new WowBGuid { Value=8 }; Check(!WalkToRecordedMailbox(new ClickAimMover()) && _stop, "changed character stops");
+            Reset(); RouteRunner.Result=false; Check(!WalkToRecordedMailbox(new ClickAimMover()) && _stop, "failed mesh stops");
+            Reset(); _vendorMailboxReader!.Player.Location.X=50; Check(!WalkToRecordedMailbox(new ClickAimMover()) && _stop, "route return alone is not arrival");
+            Reset(); ClickAimAbort.Requested=true; Check(!WalkToRecordedMailbox(new ClickAimMover()) && _vendorMailboxPending != null, "STOP holds");
+            Console.WriteLine("Mailbox route fixtures passed; no live navigation proof.");
+        }
+    }
+}
