@@ -528,6 +528,17 @@ internal static class GrindRunner
     private static WowBReader? _vendorReturnReader;
     private static GreenMagic.Memory? _vendorReturnMemory;
     private static WowBGuid _vendorReturnPlayer;
+    // Profile-free opt-in mail trips return to the stable position captured before
+    // the first town action, not to the synthetic (0,0,0) roam placeholder.
+    private static bool _roamSession;
+    private static RoutePoint? _roamMailReturn;
+    private static WowBReader? _roamMailReader;
+    private static GreenMagic.Memory? _roamMailMemory;
+    private static WowBGuid _roamMailPlayer;
+    private static void ClearRoamMailReturn()
+    {
+        _roamMailReturn = null; _roamMailReader = null; _roamMailMemory = null; _roamMailPlayer = default;
+    }
     // A confirmed location transition keeps the session in town-trip mode
     // until the profile return is complete (or the trip stops safely).
     private static bool _townTransit;
@@ -856,7 +867,7 @@ internal static class GrindRunner
             Run(areas, minutes, profilePath, roam, trialReader);
         }
         catch (Exception ex) { Logging.Write("[Grind] worker stopped on error: " + ex.Message); }
-        finally { _activeProfileArea = null; _deathCheckpoint = null; WowBGrindFactions.EndExperimental70707(); _running = false; }
+        finally { _activeProfileArea = null; _roamSession = false; ClearRoamMailReturn(); _deathCheckpoint = null; WowBGrindFactions.EndExperimental70707(); _running = false; }
     }
 
     private static void Run(List<ProfileGrindArea> areas, int minutes, string profilePath, MeshRoam? roam, WowBReader? trialReader)
@@ -922,6 +933,7 @@ internal static class GrindRunner
         ClearAutoVendorPending();
         _vendorMailboxPending = null; _vendorMailboxReader = null; _vendorMailboxMemory = null; _vendorMailboxPlayer = default;
         _vendorReturnHotspot = null; _vendorReturnReader = null; _vendorReturnMemory = null; _vendorReturnPlayer = default;
+        _roamSession = roam != null; ClearRoamMailReturn();
         _townTransit = false; _townPlayer = default; _townReader = null; _townMemory = null;
         _vendorImpossible = false;
         _vendorRetryAt = 0;
@@ -965,6 +977,16 @@ internal static class GrindRunner
             { Logging.Write("[Grind] profile map unreadable or changed; refusing to authorize profile pulls"); return; }
             ActivateProfileArea(area);
         }
+        else if (trialReader?.IsExperimental70938 == true)
+        {
+            if (ObjectManager.WowB != trialReader || !trialReader.TryReadMapId(out _profileSessionMap) || _profileSessionMap == uint.MaxValue ||
+                !trialReader.TryReadMapId(out uint roamMapAgain) || roamMapAgain != _profileSessionMap || !roam.MapCurrent())
+            { Logging.Write("[Grind] roaming map unreadable or changed; stopping before movement."); return; }
+        }
+        if (trialReader?.IsExperimental70938 == true)
+            Logging.Write("[Mail] experimental post-sell option " + (ClickAimSettings.ExperimentalAutoMail ? "ON" : "OFF") +
+                "; recipient " + (WowBMailRecipientText.ValidForTest(ClickAimSettings.MailRecipient) ? "configured" : "missing or invalid") +
+                "; selected vendor must have its own mailbox and matching controls. Sending and sales are unverified.");
         // On 70755/70790, avoid a fresh pull or roam leg while initial full-bag
         // observations are being confirmed. A bounded wait never treats an
         // unknown observation as full, and combat/STOP still take priority.
@@ -3359,6 +3381,7 @@ internal static class GrindRunner
         if (_vendorAutoPending && !ClickAimSettings.AutoSell)
         {
             ClearAutoVendorPending();
+            if (!_vendorManualPending && !_vendorDue && !_townTransit) ClearRoamMailReturn();
             BagSellMonitor.Reset(); // re-enabling must reconfirm the subtotal
             Logging.Write("[Grind] automatic vendor request cancelled because auto-selling was disabled");
         }
@@ -3387,6 +3410,7 @@ internal static class GrindRunner
                 if (_vendorAutoReader != reader || _vendorAutoMemory != memory)
                 {
                     ClearAutoVendorPending(); BagSellMonitor.Reset();
+                    if (!_vendorManualPending && !_vendorDue && !_townTransit) ClearRoamMailReturn();
                     Logging.Write("[Grind] attachment changed; automatic vendor request discarded");
                     return false;
                 }
@@ -3402,6 +3426,7 @@ internal static class GrindRunner
                 {
                     // Only a stable, nonempty new character cancels the request.
                     ClearAutoVendorPending(); BagSellMonitor.Reset();
+                    if (!_vendorManualPending && !_vendorDue && !_townTransit) ClearRoamMailReturn();
                     Logging.Write("[Grind] character changed; automatic vendor request discarded");
                     return false;
                 }
@@ -3413,6 +3438,7 @@ internal static class GrindRunner
                     AutoVendorIdentityMatches(reader, memory, _vendorAutoPlayer))
                 {
                     ClearAutoVendorPending();
+                    if (!_vendorManualPending && !_vendorDue && !_townTransit) ClearRoamMailReturn();
                     Logging.Write("[Grind] fresh candidate bag space observed; automatic vendor request cancelled");
                     return false;
                 }
@@ -3437,6 +3463,44 @@ internal static class GrindRunner
 
         // Count looted bodies only: kills alone do not imply a bag item was acquired.
         return _lootsSinceTrip >= after;
+    }
+
+    // Capture once before either walking to town or casting a return spell. A
+    // town trip may be interrupted and resumed, so never replace the origin
+    // with a point recorded partway to the vendor.
+    private static bool CaptureRoamMailReturn()
+    {
+        WowBReader? reader = ObjectManager.WowB; GreenMagic.Memory? memory = ObjectManager.Wow;
+        if (reader == null || memory == null || !reader.IsExperimental70938 || !reader.ExperimentalGrindActive) return false;
+        if (_roamMailReturn != null)
+            return _roamMailReader == reader && _roamMailMemory == memory &&
+                AutoVendorIdentityMatches(reader, memory, _roamMailPlayer) &&
+                reader.TryReadMapId(out uint existingMap) && existingMap == _profileSessionMap;
+        try
+        {
+            using var uncached = memory.TemporaryCacheState(false);
+            if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested ||
+                !reader.TryReadMapId(out uint map) || map != _profileSessionMap ||
+                !TryReadGatherCombat(out bool fighting) || fighting ||
+                !reader.TryRead70888RecoveryPlayer(out WowBObservedUnit first, out uint hp, out uint max) ||
+                first.Guid.IsEmpty || hp == 0 || max < hp ||
+                !WowBGrindFactions.TryReadGhostFlagCandidate(memory, reader, first, out bool ghost) || ghost ||
+                !reader.TryRead70888RecoveryPlayer(out WowBObservedUnit second, out uint hp2, out uint max2) ||
+                second.Guid != first.Guid || hp2 == 0 || max2 < hp2 ||
+                !double.IsFinite(first.Location.X) || !double.IsFinite(first.Location.Y) || !double.IsFinite(first.Location.Z) ||
+                !double.IsFinite(second.Location.X) || !double.IsFinite(second.Location.Y) || !double.IsFinite(second.Location.Z) ||
+                ClickAimMath.Len(first.Location.X - second.Location.X, first.Location.Y - second.Location.Y) > 1.0 ||
+                Math.Abs(first.Location.Z - second.Location.Z) > 1.0 ||
+                !AutoVendorIdentityMatches(reader, memory, first.Guid) ||
+                !reader.TryReadMapId(out uint mapAgain) || mapAgain != map ||
+                !TryReadGatherCombat(out fighting) || fighting || _stop || ClickAimAbort.Requested || RouteRunner.StopRequested) return false;
+            _roamMailReturn = new RoutePoint { X = second.Location.X, Y = second.Location.Y, Z = second.Location.Z,
+                Kind = "Hotspot", Label = "pre-vendor roaming position" };
+            _roamMailReader = reader; _roamMailMemory = memory; _roamMailPlayer = first.Guid;
+            Logging.Write("[Mail] captured the profile-free pre-vendor position as the return destination; mesh availability will be checked on return.");
+            return true;
+        }
+        catch { return false; }
     }
 
     /// <summary>
@@ -3491,6 +3555,13 @@ internal static class GrindRunner
             return false;
         }
 
+        if (_roamSession && ClickAimSettings.ExperimentalAutoMail && ObjectManager.WowB?.IsExperimental70938 == true && !_townTransit &&
+            !CaptureRoamMailReturn())
+        {
+            _vendorRetryAt = unchecked(Environment.TickCount + VendorRetryAfterFightMs);
+            Logging.Write("[Mail] profile-free pre-vendor return position or identity unreadable; town trip held before any cast or vendor clicks.");
+            return false;
+        }
         if (ClickAimSettings.UseTownReturn && !_townTransit)
         {
             if (!TownReturn(hwnd, points)) return false;
@@ -3522,10 +3593,14 @@ internal static class GrindRunner
             _vendorImpossible = true;
             Logging.Write("[Grind] no complete sell plan has a town hotspot on this map, a user-confirmed merchant, and a nonempty plan within the step limit" +
                 (_townTransit ? " within 500 yd of the return destination; stopping." : ". Existing plans are unchanged; configure them under Selling."));
-            if (_townTransit) Stop();
+            if (_townTransit) Stop(); else ClearRoamMailReturn();
             return false;
         }
         VendorFile.VendorPoint point = points[at];
+        if (vendorReader.IsExperimental70938)
+            Logging.Write("[Mail] selected sell plan " + point.Name + ": option " + (ClickAimSettings.ExperimentalAutoMail ? "ON" : "OFF") +
+                "; mailbox " + (point.Mailbox == null ? "not recorded for this plan" : "recorded for this plan") +
+                "; recipient " + (WowBMailRecipientText.ValidForTest(ClickAimSettings.MailRecipient) ? "configured" : "missing or invalid") + ".");
         Logging.Write(string.Format(CultureInfo.InvariantCulture,
             "[Grind] selling first, before the next hotspot: {0} is {1:F0} yd away and has {2} recorded "
             + "step(s); {3} kill(s) and {4} looted bodie(s) since the last trip", point,
@@ -3664,7 +3739,7 @@ internal static class GrindRunner
             + "are not verified; this does not confirm a sale.", sent, point.Steps.Count, _sellClicks));
         // A profile return is deliberately separate from the sell stage so combat
         // or a temporary read failure cannot cause the clicks to be replayed.
-        if (vendorReader.IsExperimental70938 && _activeProfileArea != null)
+        if (vendorReader.IsExperimental70938 && (_activeProfileArea != null || (_roamSession && _roamMailReturn != null)))
         {
             if (!vendorReader.TryReadTraceLocalGuid(out WowBGuid player) || player.IsEmpty ||
                 !AutoVendorIdentityMatches(vendorReader, vendorMemory, player) ||
@@ -3678,14 +3753,19 @@ internal static class GrindRunner
                 Stop(); return false;
             }
             RoutePoint? nearest = null; double distance = double.MaxValue;
-            foreach (RoutePoint hotspot in _activeProfileArea.Hotspots)
+            if (_activeProfileArea != null)
             {
-                if (!double.IsFinite(hotspot.X) || !double.IsFinite(hotspot.Y) || !double.IsFinite(hotspot.Z)) continue;
-                double d = ClickAimMath.Len(hotspot.X - position.Location.X, hotspot.Y - position.Location.Y);
-                if (d < distance) { distance = d; nearest = hotspot; }
+                foreach (RoutePoint hotspot in _activeProfileArea.Hotspots)
+                {
+                    if (!double.IsFinite(hotspot.X) || !double.IsFinite(hotspot.Y) || !double.IsFinite(hotspot.Z)) continue;
+                    double d = ClickAimMath.Len(hotspot.X - position.Location.X, hotspot.Y - position.Location.Y);
+                    if (d < distance) { distance = d; nearest = hotspot; }
+                }
             }
+            else if (_roamSession && _roamMailReader == vendorReader && _roamMailMemory == vendorMemory && _roamMailPlayer == player)
+                nearest = _roamMailReturn;
             if (nearest == null)
-            { Logging.Write("[Grind] no valid profile hotspot for the return; stopping after unverified sell replay."); Stop(); return false; }
+            { Logging.Write("[Grind] no valid profile hotspot or profile-free return point; stopping after unverified sell replay."); Stop(); return false; }
             _vendorReturnHotspot = new RoutePoint { X = nearest.X, Y = nearest.Y, Z = nearest.Z, Kind = "Hotspot", Label = nearest.Label };
             _vendorReturnReader = vendorReader; _vendorReturnMemory = vendorMemory; _vendorReturnPlayer = player;
             if (ClickAimSettings.ExperimentalAutoMail)
@@ -3701,11 +3781,14 @@ internal static class GrindRunner
                     Logging.Write("[Mail] experimental post-sell mailbox route scheduled; sales and controls are not verified.");
                     return WalkToRecordedMailbox(mover);
                 }
-                Logging.Write("[Mail] missing or mismatched mailbox/recipient/control calibration; skipping mail and returning to profile.");
+                Logging.Write("[Mail] missing or mismatched mailbox/recipient/control calibration on selected sell plan " + point.Name +
+                    "; skipping mail and returning to the grind destination.");
             }
             else Logging.Write("[Grind] vendor clicks replayed (sales unverified); experimental mail is off.");
             return WalkBackToProfile(mover);
         }
+        if (vendorReader.IsExperimental70938 && _roamSession && !ClickAimSettings.ExperimentalAutoMail)
+            Logging.Write("[Mail] experimental post-sell option is OFF; no mailbox trip will be attempted.");
         if (_townTransit)
         {
             Logging.Write("[Town return] vendor clicks replayed (sales unverified). No profile is loaded, so the original roaming area cannot be safely resumed; stopping.");
@@ -3905,7 +3988,7 @@ internal static class GrindRunner
         WowBReader? reader = _vendorReturnReader;
         GreenMagic.Memory? memory = _vendorReturnMemory;
         WowBGuid playerGuid = _vendorReturnPlayer;
-        if (hotspot == null || reader == null || memory == null || _activeProfileArea == null ||
+        if (hotspot == null || reader == null || memory == null || (_activeProfileArea == null && !_roamSession) ||
             ObjectManager.Wow != memory || ObjectManager.WowB != reader || !reader.ExperimentalGrindActive)
         { Logging.Write("[Grind] profile return session changed; stopping without repeating the sell plan."); Stop(); return false; }
         if (reader.TryReadMapId(out uint currentMap) && currentMap != _profileSessionMap)
@@ -3960,8 +4043,10 @@ internal static class GrindRunner
             Math.Abs(finalPlayer.Location.Z - hotspot.Z) > 5.0 || !Safe())
         { Logging.Write("[Grind] no complete mesh route or confirmed arrival at the profile hotspot; stopping without repeating the sale."); Stop(); return false; }
         _vendorReturnHotspot = null; _vendorReturnReader = null; _vendorReturnMemory = null; _vendorReturnPlayer = default;
+        ClearRoamMailReturn();
         _townTransit = false; _townReader = null; _townMemory = null; _townPlayer = default;
-        Logging.Write("[Grind] reached the profile hotspot; resuming the active grind. Vendor sales and any experimental mail remain unverified.");
+        Logging.Write("[Grind] reached the " + (_roamSession ? "pre-vendor roaming position" : "profile hotspot") +
+            "; resuming the active grind. Vendor sales and any experimental mail remain unverified.");
         return true;
     }
 

@@ -3,9 +3,10 @@
 ## Current experimental implementation
 
 70938 Grind has a **default-off** experimental mail-after-selling option. It
-requires a saved vendor with a same-map mailbox standing point, a profile with a
-same-map return hotspot, a saved recipient containing only letters/hyphens,
-the prior combined-bag grid, and separately recorded mailbox, Send Mail tab and
+requires a saved vendor with a same-map mailbox standing point, either a profile
+with a same-map return hotspot or a profile-free pre-vendor return position, a
+saved recipient containing only letters/hyphens, the prior combined-bag grid,
+and separately recorded mailbox, Send Mail tab and
 Send button coordinates. At the recorded standing point, the mailbox hover
 candidate must match the saved full GUID. Client size, foreground, map, player,
 health, ghost, combat and STOP guards are checked. Changes to camera, UI scale,
@@ -28,8 +29,12 @@ sales and game/server outcomes are unverified. Wrong calibration or focus can
 mail unintended items to a wrong recipient. Use a supervised disposable-item
 test first.
 
-Missing configuration before routing skips mail and returns to profile. Once
-interaction begins, any interruption, partial input, unreadable observation or
+A profile-free run latches the live position and character before starting the
+town trip and meshes back there after mailing, without using the synthetic roam
+placeholder. Cross-map return is not supported. The mailbox must belong to the
+same sell plan the bot selects (the log names that plan); saving it for another
+vendor is insufficient. Missing configuration before routing skips mail and
+returns to the grind destination. Once interaction begins, any interruption, partial input, unreadable observation or
 uncertain send stops for inspection without retrying a possible send. Confirmed
 rejection is not independently observed, so the requested three-confirmed-
 failures retry/continue behavior is **not yet implemented**. Cross-map return
