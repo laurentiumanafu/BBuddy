@@ -41,8 +41,8 @@ internal static class WowBExperimentalMail
         return down && reason == "left-button messages posted" && safe();
     }
 
-    // true means the observed 0..3 candidates are empty after this experiment,
-    // not that every bag was observed or a mail was delivered.
+    // True means no more unskipped 0..3 candidates remain for this trip, not
+    // that every bag is empty, a skipped item is ineligible, or mail arrived.
     internal static bool Run(IntPtr hwnd, Memory memory, WowBReader reader, WowBGuid player,
         WowBMailUiCalibration.Result ui, string recipient, Func<string?> safetyFailure)
     {
@@ -92,19 +92,21 @@ internal static class WowBExperimentalMail
             if (!Wait(1500, safe))
             { Logging.Write("[Mail] stopped or safety changed after mailbox interaction; no tab or send input. Inspect manually."); return false; }
             int batches = 0;
+            var skipped = new HashSet<WowBGuid>(); // one trip only; never retry the same item in it
             while (batches < 64 && safe())
             {
                 if (!ReadBags(memory, reader, player, out var bags) || bags == null)
                 { Logging.Write("[Mail] active bag observations unavailable; no tab or send input in this batch."); return false; }
                 if (!WowBMailGridLookup.TryLoad(WowBMailGridCalibration.DefaultPath, player.ToString(), w, h, bags, out var grid) || grid == null)
                 { Logging.Write("[Mail] saved bag grid missing or incompatible with current player, window or bag identities; no tab or send input in this batch."); return false; }
-                if (!WowBMailGridLookup.TryPreview(grid, player.ToString(), w, h, bags, out var selected, out int count, out bool unknownPrimary, out bool unknownFifth))
+                if (!WowBMailGridLookup.TryPreviewExcluding(grid, player.ToString(), w, h, bags, skipped, out var selected, out int count, out bool unknownPrimary, out bool unknownFifth))
                 { Logging.Write("[Mail] bag preview invalid or inconsistent; no tab or send input in this batch."); return false; }
                 if (unknownPrimary)
                 { Logging.Write("[Mail] one or more bag candidates 0–3 are unknown; no tab or send input in this batch."); return false; }
                 if (count == 0)
                 {
-                    Logging.Write("[Mail] no nonzero candidates 0–3 observed; candidate 4=" + (unknownFifth ? "Unknown" : "unverified") + ". This is not proof all bags are empty or mail was delivered.");
+                    Logging.Write("[Mail] no unskipped nonzero candidates 0–3 remain for this trip; skipped=" + skipped.Count +
+                        "; candidate 4=" + (unknownFifth ? "Unknown" : "unverified") + ". Skipped items may remain; this is not proof of empty bags or mail delivery.");
                     return true;
                 }
                 var expected = new List<WowBMailCandidateTable.Expected>();
@@ -126,29 +128,67 @@ internal static class WowBExperimentalMail
                     if (ClickAimAbort.Wait(30)) return false;
                 }
                 Logging.Write("[Mail] recipient characters posted; field focus and text are not verified.");
-                foreach (var slot in selected)
+                // Each scan group contains at most 12 clicks. If every item in
+                // a group is skipped, scan the next group without retyping the
+                // recipient into the still-open, empty composition.
+                while (true)
                 {
-                    if (!ReadBags(memory, reader, player, out var current) || current == null || !WowBMailGridLookup.Same(bags, current) ||
-                        !WowBMailCandidateReader.TryRead(memory, reader, player, safe, out raw) || !WowBMailCandidateTable.Matches(raw, expected))
-                    { Logging.Write("[Mail] bag or attachment observations changed before an attachment; no send input in this batch. Inspect manually."); return false; }
-                    var bag = current[slot.Candidate];
-                    if (bag.Candidate != slot.Candidate || bag.Unknown || slot.Slot < 0 || slot.Slot >= bag.Slots.Length || bag.Slots[slot.Slot] != slot.Item)
-                    { Logging.Write("[Mail] selected bag slot changed; no send input in this batch. Inspect manually."); return false; }
-                    int x = (int)Math.Round(slot.X), y = (int)Math.Round(slot.Y);
-                    if (!Move(hwnd, x, y, w, h, safe) ||
-                        !ClickAimInput.ConfirmedRightClick(hwnd, x, y, w, h, safe, out string clickReason))
-                    { Logging.Write("[Mail] attachment input withheld or uncertain; inspect manually."); return false; }
-                    if (clickReason != "right-button messages posted" || !safe())
-                    { Logging.Write("[Mail] attachment button release or state uncertain; inspect manually."); return false; }
-                    expected.Add(new WowBMailCandidateTable.Expected(slot.Item, bag.Identity));
-                    bool observed = false;
-                    for (int attempt = 0; attempt < 20 && safe(); attempt++)
+                    if (selected.Count == 0 || selected.Count > 12)
+                    { Logging.Write("[Mail] invalid candidate group; no send input in this batch."); return false; }
+                    foreach (var slot in selected)
                     {
-                        if (ClickAimAbort.Wait(200)) break;
-                        if (WowBMailCandidateReader.TryRead(memory, reader, player, safe, out raw) && WowBMailCandidateTable.Matches(raw, expected))
-                        { observed = true; break; }
+                        if (!ReadBags(memory, reader, player, out var current) || current == null || !WowBMailGridLookup.Same(bags, current) ||
+                            !WowBMailCandidateReader.TryRead(memory, reader, player, safe, out raw) || !WowBMailCandidateTable.Matches(raw, expected))
+                        { Logging.Write("[Mail] bag or attachment observations changed before an attachment; no send input in this batch. Inspect manually."); return false; }
+                        var bag = current[slot.Candidate];
+                        if (bag.Candidate != slot.Candidate || bag.Unknown || slot.Slot < 0 || slot.Slot >= bag.Slots.Length || bag.Slots[slot.Slot] != slot.Item || skipped.Contains(slot.Item))
+                        { Logging.Write("[Mail] selected bag slot changed; no send input in this batch. Inspect manually."); return false; }
+                        int x = (int)Math.Round(slot.X), y = (int)Math.Round(slot.Y);
+                        if (!Move(hwnd, x, y, w, h, safe) ||
+                            !ClickAimInput.ConfirmedRightClick(hwnd, x, y, w, h, safe, out string clickReason))
+                        { Logging.Write("[Mail] attachment input withheld or uncertain; inspect manually."); return false; }
+                        if (clickReason != "right-button messages posted" || !safe())
+                        { Logging.Write("[Mail] attachment button release or state uncertain; inspect manually."); return false; }
+                        var withItem = new List<WowBMailCandidateTable.Expected>(expected) { new WowBMailCandidateTable.Expected(slot.Item, bag.Identity) };
+                        var decision = new WowBMailAttachmentPolicy();
+                        bool attached = false, complete = true;
+                        for (int attempt = 0; attempt < 20; attempt++)
+                        {
+                            if (!safe() || ClickAimAbort.Wait(200)) { complete = false; break; }
+                            bool readable = WowBMailCandidateReader.TryRead(memory, reader, player, safe, out raw);
+                            if (decision.Observe(readable, readable && WowBMailCandidateTable.Matches(raw, expected),
+                                readable && WowBMailCandidateTable.Matches(raw, withItem)) == WowBMailAttachmentPolicy.Decision.Attached)
+                            { attached = true; break; }
+                        }
+                        if (attached)
+                        {
+                            expected.Add(new WowBMailCandidateTable.Expected(slot.Item, bag.Identity));
+                            continue;
+                        }
+                        // Stable unchanged table alone is not proof of failure.
+                        // Bracket two unchanged bag observations with table reads;
+                        // any unreadable, changed or unexpected state holds.
+                        bool stable = complete && safe() &&
+                            WowBMailCandidateReader.TryRead(memory, reader, player, safe, out raw) && WowBMailCandidateTable.Matches(raw, expected) &&
+                            ReadBags(memory, reader, player, out var afterClick1) && afterClick1 != null && WowBMailGridLookup.Same(bags, afterClick1) &&
+                            ReadBags(memory, reader, player, out var afterClick2) && afterClick2 != null && WowBMailGridLookup.Same(bags, afterClick2) &&
+                            WowBMailCandidateReader.TryRead(memory, reader, player, safe, out raw) && WowBMailCandidateTable.Matches(raw, expected) && safe();
+                        if (decision.Finish(complete, stable, stable) != WowBMailAttachmentPolicy.Decision.Skip)
+                        { Logging.Write("[Mail] attachment outcome uncertain; no retry or send. Inspect manually."); return false; }
+                        skipped.Add(slot.Item);
+                        Logging.Write("[Mail] candidate " + slot.Candidate + " slot " + (slot.Slot + 1) +
+                            " attachment not observed after stable checks; skipping it for this trip, not retrying. Ineligibility is unverified.");
                     }
-                    if (!observed) { Logging.Write("[Mail] attachment candidate uncertain; no retry or send. Inspect manually."); return false; }
+                    if (expected.Count > 0) break;
+                    if (!WowBMailGridLookup.TryPreviewExcluding(grid, player.ToString(), w, h, bags, skipped,
+                        out selected, out count, out unknownPrimary, out unknownFifth) || unknownPrimary)
+                    { Logging.Write("[Mail] next candidate group unavailable; no send input. Inspect manually."); return false; }
+                    if (count == 0)
+                    {
+                        Logging.Write("[Mail] no further unskipped candidates; skipped=" + skipped.Count +
+                            ". No send input for the empty composition; skipped items may remain. Candidate 4 and delivery are unverified.");
+                        return true;
+                    }
                 }
                 if (expected.Count == 0 || expected.Count > 12 || !safe() ||
                     !WowBMailCandidateReader.TryRead(memory, reader, player, safe, out raw) || !WowBMailCandidateTable.Matches(raw, expected) ||
@@ -163,10 +203,11 @@ internal static class WowBExperimentalMail
                     if (ClickAimAbort.Wait(250)) break;
                     if (!WowBMailCandidateReader.TryRead(memory, reader, player, safe, out raw) ||
                         !WowBMailCandidateTable.Matches(raw, new List<WowBMailCandidateTable.Expected>()) ||
-                        !ReadBags(memory, reader, player, out var after) || after == null) continue;
+                        !ReadBags(memory, reader, player, out var after) || after == null ||
+                        !WowBMailGridLookup.Validate(grid, player.ToString(), w, h, after)) continue;
                     bool found = false;
                     foreach (var b in after) foreach (var id in b.Slots)
-                        foreach (var sent in selected) if (id == sent.Item) found = true;
+                        foreach (var sent in expected) if (id == sent.Item) found = true;
                     if (!found) { progressed = true; break; }
                 }
                 if (!progressed) { Logging.Write("[Mail] send outcome uncertain; no retry. Inspect before resuming."); return false; }

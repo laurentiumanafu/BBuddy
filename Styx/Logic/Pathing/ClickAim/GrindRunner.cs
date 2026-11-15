@@ -4149,7 +4149,7 @@ internal static class GrindRunner
         _vendorMailboxPending = null; _vendorMailboxReader = null; _vendorMailboxMemory = null; _vendorMailboxPlayer = default;
         if (!completed)
         { Logging.Write("[Mail] experiment interrupted or uncertain; stopping to avoid repeating a possible send. Inspect the game before restarting."); Stop(); return false; }
-        Logging.Write("[Mail] observed candidates 0–3 exhausted; returning to profile. Candidate 4 and delivery remain unverified.");
+        Logging.Write("[Mail] no further unskipped candidates for this trip; returning to grind. Skipped items may remain; candidate 4 and delivery are unverified.");
         return WalkBackToProfile(mover);
     }
 

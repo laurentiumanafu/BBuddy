@@ -1,0 +1,29 @@
+using System;
+using P = Styx.Logic.Pathing.WowBMailAttachmentPolicy;
+static class Fixture
+{
+    static void Check(bool ok, string why) { if (!ok) throw new Exception(why); }
+    static P Unchanged(int count)
+    {
+        var p = new P();
+        for (int i=0; i<count; i++) Check(p.Observe(true, true, false) == P.Decision.Pending, "unchanged remains pending");
+        return p;
+    }
+    static void Main()
+    {
+        var p = Unchanged(20);
+        Check(p.Finish(true, true, true) == P.Decision.Skip, "only bounded unchanged stable evidence skips");
+        Check(Unchanged(2).Finish(true,true,true) == P.Decision.Hold, "too few observations");
+        Check(Unchanged(20).Finish(false,true,true) == P.Decision.Hold, "interrupted");
+        Check(Unchanged(20).Finish(true,false,true) == P.Decision.Hold, "changed bags");
+        Check(Unchanged(20).Finish(true,true,false) == P.Decision.Hold, "changed final table");
+        p = Unchanged(3); p.Observe(false,false,false);
+        Check(p.Finish(true,true,true) == P.Decision.Hold, "unreadable table");
+        p = Unchanged(3); p.Observe(true,false,false);
+        Check(p.Finish(true,true,true) == P.Decision.Hold, "unexpected table");
+        p = Unchanged(3);
+        Check(p.Observe(true,false,true) == P.Decision.Attached, "observed attachment");
+        Check(p.Finish(false,false,false) == P.Decision.Attached, "observed attachment does not count as skipped");
+        Console.WriteLine("Synthetic attachment decisions passed; unchanged memory does not prove ineligibility.");
+    }
+}

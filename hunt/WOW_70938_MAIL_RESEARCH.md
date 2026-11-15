@@ -22,11 +22,21 @@ reports bag/grid/table checks and whether tab button messages were posted. A
 posted click is not proof of a visible frame or tab. The experiment then waits
 one second, posts recipient text, attaches at most 12 candidate 0–3 raw slots and compares the mail record
 candidate after each click. It sends once per batch, then requires a stable
-zero-like candidate table and disappearance of those raw IDs from observed bag
-candidates before attempting another batch. This is **not** recipient field
-readback, a complete inventory, an acknowledgement, or proof of server
-delivery. Attachment field interpretation is based on one trace; a mismatch
-holds instead of guessing. Candidate 4 remains Unknown/unverified, is never
+zero-like candidate table and disappearance of the actually observed attached
+raw IDs from observed bag candidates before attempting another batch. A single
+right-click whose attachment is not observed for the full polling window may
+be skipped for this trip only if all table reads stayed equal to the previous
+expected set and fresh table/bag/table checks agree. Unexpected or unreadable
+state, interruption or uncertain button release still holds. A skip is not
+proof that the item is a quest item, ineligible or that a late attachment is
+impossible; a delayed update can race later checks. The table is checked again
+before subsequent actions and sending, but these checks are not atomic. The
+skipped items are never clicked again during that trip, and can remain in the
+bags. Each candidate scan group contains at most 12 clicks; if all fail, the
+empty composition advances to another group without retyping the recipient.
+This is **not** recipient field readback, a complete inventory, an
+acknowledgement, or proof of server delivery. Attachment field interpretation
+is based on limited traces; an unexpected mismatch holds rather than guessing. Candidate 4 remains Unknown/unverified, is never
 silently treated as absent or selected, and the separate backpack is excluded.
 A zero observed 0–3 count is not proof that all equipped bags are empty. Text
 focus, UI state, mailable items, recipient reset between batches, merchant

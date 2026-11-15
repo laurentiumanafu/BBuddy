@@ -36,6 +36,12 @@ static class Fixture
             total == 4 && preview.Count == 4 && preview[0].Candidate == 0 && !primaryUnknown && fifthUnknown,"partial preview includes candidate zero and reports unknown fifth");
         for (int i=0;i<12;i++) b[0].Slots[i]=new WowBGuid((ulong)(100+i), 3);
         Check(L.TryPreview(g,"player",600,600,b,out preview,out total,out _,out _) && total==15 && preview.Count==12 && preview[0].Candidate==0,"preview caps batch at twelve");
+        var excluded = new HashSet<WowBGuid>();
+        foreach (var slot in preview) excluded.Add(slot.Item);
+        Check(L.TryPreviewExcluding(g,"player",600,600,b,excluded,out preview,out total,out _,out _) &&
+            total==3 && preview.Count==3 && preview[0].Candidate==1,"skip a whole group and reach later bags");
+        foreach (var slot in preview) excluded.Add(slot.Item);
+        Check(L.TryPreviewExcluding(g,"player",600,600,b,excluded,out preview,out total,out _,out _) && total==0 && preview.Count==0,"all remaining excluded");
         b[1].Slots[0]=b[0].Slots[0];
         Check(!L.TryPreview(g,"player",600,600,b,out _,out _,out _,out _),"duplicate item identity rejected");
         (g,b)=Sample();

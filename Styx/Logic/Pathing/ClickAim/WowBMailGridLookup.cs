@@ -109,6 +109,13 @@ internal static class WowBMailGridLookup
     // is never a complete-inventory or mailable-items verdict.
     internal static bool TryPreview(WowBMailGridCalibration.Result grid, string player, int width, int height,
         IReadOnlyList<Bag> bags, out List<PreviewSlot> preview, out int observedCount, out bool unknownPrimary, out bool candidate4Unknown)
+        => TryPreviewExcluding(grid, player, width, height, bags, null, out preview, out observedCount, out unknownPrimary, out candidate4Unknown);
+
+    // Per-trip exclusions are raw item identities, not a claim that an item is
+    // unmailable. Keep the 12-click group limit while advancing past rejects.
+    internal static bool TryPreviewExcluding(WowBMailGridCalibration.Result grid, string player, int width, int height,
+        IReadOnlyList<Bag> bags, ISet<WowBGuid>? excluded, out List<PreviewSlot> preview, out int observedCount,
+        out bool unknownPrimary, out bool candidate4Unknown)
     {
         preview = new List<PreviewSlot>(); observedCount = 0; unknownPrimary = true; candidate4Unknown = true;
         if (!Validate(grid, player, width, height, bags)) return false;
@@ -130,7 +137,7 @@ internal static class WowBMailGridLookup
             for (int index = 0; index < bag.Slots.Length; index++)
             {
                 WowBGuid item = bag.Slots[index];
-                if (item.IsEmpty) continue;
+                if (item.IsEmpty || (excluded != null && excluded.Contains(item))) continue;
                 observedCount++;
                 if (preview.Count == WowBMailBatchPolicy.BatchLimit) continue;
                 var p = Center(grid, saved.FirstOrdinal + index);
