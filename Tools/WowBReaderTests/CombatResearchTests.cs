@@ -117,9 +117,14 @@ internal static class CombatResearchTests
             mem.Bytes(externalBase, new byte[size70938]);
             Check(WowBCombatResearch.ReadExternalCandidate(mem, playerUnit, out extReason, true, true)?.Bytes.Length == size70938,
                 "70938 observed 29-slot header accepted only with readable stable data");
-            mem.U64(playerUnit + 0x5F8, 30);
-            Check(WowBCombatResearch.ReadExternalCandidate(mem, playerUnit, out extReason, true, true) == null, "70938 beyond observed length denied");
-            mem.U64(playerUnit + 0x5F8, 29); mem.U64(playerUnit + 0x600, 37);
+            size70938 = 30 * WowBCombatResearch.ExternalCandidateStride;
+            mem.Bytes(externalBase, new byte[size70938]); mem.U64(playerUnit + 0x5F8, 30);
+            Check(WowBCombatResearch.ReadExternalCandidate(mem, playerUnit, out extReason, true, true)?.Bytes.Length == size70938,
+                "70938 observed 30-slot header accepted only with readable stable data");
+            Check(WowBCombatResearch.ReadExternalCandidate(mem, playerUnit, out extReason, true) == null, "70888 rejects 30 slots");
+            mem.U64(playerUnit + 0x5F8, 31);
+            Check(WowBCombatResearch.ReadExternalCandidate(mem, playerUnit, out extReason, true, true) == null && extReason.Contains("length=31"), "70938 beyond observed length denied with diagnostic");
+            mem.U64(playerUnit + 0x5F8, 30); mem.U64(playerUnit + 0x600, 37);
             Check(WowBCombatResearch.ReadExternalCandidate(mem, playerUnit, out extReason, true, true) == null, "70938 capacity above bound denied");
             mem.U64(playerUnit + 0x600, 36); mem.ReadableRangeAllowed = false;
             Check(WowBCombatResearch.ReadExternalCandidate(mem, playerUnit, out extReason, true, true) == null, "70938 grown region must be readable");

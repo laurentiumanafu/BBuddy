@@ -11,7 +11,8 @@ a=read('Styx/Logic/Pathing/ClickAim/WowBTotemAuraCandidate.cs')
 class Integration(unittest.TestCase):
  def test_candidate_and_safety(self):
   self.assertIn('_ids.Contains(1238640)',a)
-  self.assertEqual(c.count('WowBTotemAuraCandidate.Capture(memory, reader, player)'),2)
+  self.assertEqual(c.count('WowBTotemAuraCandidate.CaptureForGhostWolf(memory, reader, player)'),2)
+  self.assertIn('ghostWolf && reader.IsExperimental70938 && sample.Bytes.Length > 29 *', a)
   for text in ('IsExperimental70938','ExperimentalGrindActive','TraceIdentity70707',
                'first == null || second == null','first.GhostWolf70938Active() != second.GhostWolf70938Active()',
                'TryReadGhostFlagCandidate','TryReadGatherCombat','fields.PlayerPowerTypeCandidate != 0',

@@ -100,7 +100,7 @@ namespace Styx.Logic.Pathing
     }
     static class WowBCombatResearch
     {
-        internal const int ExternalCandidateStride = 0x128, ExternalMaxSlots = 24, External70888MaxSlots = 28, External70938MaxSlots = 29;
+        internal const int ExternalCandidateStride = 0x128, ExternalMaxSlots = 24, External70888MaxSlots = 28, External70938MaxSlots = 30;
         internal static byte[]? Data;
         internal static bool StopDuringRead, CombatEndsDuringRead;
         internal static Action? OnRead;
@@ -657,7 +657,37 @@ namespace Styx.Logic.Pathing
             Check(controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "70938 29-slot missing effect permits guarded macro");
             BitConverter.GetBytes(1238640U).CopyTo(grown70938, 28 * 0x128 + 0xE8);
             Check(WowBTotemAuraCandidate.FromBytes(grown70938, 19, true, true)?.GhostWolf70938Active() == true, "70938 reads Ghost Wolf candidate from slot 29");
-            Check(WowBTotemAuraCandidate.FromBytes(new byte[30 * 0x128], 1, true, true) == null, "70938 beyond observed length rejected");
+            Check(WowBTotemAuraCandidate.FromBytes(new byte[31 * 0x128], 1, true, true) == null, "70938 beyond observed length rejected");
+            // Header-only log observation; these 30-slot contents are invented.
+            Reset(); controller.Reset(); now = 0; ObjectManager.WowB!.IsExperimental70938 = true; GrindRunner.Combat = true;
+            ClickAimSettings.UseBuffsInCombat = ClickAimSettings.UseShamanTotemMacro = ClickAimSettings.ShamanTotemMana = true;
+            combatPlayer = ObjectManager.WowB.Player; ObjectManager.WowB.RawBar[1] = 123; ClickAimCombat.Bar.Clear();
+            byte[] thirty = new byte[30 * 0x128];
+            BitConverter.GetBytes(777U).CopyTo(thirty, 0xE8);
+            BitConverter.GetBytes(10491U).CopyTo(thirty, 29 * 0x128 + 0xE8);
+            WowBCombatResearch.Data = thirty; ObjectManager.Wow!.TotemCount = 2;
+            Check(WowBTotemAuraCandidate.Capture(ObjectManager.Wow, ObjectManager.WowB, combatPlayer)?.ManaSpringActive() == true,
+                "70938 slot 30 Mana Spring present");
+            Check(WowBTotemAuraCandidate.CaptureForGhostWolf(ObjectManager.Wow, ObjectManager.WowB, combatPlayer) == null,
+                "70938 slot 30 remains unknown for Ghost Wolf");
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "30-slot present Mana Spring suppresses macro");
+            BitConverter.GetBytes(777U).CopyTo(thirty, 29 * 0x128 + 0xE8);
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "30-slot duplicate withholds macro");
+            BitConverter.GetBytes(0U).CopyTo(thirty, 29 * 0x128 + 0xE8);
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "30-slot count mismatch withholds macro");
+            ObjectManager.Wow.TotemCount = 1; ObjectManager.Wow.ChangeTotemCount = true;
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "30-slot unstable count withholds macro");
+            ObjectManager.Wow.ChangeTotemCount = false;
+            Check(controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "30-slot absent Mana Spring permits guarded macro");
+            Reset(); controller.Reset(); now = 0; ObjectManager.WowB!.IsExperimental70938 = true; GrindRunner.Combat = true;
+            ClickAimSettings.UseBuffsInCombat = true; ObjectManager.WowB.Power = 125;
+            ClickAimCombat.Bar = new List<ClickAimAction> { Action(905, 2) }; combatPlayer = ObjectManager.WowB.Player;
+            BitConverter.GetBytes(905U).CopyTo(thirty, 29 * 0x128 + 0xE8);
+            WowBCombatResearch.Data = thirty; ObjectManager.Wow!.TotemCount = 2;
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "30-slot present shield withholds cast");
+            BitConverter.GetBytes(0U).CopyTo(thirty, 29 * 0x128 + 0xE8); ObjectManager.Wow.TotemCount = 1;
+            Check(controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe) && ClickAimInput.Keys.Count == 1,
+                "30-slot absent shield permits guarded cast");
             // Synthetic inline layout, same ID position and count checks as the
             // existing inline reader. It does not validate real 70888 data.
             Reset(); controller.Reset(); now = 0; ObjectManager.WowB!.IsExperimental70888 = true;

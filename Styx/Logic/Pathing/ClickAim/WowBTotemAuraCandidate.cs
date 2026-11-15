@@ -61,6 +61,15 @@ internal sealed class WowBTotemAuraCandidate
         => Capture(memory, reader, player, out _);
 
     internal static WowBTotemAuraCandidate? Capture(Memory memory, WowBReader reader, WowBObservedUnit player, out string reason)
+        => CaptureCore(memory, reader, player, false, out reason);
+
+    // The expanded 70938 buffer is for combat-buff recovery. Do not broaden
+    // the absence heuristic for Ghost Wolf, a form that can toggle off.
+    internal static WowBTotemAuraCandidate? CaptureForGhostWolf(Memory memory, WowBReader reader, WowBObservedUnit player)
+        => CaptureCore(memory, reader, player, true, out _);
+
+    private static WowBTotemAuraCandidate? CaptureCore(Memory memory, WowBReader reader, WowBObservedUnit player,
+        bool ghostWolf, out string reason)
     {
         reason = "unsupported reader or player identity";
         if (!reader.Uses70862Features || player.Guid.IsEmpty || player.UnitAddress < 0x10000 ||
@@ -84,6 +93,8 @@ internal sealed class WowBTotemAuraCandidate
             byte[]? after = memory.ReadBytes64(player.UnitAddress + ActiveCountOffset, 4);
             reason = inlineReason + "; external " + (sample == null ? externalReason : "count/slot validation failed");
             if (before == null || after == null || before.Length != 4 || after.Length != 4 || sample == null) return null;
+            if (ghostWolf && reader.IsExperimental70938 && sample.Bytes.Length > 29 * WowBCombatResearch.ExternalCandidateStride)
+            { reason = "Ghost Wolf candidate exceeds its prior 29-slot bound"; return null; }
             uint count = BitConverter.ToUInt32(before, 0);
             if (count != BitConverter.ToUInt32(after, 0)) { reason = "external active count changed during read"; return null; }
             WowBTotemAuraCandidate? result = FromBytes(sample.Bytes, count, reader.Uses70888Features, reader.IsExperimental70938);

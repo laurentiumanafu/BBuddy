@@ -68,8 +68,8 @@ internal sealed class WowBGhostWolfTravel
                 !WowBGrindFactions.TryReadGhostFlagCandidate(memory, reader, player, out bool ghost) || ghost ||
                 !GrindRunner.TryReadGatherCombat(out bool fighting) || fighting ||
                 WowBGatherCastResearch.Observe(memory, reader, player) != WowBGatherCastResearch.Observation.Idle) return false;
-            WowBTotemAuraCandidate? first = WowBTotemAuraCandidate.Capture(memory, reader, player);
-            WowBTotemAuraCandidate? second = WowBTotemAuraCandidate.Capture(memory, reader, player);
+            WowBTotemAuraCandidate? first = WowBTotemAuraCandidate.CaptureForGhostWolf(memory, reader, player);
+            WowBTotemAuraCandidate? second = WowBTotemAuraCandidate.CaptureForGhostWolf(memory, reader, player);
             if (first == null || second == null || first.GhostWolf70938Active() != second.GhostWolf70938Active() ||
                 !WowBGrindFactions.TraceIdentity70707(memory, reader, player, true) ||
                 !reader.TryReadMapId(out uint mapAfter) || mapAfter != map ||

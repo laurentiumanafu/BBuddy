@@ -27,7 +27,7 @@ class ExternalResearch(unittest.TestCase):
     def test_bounded_and_stable_read(self):
         fn = part(S, 'internal static ExternalCandidateSample? ReadExternalCandidate', '    // A new pointer/header')
         for text in ('ExternalMaxSlots = 24', 'ExternalMaxCapacity = 32', 'ExternalCandidateStride = 0x128',
-                     'External70888MaxSlots = 28', 'External70938MaxSlots = 29', 'External70888MaxCapacity = 36'):
+                     'External70888MaxSlots = 28', 'External70938MaxSlots = 30', 'External70888MaxCapacity = 36'):
             self.assertIn(text, S)
         for text in ('allow70888Extended ? External70888MaxSlots : ExternalMaxSlots',
                      'allow70938Extended ? External70938MaxSlots',

@@ -132,11 +132,12 @@ internal static class WowBCombatResearch
         return text.ToString();
     }
 
-    // 70888 showed length 28/capacity 36; 70938 traces captured 26 slots,
-    // and later logs show length 29/capacity 36. The grown 70938 bytes and
-    // completeness are unverified: permit only the observed length, not capacity.
+    // 70888 showed length 28/capacity 36; 70938 showed length 30/capacity 36.
+    // Allow only the observed length, not the full capacity. Slots beyond the
+    // recorded 26 remain experimental: the entire region, headers and candidate
+    // ID count must still validate.
     private const int ExternalHeaderOffset = 0x5F0, ExternalHeaderSize = 24;
-    internal const int ExternalCandidateStride = 0x128, ExternalMaxSlots = 24, External70888MaxSlots = 28, External70938MaxSlots = 29;
+    internal const int ExternalCandidateStride = 0x128, ExternalMaxSlots = 24, External70888MaxSlots = 28, External70938MaxSlots = 30;
     private const ulong ExternalMaxCapacity = 32, External70888MaxCapacity = 36;
 
     internal sealed class ExternalCandidateSample
@@ -169,9 +170,10 @@ internal static class WowBCombatResearch
             ulong address = BitConverter.ToUInt64(header1, 0);
             ulong length = BitConverter.ToUInt64(header1, 8);
             ulong capacity = BitConverter.ToUInt64(header1, 16);
-            reason = "candidate header outside external research bounds";
             ulong maxSlots = (ulong)(allow70938Extended ? External70938MaxSlots : allow70888Extended ? External70888MaxSlots : ExternalMaxSlots);
             ulong maxCapacity = allow70888Extended || allow70938Extended ? External70888MaxCapacity : ExternalMaxCapacity;
+            reason = "candidate header outside external research bounds (length=" + length.ToString(CultureInfo.InvariantCulture) +
+                ", capacity=" + capacity.ToString(CultureInfo.InvariantCulture) + ", maximum=" + maxSlots.ToString(CultureInfo.InvariantCulture) + ")";
             if (length == 0 || length > maxSlots || capacity == 0 || capacity > maxCapacity ||
                 length > capacity || address < 0x10000 || (address & 7) != 0) return null;
             int size = (int)length * ExternalCandidateStride;

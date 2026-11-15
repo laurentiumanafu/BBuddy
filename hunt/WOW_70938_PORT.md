@@ -108,16 +108,22 @@ external 26-slot buffers with capacity 36; the 29-slot report records a header,
 not the corresponding bytes or proof of completeness. The earlier GatherBuddy
 log reports macro attempts but cannot prove delivery or totem casts.
 
-The 70938-only experimental bound is now 29 slots (not the full capacity 36);
-older build limits are unchanged. The full readable region and header still
-must be stable, and the nonzero, unique candidate IDs must match the separate
-active count. Missing, unstable or inconsistent data is unknown and must not
-trigger a macro or a potentially toggle-like Ghost Wolf key. With valid data,
-existing combat, mana, identity, selection, STOP, Earth reservation and retry
-checks still apply. The same candidate reader also serves shield and 70938
-Ghost Wolf decisions, so the widened bound affects those features too. A
-stable 29-slot layout and effect absence remain unverified until traced live;
-this change is not proof that the macro, aura mapping or casting works.
+In `2026-11-15_0842_11844.log`, the candidate header later grew to length
+30, capacity 36. From 09:46 the macro reported the header outside bounds and
+combat Lightning Shield reported unavailable; both withheld input. A separate
+quiet-time Shield attempt occurred at 10:03. These are key attempts or reader
+states, not proof of casts. The 30-slot report contains only a header, not the
+array bytes or proof of the layout's completeness.
+
+The 70938 combat-buff experimental bound is now 30 slots, not the full capacity
+36; older build limits are unchanged. Full readable data and header must remain
+stable and the unique nonzero IDs must match the separate active count. Unknown
+or inconsistent data withholds input, with the existing combat, mana, identity,
+selection, STOP, Earth reservation and retry checks unchanged. Ghost Wolf can
+potentially toggle off, so its candidate retains the prior 29-slot bound.
+The research recorder and analyzer accept 30 slots for further evidence. Neither
+the larger layout, effect absence, mapping, macro execution nor casting is
+verified by this log; in-game validation remains necessary.
 
 ### Hotspot exhaustion and death watch
 

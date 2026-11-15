@@ -72,7 +72,7 @@ namespace Styx.Logic.Pathing
     {
         public static bool Active, Unknown; readonly bool value;
         WowBTotemAuraCandidate(bool b){value=b;}
-        public static WowBTotemAuraCandidate? Capture(Memory m,WowBReader r,WowBObservedUnit p)=>Unknown?null:new WowBTotemAuraCandidate(Active);
+        public static WowBTotemAuraCandidate? CaptureForGhostWolf(Memory m,WowBReader r,WowBObservedUnit p)=>Unknown?null:new WowBTotemAuraCandidate(Active);
         public bool GhostWolf70938Active()=>value;
     }
 }
