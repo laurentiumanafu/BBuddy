@@ -50,6 +50,27 @@ class ProfileIntegration(unittest.TestCase):
         self.assertIn('if (area == null) return true;',r)
         self.assertIn('if (roam == null && !ProfileMapCurrent())',r)
         self.assertIn('map != _profileSessionMap',r)
+    def test_explicit_lower_profile_band_on_each_pull_path(self):
+        self.assertIn('GrindProfilePolicy.AllowsLowerTarget(area, mobLevel, myLevel)', r)
+        self.assertIn('level < (uint)playerLevel', s)  # never overrides upper-level safety
+        for text in ('area.HasExplicitTargetMinLevel', 'ValidLevels(area)', 'PlayerInBand(area, playerLevel)',
+                     'level >= (uint)area.TargetMinLevel', 'level <= (uint)area.TargetMaxLevel'):
+            self.assertIn(text, s)
+        selection=block('    private static bool TryCurrentSelection(', '    // A fresh voluntary pull')
+        self.assertIn('SelectionFieldsValid(f.Health, f.UnitFlags, f.Level, PlayerLevel(), _activeProfileArea)', selection)
+        self.assertIn('!ProfileTargetAllowed(reader, target)', selection)
+        self.assertIn('!WowBGrindFactions.AllowsPull(reader, target', selection)
+        scan=block('    private static bool NearestKillable(', '    // Nearby NPCs can be attackers')
+        self.assertIn('applyFactionFilter ? !LevelViableForPull(f.Level, myLevel, _activeProfileArea) : !LevelViable(f.Level, myLevel)', scan)
+        self.assertIn('!ProfileTargetAllowed(reader, candidate, myLevel)', scan)
+        approach=block('    private static string ApproachPoolCandidate(', '    /// <summary>\n    /// Drops a target')
+        self.assertIn('SelectionFieldsValid(fields.Health, fields.UnitFlags, fields.Level, approachLevel, _activeProfileArea)', approach)
+        self.assertIn('!ProfileTargetAllowed(reader, candidate, approachLevel)', approach)
+        self.assertIn('!LevelViableForPull(tf.Level, myLevel, _activeProfileArea)', r)
+        self.assertIn('SelectionFieldsValid(fields.Health, fields.UnitFlags, fields.Level, PlayerLevel(), _activeProfileArea)', r)
+        self.assertIn('ReportRejectedTabCandidate(selReader, target)', r)
+        self.assertIn('profileLowerAllows36At43', r)
+        self.assertIn('noProfileRejects36At43', r)
     def test_avoid_mobs_and_malformed_data(self):
         self.assertIn('ReadAvoidEntries(doc.Root, area)',p)
         self.assertIn('ReadAvoidEntries(sub, area)',p)

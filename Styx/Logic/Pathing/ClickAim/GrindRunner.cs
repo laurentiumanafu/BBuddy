@@ -1567,7 +1567,8 @@ internal static class GrindRunner
         _activeProfileArea = area;
         Logging.Write("[Grind] profile area '" + area.Name + "': factions " + rules.KeyText +
             ", target level " + area.TargetMinLevel + "-" + area.TargetMaxLevel +
-            "; voluntary targets must be within 100 horizontal yd of an area hotspot and 100 yd of the player");
+            (area.HasExplicitTargetMinLevel ? "; explicit target minimum overrides the usual six-level lower cutoff" : "; usual six-level lower cutoff applies") +
+            "; upper-level safety remains; voluntary targets must be within 100 horizontal yd of an area hotspot and 100 yd of the player");
     }
 
     private static bool ProfileMapCurrent()
@@ -1895,6 +1896,7 @@ internal static class GrindRunner
                 {
                     rejectedGuid = target.Guid;
                     _lastEngageRejected = !target.Guid.IsEmpty && !target.IsLocalPlayer;
+                    ReportRejectedTabCandidate(selReader, target);
                     if (!ClearNonSelfFactionSelection(hwnd, selReader, player.Guid))
                     { report = "TAB selected an unsuitable or unreadable NPC and F1 could not be verified; holding"; _poolApproachHandled = true; return false; }
                 }
@@ -2190,16 +2192,15 @@ internal static class GrindRunner
             return false;
         }
 
-        /* TAB applies the client's own hostility filter but knows nothing about levels, so
-         * the level band is enforced here too. Killing something ten levels up is a corpse
-         * run, and a grey mob is a wasted walk. */
+        /* Recheck the upper-level safety limit and either the default lower
+         * limit or the explicit profile's lower band after TAB. */
         Styx.WoWInternals.WowBReader? esp = ObjectManager.WowB;
         int myLevel = PlayerLevel();
         if (esp != null && esp.TryGetUnitFields(target.UnitAddress,
-                out Styx.WoWInternals.WowBReader.WowBUnitFields tf) && !LevelViable(tf.Level, myLevel))
+                out Styx.WoWInternals.WowBReader.WowBUnitFields tf) && !LevelViableForPull(tf.Level, myLevel, _activeProfileArea))
         {
             report = string.Format(CultureInfo.InvariantCulture,
-                "TAB selected a level-{0} unit and this character is level {1} (viable: {2}-{3}) - "
+                "TAB selected a level-{0} unit and this character is level {1} (default range: {2}-{3}; profile lower band may override) - "
                 + "not attacking, walking on",
                 tf.Level, myLevel, Math.Max(1, myLevel - LevelBelowPlayer), myLevel + LevelAbovePlayer);
             // A level can become viable after the player levels up; do not put this
@@ -2323,7 +2324,7 @@ internal static class GrindRunner
         if (!WowBGrindFactions.AllowsPull(reader, target, out _)) return false;
         Styx.WoWInternals.WowBReader.WowBUnitFields f;
         if (!reader.TryGetUnitFields(target.UnitAddress, out f)) return false;
-        if (!SelectionFieldsValid(f.Health, f.UnitFlags, f.Level, PlayerLevel()) || !ProfileTargetAllowed(reader, target)) return false;
+        if (!SelectionFieldsValid(f.Health, f.UnitFlags, f.Level, PlayerLevel(), _activeProfileArea) || !ProfileTargetAllowed(reader, target)) return false;
 
         /* A unit this run has already given up on must not come back through the selection.
          * The 14:23 run is that bug: the fight refused the friendly peon four times in a row -
@@ -2475,8 +2476,8 @@ internal static class GrindRunner
             WowBPullPreference.Full(other.Health, other.MaxHealth), false);
     }
 
-    private static bool SelectionFieldsValid(uint health, uint flags, uint mobLevel, int myLevel)
-        => health > 0 && (flags & NotAFightFlag) == 0 && LevelViable(mobLevel, myLevel);
+    private static bool SelectionFieldsValid(uint health, uint flags, uint mobLevel, int myLevel, ProfileGrindArea? area = null)
+        => health > 0 && (flags & NotAFightFlag) == 0 && LevelViableForPull(mobLevel, myLevel, area);
 
     // Do not treat a failed read or a corpse as a rejected live target. In
     // particular, the corpse path still gets its existing single loot handling.
@@ -2485,12 +2486,40 @@ internal static class GrindRunner
         if (reader == null || target.Guid.IsEmpty || target.IsLocalPlayer
             || !reader.TryGetUnitFields(target.UnitAddress, out WowBReader.WowBUnitFields fields)
             || fields.Health == 0) return false;
-        if (target.HasPlayerVtable || !SelectionFieldsValid(fields.Health, fields.UnitFlags, fields.Level, PlayerLevel())) return true;
+        if (target.HasPlayerVtable || !SelectionFieldsValid(fields.Health, fields.UnitFlags, fields.Level, PlayerLevel(), _activeProfileArea)) return true;
         if (!WowBGrindFactions.AllowsPull(reader, target, out _) || !ProfileTargetAllowed(reader, target)) return true;
         if (_notViable.Contains(target.Guid) || Unreachable(target.Guid)) return true;
         if (Refused(target.Guid) && !InRealCombat()) return true;
         return _tabRefusedUntil.TryGetValue(target.Guid, out int until)
             && unchecked(Environment.TickCount - until) < 0;
+    }
+
+    private static int _lastRejectedTabDetails;
+
+    // This is diagnostic only; readings can change and do not establish
+    // hostility. Keep the actual selection and input guards unchanged.
+    private static void ReportRejectedTabCandidate(WowBReader? reader, WowBObservedUnit target)
+    {
+        int now = Environment.TickCount;
+        if (_lastRejectedTabDetails != 0 && unchecked(now - _lastRejectedTabDetails) < 3000) return;
+        if (reader == null || target.Guid.IsEmpty || target.IsLocalPlayer || _stop || ClickAimAbort.Requested) return;
+        _lastRejectedTabDetails = now;
+        try
+        {
+            if (ObjectManager.WowB != reader || reader.ReadTargetGuid() != target.Guid ||
+                !reader.TryGetUnitFields(target.UnitAddress, out WowBReader.WowBUnitFields fields))
+            { Logging.Write("[Grind] TAB rejection detail unavailable or selection changed"); return; }
+            int playerLevel = PlayerLevel();
+            bool faction = WowBGrindFactions.AllowsPull(reader, target, out bool factionUnknown);
+            bool profile = ProfileTargetAllowed(reader, target, playerLevel);
+            bool levels = LevelViableForPull(fields.Level, playerLevel, _activeProfileArea);
+            Logging.Write("[Grind] rejected TAB candidate " + target.Guid + ": level=" + fields.Level +
+                ", playerLevel=" + playerLevel + ", hp=" + fields.Health + ", flags=0x" + fields.UnitFlags.ToString("X", CultureInfo.InvariantCulture) +
+                ", playerObject=" + target.HasPlayerVtable + ", levelPass=" + levels + ", profilePass=" + profile +
+                ", faction=" + (factionUnknown ? "unknown" : faction ? "allowed" : "denied") +
+                "; refusal, range and selection state also apply (diagnostic recheck only)");
+        }
+        catch { Logging.Write("[Grind] TAB rejection detail unavailable"); }
     }
 
     // F1 is the client's default self-target key, not ESC (which opens the menu).
@@ -2569,6 +2598,12 @@ internal static class GrindRunner
         if ((int)mobLevel > myLevel + LevelAbovePlayer) return false;
         return (int)mobLevel >= myLevel - LevelBelowPlayer;
     }
+
+    // Explicit profile target bands may include lower-level mobs; the default
+    // six-below limit still applies without a profile. ProfileTargetAllowed and
+    // faction/identity checks remain independently required on every pull path.
+    private static bool LevelViableForPull(uint mobLevel, int myLevel, ProfileGrindArea? area)
+        => LevelViable(mobLevel, myLevel) || GrindProfilePolicy.AllowsLowerTarget(area, mobLevel, myLevel);
 
     /// <summary>
     /// Whether the walk should stop here. This runs on the route thread between polyline
@@ -4563,7 +4598,7 @@ internal static class GrindRunner
 
             if (f.Health == 0) continue;                       // a corpse is not a monster
             if ((f.UnitFlags & NotAFightFlag) != 0) continue;
-            if (!LevelViable(f.Level, myLevel)) continue;
+            if (applyFactionFilter ? !LevelViableForPull(f.Level, myLevel, _activeProfileArea) : !LevelViable(f.Level, myLevel)) continue;
 
             live++;
             bool full = preferFullHealth && WowBPullPreference.Full(f.Health, f.MaxHealth);
@@ -5864,7 +5899,7 @@ internal static class GrindRunner
                     candidate.UnitAddress != initial.UnitAddress || candidate.IsLocalPlayer || candidate.HasPlayerVtable ||
                     !WowBGrindFactions.AllowsPull(reader, candidate, out _) ||
                     !reader.TryGetUnitFields(candidate.UnitAddress, out WowBReader.WowBUnitFields fields) ||
-                    !SelectionFieldsValid(fields.Health, fields.UnitFlags, fields.Level, approachLevel) ||
+                    !SelectionFieldsValid(fields.Health, fields.UnitFlags, fields.Level, approachLevel, _activeProfileArea) ||
                     !ProfileTargetAllowed(reader, candidate, approachLevel) ||
                     _notViable.Contains(candidate.Guid) || Refused(candidate.Guid) || Unreachable(candidate.Guid))
                 {
@@ -7806,6 +7841,18 @@ internal static class GrindRunner
             check("selectionRejectsDead", !SelectionFieldsValid(0, 0, 5, 7));
             check("selectionRejectsFlagged", !SelectionFieldsValid(10, 0x200, 5, 7));
             check("selectionUnknownLevel", SelectionFieldsValid(10, 0, 0, 7));
+            var profileLevelTest = new ProfileGrindArea { PlayerMinLevel = 1, PlayerMaxLevel = 59, TargetMinLevel = 34, TargetMaxLevel = 40, HasExplicitTargetMinLevel = true };
+            profileLevelTest.Hotspots.Add(new RoutePoint { X = -9220.5, Y = -4548.3, Z = 16.3 });
+            check("profileLowerAllows36At43", SelectionFieldsValid(100, 0, 36, 43, profileLevelTest));
+            check("profileLowerAllows34At43", LevelViableForPull(34, 43, profileLevelTest));
+            check("profileLowerRejects33At43", !LevelViableForPull(33, 43, profileLevelTest));
+            check("noProfileRejects36At43", !SelectionFieldsValid(100, 0, 36, 43));
+            check("profileLowerStillRejectsDead", !SelectionFieldsValid(0, 0, 36, 43, profileLevelTest));
+            check("profileLowerStillRejectsFlagged", !SelectionFieldsValid(100, 0x200, 36, 43, profileLevelTest));
+            profileLevelTest.TargetMaxLevel = 50;
+            check("profileDoesNotRelaxUpperSafety", !LevelViableForPull(47, 43, profileLevelTest));
+            profileLevelTest.HasExplicitTargetMinLevel = false;
+            check("profileFallbackRetainsSixBelow", !LevelViableForPull(36, 43, profileLevelTest));
             check("approachAt100", ShouldApproachPoolCandidate(false, true, 100));
             check("approachBoundary", !ShouldApproachPoolCandidate(false, true, 40) && ShouldApproachPoolCandidate(false, true, 40.01));
             check("approachNotOutsideOrUnknown", !ShouldApproachPoolCandidate(false, true, 100.01) && !ShouldApproachPoolCandidate(false, true, double.NaN));

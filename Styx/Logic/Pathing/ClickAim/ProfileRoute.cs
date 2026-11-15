@@ -52,6 +52,9 @@ public sealed class ProfileGrindArea
     /// <summary>Kill things at least this level (0 = unstated).</summary>
     public int TargetMinLevel { get; set; }
 
+    /// <summary>True only when the profile explicitly specified TargetMinLevel, not a fallback player/area MinLevel.</summary>
+    public bool HasExplicitTargetMinLevel { get; set; }
+
     /// <summary>Kill things at most this level (0 = unstated).</summary>
     public int TargetMaxLevel { get; set; }
 
@@ -153,7 +156,8 @@ public static class ProfileRoute
                 if (TryReadLevel(sub.Element("MinLevel"), out level) || TryReadAttributeInt(sub, "MinLevel", out level)) area.PlayerMinLevel = level;
                 if (TryReadLevel(sub.Element("MaxLevel"), out level) || TryReadAttributeInt(sub, "MaxLevel", out level)) area.PlayerMaxLevel = level;
             }
-            if (TryReadBand(grind, sub, "TargetMinLevel", out level)) area.TargetMinLevel = level;
+            if (TryReadBand(grind, sub, "TargetMinLevel", out level))
+            { area.TargetMinLevel = level; area.HasExplicitTargetMinLevel = true; }
             if (TryReadBand(grind, sub, "TargetMaxLevel", out level)) area.TargetMaxLevel = level;
             if (area.TargetMinLevel == 0 && TryReadBand(grind, sub, "MinLevel", out level)) area.TargetMinLevel = level;
             if (area.TargetMaxLevel == 0 && TryReadBand(grind, sub, "MaxLevel", out level)) area.TargetMaxLevel = level;

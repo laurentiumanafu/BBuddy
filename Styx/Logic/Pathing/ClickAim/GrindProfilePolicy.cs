@@ -23,6 +23,15 @@ internal static class GrindProfilePolicy
         return min > 0 && level >= min && (max <= 0 || level <= max);
     }
 
+    // An explicit target band can opt into monsters more than six levels
+    // below the player. This does not authorize a pull by itself: callers must
+    // still validate map, faction, hotspot, unit identity, health and flags.
+    // The existing upper-level safety limit is deliberately not relaxed.
+    internal static bool AllowsLowerTarget(ProfileGrindArea? area, uint level, int playerLevel)
+        => area != null && area.HasExplicitTargetMinLevel && playerLevel > 0 && level > 0 && level < (uint)playerLevel &&
+           ValidLevels(area) && PlayerInBand(area, playerLevel) &&
+           level >= (uint)area.TargetMinLevel && level <= (uint)area.TargetMaxLevel;
+
     internal static bool AllowsTarget(ProfileGrindArea area, double x, double y, uint level)
     {
         if (!ValidLevels(area) || !double.IsFinite(x) || !double.IsFinite(y) ||
