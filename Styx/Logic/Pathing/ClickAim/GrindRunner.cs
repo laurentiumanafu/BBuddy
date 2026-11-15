@@ -4064,20 +4064,24 @@ internal static class GrindRunner
             reader.TryReadTraceLocalGuid(out WowBGuid again) && again == current && current != playerGuid)
         { Logging.Write("[Mailbox] character changed; stopping without moving."); Stop(); return false; }
 
-        bool Safe()
+        string? RouteSafetyFailure()
         {
-            if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested ||
-                !AutoVendorIdentityMatches(reader, memory, playerGuid) || !reader.ExperimentalGrindActive ||
-                !reader.TryReadMapId(out uint map) || map != mailbox.Map ||
-                !WowBGrindFactions.Experimental70707BarSafe(reader) ||
-                !TryReadGatherCombat(out bool fighting) || fighting ||
-                !reader.TryRead70888RecoveryPlayer(out WowBObservedUnit player, out uint hp, out uint maxHp) ||
-                player.Guid != playerGuid || hp == 0 || maxHp == 0 || hp > maxHp ||
-                !WowBGrindFactions.TryReadGhostFlagCandidate(memory, reader, player, out bool ghost) || ghost)
-                return false;
-            return AutoVendorIdentityMatches(reader, memory, playerGuid) &&
-                reader.TryReadMapId(out uint afterMap) && afterMap == mailbox.Map;
+            if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested) return "STOP or route stop requested";
+            if (!AutoVendorIdentityMatches(reader, memory, playerGuid) || !reader.ExperimentalGrindActive)
+                return "session or character identity unavailable or changed";
+            if (!reader.TryReadMapId(out uint map) || map != mailbox.Map) return "mailbox map unavailable or changed";
+            if (!WowBGrindFactions.Experimental70707BarSafe(reader)) return "action bar guard unavailable";
+            if (!TryReadGatherCombat(out bool fighting)) return "combat state unreadable";
+            if (fighting) return "combat active";
+            if (!reader.TryRead70888RecoveryPlayer(out WowBObservedUnit player, out uint hp, out uint maxHp) ||
+                player.Guid != playerGuid || hp == 0 || maxHp == 0 || hp > maxHp) return "player identity or health unavailable";
+            if (!WowBGrindFactions.TryReadGhostFlagCandidate(memory, reader, player, out bool ghost)) return "ghost state unreadable";
+            if (ghost) return "ghost state active";
+            if (!AutoVendorIdentityMatches(reader, memory, playerGuid)) return "session or character identity changed during check";
+            if (!reader.TryReadMapId(out uint afterMap) || afterMap != mailbox.Map) return "mailbox map changed during check";
+            return null;
         }
+        bool Safe() => RouteSafetyFailure() == null;
 
         if (!Safe())
         {
@@ -4126,13 +4130,22 @@ internal static class GrindRunner
             Math.Abs(controls.Z - finalPlayer.Location.Z) > 5.0)
         { Logging.Write("[Mail] control calibration changed or does not match arrival; stopping without input."); Stop(); return false; }
         IntPtr hwnd = memory.WindowHandle;
-        bool InputSafe() => Safe() && ClickAimSettings.ExperimentalAutoMail && hwnd != IntPtr.Zero &&
-            memory.WindowHandle == hwnd && ClickAimInput.GameForeground(hwnd) && ClickAimInput.MouseButtonsUp() &&
-            reader.TryRead70888RecoveryPlayer(out WowBObservedUnit currentPlayer, out uint hp, out uint max) &&
-            currentPlayer.Guid == playerGuid && hp > 0 && max >= hp &&
-            ClickAimMath.Len(currentPlayer.Location.X - controls.X, currentPlayer.Location.Y - controls.Y) <= 3.0 &&
-            Math.Abs(currentPlayer.Location.Z - controls.Z) <= 5.0;
-        bool completed = WowBExperimentalMail.Run(hwnd, memory, reader, playerGuid, controls, ClickAimSettings.MailRecipient, InputSafe);
+        string? InputSafetyFailure()
+        {
+            string? routeFailure = RouteSafetyFailure();
+            if (routeFailure != null) return routeFailure;
+            if (!ClickAimSettings.ExperimentalAutoMail) return "experimental mail disabled";
+            if (hwnd == IntPtr.Zero || memory.WindowHandle != hwnd) return "game window handle changed or unavailable";
+            if (!ClickAimInput.GameForeground(hwnd)) return "game window is not foreground";
+            if (!ClickAimInput.MouseButtonsUp()) return "a physical mouse button is held";
+            if (!reader.TryRead70888RecoveryPlayer(out WowBObservedUnit currentPlayer, out uint hp, out uint max) ||
+                currentPlayer.Guid != playerGuid || hp == 0 || max < hp) return "player identity or health unreadable or changed";
+            if (!double.IsFinite(currentPlayer.Location.X) || !double.IsFinite(currentPlayer.Location.Y) || !double.IsFinite(currentPlayer.Location.Z) ||
+                ClickAimMath.Len(currentPlayer.Location.X - controls.X, currentPlayer.Location.Y - controls.Y) > 3.0 ||
+                Math.Abs(currentPlayer.Location.Z - controls.Z) > 5.0) return "player no longer at the calibrated control position";
+            return null;
+        }
+        bool completed = WowBExperimentalMail.Run(hwnd, memory, reader, playerGuid, controls, ClickAimSettings.MailRecipient, InputSafetyFailure);
         _vendorMailboxPending = null; _vendorMailboxReader = null; _vendorMailboxMemory = null; _vendorMailboxPlayer = default;
         if (!completed)
         { Logging.Write("[Mail] experiment interrupted or uncertain; stopping to avoid repeating a possible send. Inspect the game before restarting."); Stop(); return false; }

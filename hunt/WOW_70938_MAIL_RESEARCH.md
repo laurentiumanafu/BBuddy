@@ -14,8 +14,13 @@ window layout, bag configuration or client size require recalibration; the
 controls are user-labelled, not independently detected. The merchant plan must
 leave the calibrated combined bag open.
 
-The experiment posts the tab click, waits one second, posts recipient text,
-then attaches at most 12 candidate 0–3 raw slots and compares the mail record
+Before interaction, preflight reports the specific failed safety/geometry check.
+Only a foreground/finger-held-mouse-button failure gets a three-second grace
+period before any input; no input is sent while unsafe. The game must remain
+foreground. After a matching mailbox hover and posted interaction, the log
+reports bag/grid/table checks and whether tab button messages were posted. A
+posted click is not proof of a visible frame or tab. The experiment then waits
+one second, posts recipient text, attaches at most 12 candidate 0–3 raw slots and compares the mail record
 candidate after each click. It sends once per batch, then requires a stable
 zero-like candidate table and disappearance of those raw IDs from observed bag
 candidates before attempting another batch. This is **not** recipient field
