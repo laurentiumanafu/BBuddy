@@ -549,6 +549,23 @@ internal static class ClickAimKeySteer
         return posRate >= 0.002 && posRate <= 1.0 && negRate >= 0.002 && negRate <= 1.0;
     }
 
+    // Two uncached transforms from the already identity-checked local player.
+    // Reject unstable or non-finite samples; no global position-cache reuse.
+    private static bool StableTurnSample(WowBReader reader, WowBReader.WowBPoolObject player,
+        out double x, out double y, out double z, out double facing)
+    {
+        x = y = z = facing = 0;
+        if (!reader.TryGetObjectTransform(player, out float x1, out float y1, out float z1, out float f1) ||
+            !reader.TryGetObjectTransform(player, out float x2, out float y2, out float z2, out float f2) ||
+            !float.IsFinite(x1) || !float.IsFinite(y1) || !float.IsFinite(z1) || !float.IsFinite(f1) ||
+            !float.IsFinite(x2) || !float.IsFinite(y2) || !float.IsFinite(z2) || !float.IsFinite(f2) ||
+            Math.Abs(ClickAimMath.WrapDeg((f2 - f1) * 180.0 / Math.PI)) > 1.0) return false;
+        double dx = (double)x2 - x1, dy = (double)y2 - y1, dz = (double)z2 - z1;
+        if (Math.Sqrt(dx * dx + dy * dy + dz * dz) > 0.2) return false;
+        x = x2; y = y2; z = z2; facing = f2;
+        return true;
+    }
+
     /// <summary>
     /// One steering tick toward (tx, ty). Turns with the keys when the facing is off, and
     /// holds the forward key when it is not. Returns the distance still to go.
@@ -561,7 +578,7 @@ internal static class ClickAimKeySteer
     /// combination oscillated for 60 ticks in a model of it). So the step size is adapted:
     /// if the error grew or changed sign, the tap was too long and is halved.
     /// </summary>
-    public static bool Steer(double tx, double ty, IntPtr hwnd, bool forward, out double remaining, bool requireFacing = false, bool turnInPlace = false)
+    public static bool Steer(double tx, double ty, IntPtr hwnd, bool forward, out double remaining, bool requireFacing = false, bool turnInPlace = false, ClickAimTurnRateLearning? turnLearning = null)
     {
         remaining = 0;
 
@@ -633,13 +650,61 @@ internal static class ClickAimKeySteer
             bool turnUp = error > 0;
             int vk = turnUp ? _turnPosVk : _turnNegVk;
             double rate = turnUp ? _turnPosRate : _turnNegRate;
+            // Rate observations are per mover/chase and experimental on 70938.
+            // Never apply an in-place estimate to a tap made while running.
+            var sampleReader = ObjectManager.WowB;
+            var sampleMemory = ObjectManager.Wow;
+            int sampleGeneration = ClickAimAbort.Generation;
+            bool sampleContext = turnLearning != null && sampleReader?.IsExperimental70938 == true &&
+                sampleMemory != null && sampleMemory.WindowHandle == hwnd && !_keyDown;
+            using var sampleUncached = sampleContext ? sampleMemory?.TemporaryCacheState(false) : null;
+            WowBReader.WowBPoolObject samplePlayer = default;
+            bool mayLearn = sampleContext && sampleReader!.TryGetPlayerObject(out samplePlayer) && !samplePlayer.Guid.IsEmpty;
+            if (mayLearn)
+            {
+                turnLearning!.Bind(sampleMemory, sampleReader, hwnd, sampleGeneration, samplePlayer.RecordPtr,
+                    samplePlayer.Guid.ToString(), _turnPosVk, _turnNegVk, _turnPosRate, _turnNegRate);
+                rate = turnLearning.Rate(turnUp, rate);
+            }
+            else turnLearning?.ForgetCandidate(turnUp);
 
             int ms = (int)Math.Round(Math.Abs(error) / Math.Max(0.02, rate) * _turnStepScale);
             if (ms < 10) ms = 10;   // the shortest tap that still registers
             if (ms > MaxTurnTapMs) ms = MaxTurnTapMs;
 
-            if (!ClickAimInput.TapMovementKey(hwnd, vk, ms) || ClickAimAbort.Wait(60))
-            { ReleaseHeld(); return false; }
+            double sampleX = 0, sampleY = 0, sampleZ = 0, sampleFacing = 0;
+            bool sampleReady = mayLearn && ms >= 40 &&
+                StableTurnSample(sampleReader!, samplePlayer, out sampleX, out sampleY, out sampleZ, out sampleFacing) &&
+                Math.Abs(ClickAimMath.WrapDeg(sampleFacing * 180.0 / Math.PI - facingDeg)) <= 2.0;
+            long tapStart = System.Diagnostics.Stopwatch.GetTimestamp();
+            bool tapped = ClickAimInput.TapMovementKey(hwnd, vk, ms);
+            double durationMs = (System.Diagnostics.Stopwatch.GetTimestamp() - tapStart) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+            if (!tapped || ClickAimAbort.Wait(60))
+            { if (mayLearn) turnLearning!.ForgetCandidate(turnUp); ReleaseHeld(); return false; }
+            if (mayLearn)
+            {
+                if (sampleReady && !_keyDown && ClickAimAbort.Generation == sampleGeneration &&
+                    ObjectManager.WowB == sampleReader && ObjectManager.Wow == sampleMemory &&
+                    sampleMemory!.WindowHandle == hwnd && sampleReader!.TryGetPlayerObject(out WowBReader.WowBPoolObject endPlayer) &&
+                    endPlayer.Guid == samplePlayer.Guid && endPlayer.RecordPtr == samplePlayer.RecordPtr &&
+                    StableTurnSample(sampleReader, endPlayer, out double endX, out double endY, out double endZ, out double endFacing) &&
+                    sampleReader.TryGetPlayerObject(out WowBReader.WowBPoolObject finalPlayer) &&
+                    finalPlayer.Guid == samplePlayer.Guid && finalPlayer.RecordPtr == samplePlayer.RecordPtr &&
+                    ObjectManager.WowB == sampleReader && ObjectManager.Wow == sampleMemory &&
+                    !_keyDown && !ClickAimAbort.Requested && ClickAimAbort.Generation == sampleGeneration)
+                {
+                    double priorRate = turnLearning!.Rate(turnUp, turnUp ? _turnPosRate : _turnNegRate);
+                    double dx = endX - sampleX, dy = endY - sampleY, dz = endZ - sampleZ;
+                    turnLearning.Observe(turnUp, ClickAimMath.WrapDeg((endFacing - sampleFacing) * 180.0 / Math.PI),
+                        durationMs, Math.Sqrt(dx * dx + dy * dy + dz * dz));
+                    double updatedRate = turnLearning.Rate(turnUp, turnUp ? _turnPosRate : _turnNegRate);
+                    if (Math.Abs(updatedRate - priorRate) > Math.Max(0.03, priorRate * 0.3))
+                        Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                            "[Keys] bounded in-place turn estimate for {0}: {1:F3} -> {2:F3} deg/ms (candidate, not verified)",
+                            vk == TurnRightVk ? "right arrow" : "left arrow", priorRate, updatedRate));
+                }
+                else turnLearning!.ForgetCandidate(turnUp);
+            }
 
             if (Math.Abs(error) > 45.0)
             {

@@ -1,0 +1,42 @@
+using System;
+using Styx.Logic.Pathing;
+
+static class Program
+{
+    static void Check(bool ok, string text) { if (!ok) throw new Exception(text); }
+    static bool Near(double a, double b) => Math.Abs(a - b) < 0.0001;
+    static void Main()
+    {
+        var memory = new object(); var reader = new object();
+        var rate = new ClickAimTurnRateLearning();
+        var window = new IntPtr(42);
+        void Bind(int generation) => rate.Bind(memory, reader, window, generation, 123, "player", 39, 37, 0.1, 0.2);
+        Bind(1);
+        Check(Near(rate.Rate(true, 0.1), 0.1), "starts at calibrated rate");
+        rate.Observe(true, 30, 100, 0);
+        Check(Near(rate.Rate(true, 0.1), 0.1), "one sample cannot train");
+        rate.Observe(true, 31, 100, 0.1);
+        Check(Near(rate.Rate(true, 0.1), 0.2), "two similar samples capped at twice calibration");
+        Check(Near(rate.Rate(false, 0.2), 0.2), "keys learn independently");
+        rate.Observe(false, -10, 100, 0);
+        rate.Observe(false, -10, 100, 0);
+        Check(Near(rate.Rate(false, 0.2), 0.1), "negative key independently learned");
+        Bind(2);
+        Check(Near(rate.Rate(true, 0.1), 0.1) && Near(rate.Rate(false, 0.2), 0.2), "stop generation resets learning");
+        rate.Observe(true, -20, 100, 0);
+        rate.Observe(true, 20, 100, 0.3);
+        rate.Observe(true, 20, 100, 0);
+        Check(Near(rate.Rate(true, 0.1), 0.1), "bad direction and movement rejected");
+        rate.Observe(true, 20, 100, 0);
+        Check(Near(rate.Rate(true, 0.1), 0.2), "second valid sample accepted");
+        rate.Bind(new object(), reader, window, 2, 123, "player", 39, 37, 0.1, 0.2);
+        Check(Near(rate.Rate(true, 0.1), 0.1), "attachment change resets learning");
+        rate.Observe(true, 20, 100, 0);
+        rate.Observe(true, 20, 900, 0);
+        rate.Observe(true, 20, 100, 0);
+        Check(Near(rate.Rate(true, 0.1), 0.1), "invalid duration discards candidate");
+        rate.Bind(memory, reader, window, 2, 456, "other player", 39, 37, 0.1, 0.2);
+        Check(Near(rate.Rate(true, 0.1), 0.1), "player identity change resets learning");
+        Console.WriteLine("Turn rate learning fixture passed");
+    }
+}

@@ -1372,7 +1372,7 @@ internal static class GrindRunner
                     }
                 }
 
-                Thread.Sleep(150);
+                ClickAimAbort.Wait(150);
             }
             recovered = !watchCancelled && _recoveryReady && !ClickAimAbort.Requested &&
                 unchecked(Environment.TickCount - started) < budgetMs && RecoverIfPending(mover);
@@ -2314,7 +2314,7 @@ internal static class GrindRunner
         {
             _gaveUpGuid = target.Guid;
             _gaveUpAt = Environment.TickCount;
-            Thread.Sleep(GiveUpBackoffMs);
+            ClickAimAbort.Wait(GiveUpBackoffMs);
         }
 
         /* Nothing landed at all - not a point of health, not one mana. Either the target
@@ -4420,11 +4420,14 @@ internal static class GrindRunner
             if (recentOnly) return LootNoClick; // recent bodies use the validated mesh approach only
             if (UnderAttack()) return LootUnderAttack;
             double remaining;
-            ClickAimKeySteer.Steer(corpse.Location.X, corpse.Location.Y, hwnd, true, out remaining);
-            Thread.Sleep(90);
+            if (!ClickAimKeySteer.Steer(corpse.Location.X, corpse.Location.Y, hwnd, true, out remaining))
+            { ClickAimKeySteer.ReleaseHeld(); return LootNoClick; }
+            if (ClickAimAbort.Wait(90) || _stop || RouteRunner.StopRequested)
+            { ClickAimKeySteer.ReleaseHeld(); return LootUnderAttack; }
         }
 
         ClickAimKeySteer.ReleaseHeld();
+        if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested) return LootUnderAttack;
         StopAndSettle(hwnd);
 
         double lx, ly;
@@ -6279,6 +6282,7 @@ internal static class GrindRunner
         public int Stalls;
         public int LastClosingMs;
         public double BestTargetDistance = double.PositiveInfinity;
+        public readonly ClickAimTurnRateLearning TurnLearning = new ClickAimTurnRateLearning();
         public ChaseWatch(int started) { LastProgressMs = started; LastClosingMs = started; }
         public void EndApproach()
         {
@@ -6379,7 +6383,7 @@ internal static class GrindRunner
         if (combatMoveAllowed != null && !combatMoveAllowed())
         { ClickAimKeySteer.ReleaseHeld(); why = "defensive movement guard changed"; return false; }
         double remaining;
-        if (!ClickAimKeySteer.Steer(point.X, point.Y, hwnd, true, out remaining, true, true))
+        if (!ClickAimKeySteer.Steer(point.X, point.Y, hwnd, true, out remaining, true, true, watch.TurnLearning))
         { ClickAimKeySteer.ReleaseHeld(); why = "mesh-point steering failed"; return false; }
         ClickAimAbort.Wait(90);
         return true;
@@ -6711,7 +6715,7 @@ internal static class GrindRunner
 
 
         _pendingCastId = 0;                 // a cast remembered from the last fight is not evidence
-        bool castEverLanded = false;        // a Wrath has demonstrably cast this fight
+        bool castEverObservedEffect = false; // power or target health changed after a cast attempt
         bool melee = false;                 // set when casting is shown not to work
         bool announced = false;
         int healFailures = 0;               // presses of the heal key that changed nothing
@@ -6893,7 +6897,7 @@ internal static class GrindRunner
                 string secs = ((Environment.TickCount - started) / 1000).ToString(CultureInfo.InvariantCulture);
                 return worked.Count == 0
                     ? "target gone after " + secs + " s and nothing had landed - it fled or the client dropped it"
-                    : "killed or fled after " + secs + " s; what landed: " + string.Join(", ", worked.ToArray());
+                    : "killed or fled after " + secs + " s; recorded attempts/observations: " + string.Join(", ", worked.ToArray());
             }
 
             if (target.Guid != defenceTarget)
@@ -6910,7 +6914,7 @@ internal static class GrindRunner
             if (health >= 0 && lastHealth > 0 && health == 0)
             {
                 if (_focusedFightGuid == target.Guid) _focusedFightGuid = default;
-                return "killed" + (worked.Count == 0 ? "" : " with " + string.Join(", ", worked.ToArray()));
+                return "killed" + (worked.Count == 0 ? "" : "; recorded attempts/observations: " + string.Join(", ", worked.ToArray()));
             }
             if (initialTargetHealth > 0 && health > 0 && health < initialTargetHealth)
             { MarkFocusedAttack(target); _focusedDamageObserved = true; if (!defenceOnly) _damagedVoluntaryTarget = target; }
@@ -7009,7 +7013,7 @@ internal static class GrindRunner
                         asked, PoolVerifyMs / 1000, d));
 
                     ClickAimInput.TapKey(hwnd, TabVk, 40);
-                    Thread.Sleep(TabSettleMs);
+                    if (ClickAimAbort.Wait(TabSettleMs) || _stop || RouteRunner.StopRequested) return "stopped";
 
                     WowBWorldSnapshot? verdictSnap;
                     WowBObservedUnit verdictUnit = default(WowBObservedUnit);
@@ -7485,7 +7489,7 @@ internal static class GrindRunner
                 StopAndSettle(hwnd);
                 if (!ClickAimKeySteer.Face(target.Location.X, target.Location.Y, hwnd, 25.0, 4))
                 {
-                    Thread.Sleep(120);
+                    ClickAimAbort.Wait(120);
                     continue;
                 }
 
@@ -7613,13 +7617,13 @@ internal static class GrindRunner
              * it had hit with Wrath one second earlier. */
             if (canCast && unchecked(Environment.TickCount - lastCastMs) < ClickAimCombat.CastSettleMs)
             {
-                Thread.Sleep(120);
+                ClickAimAbort.Wait(120);
                 continue;
             }
 
             if (canCast && !maelstromCast && !supplemental && !ClickAimClassRotation.Ready(_rotationCooldowns, rotation.DamageGroup, Environment.TickCount))
             {
-                Thread.Sleep(120); // estimated cooldown, still refresh target, health and STOP each loop
+                ClickAimAbort.Wait(120); // estimated cooldown, still refresh target, health and STOP each loop
                 continue;
             }
 
@@ -7642,7 +7646,7 @@ internal static class GrindRunner
                             "[Grind] cannot turn onto the target ({0:F0} yd away) - the arrow keys are not "
                             + "moving the facing field. Held the cast {1} time(s)",
                             d, faceFailures));
-                    Thread.Sleep(150);
+                    ClickAimAbort.Wait(150);
                     continue;
                 }
 
@@ -7689,49 +7693,56 @@ internal static class GrindRunner
                  * the whole fight into melee. Poll mana and the mob's health for up to
                  * CastVerifyMs and stop as soon as either moves. */
                 uint manaAfter = 0;
+                bool manaObserved = false;
                 int mobAfter = mobBeforeHealth;
                 bool spentMana = false;
                 bool hurtMob = false;
                 for (int waited = 0; waited < ClickAimCombat.CastVerifyMs && !_stop; waited += 250)
                 {
-                    ClickAimAbort.Wait(250);
+                    if (ClickAimAbort.Wait(250) || _stop || RouteRunner.StopRequested) return "stopped";
+                    manaObserved = false;
                     WowBWorldSnapshot? afterCast;
                     if (!Capture(out afterCast) || afterCast == null) continue;
 
                     WowBObservedUnit me3;
-                    if (reader != null && afterCast.TryGetLocalPlayer(out me3)
-                        && reader.TryGetUnitFields(me3.UnitAddress, out mine))
-                        manaAfter = mine.Power;
+                    if (reader != null && ObjectManager.WowB == reader && ObjectManager.Wow == fightMemory &&
+                        afterCast.TryGetLocalPlayer(out me3) && me3.Guid == me.Guid &&
+                        me3.UnitAddress == me.UnitAddress && me3.RecordAddress == me.RecordAddress &&
+                        reader.TryGetUnitFields(me3.UnitAddress, out mine) &&
+                        (!reader.IsExperimental70707 || (mine.PlayerPowerTypeCandidate == 0 && mine.MaxPower > 0 && mine.Power <= mine.MaxPower)))
+                    { manaAfter = mine.Power; manaObserved = true; }
                     WowBObservedUnit t3;
                     if (afterCast.TryGetSelectedTarget(out t3) && t3.Guid == defenceTarget &&
                         (!reader.Uses70862Features || (t3.UnitAddress == expectedPull.UnitAddress &&
                          t3.RecordAddress == expectedPull.RecordAddress && !t3.IsLocalPlayer && !t3.HasPlayerVtable)))
                         mobAfter = Health(t3);
 
-                    spentMana = manaAfter > 0 && manaAfter < manaBefore;
+                    spentMana = manaObserved && manaAfter < manaBefore;
                     hurtMob = mobAfter >= 0 && mobBeforeHealth >= 0 && mobAfter < mobBeforeHealth;
                     if (spentMana || hurtMob) break;
                 }
 
                 if (spentMana || hurtMob)
                 {
-                    castEverLanded = true;
-                    LearnCastCost(castDamage!.Id, manaBefore, manaAfter);
-                    string label = castDamage!.Name + " (slot " + castDamage!.Slot.ToString(CultureInfo.InvariantCulture) + ")";
+                    castEverObservedEffect = true;
+                    if (spentMana) LearnCastCost(castDamage!.Id, manaBefore, manaAfter);
+                    // Neither a power drop nor a health drop identifies the cause.
+                    // Preserve the existing rotation decisions but report attempts,
+                    // rather than claiming that this spell landed.
+                    string label = castDamage!.Name + " (attempted; effect unconfirmed)";
                     if (!worked.Contains(label)) worked.Add(label);
                     if (hurtMob)
                     {
                         if (_focusedFightGuid == defenceTarget) _focusedDamageObserved = true;
                         if (!defenceOnly) _damagedVoluntaryTarget = target;
                         Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                            shockAutoPlan
-                                ? "[Grind] after {0}, mob health {1} -> {2} (mana {3} -> {4}); damage source and swing state unverified"
-                                : "[Grind] {0} does damage: mob health {1} -> {2} (mana {3} -> {4})",
-                            castDamage!.Name, lastHealth, mobAfter, manaBefore, manaAfter));
+                            "[Grind] after attempting {0}, mob health {1} -> {2} (power {3} -> {4}); damage source and swing state unverified; cast success unverified",
+                            castDamage!.Name, lastHealth, mobAfter, manaBefore,
+                            manaObserved ? manaAfter.ToString(CultureInfo.InvariantCulture) : "unreadable"));
                         if (reader.Uses70862Features && mobAfter == 0 && mobBeforeHealth > 0)
                         {
                             if (_focusedFightGuid == defenceTarget) _focusedFightGuid = default;
-                            return "killed with " + string.Join(", ", worked.ToArray());
+                            return "killed; recorded attempts/observations: " + string.Join(", ", worked.ToArray());
                         }
                         lastHealth = mobAfter;
                         if (shockAutoPlan) { lastShockDamageMs = Environment.TickCount; quietRounds = 0; }
@@ -7740,7 +7751,9 @@ internal static class GrindRunner
                     continue;
                 }
 
-                LearnCastCost(castDamage!.Id, manaBefore, manaAfter);   // a refusal costs nothing, a cast does
+                // No observed power drop: an unreadable value must not become a
+                // fabricated full-mana spell cost. The next guarded read can still
+                // use the pending-cast estimate.
                 if (supplemental || maelstromCast)
                 {
                     // A failed proc/optional attempt must not suppress Shock or
@@ -7753,9 +7766,9 @@ internal static class GrindRunner
                     "[Grind] {0} (slot {1}, key '{2}') changed nothing in {3} ms: mana {4} -> {5}, "
                     + "mob health {6} - {7} failure(s) this fight{8}",
                     castDamage!.Name, castDamage!.Slot, ClickAimCombat.KeyLabel(castDamage!.KeyVk), ClickAimCombat.CastVerifyMs,
-                    manaBefore, manaAfter,
+                    manaBefore, manaObserved ? manaAfter.ToString(CultureInfo.InvariantCulture) : "unreadable",
                     mobAfter >= 0 ? mobAfter.ToString(CultureInfo.InvariantCulture) : "unreadable",
-                    castFailures, castEverLanded ? " (but it has cast before)" : ""));
+                    castFailures, castEverObservedEffect ? " (a previous attempt was followed by a power or health change)" : ""));
 
                 /* Casting has already been faced for, so a failure now is range, line of
                  * sight or a moving target. Three in a row without landing: melee, rather
@@ -7763,10 +7776,10 @@ internal static class GrindRunner
                 if (castFailures >= 3)
                 {
                     melee = true;
-                    Logging.Write(castEverLanded
-                        ? "[Grind] the last 3 casts landed nothing even while facing the target - "
+                    Logging.Write(castEverObservedEffect
+                        ? "[Grind] the last 3 cast attempts had no observed effect even while facing the target - "
                           + "closing to melee for the rest of this fight"
-                        : "[Grind] this key has not cast once this fight - switching to auto-attack "
+                        : "[Grind] this key has had no observed effect this fight - switching to auto-attack "
                           + "rather than standing still");
                 }
                 continue;
@@ -7891,7 +7904,7 @@ internal static class GrindRunner
                         Logging.Write(string.Format(CultureInfo.InvariantCulture,
                             "[Grind] cannot turn onto the mob at arm's length ({0:F1} yd) - the arrow keys "
                             + "are not moving the facing field ({1} time(s))", d, faceFailures));
-                    Thread.Sleep(150);
+                    ClickAimAbort.Wait(150);
                     continue;
                 }
             }
@@ -8045,7 +8058,10 @@ internal static class GrindRunner
             /* Nothing was sent this pass: wait out the swing instead of spinning. A level-1
              * swing lands every ~3 s and the loop would otherwise pass here ten times a second. */
             int settleMs = attacked ? AttackSettleMs : MeleeWaitMs;
-            if (!stormReset.Armed) Thread.Sleep(settleMs);
+            if (!stormReset.Armed)
+            {
+                if (ClickAimAbort.Wait(settleMs) || _stop || RouteRunner.StopRequested) return "stopped";
+            }
             else
             {
                 // The observed active window can be shorter than one attack
@@ -8060,12 +8076,13 @@ internal static class GrindRunner
                     if (stormReset.Armed) ObserveStormReset();
                 }
             }
+            if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested) return "stopped";
 
             WowBWorldSnapshot? afterSwing;
             if (!Capture(out afterSwing) || afterSwing == null || !afterSwing.TryGetSelectedTarget(out target))
                 return worked.Count == 0
                     ? "target gone while attacking and nothing had landed"
-                    : "killed or fled while attacking; what landed: " + string.Join(", ", worked.ToArray());
+                    : "killed or fled while attacking; recorded attempts/observations: " + string.Join(", ", worked.ToArray());
 
             if (reader.Uses70862Features && (target.Guid != defenceTarget || target.IsLocalPlayer || target.HasPlayerVtable ||
                 target.UnitAddress != expectedPull.UnitAddress || target.RecordAddress != expectedPull.RecordAddress))
@@ -8074,7 +8091,7 @@ internal static class GrindRunner
             if (reader.Uses70862Features && lastHealth > 0 && health == 0)
             {
                 if (_focusedFightGuid == defenceTarget) _focusedFightGuid = default;
-                return "killed" + (worked.Count == 0 ? "" : " with " + string.Join(", ", worked.ToArray()));
+                return "killed" + (worked.Count == 0 ? "" : "; recorded attempts/observations: " + string.Join(", ", worked.ToArray()));
             }
             if (health >= 0 && lastHealth >= 0 && health < lastHealth)
             {
@@ -8123,8 +8140,8 @@ internal static class GrindRunner
         if (_stop || ClickAimAbort.Requested) return "stopped";
 
         if (worked.Count > 0)
-            return "gave up on the target after " + presses + " press(es) but "
-                   + string.Join(", ", worked.ToArray()) + " landed";
+            return "gave up on the target after " + presses + " press(es); recorded attempts/observations: "
+                   + string.Join(", ", worked.ToArray());
 
         return "nothing landed on the target: "
                + (damage == null ? "no damage spell on the bar" : "the spell key did not cast")

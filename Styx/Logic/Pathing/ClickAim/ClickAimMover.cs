@@ -84,6 +84,7 @@ public sealed class ClickAimMover : IPlayerMover
     private readonly object _gate = new object();
     private readonly ClickAimParams _p = new ClickAimParams();
     private readonly ClickAimCalibration.Result _cal = new ClickAimCalibration.Result();
+    private readonly ClickAimTurnRateLearning _turnLearning = new ClickAimTurnRateLearning();
 
     private Phase _phase = Phase.Idle;
     private ClickAimLeg _leg;
@@ -383,7 +384,7 @@ public sealed class ClickAimMover : IPlayerMover
                  * at the waypoint instead of overshooting it. */
                 IntPtr hwnd = Handle();
                 double rem;
-                if (!ClickAimKeySteer.Steer(location.X, location.Y, hwnd, true, out rem, RequireFacingForKeyMode, TurnInPlaceForKeyMode))
+                if (!ClickAimKeySteer.Steer(location.X, location.Y, hwnd, true, out rem, RequireFacingForKeyMode, TurnInPlaceForKeyMode, _turnLearning))
                 {
                     Blocked = true;
                     return;
