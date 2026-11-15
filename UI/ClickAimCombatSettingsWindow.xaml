@@ -293,6 +293,8 @@
                         <Button x:Name="btnMailClickTest" Content="3. Test one right-click (3 s)" Height="24" Padding="8,0" Margin="8,0,0,0" IsEnabled="False" Click="btnMailClickTest_Click" ToolTip="Supervised one-click test only. No Send Mail tab, recipient, attachment or Send input."/>
                     </WrapPanel>
                     <TextBlock TextWrapping="Wrap" Margin="0,4,0,0" FontSize="11" Text="Optional step 3 posts one right-click over the same user-labelled candidate; close all game windows, stand by the mailbox and stay out of combat. Focus the game and hover the mailbox during the countdown. A posted click does not prove the mailbox opened; inspect it yourself. STOP cancels before button-down."/>
+                    <Button x:Name="btnMailTabTest" Content="Test Send Mail tab (one left-click, 3 s)" HorizontalAlignment="Left" Height="24" Padding="8,0" Margin="0,6,0,0" Click="btnMailTabTest_Click"/>
+                    <TextBlock TextWrapping="Wrap" Margin="0,4,0,0" FontSize="11" Text="Supervised tab test only: manually ensure the mailbox window is open, then hover its Send Mail TAB during the countdown. The bot clicks exactly where you hold the cursor, not where it detects a tab. Do not hover the Send button. No recipient or item input is sent; visually check the result."/>
                     <TextBlock x:Name="lblMailHoverStatus" TextWrapping="Wrap" Margin="0,4,0,6" FontSize="11" Text="No mailbox hover observations recorded."/>
                     <TextBlock x:Name="lblVendorNote" TextWrapping="Wrap" Margin="0,2,0,8" FontSize="11" Opacity="0.9"/>
                 </StackPanel>

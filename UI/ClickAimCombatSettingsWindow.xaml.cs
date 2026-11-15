@@ -267,7 +267,7 @@ namespace CopilotBuddy.UI
             { _mailHoverAway = null; _mailHoverBox = null; btnMailClickTest.IsEnabled = false; lblMailHoverStatus.Text = "Stop the bot and attach to the 70938 game window first."; return; }
             if (!mailbox) _mailHoverAway = null;
             _mailHoverBox = null;
-            _mailHoverBusy = true; btnMailHoverAway.IsEnabled = false; btnMailHoverBox.IsEnabled = false; btnMailClickTest.IsEnabled = false;
+            _mailHoverBusy = true; btnMailHoverAway.IsEnabled = false; btnMailHoverBox.IsEnabled = false; btnMailClickTest.IsEnabled = false; btnMailTabTest.IsEnabled = false;
             lblMailHoverStatus.Text = mailbox ? "Focus the game and hover over the mailbox; do not click." : "Focus the game and hover over empty ground away from objects; do not click.";
             try
             {
@@ -303,7 +303,7 @@ namespace CopilotBuddy.UI
                 lblMailHoverStatus.Text = "Mailbox hover recorded; candidate " + (second.Hover.IsEmpty ? "is empty" : changed ? "changed from away" : "did not change from away") + ". Send the log for analysis if comfortable sharing GUIDs. No click was sent; mailbox identity and UI state remain unverified.";
             }
             catch (Exception ex) { lblMailHoverStatus.Text = "Mailbox observation failed: " + ex.Message; }
-            finally { _mailHoverBusy = false; if (IsLoaded) { btnMailHoverAway.IsEnabled = true; btnMailHoverBox.IsEnabled = true; btnMailClickTest.IsEnabled = _mailHoverBox != null; } }
+            finally { _mailHoverBusy = false; if (IsLoaded) { btnMailHoverAway.IsEnabled = true; btnMailHoverBox.IsEnabled = true; btnMailClickTest.IsEnabled = _mailHoverBox != null; btnMailTabTest.IsEnabled = true; } }
         }
 
         private async void btnMailClickTest_Click(object sender, RoutedEventArgs e)
@@ -314,7 +314,7 @@ namespace CopilotBuddy.UI
                 "Supervised mailbox click", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
             int generation = ClickAimAbort.Generation;
             var cancel = new CancellationTokenSource(); _mailClickCancellation = cancel;
-            _mailHoverBusy = true; btnMailHoverAway.IsEnabled = false; btnMailHoverBox.IsEnabled = false; btnMailClickTest.IsEnabled = false;
+            _mailHoverBusy = true; btnMailHoverAway.IsEnabled = false; btnMailHoverBox.IsEnabled = false; btnMailClickTest.IsEnabled = false; btnMailTabTest.IsEnabled = false;
             // Consume the user-labelled observation even if the attempt fails. No blind retry.
             _mailHoverBox = null; _mailHoverAway = null;
             lblMailHoverStatus.Text = "Focus the game and hover the SAME mailbox for 3 seconds; do not click or hold mouse buttons. STOP cancels.";
@@ -350,7 +350,57 @@ namespace CopilotBuddy.UI
             finally
             {
                 _mailClickCancellation = null; cancel.Dispose(); _mailHoverBusy = false;
-                if (IsLoaded) { btnMailHoverAway.IsEnabled = true; btnMailHoverBox.IsEnabled = true; btnMailClickTest.IsEnabled = false; }
+                if (IsLoaded) { btnMailHoverAway.IsEnabled = true; btnMailHoverBox.IsEnabled = true; btnMailClickTest.IsEnabled = false; btnMailTabTest.IsEnabled = true; }
+            }
+        }
+
+        private async void btnMailTabTest_Click(object sender, RoutedEventArgs e)
+        {
+            if (_mailHoverBusy) return;
+            GreenMagic.Memory? memory = ObjectManager.Wow; WowBReader? reader = ObjectManager.WowB;
+            IntPtr hwnd = memory?.WindowHandle ?? IntPtr.Zero;
+            if (ClickAimUi.Running || ClickAimUi.Paused || reader?.IsExperimental70938 != true || memory == null ||
+                hwnd == IntPtr.Zero || !ClickAimInput.ClientSize(hwnd, out int width, out int height))
+            { lblMailHoverStatus.Text = "Stop the bot and attach to 70938 before the tab test."; return; }
+            if (System.Windows.MessageBox.Show("Only proceed if the mailbox window is open and the Send Mail TAB is visible. This will post ONE left-click exactly where you hover after three seconds. Do NOT hover the Send button. It cannot detect the tab or mailbox window. Continue?",
+                "Supervised Send Mail tab test", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
+            int generation = ClickAimAbort.Generation;
+            var cancel = new CancellationTokenSource(); _mailClickCancellation = cancel;
+            _mailHoverAway = null; _mailHoverBox = null;
+            _mailHoverBusy = true; btnMailHoverAway.IsEnabled = false; btnMailHoverBox.IsEnabled = false; btnMailClickTest.IsEnabled = false; btnMailTabTest.IsEnabled = false;
+            lblMailHoverStatus.Text = "Focus the game and hover the Send Mail TAB, not the Send button. Do not click; STOP cancels.";
+            try
+            {
+                await Task.Delay(3000, cancel.Token);
+                if (!IsLoaded) return;
+                if (cancel.IsCancellationRequested || ClickAimAbort.Generation != generation)
+                { lblMailHoverStatus.Text = "Tab test cancelled; no click was posted."; return; }
+                var attempt = await Task.Run(() => {
+                    bool safe(MailHoverSample? s) => s != null && s.ClickSafetyCandidate &&
+                        !cancel.IsCancellationRequested && ClickAimAbort.Generation == generation;
+                    if (!MailHoverSampleNow(memory, reader, hwnd, width, height, out var one) || !safe(one) || one == null)
+                        return (false, "first session, focus, health, combat or ghost check failed");
+                    Thread.Sleep(150);
+                    if (!MailHoverSampleNow(memory, reader, hwnd, width, height, out var two) || !safe(two) || two == null ||
+                        !MailHoverSameSession(one, two) || Math.Abs(one.CursorX - two.CursorX) > 3 || Math.Abs(one.CursorY - two.CursorY) > 3)
+                        return (false, "second session, focus or cursor check failed");
+                    int x = (int)Math.Round(two.CursorX), y = (int)Math.Round(two.CursorY);
+                    bool posted = ClickAimInput.DiagnosticLeftClick(hwnd, x, y, width, height, generation,
+                        () => MailHoverSampleNow(memory, reader, hwnd, width, height, out var final) && safe(final) && final != null &&
+                              MailHoverSameSession(one, final) && Math.Abs(final.CursorX - x) <= 3 && Math.Abs(final.CursorY - y) <= 3,
+                        out string reason);
+                    return (posted, reason + string.Format(CultureInfo.InvariantCulture, "; user-labelled cursor=({0},{1}), client={2}x{3}", x, y, width, height));
+                });
+                Logging.Write("[Mailbox tab test] " + attempt.Item2 + "; user-labelled cursor, mailbox and tab state not verified; no mail sent.");
+                if (IsLoaded) lblMailHoverStatus.Text = (attempt.Item1 ? "One left-click was posted. " : "No left-button down was posted. ") +
+                    attempt.Item2 + ". Check the game visually and report the result.";
+            }
+            catch (OperationCanceledException) { if (IsLoaded) lblMailHoverStatus.Text = "Tab test cancelled; no click was posted."; }
+            catch (Exception ex) { Logging.Write("[Mailbox tab test] exception, outcome uncertain: " + ex.Message); if (IsLoaded) lblMailHoverStatus.Text = "Tab test failed or outcome uncertain; check the game before retrying."; }
+            finally
+            {
+                _mailClickCancellation = null; cancel.Dispose(); _mailHoverBusy = false;
+                if (IsLoaded) { btnMailHoverAway.IsEnabled = true; btnMailHoverBox.IsEnabled = true; btnMailClickTest.IsEnabled = false; btnMailTabTest.IsEnabled = true; }
             }
         }
 

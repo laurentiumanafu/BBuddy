@@ -24,7 +24,7 @@ class MailboxHoverWiring(unittest.TestCase):
 
     def test_supervised_click_has_guards_and_no_retry(self):
         self.assertIn('btnMailClickTest_Click', xaml)
-        click = ui[ui.index('private async void btnMailClickTest_Click'):ui.index('private sealed class MailGridPointRow')]
+        click = ui[ui.index('private async void btnMailClickTest_Click'):ui.index('private async void btnMailTabTest_Click')]
         for guard in ('MessageBoxButton.YesNo', 'ClickAimAbort.Generation', 'cancel.IsCancellationRequested',
                       'ClickSafetyCandidate', 's.Hover == expected.Hover', 'MailHoverSameSession',
                       'Task.Delay(3000, cancel.Token)', 'DiagnosticRightClick', '_mailHoverBox = null; _mailHoverAway = null'):
@@ -32,12 +32,30 @@ class MailboxHoverWiring(unittest.TestCase):
         self.assertEqual(click.count('DiagnosticRightClick('), 1)
         self.assertIn('_mailClickCancellation?.Cancel()', ui)
         source = (root / 'Styx/Logic/Pathing/ClickAim/ClickAimInput.cs').read_text(encoding='utf-8-sig')
-        helper = source[source.index('internal static bool DiagnosticRightClick'):source.index('// One dialog click only')]
+        helper = source[source.index('internal static bool DiagnosticRightClick'):source.index('internal static bool DiagnosticLeftClick')]
         for guard in ('ClickAimAbort.Generation', 'GameForeground', 'MouseButtonsUp', 'TryCursorFraction', 'confirm()', 'WM_RBUTTONDOWN', 'WM_RBUTTONUP'):
             self.assertIn(guard, helper)
         self.assertNotIn('WM_MOUSEMOVE', helper)
         self.assertNotIn('ClickAimAbort.Clear', helper)
         self.assertIn('both button-up messages failed', helper)
+
+    def test_send_tab_is_separate_explicit_single_click(self):
+        self.assertIn('btnMailTabTest_Click', xaml)
+        self.assertIn('Do not hover the Send button', xaml)
+        code = ui[ui.index('private async void btnMailTabTest_Click'):ui.index('private sealed class MailGridPointRow')]
+        for guard in ('MessageBoxButton.YesNo', 'ClickAimUi.Running', 'ClickAimUi.Paused', 'ClickAimAbort.Generation',
+                      'cancel.IsCancellationRequested', 'Task.Delay(3000, cancel.Token)', 'ClickSafetyCandidate',
+                      'MailHoverSameSession', 'DiagnosticLeftClick', 'mailbox and tab state not verified'):
+            self.assertIn(guard, code)
+        self.assertEqual(code.count('DiagnosticLeftClick('), 1)
+        self.assertNotIn('DiagnosticRightClick(', code)
+        self.assertNotIn('ClickAimInput.ClickFraction', code)
+        source = (root / 'Styx/Logic/Pathing/ClickAim/ClickAimInput.cs').read_text(encoding='utf-8-sig')
+        helper = source[source.index('internal static bool DiagnosticLeftClick'):source.index('// One dialog click only')]
+        for guard in ('ClickAimAbort.Generation', 'GameForeground', 'MouseButtonsUp', 'TryCursorFraction', 'confirm()', 'WM_LBUTTONDOWN', 'WM_LBUTTONUP'):
+            self.assertIn(guard, helper)
+        self.assertNotIn('WM_MOUSEMOVE', helper)
+        self.assertNotIn('ClickAimAbort.Clear', helper)
 
     def test_not_wired_to_gameplay(self):
         for name in ('GrindRunner.cs', 'GatherRunner.cs'):

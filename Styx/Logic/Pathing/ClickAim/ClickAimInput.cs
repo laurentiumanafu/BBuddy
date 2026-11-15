@@ -223,6 +223,32 @@ internal static class ClickAimInput
         return true;
     }
 
+    // One supervised foreground UI click at the human-held cursor. This does
+    // not verify which UI is open or what control is under the pointer. Like
+    // the right-click diagnostic, a new STOP vetoes without clearing old STOP.
+    internal static bool DiagnosticLeftClick(IntPtr hwnd, int x, int y, int width, int height,
+        int stopGeneration, Func<bool> confirm, out string reason)
+    {
+        reason = "stop, focus, mouse buttons or client geometry changed";
+        if (ClickAimAbort.Generation != stopGeneration || !GameForeground(hwnd) || !MouseButtonsUp() ||
+            !ClientSize(hwnd, out int w, out int h) || w != width || h != height ||
+            x <= 0 || x >= w - 1 || y <= 0 || y >= h - 1) return false;
+        reason = "final diagnostic validation failed";
+        if (!confirm() || ClickAimAbort.Generation != stopGeneration || !GameForeground(hwnd) || !MouseButtonsUp() ||
+            !ClientSize(hwnd, out w, out h) || w != width || h != height ||
+            !TryCursorFraction(hwnd, out double fx, out double fy) ||
+            Math.Abs(fx * width - x) > 3 || Math.Abs(fy * height - y) > 3 ||
+            ClickAimAbort.Generation != stopGeneration) return false;
+        reason = "left-button down could not be posted";
+        if (!PostMessageInternal(hwnd, WM_LBUTTONDOWN, new IntPtr(MK_LBUTTON), Lp(x, y))) return false;
+        Thread.Sleep(45);
+        bool up = PostMessageInternal(hwnd, WM_LBUTTONUP, IntPtr.Zero, Lp(x, y));
+        Thread.Sleep(5);
+        bool upAgain = PostMessageInternal(hwnd, WM_LBUTTONUP, IntPtr.Zero, Lp(x, y));
+        reason = up || upAgain ? "left-button messages posted; tab state not verified" : "down posted but both button-up messages failed; do not retry blindly";
+        return true;
+    }
+
     // One dialog click only. Recheck the screen and state after the posted move;
     // always release the button if down was sent, including after STOP.
     internal static bool ConfirmedLeftClick(IntPtr hWnd, int x, int y, int expectedWidth, int expectedHeight,

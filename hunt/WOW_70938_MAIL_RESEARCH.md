@@ -14,7 +14,11 @@ Requested behavior: after the recorded sell plan, navigate to the recorded mailb
 
 ## Mailbox hover observation
 
-A user-labelled 70938 hover comparison showed empty away, then a nonzero hover candidate with entry-candidate 696264 over the mailbox, at 1920×1080. This single observation supports a correlation only: it does not verify mailbox type, range, open state, successful clicking, or stability across sessions. Neither the GUID nor screen coordinate is hardcoded for gameplay.
+A user-labelled 70938 hover comparison showed empty away, then a nonzero hover candidate with entry-candidate 696264 over the mailbox, at 1920×1080. In the later `2026-11-15_2010_9852.log`, three comparisons had the same candidate with an empty away value; the first interaction failed a combined safety/hover/session check without a button-down, and the next two logged right-button messages posted. The user reported that the mailbox opened a few seconds after the test. This is encouraging user-observed behavior, not machine-verified frame state, general mailbox type/range, or reliability across sessions; the report does not identify which posted attempt caused the opening. Neither the GUID nor screen coordinate is hardcoded for gameplay.
+
+## Supervised Send Mail tab test
+
+With the bot stopped, the user can confirm the mailbox window is open and separately run **Test Send Mail tab**. After confirmation and a three-second countdown it posts at most one left-click at the user's live cursor, with foreground, cursor stability, STOP generation, identity/map/position, and experimental health/combat/ghost vetoes. It never moves the cursor or guesses a coordinate. The user must hover the actual tab, **not** the Send button; there is no programmatic mailbox or tab detection. The log reports the labelled coordinate and post result, not success, and the user must inspect the tab. It does not type, attach, send, or wire anything into Grind. Do not infer safety from the test or use its coordinate automatically; one-second post-tab waiting will be required before any future recipient entry.
 
 ## User-supplied grid calibration
 
