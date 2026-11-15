@@ -8,7 +8,7 @@ from pathlib import Path
 STRIDE = 0x128  # hypothesis inherited from the old inline observation
 MAX_SLOTS = 24
 MAX_SLOTS_70888 = 28
-MAX_SLOTS_70938 = 30
+MAX_SLOTS_70938 = 32
 ID_WITHIN_SLOT = 0xE8
 SAMPLE = re.compile(r'^sample=(\d+) startMs=(\d+)')
 BASELINE = re.compile(r'^external baseline pointer=0x([0-9A-F]+) length=(\d+) capacity=(\d+) bytes=([0-9A-F]+)$')

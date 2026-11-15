@@ -19,6 +19,16 @@ that difference was 30082, demonstrating non-atomic sampling and why a single
 trace sample must not be treated as exact simultaneous state. The known
 candidate count and unique nonzero IDs agree in those samples.
 
+The later five-stack recording `20261115-210942-2c935aed971c436b97e1a3cf8a971c8d.txt`
+reported an external header of length 32 and capacity 36 in all 100 samples.
+The old 70938 limit of 30 rejected every external read, so this recording
+contains no external buffer bytes and cannot establish that the candidate layout,
+count, ID, stack or expiry are valid at that size. The 70938 reader now allows
+up to the observed length 32 (capacity remains at most 36), with its existing
+readability and stability checks and consumer validation. Ghost Wolf remains
+limited to 29 slots because a mistaken absence can toggle the form off. These
+changes do not establish that the Bolt or macro input reaches the game.
+
 This correlation does not prove an aura API, spell rank mapping, atomicity,
 stack lifetime, successful cast or consumption. Another rank, inline storage,
 changed offsets, incomplete/unreadable data or clock behavior may withhold the

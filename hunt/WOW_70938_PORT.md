@@ -115,15 +115,19 @@ quiet-time Shield attempt occurred at 10:03. These are key attempts or reader
 states, not proof of casts. The 30-slot report contains only a header, not the
 array bytes or proof of the layout's completeness.
 
-The 70938 combat-buff experimental bound is now 30 slots, not the full capacity
-36; older build limits are unchanged. Full readable data and header must remain
-stable and the unique nonzero IDs must match the separate active count. Unknown
-or inconsistent data withholds input, with the existing combat, mana, identity,
-selection, STOP, Earth reservation and retry checks unchanged. Ghost Wolf can
-potentially toggle off, so its candidate retains the prior 29-slot bound.
-The research recorder and analyzer accept 30 slots for further evidence. Neither
+In `2026-11-15_2307_18136.log` and the later five-stack research recording,
+the header was length 32, capacity 36; the then-current 30-slot bound rejected
+the candidate. The recording captured no external bytes at that length.
+
+The 70938 combat-buff and Maelstrom experimental bound is now 32 slots, not the
+full capacity 36; older build limits are unchanged. Full readable data and header
+must remain stable and the unique nonzero IDs must match the separate active count.
+Unknown or inconsistent data withholds input, with the existing combat, mana,
+identity, selection, STOP, Earth reservation and retry checks unchanged. Ghost
+Wolf can potentially toggle off, so its candidate retains the prior 29-slot bound.
+The research recorder and analyzers accept 32 slots for further evidence. Neither
 the larger layout, effect absence, mapping, macro execution nor casting is
-verified by this log; in-game validation remains necessary.
+verified by these logs; in-game validation remains necessary.
 
 ### Hotspot exhaustion and death watch
 

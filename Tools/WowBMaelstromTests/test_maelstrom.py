@@ -49,6 +49,24 @@ class Maelstrom(unittest.TestCase):
                      'WowBMaelstromWeapon.ReadFive', 'current.Raw == bolt.Raw', 'mapAfter == map'):
             self.assertIn(text, guard)
         self.assertGreaterEqual(guard.count('FightAttackInputAllowed'), 2)
+    def test_offline_32_slot_header_and_bound(self):
+        chunk = bytearray(256); struct.pack_into('<I', chunk, 0x60, 1)
+        clock = bytearray(256); struct.pack_into('<I', clock, 0x10, 1000)
+        raw = bytearray(ma.STRIDE * 32)
+        struct.pack_into('<I', raw, 31 * ma.STRIDE + 0xe8, ma.IDENT)
+        struct.pack_into('<I', raw, 31 * ma.STRIDE + 0xf4, 30000)
+        struct.pack_into('<I', raw, 31 * ma.STRIDE + 0xf8, 30000)
+        struct.pack_into('<I', raw, 31 * ma.STRIDE + 0x104, 5)
+        prefix = ('70938 COMBAT RESEARCH v1: fixture\nsample=0 startMs=0\n'
+                  'player+0x1A00 baseline ' + chunk.hex().upper() + '\n'
+                  'player+0x1C00 baseline ' + clock.hex().upper() + '\n')
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'trace.txt'
+            path.write_text(prefix + 'external baseline pointer=0x100000 length=32 capacity=36 bytes=' + raw.hex().upper())
+            self.assertEqual(ma.read(path)[0][1], (31, 5, 30000, 29000))
+            path.write_text(prefix + 'external baseline pointer=0x100000 length=33 capacity=36 bytes=' + (raw + bytearray(ma.STRIDE)).hex().upper())
+            with self.assertRaises(ValueError): ma.read(path)
+
     def test_offline_reconstruction_invalidates_on_unknown(self):
         chunk = bytearray(256); struct.pack_into('<I', chunk, 0x60, 1)
         clock = bytearray(256); struct.pack_into('<I', clock, 0x10, 1000)

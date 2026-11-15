@@ -132,12 +132,13 @@ internal static class WowBCombatResearch
         return text.ToString();
     }
 
-    // 70888 showed length 28/capacity 36; 70938 showed length 30/capacity 36.
-    // Allow only the observed length, not the full capacity. Slots beyond the
-    // recorded 26 remain experimental: the entire region, headers and candidate
-    // ID count must still validate.
+    // 70888 showed length 28/capacity 36. The 70938 five-stack recording
+    // reports a stable 32/36 header, but the old 30-slot limit prevented any
+    // external bytes from being captured. Allow only the newly observed length,
+    // not the full capacity. Its contents and completeness are still unverified;
+    // readable region, stable header/data and consumer count checks remain required.
     private const int ExternalHeaderOffset = 0x5F0, ExternalHeaderSize = 24;
-    internal const int ExternalCandidateStride = 0x128, ExternalMaxSlots = 24, External70888MaxSlots = 28, External70938MaxSlots = 30;
+    internal const int ExternalCandidateStride = 0x128, ExternalMaxSlots = 24, External70888MaxSlots = 28, External70938MaxSlots = 32;
     private const ulong ExternalMaxCapacity = 32, External70888MaxCapacity = 36;
 
     internal sealed class ExternalCandidateSample

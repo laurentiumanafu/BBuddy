@@ -5,7 +5,7 @@ import re
 import struct
 from pathlib import Path
 
-STRIDE, MAX_SLOTS, IDENT = 0x128, 30, 408505
+STRIDE, MAX_SLOTS, IDENT = 0x128, 32, 408505
 SAMPLE = re.compile(r'^sample=(\d+) startMs=(\d+)')
 BASE = re.compile(r'^external baseline pointer=0x[0-9A-F]+ length=(\d+) capacity=(\d+) bytes=([0-9A-F]+)$')
 CHANGE = re.compile(r' \+0x([0-9A-F]{4}):([0-9A-F]{8})>([0-9A-F]{8})')

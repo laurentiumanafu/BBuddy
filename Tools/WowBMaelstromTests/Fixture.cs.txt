@@ -27,7 +27,7 @@ namespace Styx.Logic.Pathing
 {
     static class WowBCombatResearch
     {
-        public const int ExternalCandidateStride = 0x128, External70938MaxSlots = 30;
+        public const int ExternalCandidateStride = 0x128, External70938MaxSlots = 32;
         public static byte[]? Data; public static Action? OnRead;
         public sealed class ExternalCandidateSample { public byte[] Bytes = Array.Empty<byte>(); }
         public static ExternalCandidateSample? ReadExternalCandidate(Memory m, ulong unit, out string reason, bool a, bool b)
@@ -40,22 +40,22 @@ static class Program
     static void Put(byte[] data, int slot, int offset, uint value) => BitConverter.GetBytes(value).CopyTo(data, slot * 0x128 + offset);
     static void Main()
     {
-        var bytes = new byte[30 * 0x128]; Put(bytes, 0, 0xe8, 777); Put(bytes, 29, 0xe8, WowBMaelstromWeapon.CandidateId);
-        Put(bytes, 29, 0xf4, 30000); Put(bytes, 29, 0xf8, 30000);
+        var bytes = new byte[32 * 0x128]; Put(bytes, 0, 0xe8, 777); Put(bytes, 31, 0xe8, WowBMaelstromWeapon.CandidateId);
+        Put(bytes, 31, 0xf4, 30000); Put(bytes, 31, 0xf8, 30000);
         for (uint stacks = 0; stacks <= 6; stacks++)
         {
-            Put(bytes, 29, 0x104, stacks);
+            Put(bytes, 31, 0x104, stacks);
             Check(WowBMaelstromWeapon.IsFive(bytes, 2, 1000) == (stacks == 5), "only five: " + stacks);
         }
-        Put(bytes, 29, 0x104, 5);
+        Put(bytes, 31, 0x104, 5);
         Check(!WowBMaelstromWeapon.IsFive(bytes, 1, 1000), "count mismatch");
         Check(!WowBMaelstromWeapon.IsFive(bytes, 2, 30000), "expired candidate denied");
-        Put(bytes, 29, 0xf4, 20000); Check(!WowBMaelstromWeapon.IsFive(bytes, 2, 1000), "unknown duration denied");
-        Put(bytes, 29, 0xf4, 30000);
+        Put(bytes, 31, 0xf4, 20000); Check(!WowBMaelstromWeapon.IsFive(bytes, 2, 1000), "unknown duration denied");
+        Put(bytes, 31, 0xf4, 30000);
         Put(bytes, 1, 0xe8, 777); Check(!WowBMaelstromWeapon.IsFive(bytes, 3, 1000), "duplicate rejected"); Put(bytes, 1, 0xe8, 0);
-        Put(bytes, 29, 0xe8, 999); Check(!WowBMaelstromWeapon.IsFive(bytes, 2, 1000), "unknown candidate not accepted");
-        Put(bytes, 29, 0xe8, WowBMaelstromWeapon.CandidateId);
-        Check(!WowBMaelstromWeapon.IsFive(new byte[31 * 0x128], 1, 1000), "oversized buffer rejected");
+        Put(bytes, 31, 0xe8, 999); Check(!WowBMaelstromWeapon.IsFive(bytes, 2, 1000), "unknown candidate not accepted");
+        Put(bytes, 31, 0xe8, WowBMaelstromWeapon.CandidateId);
+        Check(!WowBMaelstromWeapon.IsFive(new byte[33 * 0x128], 1, 1000), "oversized buffer rejected");
         Check(!WowBMaelstromWeapon.IsFive(new byte[5], 1, 1000) && !WowBMaelstromWeapon.IsFive(null, 1, 1000), "malformed/unreadable rejected");
         var memory = new Memory { Count = 2 }; var reader = new WowBReader(); var player = new WowBObservedUnit { UnitAddress = 0x20000 };
         WowBCombatResearch.Data = bytes;
