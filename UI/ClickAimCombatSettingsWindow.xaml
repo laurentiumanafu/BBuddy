@@ -294,6 +294,8 @@
                                 ToolTip="Removes the selected point and every step recorded under it."/>
                         <Button Content="Record town hotspot" Height="24" Padding="8,0" Margin="0,4,4,0" Click="btnRecordTown_Click"/>
                         <Button Content="Remember selected merchant" Height="24" Padding="8,0" Margin="0,4,0,0" Click="btnRememberMerchant_Click"/>
+                        <Button Content="Record mailbox here" Height="24" Padding="8,0" Margin="0,4,0,0" Click="btnRecordMailbox_Click"
+                                ToolTip="Stand beside the mailbox and record this position for the selected town. This does not yet enable mailbox navigation or sending mail."/>
                     </WrapPanel>
                     <StackPanel Grid.Row="3" Grid.Column="0" Margin="0,2,0,0">
                         <TextBlock Text="Copy steps from:" Margin="0,0,0,3"/>

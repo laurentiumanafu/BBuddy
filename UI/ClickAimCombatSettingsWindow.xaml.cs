@@ -679,7 +679,9 @@ namespace CopilotBuddy.UI
                     + "match the merchant window's own layout.", point, point.Steps.Count);
             lblVendorPlan.Text += " Town map: " + (point.TownMap.HasValue ? point.TownMap.Value.ToString(CultureInfo.InvariantCulture) : "not recorded")
                 + "; saved merchant GUIDs: " + point.MerchantGuids.Count.ToString(CultureInfo.InvariantCulture)
-                + ". 70938 may use a unique same-high candidate near this town if a GUID changes; verify the first sale.";
+                + "; mailbox: " + (point.Mailbox == null ? "not recorded" : string.Format(CultureInfo.InvariantCulture,
+                    "map {0} ({1:F0}, {2:F0}, {3:F0})", point.Mailbox.Map, point.Mailbox.X, point.Mailbox.Y, point.Mailbox.Z))
+                + ". Mailbox navigation and mail sending are not implemented. 70938 may use a unique same-high candidate near this town if a GUID changes; verify the first sale.";
         }
 
         private void lstVendors_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -783,7 +785,7 @@ namespace CopilotBuddy.UI
             WowBReader? reader = ObjectManager.WowB;
             if (!TryTownPosition(reader, out uint map, out double x, out double y, out double z))
             { lblVendorNote.Text = "Map or player position unavailable; stand in town on wowb.exe and retry."; return; }
-            if (System.Windows.MessageBox.Show("Replace the selected plan's town hotspot? Its recorded clicks stay, but previously remembered merchants must be recorded again.",
+            if (System.Windows.MessageBox.Show("Replace the selected plan's town hotspot? Its recorded clicks stay, but previously remembered merchants and mailbox position must be recorded again.",
                 "Record town", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
             if (ClickAimUi.Running || ClickAimUi.Paused || ObjectManager.WowB != reader ||
                 !TryTownPosition(reader, out uint finalMap, out x, out y, out z) || finalMap != map)
@@ -791,6 +793,29 @@ namespace CopilotBuddy.UI
             if (!VendorFile.SetTown(index, x, y, z, map, out string error)) { lblVendorNote.Text = "Town hotspot could not be saved: " + error; return; }
             LoadVendor(); lstVendors.SelectedIndex = index;
             lblVendorNote.Text = "Town hotspot saved; the click plan was preserved. Select a known merchant and press Remember selected merchant.";
+        }
+
+        private void btnRecordMailbox_Click(object sender, RoutedEventArgs e)
+        {
+            if (ClickAimUi.Running || ClickAimUi.Paused) { lblVendorNote.Text = "Stop the bot before recording a mailbox."; return; }
+            if (lstVendors.SelectedItem is not VendorRow row || row.Index < 0 || row.Index >= _vendors.Count)
+            { lblVendorNote.Text = "Select the town's vendor plan first."; return; }
+            int index = row.Index;
+            WowBReader? reader = ObjectManager.WowB;
+            var memory = ObjectManager.Wow;
+            if (memory == null || !TryTownPosition(reader, out uint map, out double x, out double y, out double z) || _vendors[index].TownMap != map)
+            { lblVendorNote.Text = "Stand beside the mailbox on the selected town's recorded map; map or position was unavailable or mismatched."; return; }
+            if (System.Windows.MessageBox.Show("Record where you are standing as the mailbox location for this town? This only saves a position; mailbox navigation and mailing are not implemented.",
+                "Record mailbox", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+            if (ClickAimUi.Running || ClickAimUi.Paused || ObjectManager.Wow != memory || ObjectManager.WowB != reader ||
+                lstVendors.SelectedItem is not VendorRow finalRow || finalRow.Index != index ||
+                !TryTownPosition(reader, out uint finalMap, out double fx, out double fy, out double fz) || finalMap != map ||
+                ClickAimMath.Len(fx - x, fy - y) > 2.0 || Math.Abs(fz - z) > 2.0)
+            { lblVendorNote.Text = "Player, selection, map or bot state changed; mailbox position not saved."; return; }
+            if (!VendorFile.SetMailbox(index, fx, fy, fz, map, out string error))
+            { lblVendorNote.Text = "Mailbox position could not be saved: " + error; return; }
+            LoadVendor(); lstVendors.SelectedIndex = index;
+            lblVendorNote.Text = "Mailbox standing position saved. No mailbox travel or mail sending is enabled yet.";
         }
 
         private void btnRememberMerchant_Click(object sender, RoutedEventArgs e)

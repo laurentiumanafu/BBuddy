@@ -140,6 +140,8 @@ internal static class VendorFile
         public double Y { get; set; }
         public double Z { get; set; }
         public uint? TownMap { get; set; }
+        // A user-recorded standing position near the mailbox, not proof of a mailbox object.
+        public MailboxPoint? Mailbox { get; set; }
         public List<string> MerchantGuids { get; } = new List<string>();
         public List<Step> Steps { get; } = new List<Step>();
 
@@ -148,6 +150,14 @@ internal static class VendorFile
             return (Name.Length == 0 ? "vendor" : Name)
                    + string.Format(CultureInfo.InvariantCulture, " at ({0:F0}, {1:F0}, {2:F0})", X, Y, Z);
         }
+    }
+
+    public sealed class MailboxPoint
+    {
+        public uint Map { get; set; }
+        public double X { get; set; }
+        public double Y { get; set; }
+        public double Z { get; set; }
     }
 
     /// <summary>One lock for the two threads that touch the file: the grind loop and the window.</summary>
@@ -208,6 +218,20 @@ internal static class VendorFile
 
                 foreach (XElement stepElement in element.Elements())
                 {
+                    if (string.Equals(stepElement.Name.LocalName, "Mailbox", StringComparison.OrdinalIgnoreCase))
+                    {
+                        // Ignore malformed/duplicate mailbox metadata rather than breaking existing selling.
+                        // A position does not authorize interaction or mailing.
+                        if (point.Mailbox == null && point.TownMap.HasValue &&
+                            uint.TryParse((string?)stepElement.Attribute("Map"), NumberStyles.None, CultureInfo.InvariantCulture, out uint mailboxMap) &&
+                            mailboxMap == point.TownMap.Value &&
+                            double.TryParse((string?)stepElement.Attribute("X"), NumberStyles.Float, CultureInfo.InvariantCulture, out double mx) &&
+                            double.TryParse((string?)stepElement.Attribute("Y"), NumberStyles.Float, CultureInfo.InvariantCulture, out double my) &&
+                            double.TryParse((string?)stepElement.Attribute("Z"), NumberStyles.Float, CultureInfo.InvariantCulture, out double mz) &&
+                            ValidPosition(mx, my, mz))
+                            point.Mailbox = new MailboxPoint { Map = mailboxMap, X = mx, Y = my, Z = mz };
+                        continue;
+                    }
                     if (string.Equals(stepElement.Name.LocalName, "Merchant", StringComparison.OrdinalIgnoreCase))
                     {
                         string guid = ((string?)stepElement.Attribute("Guid") ?? "").Trim();
@@ -303,6 +327,37 @@ internal static class VendorFile
                (high != 0 || low != 0);
     }
 
+    private static bool ValidPosition(double x, double y, double z)
+        => double.IsFinite(x) && double.IsFinite(y) && double.IsFinite(z) &&
+           Math.Abs(x) <= 100000 && Math.Abs(y) <= 100000 && Math.Abs(z) <= 100000;
+
+    // The recorded standing point is metadata only; no mailbox identity is inferred.
+    public static bool SetMailbox(int index, double x, double y, double z, uint map, out string error, string? path = null)
+    {
+        error = ""; string file = path ?? DefaultPath;
+        if (!ValidPosition(x, y, z)) { error = "Mailbox position is invalid"; return false; }
+        try
+        {
+            lock (Gate)
+            {
+                if (!File.Exists(file)) { error = "Add a vendor point first"; return false; }
+                XDocument doc = XDocument.Load(file); XElement? target = VendorAt(doc, index);
+                if (target == null || !uint.TryParse((string?)target.Attribute("TownMap"), NumberStyles.None, CultureInfo.InvariantCulture, out uint townMap) || townMap != map)
+                { error = "Record the selected town hotspot on this map first"; return false; }
+                var old = new List<XElement>();
+                foreach (XElement element in target.Elements())
+                    if (string.Equals(element.Name.LocalName, "Mailbox", StringComparison.OrdinalIgnoreCase)) old.Add(element);
+                foreach (XElement element in old) element.Remove();
+                target.Add(new XElement("Mailbox", new XAttribute("Map", map.ToString(CultureInfo.InvariantCulture)),
+                    new XAttribute("X", x.ToString("0.000", CultureInfo.InvariantCulture)),
+                    new XAttribute("Y", y.ToString("0.000", CultureInfo.InvariantCulture)),
+                    new XAttribute("Z", z.ToString("0.000", CultureInfo.InvariantCulture))));
+                Save(doc, file); return true;
+            }
+        }
+        catch (Exception ex) { error = ex.Message; return false; }
+    }
+
     // Change only the selected point's location, keeping its recorded sell plan.
     public static bool SetTown(int index, double x, double y, double z, uint map, out string error, string? path = null)
     {
@@ -320,11 +375,12 @@ internal static class VendorFile
                 target.SetAttributeValue("Y", y.ToString("0.000", CultureInfo.InvariantCulture));
                 target.SetAttributeValue("Z", z.ToString("0.000", CultureInfo.InvariantCulture));
                 target.SetAttributeValue("TownMap", map.ToString(CultureInfo.InvariantCulture));
-                // Registered full GUIDs can belong to a different town. Reconfirm them.
-                var oldMerchants = new List<XElement>();
+                // Both merchant confirmations and mailbox points belong to the old town.
+                var oldTownData = new List<XElement>();
                 foreach (XElement element in target.Elements())
-                    if (string.Equals(element.Name.LocalName, "Merchant", StringComparison.OrdinalIgnoreCase)) oldMerchants.Add(element);
-                for (int i = 0; i < oldMerchants.Count; i++) oldMerchants[i].Remove();
+                    if (string.Equals(element.Name.LocalName, "Merchant", StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(element.Name.LocalName, "Mailbox", StringComparison.OrdinalIgnoreCase)) oldTownData.Add(element);
+                for (int i = 0; i < oldTownData.Count; i++) oldTownData[i].Remove();
                 Save(doc, file); return true;
             }
         }
