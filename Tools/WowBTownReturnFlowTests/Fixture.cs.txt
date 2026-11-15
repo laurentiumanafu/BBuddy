@@ -1,0 +1,94 @@
+using System;
+using System.Collections.Generic;
+using Styx.WoWInternals;
+using Styx.Logic.Pathing;
+namespace GreenMagic { sealed class Memory { public IntPtr WindowHandle = new IntPtr(1); } }
+namespace Styx.WoWInternals
+{
+    struct WowBGuid { public int Value; public bool IsEmpty => Value == 0; public static bool operator ==(WowBGuid a, WowBGuid b) => a.Value == b.Value; public static bool operator !=(WowBGuid a, WowBGuid b) => a.Value != b.Value; public override bool Equals(object? o) => o is WowBGuid g && g == this; public override int GetHashCode() => Value; }
+    struct Point { public double X,Y,Z; }
+    struct WowBObservedUnit { public WowBGuid Guid; public Point Location; }
+    sealed class WowBReader
+    {
+        public bool IsExperimental70938 = true, ExperimentalGrindActive = true;
+        public bool TryReadMapId(out uint map) { map = Fixture.Teleported ? 2u : 1u; return true; }
+        public bool TryRead70888RecoveryPlayer(out WowBObservedUnit p, out uint hp, out uint max)
+        { p=new WowBObservedUnit { Guid = new WowBGuid { Value=7 }, Location = new Point { X=Fixture.Teleported ? 1000 : 0 } }; hp=max=100; return true; }
+    }
+    static class ObjectManager { public static WowBReader? WowB; public static GreenMagic.Memory? Wow; }
+}
+namespace Styx.Logic.Pathing
+{
+    static class Environment { public static long TickCount64 => Fixture.Now; }
+    enum ClickAimRotationClass { Auto, Generic, Shaman, Warrior }
+    enum ClickAimActionKind { Spell, Item }
+    sealed class ClickAimAction { public int Slot, Id, KeyVk; public ulong Raw; public ClickAimActionKind Kind; }
+    static class ClickAimSettings { public static ClickAimRotationClass RotationClass=ClickAimRotationClass.Shaman; }
+    static class ClickAimClassRotation { public static ClickAimRotationClass Resolve(ClickAimRotationClass c, List<ClickAimAction> b) => c; }
+    static class ClickAimCombat { public static List<ClickAimAction> Bar=new(); public static List<ClickAimAction> ReadBar(WowBReader r)=>Bar; }
+    static class ClickAimMath { public static double Len(double x,double y) => Math.Sqrt(x*x+y*y); }
+    static class ClickAimKeySteer { public static void ReleaseHeld() {} }
+    static class RouteRunner { public static bool StopRequested; }
+    static class Logging { public static void Write(string s) {} }
+    static class ClickAimAbort
+    {
+        public static bool Requested;
+        public static bool Wait(int ms) { Fixture.Now += ms; if (Fixture.StopAt > 0 && Fixture.Now >= Fixture.StopAt) Requested=true; return Requested; }
+    }
+    static class ClickAimInput { public static void TapKey(IntPtr hwnd,int key,int duration) { Fixture.Presses++; Fixture.AttemptAt=Fixture.Now; Fixture.Interrupted=false; } }
+    static class WowBGrindFactions
+    {
+        public static bool Experimental70707BarSafe(WowBReader r)=>true;
+        public static bool TryReadGhostFlagCandidate(GreenMagic.Memory m,WowBReader r,WowBObservedUnit p,out bool ghost) { ghost=false; return true; }
+    }
+    static class VendorFile { public sealed class VendorPoint { public uint? TownMap; public double X,Y; public List<string> MerchantGuids=new(); public List<int> Steps=new(); } }
+    static class WowBTownCastCandidate
+    {
+        public enum State { Unknown, Idle, AstralRecall, Hearthstone }
+        public static State Observe(GreenMagic.Memory m,WowBReader r,WowBObservedUnit p,out uint start,out uint end,out uint clock)
+        {
+            long elapsed=Fixture.Now-Fixture.AttemptAt; clock=(uint)(1000+Math.Max(0,elapsed)); start=end=0;
+            if (Fixture.Presses==0 || Fixture.NoCast || Fixture.Interrupted || Fixture.Teleported ||
+                (Fixture.EarlyOnce && Fixture.Presses==1 && elapsed>=5000)) return State.Idle;
+            start=1000; end=11000; return ClickAimSettings.RotationClass==ClickAimRotationClass.Shaman ? State.AstralRecall : State.Hearthstone;
+        }
+    }
+    static class Fixture
+    {
+        public static long Now, AttemptAt, StopAt; public static int Presses; public static bool Interrupted, NoCast, CombatOnce, CombatDone, EarlyOnce;
+        public static bool Teleported => Presses>0 && !NoCast && !Interrupted && !(EarlyOnce && Presses==1) && Now-AttemptAt>=10000;
+        private static bool _stop, _townTransit; private static int _presses;
+        private static WowBGuid _townPlayer; private static WowBReader? _townReader; private static GreenMagic.Memory? _townMemory;
+        const int SellPlanMaxSteps=200;
+        static bool StopForRest(IntPtr hwnd)=>true;
+        static bool AutoVendorIdentityMatches(WowBReader r,GreenMagic.Memory m,WowBGuid g)=>g.Value==7 && ObjectManager.Wow==m && ObjectManager.WowB==r;
+        static bool CheckDeathCheckpoint(bool trackerOnly=false,bool deferUnconfirmed=false)=>false;
+        static bool TryReadGatherCombat(out bool fighting)
+        { fighting=CombatOnce && !CombatDone && Presses>0 && Now-AttemptAt>=2500; return true; }
+        static string DefendNearby(IntPtr hwnd,bool grind,out bool engaged) { engaged=true; CombatDone=true; Interrupted=true; return "defended"; }
+        static void Stop() { _stop=true; ClickAimAbort.Requested=true; }
+        // __PRODUCTION__
+        static void Check(bool value,string why) { if(!value) throw new Exception(why); }
+        static void Reset(bool shaman=true)
+        {
+            Now=AttemptAt=StopAt=0; Presses=_presses=0; Interrupted=NoCast=CombatOnce=CombatDone=EarlyOnce=false;
+            _stop=_townTransit=false; _townReader=null; _townMemory=null; _townPlayer=default; ClickAimAbort.Requested=false; RouteRunner.StopRequested=false;
+            ObjectManager.Wow=new GreenMagic.Memory(); ObjectManager.WowB=new WowBReader();
+            ClickAimSettings.RotationClass=shaman ? ClickAimRotationClass.Shaman : ClickAimRotationClass.Warrior;
+            ClickAimCombat.Bar=new List<ClickAimAction>{new ClickAimAction { Slot=2, KeyVk=0x32, Id=shaman ? 556 : 6948, Raw=shaman ? 556UL : 0x8000000000001B24UL, Kind=shaman ? ClickAimActionKind.Spell : ClickAimActionKind.Item }};
+        }
+        static List<VendorFile.VendorPoint> Plans(double x=1000) => new() { new VendorFile.VendorPoint { TownMap=2, X=x, MerchantGuids=new List<string>{"confirmed"}, Steps=new List<int>{1} } };
+        public static void Main()
+        {
+            Reset(); Check(TownReturn(new IntPtr(1), Plans()) && _townTransit && Presses==1, "Astral observed, transitioned, confirmed town");
+            Reset(false); Check(TownReturn(new IntPtr(1), Plans()) && Presses==1, "Hearthstone path");
+            Reset(); CombatOnce=true; Check(TownReturn(new IntPtr(1), Plans()) && CombatDone && Presses==2, "defend and retry observed interrupted cast");
+            Reset(); EarlyOnce=true; Check(TownReturn(new IntPtr(1), Plans()) && Presses==2, "early-clear observed cast retries");
+            Reset(); NoCast=true; Check(!TownReturn(new IntPtr(1), Plans()) && _stop && Presses==1, "no observed cast does not retry");
+            Reset(); Check(!TownReturn(new IntPtr(1), Plans(5000)) && _stop && Presses==1, "wrong destination stops");
+            Reset(); StopAt=1000; Check(!TownReturn(new IntPtr(1), Plans()) && ClickAimAbort.Requested && Presses==1, "STOP during cast");
+            Reset(); ClickAimCombat.Bar.Clear(); Check(!TownReturn(new IntPtr(1), Plans()) && Presses==0, "missing action refuses key");
+            Console.WriteLine("Town return orchestration synthetic cases passed.");
+        }
+    }
+}

@@ -109,6 +109,8 @@ internal static class ClickAimSettings
     /// all bag layouts or that merchant clicks sold anything.
     /// </summary>
     public static bool AutoSell = true;
+    // 70938 Grind only: use a directly bound Astral Recall or Hearthstone.
+    public static bool UseTownReturn;
 
     /// <summary>
     /// On older WowB builds, sell after this many corpse interactions; 0 disables
@@ -183,6 +185,7 @@ internal static class ClickAimSettings
         DotRefreshSeconds = 12;
         RestMs = 20000;
         AutoSell = true;
+        UseTownReturn = false;
         SellAfterLoots = 40;
         VendorWaitMs = 2500;
         VendorSearchYd = 25;
@@ -198,6 +201,7 @@ internal static class ClickAimSettings
     {
         // Missing or malformed files never carry a previous macro opt-in.
         UseKeyOneStartAttackMacro = false;
+        UseTownReturn = false;
         UseShamanTotemMacro = ShamanTotemEarth = ShamanTotemHealing = ShamanTotemMana = false;
         ShamanTotemMacroKey = 2; ShamanTotemMacroPresses = 2;
         string path;
@@ -339,6 +343,11 @@ internal static class ClickAimSettings
             AutoSell = flag;
             return true;
         }
+        if (string.Equals(key, "UseTownReturn", StringComparison.OrdinalIgnoreCase))
+        {
+            UseTownReturn = flag;
+            return true;
+        }
         if (string.Equals(key, "SellAfterLoots", StringComparison.OrdinalIgnoreCase))
         {
             if (hasNumber) SellAfterLoots = number;
@@ -428,6 +437,7 @@ internal static class ClickAimSettings
         text.AppendLine("DotRefreshSeconds = " + DotRefreshSeconds.ToString(CultureInfo.InvariantCulture));
         text.AppendLine("RestMs = " + RestMs.ToString(CultureInfo.InvariantCulture));
         text.AppendLine("AutoSell = " + (AutoSell ? "true" : "false"));
+        text.AppendLine("UseTownReturn = " + (UseTownReturn ? "true" : "false"));
         text.AppendLine("SellAfterLoots = " + SellAfterLoots.ToString(CultureInfo.InvariantCulture));
         text.AppendLine("VendorWaitMs = " + VendorWaitMs.ToString(CultureInfo.InvariantCulture));
         text.AppendLine("VendorSearchYd = " + VendorSearchYd.ToString(CultureInfo.InvariantCulture));
@@ -511,6 +521,9 @@ internal static class ClickAimSettings
         check(DotRefreshSeconds == 4, "clampDot");
 
         check(Apply("AutoSell", "false") && !AutoSell, "applyAutoSell");
+        check(!UseTownReturn, "townReturnDefaultOff");
+        check(Apply("UseTownReturn", "true") && UseTownReturn, "townReturnOptIn");
+        check(Apply("UseTownReturn", "nonsense") && !UseTownReturn, "townReturnMalformedOff");
         check(Apply("SellAfterLoots", "7") && SellAfterLoots == 7, "applySellAfter");
         check(Apply("VendorWaitMs", "900") && VendorWaitMs == 900, "applyVendorWait");
         check(Apply("VendorSearchYd", "12") && VendorSearchYd == 12, "applyVendorSearch");

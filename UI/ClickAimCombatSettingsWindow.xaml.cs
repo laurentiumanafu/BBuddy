@@ -266,6 +266,7 @@ namespace CopilotBuddy.UI
             chkBuffsInCombat.IsChecked = ClickAimSettings.UseBuffsInCombat;
 
             chkAutoSell.IsChecked = ClickAimSettings.AutoSell;
+            chkTownReturn.IsChecked = ClickAimSettings.UseTownReturn;
             txtSellAfter.Text = Text(ClickAimSettings.SellAfterLoots);
             txtVendorWait.Text = Text(ClickAimSettings.VendorWaitMs);
             txtVendorSearch.Text = Text(ClickAimSettings.VendorSearchYd);
@@ -330,6 +331,11 @@ namespace CopilotBuddy.UI
                 System.Windows.MessageBox.Show("Key 1 cannot be shared by the Start Attack and Shaman totem macros. Choose another totem key.", "Combat settings", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return false;
             }
+            if ((ClickAimUi.Running || ClickAimUi.Paused) && (chkTownReturn.IsChecked == true) != ClickAimSettings.UseTownReturn)
+            {
+                System.Windows.MessageBox.Show("Stop the bot before changing the town return option.", "Combat settings", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return false;
+            }
             _shamanTotemOptions.Apply();
             if (cmbRotation.SelectedItem is ClickAimRotationClass selectedRotation)
                 ClickAimSettings.RotationClass = selectedRotation;
@@ -349,6 +355,7 @@ namespace CopilotBuddy.UI
             ClickAimSettings.UseBuffsInCombat = chkBuffsInCombat.IsChecked == true;
 
             ClickAimSettings.AutoSell = chkAutoSell.IsChecked == true;
+            ClickAimSettings.UseTownReturn = chkTownReturn.IsChecked == true;
             ClickAimSettings.SellAfterLoots = sellAfter;
             ClickAimSettings.VendorWaitMs = vendorWait;
             ClickAimSettings.VendorSearchYd = vendorSearch;

@@ -522,8 +522,14 @@ internal static class GrindRunner
     private static WowBReader? _vendorMailboxReader;
     private static GreenMagic.Memory? _vendorMailboxMemory;
     private static WowBGuid _vendorMailboxPlayer;
+    // After a confirmed location transition, remain in town-trip mode until
+    // the vendor/mailbox stage stops; never re-cast or resume the old profile.
+    private static bool _townTransit;
+    private static WowBGuid _townPlayer;
+    private static WowBReader? _townReader;
+    private static GreenMagic.Memory? _townMemory;
 
-    private static bool AutoVendorPending() => _vendorMailboxPending != null || (_vendorAutoPending && ClickAimSettings.AutoSell && !_vendorImpossible);
+    private static bool AutoVendorPending() => _townTransit || _vendorMailboxPending != null || (_vendorAutoPending && ClickAimSettings.AutoSell && !_vendorImpossible);
     private static void ClearAutoVendorPending()
     {
         _vendorAutoPending = false; _vendorAutoPlayer = default;
@@ -909,6 +915,7 @@ internal static class GrindRunner
         _vendorManualPending = false;
         ClearAutoVendorPending();
         _vendorMailboxPending = null; _vendorMailboxReader = null; _vendorMailboxMemory = null; _vendorMailboxPlayer = default;
+        _townTransit = false; _townPlayer = default; _townReader = null; _townMemory = null;
         _vendorImpossible = false;
         _vendorRetryAt = 0;
         _lootsSinceTrip = 0;
@@ -988,9 +995,9 @@ internal static class GrindRunner
                     Logging.Write("[Grind] action bar matched the original snapshot again; rechecking combat before continuing");
                     continue;
                 }
-                if (roam != null && !roam.MapCurrent())
+                if (!_townTransit && roam != null && !roam.MapCurrent())
                 { Logging.Write("[Roam] map changed or became unreadable; stopping"); break; }
-                if (roam == null && !ProfileMapCurrent())
+                if (!_townTransit && roam == null && !ProfileMapCurrent())
                 { Logging.Write("[Grind] profile session map changed or became unreadable; stopping"); break; }
                 if (startupBagWait)
                 {
@@ -1022,7 +1029,7 @@ internal static class GrindRunner
                  * the player's data block, and it is the only way this loop can ever climb.
                  * Timed rather than counted, because a loop iteration is a whole hotspot leg,
                  * not a tick. */
-                if (roam == null && unchecked(Environment.TickCount - lastLevelCheck) >= LevelCheckMs)
+                if (!_townTransit && roam == null && unchecked(Environment.TickCount - lastLevelCheck) >= LevelCheckMs)
                 {
                     lastLevelCheck = Environment.TickCount;
                     int now = PlayerLevel();
@@ -1353,6 +1360,7 @@ internal static class GrindRunner
             try { mover.MoveStop(); } catch { }
             // Never let a stopped Grind session affect a later Gather session.
             _vendorMailboxPending = null; _vendorMailboxReader = null; _vendorMailboxMemory = null; _vendorMailboxPlayer = default;
+            _townTransit = false; _townPlayer = default; _townReader = null; _townMemory = null;
         }
 
         string bagReport = BagSlotHunt.Report();
@@ -3347,7 +3355,7 @@ internal static class GrindRunner
             Logging.Write("[Grind] automatic vendor request cancelled because auto-selling was disabled");
         }
         if (UnderAttack()) return false;
-        if (_vendorMailboxPending != null)
+        if (_townTransit || _vendorMailboxPending != null)
             return !ClickAimAbort.Requested && !RouteRunner.StopRequested &&
                 unchecked(Environment.TickCount - _vendorRetryAt) >= 0;
 
@@ -3460,6 +3468,7 @@ internal static class GrindRunner
             _vendorImpossible = true;
             Logging.Write("[Grind] the vendor file could not be read (" + ex.Message
                           + ") - selling is off for the rest of this run");
+            if (ClickAimSettings.UseTownReturn || _townTransit) Stop();
             return false;
         }
 
@@ -3469,8 +3478,17 @@ internal static class GrindRunner
             Logging.Write("[Grind] the bags are due a trip, but no vendor point is saved: stand at the vendor "
                           + "in town, open Combat settings -> Selling, and press \"Add vendor here\". "
                           + "Selling is off for the rest of this run.");
+            if (ClickAimSettings.UseTownReturn || _townTransit) Stop();
             return false;
         }
+
+        if (ClickAimSettings.UseTownReturn && !_townTransit)
+        {
+            if (!TownReturn(hwnd, points)) return false;
+        }
+        if (_townTransit && (_townReader == null || _townMemory == null ||
+            !AutoVendorIdentityMatches(_townReader, _townMemory, _townPlayer)))
+        { Logging.Write("[Town return] character or attachment changed after arrival; stopping."); Stop(); return false; }
 
         double px, py;
         if (!ClickAimPositions.TryRead(out px, out py))
@@ -3490,10 +3508,12 @@ internal static class GrindRunner
             double townDistance = ClickAimMath.Len(points[i].X - px, points[i].Y - py);
             if (double.IsFinite(townDistance) && townDistance < closest) { closest = townDistance; at = i; }
         }
-        if (at < 0)
+        if (at < 0 || (_townTransit && closest > 500.0))
         {
             _vendorImpossible = true;
-            Logging.Write("[Grind] no complete sell plan has a town hotspot on this map, a user-confirmed merchant, and a nonempty plan within the step limit. Existing plans are unchanged; configure them under Selling.");
+            Logging.Write("[Grind] no complete sell plan has a town hotspot on this map, a user-confirmed merchant, and a nonempty plan within the step limit" +
+                (_townTransit ? " within 500 yd of the return destination; stopping." : ". Existing plans are unchanged; configure them under Selling."));
+            if (_townTransit) Stop();
             return false;
         }
         VendorFile.VendorPoint point = points[at];
@@ -3518,6 +3538,7 @@ internal static class GrindRunner
         RouteRunner.ShouldInterrupt = () => !TryReadGatherCombat(out bool fighting) || fighting ||
             (vendorReader.Uses70862Features && !WowBGrindFactions.Experimental70707BarSafe(vendorReader)) ||
             ObjectManager.WowB != vendorReader || !vendorReader.TryReadMapId(out uint routeMap) || routeMap != currentMap ||
+            (_townTransit && (_townReader != vendorReader || _townMemory == null || !AutoVendorIdentityMatches(vendorReader, _townMemory, _townPlayer))) ||
             (automaticTrip && (!ClickAimSettings.AutoSell || routeMemory == null ||
                 !AutoVendorIdentityMatches(vendorReader, routeMemory, routePlayer)));
         RouteRunner.PollInterruptDuringWalk = true;
@@ -3645,7 +3666,197 @@ internal static class GrindRunner
             Logging.Write("[Mailbox] vendor clicks were sent but sales are unverified. Walking to the recorded mailbox standing point; mailing remains manual.");
             return WalkToRecordedMailbox(mover);
         }
+        if (_townTransit)
+        {
+            Logging.Write("[Town return] vendor clicks were replayed but sales are unverified; no mailbox is recorded. Stopping rather than resuming the old grind area.");
+            Stop();
+        }
         return true;
+    }
+
+    // Select only directly readable first-bar actions. Auto class inference is
+    // best effort, not a verified class byte; ambiguous Generic is rejected.
+    private static ClickAimAction? TownReturnAction(WowBReader reader, out WowBTownCastCandidate.State expected, out string why)
+    {
+        expected = WowBTownCastCandidate.State.Unknown; why = "class or action bar unavailable";
+        List<ClickAimAction> bar = ClickAimCombat.ReadBar(reader);
+        ClickAimRotationClass cls = ClickAimClassRotation.Resolve(ClickAimSettings.RotationClass, bar);
+        if (ClickAimSettings.RotationClass == ClickAimRotationClass.Auto && cls == ClickAimRotationClass.Generic)
+            foreach (ClickAimAction action in bar)
+                if (action.Kind == ClickAimActionKind.Spell && action.Id == 556) { cls = ClickAimRotationClass.Shaman; break; }
+        if (cls == ClickAimRotationClass.Auto || cls == ClickAimRotationClass.Generic)
+        { why = "class is ambiguous; select the actual class in Combat settings"; return null; }
+        bool shaman = cls == ClickAimRotationClass.Shaman;
+        expected = shaman ? WowBTownCastCandidate.State.AstralRecall : WowBTownCastCandidate.State.Hearthstone;
+        foreach (ClickAimAction action in bar)
+            if (action.KeyVk != 0 && action.Slot >= 1 && action.Slot <= 12 &&
+                (shaman ? action.Kind == ClickAimActionKind.Spell && action.Id == 556 && (action.Raw >> 32) == 0 :
+                           action.Kind == ClickAimActionKind.Item && action.Id == 6948 && (action.Raw >> 32) == 0x80000000UL))
+            { why = ""; return action; }
+        why = shaman ? "put Astral Recall directly on a default-bound first-bar slot 1–12" :
+                        "put Hearthstone directly on a default-bound first-bar slot 1–12";
+        return null;
+    }
+
+    private static bool TownHasPlanNearby(List<VendorFile.VendorPoint> points, uint map, double x, double y)
+    {
+        foreach (VendorFile.VendorPoint point in points)
+            if (point.TownMap == map && point.MerchantGuids.Count > 0 && point.Steps.Count > 0 &&
+                point.Steps.Count <= SellPlanMaxSteps && ClickAimMath.Len(point.X - x, point.Y - y) <= 500.0) return true;
+        return false;
+    }
+
+    // A key is not proof of a cast. Unknown/no-start/uncertain transitions stop
+    // instead of repeatedly pressing or walking during a possible cast.
+    private static bool TownReturn(IntPtr hwnd, List<VendorFile.VendorPoint> points)
+    {
+        WowBReader? reader = ObjectManager.WowB;
+        GreenMagic.Memory? memory = ObjectManager.Wow;
+        if (reader?.IsExperimental70938 != true || memory == null || memory.WindowHandle != hwnd)
+        { Logging.Write("[Town return] recall is supported only on 70938 Grind; stopping."); Stop(); return false; }
+        bool hasPlan = false;
+        foreach (VendorFile.VendorPoint point in points)
+            if (point.TownMap.HasValue && point.MerchantGuids.Count > 0 && point.Steps.Count > 0 && point.Steps.Count <= SellPlanMaxSteps) hasPlan = true;
+        if (!hasPlan)
+        { Logging.Write("[Town return] no complete recorded vendor plan; stopping before casting."); Stop(); return false; }
+
+        ClickAimAction? action = TownReturnAction(reader, out WowBTownCastCandidate.State expected, out string why);
+        if (action == null)
+        { Logging.Write("[Town return] " + why + "; stopping before casting."); Stop(); return false; }
+        for (int attempt = 0; attempt < 3 && !_stop && !ClickAimAbort.Requested; attempt++)
+        {
+            if (!StopForRest(hwnd) || !TryReadGatherCombat(out bool fighting) || fighting ||
+                !WowBGrindFactions.Experimental70707BarSafe(reader) || !reader.TryReadMapId(out uint originMap) || originMap == uint.MaxValue ||
+                !reader.TryRead70888RecoveryPlayer(out WowBObservedUnit origin, out uint hp, out uint maxHp) ||
+                origin.Guid.IsEmpty || hp == 0 || maxHp == 0 || hp > maxHp ||
+                !AutoVendorIdentityMatches(reader, memory, origin.Guid) ||
+                !WowBGrindFactions.TryReadGhostFlagCandidate(memory, reader, origin, out bool ghost) || ghost ||
+                WowBTownCastCandidate.Observe(memory, reader, origin, out _, out _, out _) != WowBTownCastCandidate.State.Idle)
+            {
+                if (TryReadGatherCombat(out bool nowFighting) && nowFighting)
+                { Logging.Write("[Town return] combat before cast; yielding to defence."); return false; }
+                Logging.Write("[Town return] player, combat, movement, cast or identity not safely readable; stopping without a key."); Stop(); return false;
+            }
+            ClickAimAction? again = TownReturnAction(reader, out WowBTownCastCandidate.State againExpected, out _);
+            if (again == null || again.Slot != action.Slot || again.Raw != action.Raw || again.KeyVk != action.KeyVk || againExpected != expected ||
+                !reader.TryReadMapId(out uint originAgain) || originAgain != originMap || !AutoVendorIdentityMatches(reader, memory, origin.Guid) ||
+                !reader.TryRead70888RecoveryPlayer(out WowBObservedUnit finalOrigin, out uint finalHp, out uint finalMax) ||
+                finalOrigin.Guid != origin.Guid || finalHp == 0 || finalMax == 0 || finalHp > finalMax ||
+                ClickAimMath.Len(finalOrigin.Location.X - origin.Location.X, finalOrigin.Location.Y - origin.Location.Y) > 0.5 ||
+                Math.Abs(finalOrigin.Location.Z - origin.Location.Z) > 0.5 ||
+                !WowBGrindFactions.TryReadGhostFlagCandidate(memory, reader, finalOrigin, out bool finalGhost) || finalGhost ||
+                WowBTownCastCandidate.Observe(memory, reader, finalOrigin, out _, out _, out _) != WowBTownCastCandidate.State.Idle ||
+                _stop || ClickAimAbort.Requested)
+            { Logging.Write("[Town return] state or binding changed before the key; stopping."); Stop(); return false; }
+            if (!TryReadGatherCombat(out fighting))
+            { Logging.Write("[Town return] combat state unreadable before the key; stopping."); Stop(); return false; }
+            if (fighting) { Logging.Write("[Town return] combat before cast; yielding to defence."); return false; }
+            if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested || ObjectManager.Wow != memory || ObjectManager.WowB != reader) return false;
+            var progress = new WowBTownCastProgress(expected, originMap, origin.Location.X, origin.Location.Y, origin.Location.Z);
+            ClickAimInput.TapKey(hwnd, action.KeyVk, 60); _presses++;
+            long began = Environment.TickCount64;
+            Logging.Write("[Town return] attempted " + expected + " using slot " + action.Slot + "; waiting for observed cast and location transition.");
+            bool seen = false, defendedDuringCast = false, combatAfterCast = false, earlyClear = false;
+            uint activeEnd = 0, remaining = uint.MaxValue;
+            int combatIdleCount = 0, destinationCount = 0;
+            long combatIdleAt = 0, destinationAt = 0, activeAt = -1;
+            uint destinationMap = uint.MaxValue;
+            double destinationX = 0, destinationY = 0, destinationZ = 0;
+            while (!_stop && !ClickAimAbort.Requested && !RouteRunner.StopRequested)
+            {
+                long elapsed = Environment.TickCount64 - began;
+                // World loading can make the ghost byte temporarily unreadable;
+                // keep polling without input, while still honoring a recorded death.
+                if (CheckDeathCheckpoint(trackerOnly: true, deferUnconfirmed: true)) return false;
+                if (ObjectManager.Wow != memory || ObjectManager.WowB != reader || !reader.ExperimentalGrindActive)
+                { Logging.Write("[Town return] attachment or session changed; stopping."); Stop(); return false; }
+                bool combatKnown = TryReadGatherCombat(out fighting);
+                if (combatKnown && fighting)
+                {
+                    // Movement during defence cannot establish a successful teleport.
+                    combatAfterCast |= seen;
+                    // Only a recently observed active cast can authorize a
+                    // combat-interruption retry after the fight.
+                    defendedDuringCast |= seen && remaining >= 500 && remaining <= 10000 && activeAt >= 0 && elapsed - activeAt <= 700;
+                    ClickAimKeySteer.ReleaseHeld();
+                    string report = DefendNearby(hwnd, true, out bool engaged);
+                    if (engaged || report.Length > 0) Logging.Write("[Town return] defence: " + report);
+                    if (_stop || ClickAimAbort.Requested || CheckDeathCheckpoint()) return false;
+                    if (ClickAimAbort.Wait(200)) return false;
+                    continue;
+                }
+                if (!combatKnown)
+                {
+                    if (elapsed > 30000) { Logging.Write("[Town return] combat state did not recover; stopping."); Stop(); return false; }
+                    if (ClickAimAbort.Wait(150)) return false;
+                    continue;
+                }
+                if (!reader.TryReadMapId(out uint map) || map == uint.MaxValue ||
+                    !reader.TryRead70888RecoveryPlayer(out WowBObservedUnit player, out hp, out maxHp) ||
+                    player.Guid != origin.Guid || hp == 0 || maxHp == 0 || hp > maxHp ||
+                    !WowBGrindFactions.TryReadGhostFlagCandidate(memory, reader, player, out bool currentGhost) || currentGhost ||
+                    !reader.TryReadMapId(out uint mapAgain) || mapAgain != map ||
+                    !AutoVendorIdentityMatches(reader, memory, origin.Guid))
+                {
+                    // World loading can temporarily invalidate the player. No
+                    // input is sent; a bounded timeout never means success.
+                    if (elapsed > 30000) { Logging.Write("[Town return] player or map did not recover after cast; stopping."); Stop(); return false; }
+                    if (ClickAimAbort.Wait(150)) return false;
+                    continue;
+                }
+                WowBTownCastCandidate.State state = WowBTownCastCandidate.Observe(memory, reader, player, out uint start, out uint end, out uint clock);
+                if (state == expected)
+                {
+                    seen = true; activeEnd = end; remaining = unchecked(end - clock); activeAt = elapsed; combatIdleCount = destinationCount = 0;
+                }
+                if (state == WowBTownCastCandidate.State.Idle && seen && activeEnd != 0 && !defendedDuringCast)
+                {
+                    uint left = unchecked(activeEnd - clock);
+                    if (left >= 200 && left <= 10000) earlyClear = true;
+                }
+                var result = state == WowBTownCastCandidate.State.Unknown ? WowBTownCastProgress.Result.Waiting :
+                    progress.Update(state, start, end, clock, elapsed, map, player.Location.X, player.Location.Y, player.Location.Z);
+                double moved = ClickAimMath.Len(player.Location.X - origin.Location.X, player.Location.Y - origin.Location.Y);
+                bool changed = map != originMap || moved >= 50.0 || Math.Abs(player.Location.Z - origin.Location.Z) >= 50.0;
+                bool nearTown = TownHasPlanNearby(points, map, player.Location.X, player.Location.Y);
+                if (seen && state == WowBTownCastCandidate.State.Idle && changed && nearTown && !earlyClear && !combatAfterCast &&
+                    result != WowBTownCastProgress.Result.Uncertain &&
+                    (result == WowBTownCastProgress.Result.ArrivedCandidate || (remaining <= 1500 && elapsed >= 9500)))
+                {
+                    if (destinationCount > 0 && destinationMap == map &&
+                        ClickAimMath.Len(player.Location.X - destinationX, player.Location.Y - destinationY) <= 3 &&
+                        Math.Abs(player.Location.Z - destinationZ) <= 3) destinationCount++;
+                    else { destinationCount = 1; destinationAt = Environment.TickCount64; }
+                    destinationMap = map; destinationX = player.Location.X; destinationY = player.Location.Y; destinationZ = player.Location.Z;
+                    if (destinationCount >= 2 && Environment.TickCount64 - destinationAt >= 100 &&
+                        !ClickAimAbort.Requested && AutoVendorIdentityMatches(reader, memory, origin.Guid))
+                    {
+                        _townTransit = true; _townReader = reader; _townMemory = memory; _townPlayer = origin.Guid;
+                        Logging.Write("[Town return] cast candidate cleared and location changed near a recorded vendor; continuing by mesh. Destination and cast remain experimental.");
+                        return true;
+                    }
+                }
+                else destinationCount = 0;
+                if (seen && state == WowBTownCastCandidate.State.Idle && !changed && defendedDuringCast &&
+                    map == originMap && moved < 20 && Math.Abs(player.Location.Z - origin.Location.Z) < 20 &&
+                    TryReadGatherCombat(out fighting) && !fighting)
+                {
+                    if (combatIdleCount++ == 0) combatIdleAt = Environment.TickCount64;
+                    if (combatIdleCount >= 2 && Environment.TickCount64 - combatIdleAt >= 100)
+                    { Logging.Write("[Town return] observed cast was interrupted by combat; retrying after defence."); break; }
+                }
+                else combatIdleCount = 0;
+                if (result == WowBTownCastProgress.Result.Interrupted && !changed)
+                { Logging.Write("[Town return] observed cast cleared early at the original location; retrying."); break; }
+                if (seen && state == WowBTownCastCandidate.State.Idle && changed && !nearTown)
+                { Logging.Write("[Town return] location changed away from any complete recorded town plan; stopping."); Stop(); return false; }
+                if ((!seen && elapsed > 4000) || elapsed > 30000)
+                { Logging.Write("[Town return] cast or successful arrival not confirmed; stopping without a blind retry."); Stop(); return false; }
+                if (ClickAimAbort.Wait(150)) return false;
+            }
+        }
+        if (!_stop && !ClickAimAbort.Requested) { Logging.Write("[Town return] three interrupted attempts; stopping."); Stop(); }
+        return false;
     }
 
     private static bool WalkToRecordedMailbox(ClickAimMover mover)

@@ -47,7 +47,7 @@ namespace Styx.Logic.Pathing
     {
         private static bool _running = true, _stop, _vendorDue, _vendorImpossible, _vendorManualPending, combat;
         private static int _vendorRetryAt, _lootsSinceTrip;
-        private static bool _vendorAutoPending;
+        private static bool _vendorAutoPending, _townTransit;
         private static WowBGuid _vendorAutoPlayer;
         private static WowBReader? _vendorAutoReader;
         private static GreenMagic.Memory? _vendorAutoMemory;
@@ -95,6 +95,9 @@ namespace Styx.Logic.Pathing
             ClickAimAbort.Requested = true; Check(!VendorDue(), "STOP blocks mailbox route"); ClickAimAbort.Requested = false;
             _vendorRetryAt = unchecked(Environment.TickCount + 10000); Check(!VendorDue() && AutoVendorPending(), "mailbox retry holds new pulls");
             _vendorRetryAt = unchecked(Environment.TickCount - 1); Check(VendorDue(), "mailbox route resumes after delay");
+            _vendorMailboxPending = null; _townTransit = true;
+            Check(VendorDue() && AutoVendorPending(), "confirmed town transit remains pending without auto-sell");
+            combat = true; Check(!VendorDue() && AutoVendorPending(), "town route yields to defence"); combat = false;
             Console.WriteLine("70707 and legacy vendor-due wiring synthetic fixtures passed");
         }
     }

@@ -228,8 +228,11 @@
                 <TextBlock Grid.Row="0" Grid.ColumnSpan="3" TextWrapping="Wrap" Margin="0,0,0,10"
                            Text="On 70755/70790/70862/70888/70938, Grind uses the experimental ordinary-bag subtotal, excluding bags you mark as specialty. Unclassified or unreadable candidates wait rather than guessing. On 70707, all candidate bags count. Two fresh zero observations are required. Other WowB builds use the corpse-interaction threshold below. The recorded click plan is replayed; sales are not verified."/>
 
-                <CheckBox x:Name="chkAutoSell" Grid.Row="1" Grid.ColumnSpan="3" Margin="0,0,0,8"
-                          Content="Walk to the vendor and sell when the bags are due"/>
+                <StackPanel Grid.Row="1" Grid.ColumnSpan="3">
+                    <CheckBox x:Name="chkAutoSell" Margin="0,0,0,8" Content="Go to the vendor and sell when the bags are due"/>
+                    <CheckBox x:Name="chkTownReturn" Margin="0,0,0,4" Content="Use Astral Recall / Hearthstone before the vendor trip (70938 Grind)"/>
+                    <TextBlock Margin="20,0,0,8" TextWrapping="Wrap" FontSize="11" Text="Off: use the mesh to walk to a vendor on this map. On: put Astral Recall (Shaman) or Hearthstone (other classes) directly on a default-bound first-bar slot 1–12, and set the correct class under Combat. Bind home near a saved vendor. Experimental cast and sale detection; no automatic mail."/>
+                </StackPanel>
 
                 <TextBlock Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2" VerticalAlignment="Center" Margin="0,0,8,8"
                            Text="Other WowB builds: after this many corpse interactions"/>
