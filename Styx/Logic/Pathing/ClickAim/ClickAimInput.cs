@@ -83,6 +83,9 @@ internal static class ClickAimInput
     [DllImport("user32.dll")]
     private static extern short GetAsyncKeyState(int key);
 
+    // Recording a screen coordinate is meaningful only while the game is in front.
+    internal static bool GameForeground(IntPtr hwnd) => hwnd != IntPtr.Zero && GetForegroundWindow() == hwnd;
+
     // Do not post a foreground gather click while the real mouse is held.
     // Background interaction intentionally permits clicks in other applications.
     internal static bool MouseButtonsUp()

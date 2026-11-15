@@ -171,6 +171,187 @@ namespace CopilotBuddy.UI
             finally { btnTargetInfo.IsEnabled = true; }
         }
 
+        private sealed class MailGridPointRow
+        {
+            public string Key { get; set; } = "";
+            public string Description { get; set; } = "";
+            public bool Recorded { get; set; }
+            public string Label => (Recorded ? "✓ " : "○ ") + Description;
+        }
+        private readonly List<MailGridPointRow> _mailGridRows = new List<MailGridPointRow>();
+        private readonly Dictionary<string, WowBMailGridCalibration.Point> _mailGridPoints = new Dictionary<string, WowBMailGridCalibration.Point>();
+        private List<WowBContainerResearchProbe.MailBagObservation>? _mailGridBags;
+        private WowBReader? _mailGridReader;
+        private GreenMagic.Memory? _mailGridMemory;
+        private WowBGuid _mailGridPlayer;
+        private IntPtr _mailGridHwnd;
+        private int _mailGridWidth, _mailGridHeight;
+        private bool _mailGridBusy;
+
+        private bool MailGridContextCurrent()
+            => !_mailGridBusy && !ClickAimUi.Running && !ClickAimUi.Paused && _mailGridReader?.IsExperimental70938 == true &&
+               _mailGridMemory != null && ObjectManager.Wow == _mailGridMemory && ObjectManager.WowB == _mailGridReader &&
+               _mailGridMemory.WindowHandle == _mailGridHwnd && _mailGridHwnd != IntPtr.Zero &&
+               ClickAimInput.ClientSize(_mailGridHwnd, out int width, out int height) && width == _mailGridWidth && height == _mailGridHeight;
+
+        private bool MailGridObservationsMatch(WowBGuid player, List<WowBContainerResearchProbe.MailBagObservation>? bags)
+        {
+            if (_mailGridBags == null || bags == null || player != _mailGridPlayer || bags.Count != _mailGridBags.Count) return false;
+            for (int i = 0; i < bags.Count; i++)
+            {
+                var before = _mailGridBags[i]; var after = bags[i];
+                if (before.CandidateIndex != after.CandidateIndex || before.Unknown != after.Unknown ||
+                    before.Bag != after.Bag || before.Slots.Length != after.Slots.Length) return false;
+                for (int j = 0; j < before.Slots.Length; j++) if (before.Slots[j] != after.Slots[j]) return false;
+            }
+            return true;
+        }
+
+        private void AddMailGridPoint(string key, string description)
+            => _mailGridRows.Add(new MailGridPointRow { Key = key, Description = description });
+
+        private async void btnMailGridStart_Click(object sender, RoutedEventArgs e)
+        {
+            if (_mailGridBusy || ClickAimUi.Running || ClickAimUi.Paused)
+            { lblMailGridStatus.Text = "Stop the bot and routes first."; return; }
+            GreenMagic.Memory? memory = ObjectManager.Wow; WowBReader? reader = ObjectManager.WowB;
+            IntPtr hwnd = memory?.WindowHandle ?? IntPtr.Zero;
+            if (reader?.IsExperimental70938 != true || memory == null || hwnd == IntPtr.Zero ||
+                !ClickAimInput.ClientSize(hwnd, out int width, out int height))
+            { lblMailGridStatus.Text = "Attach to 70938 and open the game window before calibrating."; return; }
+            _mailGridBusy = true; btnMailGridStart.IsEnabled = false; btnMailGridRecord.IsEnabled = false; btnMailGridSave.IsEnabled = false;
+            lblMailGridStatus.Text = "Reading bag identities and slots; keep the bags unchanged...";
+            try
+            {
+                var sample = await Task.Run(() => {
+                    bool ok = WowBInventoryProbe.TryReadMailCandidateBags(out WowBGuid player, out var bags);
+                    return (ok, player, bags);
+                });
+                if (!IsLoaded) return;
+                if (!sample.ok || sample.player.IsEmpty || sample.bags == null || ObjectManager.Wow != memory || ObjectManager.WowB != reader ||
+                    ClickAimUi.Running || ClickAimUi.Paused || memory.WindowHandle != hwnd ||
+                    !ClickAimInput.ClientSize(hwnd, out int finalWidth, out int finalHeight) || finalWidth != width || finalHeight != height)
+                { _mailGridBags = null; lblMailGridStatus.Text = "Bag snapshot or session changed/unreadable; nothing was recorded. Try again while stopped."; return; }
+                _mailGridMemory = memory; _mailGridReader = reader; _mailGridHwnd = hwnd;
+                _mailGridWidth = width; _mailGridHeight = height; _mailGridPlayer = sample.player; _mailGridBags = sample.bags;
+                _mailGridRows.Clear(); _mailGridPoints.Clear(); txtMailGridPreview.Text = "";
+                AddMailGridPoint("anchor", "Reference: leftmost cell in a complete grid row");
+                AddMailGridPoint("right", "Cell immediately to the right of the reference");
+                AddMailGridPoint("below", "Cell immediately below the reference");
+                AddMailGridPoint("backpack.first", "Main backpack: first visible slot (including locked slots)");
+                AddMailGridPoint("backpack.last", "Main backpack: last visible slot");
+                foreach (var bag in sample.bags)
+                {
+                    if (bag.Unknown) continue;
+                    AddMailGridPoint("bag" + bag.CandidateIndex + ".first", "Candidate " + bag.CandidateIndex + ": first slot (1 of " + bag.Slots.Length + ")");
+                    AddMailGridPoint("bag" + bag.CandidateIndex + ".last", "Candidate " + bag.CandidateIndex + ": last slot (" + bag.Slots.Length + ")");
+                }
+                cmbMailGridPoint.ItemsSource = null; cmbMailGridPoint.ItemsSource = _mailGridRows;
+                cmbMailGridPoint.SelectedIndex = 0;
+                btnMailGridRecord.IsEnabled = true; btnMailGridSave.IsEnabled = true;
+                int unknown = 0; foreach (var bag in sample.bags) if (bag.Unknown) unknown++;
+                lblMailGridStatus.Text = "Captured " + width + "×" + height + " client and bag identities. " + unknown + " candidate(s) unknown, not assumed absent. Record each point. Automatic mailing remains disabled.";
+            }
+            catch (Exception ex) { _mailGridBags = null; if (IsLoaded) lblMailGridStatus.Text = "Grid setup failed: " + ex.Message; }
+            finally { _mailGridBusy = false; if (IsLoaded) btnMailGridStart.IsEnabled = true; }
+        }
+
+        private void cmbMailGridPoint_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (lblMailGridInstruction == null) return;
+            lblMailGridInstruction.Text = cmbMailGridPoint.SelectedItem is MailGridPointRow row
+                ? "Select Record, switch focus to the game, then within 3 seconds put the cursor at the CENTER of: " + row.Description + ". Do not click the slot." : "Start calibration and select a point.";
+        }
+
+        private async void btnMailGridRecord_Click(object sender, RoutedEventArgs e)
+        {
+            if (!MailGridContextCurrent() || cmbMailGridPoint.SelectedItem is not MailGridPointRow row)
+            { lblMailGridStatus.Text = "Session, client size or bot state changed. Start calibration again."; return; }
+            _mailGridBusy = true; btnMailGridStart.IsEnabled = false; btnMailGridRecord.IsEnabled = false; btnMailGridSave.IsEnabled = false;
+            lblMailGridStatus.Text = "Focus the game and move the cursor to the center of " + row.Description + "; recording in 3 seconds. Do not click the slot.";
+            try
+            {
+                await Task.Delay(3000);
+                if (!IsLoaded) return;
+                double fx = 0, fy = 0;
+                bool cursor = ClickAimInput.GameForeground(_mailGridHwnd) && ClickAimInput.TryCursorFraction(_mailGridHwnd, out fx, out fy);
+                var sample = await Task.Run(() => {
+                    bool ok = WowBInventoryProbe.TryReadMailCandidateBags(out WowBGuid player, out var bags);
+                    return (ok, player, bags);
+                });
+                if (!IsLoaded) return;
+                _mailGridBusy = false;
+                if (!cursor || !MailGridContextCurrent() || !sample.ok || !MailGridObservationsMatch(sample.player, sample.bags))
+                { _mailGridBags = null; lblMailGridStatus.Text = "Cursor, bag contents, player, client size or session changed/unreadable. Start calibration again."; return; }
+                _mailGridPoints[row.Key] = new WowBMailGridCalibration.Point(fx * _mailGridWidth, fy * _mailGridHeight);
+                row.Recorded = true; cmbMailGridPoint.Items.Refresh();
+                int next = _mailGridRows.FindIndex(item => !item.Recorded);
+                if (next >= 0) cmbMailGridPoint.SelectedIndex = next;
+                lblMailGridStatus.Text = "Recorded " + row.Description + ". " + _mailGridPoints.Count + "/" + _mailGridRows.Count + " points. No input was sent.";
+            }
+            catch (Exception ex) { _mailGridBags = null; if (IsLoaded) lblMailGridStatus.Text = "Grid point failed: " + ex.Message; }
+            finally
+            {
+                _mailGridBusy = false;
+                if (IsLoaded) { btnMailGridStart.IsEnabled = true; btnMailGridRecord.IsEnabled = _mailGridBags != null; btnMailGridSave.IsEnabled = _mailGridBags != null; }
+            }
+        }
+
+        private async void btnMailGridSave_Click(object sender, RoutedEventArgs e)
+        {
+            if (!MailGridContextCurrent() || _mailGridBags == null)
+            { lblMailGridStatus.Text = "Session, client size or bot state changed. Start calibration again."; return; }
+            if (!int.TryParse(txtMailGridColumns.Text, out int columns) || !int.TryParse(txtMailGridBackpack.Text, out int backpack))
+            { lblMailGridStatus.Text = "Columns and visible backpack slots must be whole numbers."; return; }
+            _mailGridBusy = true; btnMailGridStart.IsEnabled = false; btnMailGridRecord.IsEnabled = false; btnMailGridSave.IsEnabled = false;
+            try
+            {
+                var sample = await Task.Run(() => {
+                    bool ok = WowBInventoryProbe.TryReadMailCandidateBags(out WowBGuid player, out var bags);
+                    return (ok, player, bags);
+                });
+                if (!IsLoaded) return;
+                _mailGridBusy = false;
+                if (!MailGridContextCurrent() || !sample.ok || !MailGridObservationsMatch(sample.player, sample.bags))
+                { _mailGridBags = null; lblMailGridStatus.Text = "Bag contents, player, client size or session changed/unreadable. Start calibration again."; return; }
+                var bags = new List<WowBMailGridCalibration.Bag>();
+                foreach (var bag in _mailGridBags)
+                    bags.Add(new WowBMailGridCalibration.Bag { Index = bag.CandidateIndex, Unknown = bag.Unknown,
+                        Identity = bag.Unknown ? "" : bag.Bag.ToString(), Count = bag.Slots.Length });
+                if (!WowBMailGridCalibration.TryBuild(_mailGridWidth, _mailGridHeight, columns, _mailGridPlayer.ToString(), bags,
+                    backpack, _mailGridPoints, out var result, out string error) || result == null)
+                { lblMailGridStatus.Text = "Calibration not saved: " + error; return; }
+                if (!MailGridContextCurrent() || !WowBMailGridCalibration.Save(result, out error))
+                { lblMailGridStatus.Text = "Calibration not saved: " + (error.Length == 0 ? "session changed" : error); return; }
+                var preview = new System.Text.StringBuilder();
+                preview.AppendLine("Client-pixel centers only; verify visually. Backpack is excluded:");
+                foreach (var bag in result.Bags)
+                {
+                    if (bag.Unknown) { preview.AppendLine("Candidate " + bag.Candidate + ": unknown; not assumed absent."); continue; }
+                    preview.Append("Candidate ").Append(bag.Candidate).Append(": ");
+                    for (int i = 0; i < bag.Count; i++)
+                    {
+                        int ordinal = bag.FirstOrdinal + i;
+                        int gridRow = (int)Math.Floor(ordinal / (double)result.Columns);
+                        int col = ordinal - gridRow * result.Columns;
+                        if (i > 0) preview.Append("; ");
+                        preview.Append(i + 1).Append("=(").Append((int)Math.Round(result.AnchorX + col * result.PitchX))
+                            .Append(',').Append((int)Math.Round(result.AnchorY + gridRow * result.PitchY)).Append(')');
+                    }
+                    preview.AppendLine();
+                }
+                txtMailGridPreview.Text = preview.ToString();
+                int unknown = 0; foreach (var bag in result.Bags) if (bag.Unknown) unknown++;
+                lblMailGridStatus.Text = "Research grid saved to " + WowBMailGridCalibration.DefaultPath + ". " + unknown + " candidate(s) still unknown. Check all markers visually; no click was made and automatic mailing remains disabled.";
+            }
+            catch (Exception ex) { if (IsLoaded) lblMailGridStatus.Text = "Grid save failed: " + ex.Message; }
+            finally
+            {
+                _mailGridBusy = false;
+                if (IsLoaded) { btnMailGridStart.IsEnabled = true; btnMailGridRecord.IsEnabled = _mailGridBags != null; btnMailGridSave.IsEnabled = _mailGridBags != null; }
+            }
+        }
+
         private void RefreshObservedBags()
         {
             cmbBagCandidate.ItemsSource = WowBInventoryProbe.ObservedBags();

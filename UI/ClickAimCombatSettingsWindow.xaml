@@ -266,6 +266,24 @@
                         <Button Content="Mark ordinary" Height="24" Padding="8,0" Click="btnBagOrdinary_Click"/>
                         <Button Content="Mark specialty" Height="24" Padding="8,0" Margin="8,0,0,0" Click="btnBagSpecialty_Click"/>
                     </StackPanel>
+                    <Separator Margin="0,10,0,6"/>
+                    <TextBlock Text="Combined bag grid calibration (research only)" FontWeight="SemiBold"/>
+                    <TextBlock TextWrapping="Wrap" Margin="0,4,0,4" Text="Stop the bot and open Combined Backpack in the game. Keep the game client size, UI scale, bag positions and bag configuration unchanged. Record each listed cell center; no clicks are sent. Mark the 20 visible main-backpack slots including locked slots. Identify the first and last visible slot of each candidate using the bag snapshots; do not guess."/>
+                    <WrapPanel Margin="0,2,0,4">
+                        <TextBlock Text="Columns:" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                        <TextBox x:Name="txtMailGridColumns" Width="42" Text="10" Margin="0,0,12,0"/>
+                        <TextBlock Text="Visible backpack slots (including locked):" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                        <TextBox x:Name="txtMailGridBackpack" Width="42" Text="20" Margin="0,0,12,0"/>
+                        <Button x:Name="btnMailGridStart" Content="Start grid calibration" Height="24" Padding="8,0" Click="btnMailGridStart_Click"/>
+                    </WrapPanel>
+                    <ComboBox x:Name="cmbMailGridPoint" MinWidth="300" HorizontalAlignment="Left" DisplayMemberPath="Label" SelectionChanged="cmbMailGridPoint_SelectionChanged"/>
+                    <TextBlock x:Name="lblMailGridInstruction" TextWrapping="Wrap" Margin="0,4,0,4" FontSize="11"/>
+                    <WrapPanel>
+                        <Button x:Name="btnMailGridRecord" Content="Record selected cell (3 s)" Height="24" Padding="8,0" IsEnabled="False" Click="btnMailGridRecord_Click"/>
+                        <Button x:Name="btnMailGridSave" Content="Validate and save grid" Height="24" Padding="8,0" Margin="8,0,0,0" IsEnabled="False" Click="btnMailGridSave_Click"/>
+                    </WrapPanel>
+                    <TextBlock x:Name="lblMailGridStatus" TextWrapping="Wrap" Margin="0,4,0,6" FontSize="11" Text="No grid calibration recorded. Automatic mailing is not enabled."/>
+                    <TextBox x:Name="txtMailGridPreview" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" Height="100" Margin="0,0,0,6" ToolTip="Calculated cell centers, in game client pixels. This preview never sends input."/>
                     <TextBlock x:Name="lblVendorNote" TextWrapping="Wrap" Margin="0,2,0,8" FontSize="11" Opacity="0.9"/>
                 </StackPanel>
 

@@ -1,0 +1,23 @@
+# Combined bag grid calibration (research only)
+
+This calibration records **geometry only**. It does not open bags, click, attach, send mail, or enable automatic mailing. A valid-looking calibration is not proof that a mailbox or bag window is currently open, that the recipient is correct, or that the user identified each cell correctly. No gameplay code reads this file yet.
+
+## Before starting
+
+1. Attach to 70938, stop Grind/Gather and other routes, and open the game's **Combined Backpack**. Keep the same character, game client size, UI scale, position/layout of the combined bag, bag contents and equipped bags throughout calibration. No gameplay or mouse clicks are sent by the calibration.
+2. In Combat settings → Selling, the existing **Bag research snapshot** and the earlier user observations can help identify candidate 0–3 and each bag's first/last visible slot. Before starting calibration, identify those cells (for example, use one disposable item moved one slot at a time with stopped snapshots). The combined grid does not label bag boundaries; **do not guess**. Make notes or screenshots, then leave all bag contents unchanged. The reader lists the observed candidate sizes; candidate 4 may show unknown and is never treated as absent.
+3. In Selling → Combined bag grid calibration, enter the number of columns in a complete row (the supplied screenshots show 10) and the number of **visible main-backpack cells including the four locked cells** (the user reported 20). Different interfaces may have different values.
+
+## Record
+
+* Press **Start grid calibration**. It takes a stopped, identity-guarded bag snapshot. Unknown candidate identities stay unknown; a changed or unresolved nonzero candidate refuses the snapshot.
+* For each entry in the selector, press **Record selected cell (3 s)**, switch focus to the game, and hover over the **center** of the indicated cell until the timer finishes. Do not click the slot. Return to settings and select the next entry; recorded entries are checked and the next unrecorded entry is selected automatically. The tool records only cursor coordinates, never sends game input.
+* For the reference, choose the **leftmost cell of a full row** of the combined grid; then record the immediately right-adjacent cell and the cell directly below the reference. Do not choose a short/incomplete top row for the reference. These three centers establish horizontal/vertical spacing and the grid's first column.
+* Record the first and last visible main-backpack cells, including locked cells, followed by the first and last cells of every observed nonzero bag candidate. Candidate 0 is an equipped bag in the supplied trace and is eligible for future mail; it is not the backpack.
+* Press **Validate and save grid**. This first research version assumes each bag's slots are displayed consecutively in left-to-right, top-to-bottom row-major order, with no gaps inside an individual bag. It requires markers on a common grid, each recorded bag span to equal its observed candidate slot count, and no overlap between any equipped bag and the excluded backpack or between bags. A reversed, sorted or otherwise different display must be rejected or recalibrated with a future mapping method; do not force points to fit. It verifies the same character, attachment, client size, bag identities and candidate slot bytes at each capture and before saving. A changed or unreadable state invalidates the in-progress calibration. The resulting client-pixel centers are shown for review and saved to `Settings/clickaim-mail-grid.json`.
+
+A zero candidate identity is recorded as Unknown, not as a confirmed empty bag. Missing/unreadable candidates and GUI states still require further evidence; a saved file is explicitly marked `ResearchOnly` and cannot authorize clicks. The checks cannot detect every UI-scale/window movement or prove the user selected the correct bag. Recalibrate whenever the layout, bags, client size, UI scale, character or addons change. A screen-size match alone is insufficient. Inspect the preview and send the resulting JSON only if comfortable sharing character and bag GUIDs; it contains no actual nickname or item contents.
+
+## Evidence and limitations
+
+The screenshots `img1backpackopen.png` and `itemsattached.png` show the combined layout at 1919×1079, with 12 attachment icons in one image. They do not identify actual candidate-to-screen-cell correspondence or recipient/send success. The 11 bag snapshots showed candidates 0–3 corresponding to the user-labelled moves and the separate player array reflecting backpack changes. They do not prove UI geometry for a different layout or candidate 4's meaning. No mailbox-frame/readback or send-result observer is implemented yet.

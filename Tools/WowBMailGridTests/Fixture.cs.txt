@@ -1,0 +1,39 @@
+using System;
+using System.Collections.Generic;
+using Styx.Logic.Pathing;
+using G = Styx.Logic.Pathing.WowBMailGridCalibration;
+namespace Styx.Logic.Pathing { static class ClickAimCalibration { public static string DefaultPath => "grid-test/clickaim-cal.txt"; } }
+static class Fixture
+{
+    static void Check(bool b,string why) { if (!b) throw new Exception(why); }
+    static G.Point Point(int col,int row) => new G.Point(100+40*col,200+40*row);
+    static Dictionary<string,G.Point> Points() => new() {
+        ["anchor"]=Point(0,0), ["right"]=Point(1,0), ["below"]=Point(0,1),
+        ["backpack.first"]=Point(2,-1), ["backpack.last"]=Point(1,1),
+        ["bag0.first"]=Point(2,1), ["bag0.last"]=Point(3,2),
+        ["bag1.first"]=Point(4,2), ["bag1.last"]=Point(5,3),
+        ["bag2.first"]=Point(6,3), ["bag2.last"]=Point(7,4),
+        ["bag3.first"]=Point(8,4), ["bag3.last"]=Point(9,5)
+    };
+    static List<G.Bag> Bags() => new() { new G.Bag {Index=0,Identity="bag0",Count=12},new G.Bag {Index=1,Identity="bag1",Count=12},new G.Bag {Index=2,Identity="bag2",Count=12},new G.Bag {Index=3,Identity="bag3",Count=12},new G.Bag {Index=4,Unknown=true} };
+    static bool Build(Dictionary<string,G.Point> p,List<G.Bag>? bags=null,int columns=10,int backpack=20) => G.TryBuild(600,600,columns,"player",bags??Bags(),backpack,p,out _,out _);
+    public static void Main()
+    {
+        var pts=Points(); Check(G.TryBuild(600,600,10,"player",Bags(),20,pts,out var grid,out _) && grid!=null,"row-wrapping grid");
+        Check(grid!.BackpackFirstOrdinal==-8 && grid.BackpackVisibleSlots==20 && grid.Bags[0].FirstOrdinal==12 && grid.Bags[3].FirstOrdinal==48,"backpack and candidate ordinals");
+        Check(grid.ResearchOnly && grid.Bags[4].Unknown && grid.Bags[4].Count==0,"unknown fifth bag remains unknown");
+        pts=Points(); pts["bag0.first"]=Point(1,1); pts["bag0.last"]=Point(2,2); Check(!Build(pts),"backpack overlap rejected");
+        pts=Points(); pts["bag1.first"]=Point(3,2); pts["bag1.last"]=Point(4,3); Check(!Build(pts),"bag overlap rejected");
+        pts=Points(); pts["bag0.last"]=Point(4,2); Check(!Build(pts),"wrong bag span rejected");
+        pts=Points(); pts["bag0.first"]=new G.Point(192,247); Check(!Build(pts),"off-center marker rejected");
+        pts=Points(); pts.Remove("below"); Check(!Build(pts),"missing marker rejected");
+        pts=Points(); pts["right"]=Point(2,0); Check(!Build(pts),"incorrect pitch and spans rejected");
+        pts=Points(); Check(!Build(pts,columns:11),"wrong column count rejected");
+        pts=Points(); Check(!Build(pts,backpack:16),"locked slots not silently omitted");
+        var bags=Bags(); bags[1].Identity="bag0"; Check(!Build(Points(),bags),"duplicate bag identities rejected");
+        bags=Bags(); bags[4].Unknown=false; bags[4].Identity="bag4"; bags[4].Count=12; Check(!Build(Points(),bags),"unmarked fifth bag not omitted");
+        Check(!G.TryBuild(200,200,10,"player",Bags(),20,Points(),out _,out _),"out-of-window geometry rejected");
+        Check(!G.TryBuild(600,600,10,"",Bags(),20,Points(),out _,out _),"missing identity rejected");
+        Console.WriteLine("Synthetic grid geometry cases passed; UI and live mapping unverified.");
+    }
+}
