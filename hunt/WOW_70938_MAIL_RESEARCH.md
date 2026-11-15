@@ -1,4 +1,42 @@
-# 70938 mailing research: not enabled
+# 70938 experimental mailing
+
+## Current experimental implementation
+
+70938 Grind has a **default-off** experimental mail-after-selling option. It
+requires a saved vendor with a same-map mailbox standing point, a profile with a
+same-map return hotspot, a saved recipient containing only letters/hyphens,
+the prior combined-bag grid, and separately recorded mailbox, Send Mail tab and
+Send button coordinates. At the recorded standing point, the mailbox hover
+candidate must match the saved full GUID. Client size, foreground, map, player,
+health, ghost, combat and STOP guards are checked. Changes to camera, UI scale,
+window layout, bag configuration or client size require recalibration; the
+controls are user-labelled, not independently detected. The merchant plan must
+leave the calibrated combined bag open.
+
+The experiment posts the tab click, waits one second, posts recipient text,
+then attaches at most 12 candidate 0–3 raw slots and compares the mail record
+candidate after each click. It sends once per batch, then requires a stable
+zero-like candidate table and disappearance of those raw IDs from observed bag
+candidates before attempting another batch. This is **not** recipient field
+readback, a complete inventory, an acknowledgement, or proof of server
+delivery. Attachment field interpretation is based on one trace; a mismatch
+holds instead of guessing. Candidate 4 remains Unknown/unverified, is never
+silently treated as absent or selected, and the separate backpack is excluded.
+A zero observed 0–3 count is not proof that all equipped bags are empty. Text
+focus, UI state, mailable items, recipient reset between batches, merchant
+sales and game/server outcomes are unverified. Wrong calibration or focus can
+mail unintended items to a wrong recipient. Use a supervised disposable-item
+test first.
+
+Missing configuration before routing skips mail and returns to profile. Once
+interaction begins, any interruption, partial input, unreadable observation or
+uncertain send stops for inspection without retrying a possible send. Confirmed
+rejection is not independently observed, so the requested three-confirmed-
+failures retry/continue behavior is **not yet implemented**. Cross-map return
+remains unsupported; the experiment is limited to 64 batches. No Lua is used.
+The Windows build and live workflow have not been tested here. The historical
+notes below describe the earlier disabled research stages and should not be
+read as the current opt-in status.
 
 Requested behavior: after the recorded sell plan, navigate to the recorded mailbox, open Send Mail, wait one second, type the user-editable recipient, attach at most 12 items per mail from equipped bags, send and verify those items left the bags. The user clarified that **only the separate 20-slot main backpack is excluded**; observed container candidates 0, 1, 2 and 3 must all be included. A future candidate 4 must not be silently excluded if established to be another equipped bag. After all eligible items are gone or three failed attempts, mesh back to the active profile hotspot. STOP, death, combat, player/map identity and no-Lua rules still apply. A saved sell plan can itself click any bag slot; the user must configure it not to sell things intended for mail.
 

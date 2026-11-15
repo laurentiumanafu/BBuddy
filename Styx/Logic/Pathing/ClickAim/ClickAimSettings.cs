@@ -111,7 +111,8 @@ internal static class ClickAimSettings
     public static bool AutoSell = true;
     // 70938 Grind only: use a directly bound Astral Recall or Hearthstone.
     public static bool UseTownReturn;
-    // Stored for future 70938 mailbox support. Saving a name does not enable mailing.
+    // Explicit experimental opt-in; saved recipient alone does not enable it.
+    public static bool ExperimentalAutoMail;
     public static string MailRecipient = "";
     internal static bool ValidMailRecipient(string value)
     {
@@ -194,6 +195,7 @@ internal static class ClickAimSettings
         RestMs = 20000;
         AutoSell = true;
         UseTownReturn = false;
+        ExperimentalAutoMail = false;
         MailRecipient = "";
         SellAfterLoots = 40;
         VendorWaitMs = 2500;
@@ -211,6 +213,7 @@ internal static class ClickAimSettings
         // Missing or malformed files never carry a previous macro opt-in.
         UseKeyOneStartAttackMacro = false;
         UseTownReturn = false;
+        ExperimentalAutoMail = false;
         MailRecipient = "";
         UseShamanTotemMacro = ShamanTotemEarth = ShamanTotemHealing = ShamanTotemMana = false;
         ShamanTotemMacroKey = 2; ShamanTotemMacroPresses = 2;
@@ -358,6 +361,11 @@ internal static class ClickAimSettings
             UseTownReturn = flag;
             return true;
         }
+        if (string.Equals(key, "ExperimentalAutoMail", StringComparison.OrdinalIgnoreCase))
+        {
+            ExperimentalAutoMail = flag;
+            return true;
+        }
         if (string.Equals(key, "MailRecipient", StringComparison.OrdinalIgnoreCase))
         {
             MailRecipient = ValidMailRecipient(value) ? value : "";
@@ -453,7 +461,8 @@ internal static class ClickAimSettings
         text.AppendLine("RestMs = " + RestMs.ToString(CultureInfo.InvariantCulture));
         text.AppendLine("AutoSell = " + (AutoSell ? "true" : "false"));
         text.AppendLine("UseTownReturn = " + (UseTownReturn ? "true" : "false"));
-        text.AppendLine("# Saved for future mailbox support; saving this name does not enable mailing.");
+        text.AppendLine("# Experimental mailing is opt-in and may mail the wrong items or recipient; inspect and test first.");
+        text.AppendLine("ExperimentalAutoMail = " + (ExperimentalAutoMail ? "true" : "false"));
         text.AppendLine("MailRecipient = " + (ValidMailRecipient(MailRecipient) ? MailRecipient : ""));
         text.AppendLine("SellAfterLoots = " + SellAfterLoots.ToString(CultureInfo.InvariantCulture));
         text.AppendLine("VendorWaitMs = " + VendorWaitMs.ToString(CultureInfo.InvariantCulture));

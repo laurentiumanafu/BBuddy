@@ -14,7 +14,7 @@ class MailboxRecording(unittest.TestCase):
             self.assertIn(guard, record)
         self.assertIn('btnRecordMailbox_Click', x)
         handler = c[c.index('private void btnRecordMailbox_Click'):c.index('private void btnRememberMerchant_Click')]
-        for guard in ('ClickAimUi.Running', 'ObjectManager.Wow != memory', 'finalMap != map', 'ClickAimMath.Len', 'does not verify a sale or send mail'):
+        for guard in ('ClickAimUi.Running', 'ObjectManager.Wow != memory', 'finalMap != map', 'ClickAimMath.Len', 'Sales and mail are not independently verified'):
             self.assertIn(guard, handler)
     def test_town_rerecord_clears_old_metadata(self):
         method = v[v.index('public static bool SetTown'):v.index('public static bool AddMerchant')]

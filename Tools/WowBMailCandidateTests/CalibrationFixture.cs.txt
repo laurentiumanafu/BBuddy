@@ -1,0 +1,18 @@
+using System;
+using C = Styx.Logic.Pathing.WowBMailUiCalibration;
+namespace Styx.Logic.Pathing { static class ClickAimCalibration { public static string DefaultPath => "Settings/example.txt"; } }
+static class Fixture
+{
+ static void Check(bool b, string why) { if (!b) throw new Exception(why); }
+ static void Main()
+ {
+  var c = new C.Result { Player="p", MailboxHover="m", Width=1920, Height=1080,
+   X=1, Y=2, Z=3, MailboxX=600, MailboxY=500, TabX=100, TabY=500, SendX=300, SendY=500 };
+  Check(C.Valid(c),"valid basic calibration");
+  c.SendX=100; Check(!C.Valid(c),"tab and send cannot overlap");
+  c.SendX=300; c.MailboxX=1920; Check(!C.Valid(c),"point out of bounds");
+  c.MailboxX=600; c.X=double.NaN; Check(!C.Valid(c),"nonfinite coordinates");
+  c.X=1; c.MailboxHover=""; Check(!C.Valid(c),"missing hover");
+  Console.WriteLine("Synthetic mail calibration checks passed; user mapping is not proven.");
+ }
+}

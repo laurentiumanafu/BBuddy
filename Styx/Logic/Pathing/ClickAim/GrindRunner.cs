@@ -3462,8 +3462,8 @@ internal static class GrindRunner
     /// </summary>
     private static bool VendorTrip(IntPtr hwnd, ClickAimMover mover)
     {
-        if (_vendorReturnHotspot != null) return WalkBackToProfile(mover);
         if (_vendorMailboxPending != null) return WalkToRecordedMailbox(mover);
+        if (_vendorReturnHotspot != null) return WalkBackToProfile(mover);
         _vendorManualPending |= _vendorDue;
         _vendorDue = false;
         _vendorImpossible = false;
@@ -3662,7 +3662,6 @@ internal static class GrindRunner
         Logging.Write(string.Format(CultureInfo.InvariantCulture,
             "[Grind] vendor replay: {0} of {1} step(s) sent ({2} click(s)). Merchant state and bag contents "
             + "are not verified; this does not confirm a sale.", sent, point.Steps.Count, _sellClicks));
-        // Mailing is not implemented: do not detour to the mailbox or stop for it.
         // A profile return is deliberately separate from the sell stage so combat
         // or a temporary read failure cannot cause the clicks to be replayed.
         if (vendorReader.IsExperimental70938 && _activeProfileArea != null)
@@ -3689,7 +3688,22 @@ internal static class GrindRunner
             { Logging.Write("[Grind] no valid profile hotspot for the return; stopping after unverified sell replay."); Stop(); return false; }
             _vendorReturnHotspot = new RoutePoint { X = nearest.X, Y = nearest.Y, Z = nearest.Z, Kind = "Hotspot", Label = nearest.Label };
             _vendorReturnReader = vendorReader; _vendorReturnMemory = vendorMemory; _vendorReturnPlayer = player;
-            Logging.Write("[Grind] vendor clicks replayed (sales unverified); mailing is skipped and the nearest active profile hotspot is the next mesh destination.");
+            if (ClickAimSettings.ExperimentalAutoMail)
+            {
+                VendorFile.MailboxPoint? mailbox = point.Mailbox;
+                if (mailbox != null && mailbox.Map == returnMap && WowBMailRecipientText.ValidForTest(ClickAimSettings.MailRecipient) &&
+                    WowBMailUiCalibration.TryLoad(out var controls) && controls != null && controls.Map == mailbox.Map &&
+                    controls.Player == player.ToString() && ClickAimMath.Len(controls.X - mailbox.X, controls.Y - mailbox.Y) <= 3.0 &&
+                    Math.Abs(controls.Z - mailbox.Z) <= 5.0)
+                {
+                    _vendorMailboxPending = mailbox; _vendorMailboxReader = vendorReader;
+                    _vendorMailboxMemory = vendorMemory; _vendorMailboxPlayer = player;
+                    Logging.Write("[Mail] experimental post-sell mailbox route scheduled; sales and controls are not verified.");
+                    return WalkToRecordedMailbox(mover);
+                }
+                Logging.Write("[Mail] missing or mismatched mailbox/recipient/control calibration; skipping mail and returning to profile.");
+            }
+            else Logging.Write("[Grind] vendor clicks replayed (sales unverified); experimental mail is off.");
             return WalkBackToProfile(mover);
         }
         if (_townTransit)
@@ -3947,7 +3961,7 @@ internal static class GrindRunner
         { Logging.Write("[Grind] no complete mesh route or confirmed arrival at the profile hotspot; stopping without repeating the sale."); Stop(); return false; }
         _vendorReturnHotspot = null; _vendorReturnReader = null; _vendorReturnMemory = null; _vendorReturnPlayer = default;
         _townTransit = false; _townReader = null; _townMemory = null; _townPlayer = default;
-        Logging.Write("[Grind] reached the profile hotspot; resuming the active grind. Vendor sales remain unverified; no mail was sent.");
+        Logging.Write("[Grind] reached the profile hotspot; resuming the active grind. Vendor sales and any experimental mail remain unverified.");
         return true;
     }
 
@@ -4021,10 +4035,24 @@ internal static class GrindRunner
             Logging.Write("[Mailbox] no complete mesh route or confirmed arrival at the recorded point; stopping without interaction.");
             Stop(); return false;
         }
+        if (!ClickAimSettings.ExperimentalAutoMail || !WowBMailUiCalibration.TryLoad(out var controls) || controls == null ||
+            controls.Map != mailbox.Map || controls.Player != playerGuid.ToString() ||
+            ClickAimMath.Len(controls.X - finalPlayer.Location.X, controls.Y - finalPlayer.Location.Y) > 3.0 ||
+            Math.Abs(controls.Z - finalPlayer.Location.Z) > 5.0)
+        { Logging.Write("[Mail] control calibration changed or does not match arrival; stopping without input."); Stop(); return false; }
+        IntPtr hwnd = memory.WindowHandle;
+        bool InputSafe() => Safe() && ClickAimSettings.ExperimentalAutoMail && hwnd != IntPtr.Zero &&
+            memory.WindowHandle == hwnd && ClickAimInput.GameForeground(hwnd) && ClickAimInput.MouseButtonsUp() &&
+            reader.TryRead70888RecoveryPlayer(out WowBObservedUnit currentPlayer, out uint hp, out uint max) &&
+            currentPlayer.Guid == playerGuid && hp > 0 && max >= hp &&
+            ClickAimMath.Len(currentPlayer.Location.X - controls.X, currentPlayer.Location.Y - controls.Y) <= 3.0 &&
+            Math.Abs(currentPlayer.Location.Z - controls.Z) <= 5.0;
+        bool completed = WowBExperimentalMail.Run(hwnd, memory, reader, playerGuid, controls, ClickAimSettings.MailRecipient, InputSafe);
         _vendorMailboxPending = null; _vendorMailboxReader = null; _vendorMailboxMemory = null; _vendorMailboxPlayer = default;
-        Logging.Write("[Mailbox] reached the recorded standing point. Mailbox object, sale and bag contents are unverified; stopping so the user can mail manually. No mail was sent.");
-        Stop();
-        return true;
+        if (!completed)
+        { Logging.Write("[Mail] experiment interrupted or uncertain; stopping to avoid repeating a possible send. Inspect the game before restarting."); Stop(); return false; }
+        Logging.Write("[Mail] observed candidates 0–3 exhausted; returning to profile. Candidate 4 and delivery remain unverified.");
+        return WalkBackToProfile(mover);
     }
 
     /// <summary>

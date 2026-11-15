@@ -9,7 +9,7 @@ g=(R/'Styx/Logic/Pathing/ClickAim/GrindRunner.cs').read_text(encoding='utf-8-sig
 class MailPolicy(unittest.TestCase):
  def test_recipient_persistence_does_not_enable_mail(self):
   for part in ('MailRecipient = ""', 'ValidMailRecipient', '"MailRecipient"', '"MailRecipient = "'): self.assertIn(part,s)
-  for part in ('txtMailRecipient', 'Mailing is not active'): self.assertIn(part,x)
+  for part in ('txtMailRecipient', 'chkExperimentalAutoMail', 'server delivery cannot be independently verified'): self.assertIn(part,x)
   for part in ('txtMailRecipient.Text = ClickAimSettings.MailRecipient', 'ClickAimSettings.MailRecipient = mailRecipient', 'Stop the bot before changing the mail recipient'): self.assertIn(part,c)
   self.assertNotIn('WowBMailBatchPolicy',g)
  def test_policy_limits_and_unknowns(self):

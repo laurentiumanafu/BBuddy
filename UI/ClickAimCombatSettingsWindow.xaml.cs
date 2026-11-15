@@ -581,7 +581,7 @@ namespace CopilotBuddy.UI
                 if (!IsLoaded) return;
                 if (!current()) { lblMailGridStatus.Text = "Session changed; preview discarded."; return; }
                 txtMailGridPreview.Text = result.ok ? result.text : "";
-                lblMailGridStatus.Text = result.ok ? "Research preview shown; no actions were sent and automatic mailing remains disabled." : result.text;
+                lblMailGridStatus.Text = result.ok ? "Research preview shown; no actions were sent. Experimental mail requires separate opt-in." : result.text;
             }
             catch (Exception ex) { if (IsLoaded) lblMailGridStatus.Text = "Research preview failed: " + ex.Message; }
             finally
@@ -671,7 +671,7 @@ namespace CopilotBuddy.UI
                 cmbMailGridPoint.SelectedIndex = 0;
                 btnMailGridRecord.IsEnabled = true; btnMailGridSave.IsEnabled = true;
                 int unknown = 0; foreach (var bag in sample.bags) if (bag.Unknown) unknown++;
-                lblMailGridStatus.Text = "Captured " + width + "×" + height + " client and bag identities. " + unknown + " candidate(s) unknown, not assumed absent. Record each point. Automatic mailing remains disabled.";
+                lblMailGridStatus.Text = "Captured " + width + "×" + height + " client and bag identities. " + unknown + " candidate(s) unknown, not assumed absent. Record each point; experimental mail requires separate opt-in.";
             }
             catch (Exception ex) { _mailGridBags = null; if (IsLoaded) lblMailGridStatus.Text = "Grid setup failed: " + ex.Message; }
             finally { _mailGridBusy = false; if (IsLoaded) btnMailGridStart.IsEnabled = true; }
@@ -765,7 +765,7 @@ namespace CopilotBuddy.UI
                 }
                 txtMailGridPreview.Text = preview.ToString();
                 int unknown = 0; foreach (var bag in result.Bags) if (bag.Unknown) unknown++;
-                lblMailGridStatus.Text = "Research grid saved to " + WowBMailGridCalibration.DefaultPath + ". " + unknown + " candidate(s) still unknown. Check all markers visually; no click was made and automatic mailing remains disabled.";
+                lblMailGridStatus.Text = "Research grid saved to " + WowBMailGridCalibration.DefaultPath + ". " + unknown + " candidate(s) still unknown. Check all markers visually; no click was made. Experimental mail requires separate opt-in.";
             }
             catch (Exception ex) { if (IsLoaded) lblMailGridStatus.Text = "Grid save failed: " + ex.Message; }
             finally
@@ -820,6 +820,77 @@ namespace CopilotBuddy.UI
             }
             catch (Exception ex) { lblVendorNote.Text = "Bag research snapshot failed: " + ex.Message; }
             finally { btnInventoryProbe.IsEnabled = true; }
+        }
+
+        private MailHoverSample? _mailControlObject, _mailControlTab, _mailControlSend;
+
+        private async void btnRecordMailObject_Click(object sender, RoutedEventArgs e) => await RecordMailControl(0);
+        private async void btnRecordMailTab_Click(object sender, RoutedEventArgs e) => await RecordMailControl(1);
+        private async void btnRecordMailSend_Click(object sender, RoutedEventArgs e) => await RecordMailControl(2);
+
+        private async Task RecordMailControl(int kind)
+        {
+            if (_mailHoverBusy || _mailGridBusy || ClickAimUi.Running || ClickAimUi.Paused)
+            { lblMailControlsStatus.Text = "Stop the bot and wait for other mail research."; return; }
+            GreenMagic.Memory? memory = ObjectManager.Wow; WowBReader? reader = ObjectManager.WowB;
+            IntPtr hwnd = memory?.WindowHandle ?? IntPtr.Zero;
+            if (memory == null || reader?.IsExperimental70938 != true || hwnd == IntPtr.Zero ||
+                !ClickAimInput.ClientSize(hwnd, out int width, out int height))
+            { lblMailControlsStatus.Text = "Attach to 70938 first."; return; }
+            if (kind != 0 && _mailControlObject == null)
+            { lblMailControlsStatus.Text = "Record the mailbox first, then the tab and Send button without moving."; return; }
+            int generation = ClickAimAbort.Generation;
+            _mailHoverBusy = true; _mailGridBusy = true;
+            lblMailControlsStatus.Text = "Focus the game and hover " + (kind == 0 ? "the mailbox with the window closed" : kind == 1 ? "the Send Mail TAB" : "the Send button") + "; keep still for 3 seconds. No input is sent.";
+            try
+            {
+                await Task.Delay(3000);
+                if (!IsLoaded || ClickAimAbort.Generation != generation) return;
+                var pair = await Task.Run(() => {
+                    if (!MailHoverSampleNow(memory, reader, hwnd, width, height, out var a) || a == null || !a.ClickSafetyCandidate)
+                        return (ok: false, sample: (MailHoverSample?)null);
+                    Thread.Sleep(150);
+                    if (!MailHoverSampleNow(memory, reader, hwnd, width, height, out var b) || b == null || !b.ClickSafetyCandidate ||
+                        !MailHoverSameSession(a, b) || Math.Abs(a.CursorX-b.CursorX) > 3 || Math.Abs(a.CursorY-b.CursorY) > 3 ||
+                        ClickAimAbort.Generation != generation) return (ok: false, sample: (MailHoverSample?)null);
+                    return (ok: true, sample: b);
+                });
+                if (!IsLoaded) return;
+                if (!pair.ok || pair.sample == null || ClickAimAbort.Generation != generation)
+                { lblMailControlsStatus.Text = "Observation changed or was unsafe; no point recorded."; return; }
+                MailHoverSample sample = pair.sample;
+                if (kind == 0)
+                {
+                    if (sample.Hover.IsEmpty) { lblMailControlsStatus.Text = "Mailbox hover candidate is empty; nothing recorded."; return; }
+                    _mailControlObject = sample; _mailControlTab = null; _mailControlSend = null;
+                }
+                else
+                {
+                    if (_mailControlObject == null || !MailHoverSameSession(_mailControlObject, sample))
+                    { lblMailControlsStatus.Text = "Player, standing point or game session changed; record mailbox again."; return; }
+                    if (kind == 1) _mailControlTab = sample; else _mailControlSend = sample;
+                }
+                lblMailControlsStatus.Text = "Point recorded. Continue with the remaining controls; Save mail controls when finished.";
+            }
+            catch (Exception ex) { if (IsLoaded) lblMailControlsStatus.Text = "Control observation failed: " + ex.Message; }
+            finally { _mailHoverBusy = false; _mailGridBusy = false; }
+        }
+
+        private void btnSaveMailControls_Click(object sender, RoutedEventArgs e)
+        {
+            if (_mailHoverBusy || _mailGridBusy || ClickAimUi.Running || ClickAimUi.Paused ||
+                _mailControlObject == null || _mailControlTab == null || _mailControlSend == null ||
+                !MailHoverSameSession(_mailControlObject, _mailControlTab) || !MailHoverSameSession(_mailControlObject, _mailControlSend) ||
+                ObjectManager.Wow != _mailControlObject.Memory || ObjectManager.WowB != _mailControlObject.Reader)
+            { lblMailControlsStatus.Text = "Record all three controls in the same stopped session first."; return; }
+            var o = _mailControlObject; var t = _mailControlTab; var s = _mailControlSend;
+            var value = new WowBMailUiCalibration.Result { Player = o.Player.ToString(), MailboxHover = o.Hover.ToString(), Map = o.Map,
+                Width = o.Width, Height = o.Height, X = o.X, Y = o.Y, Z = o.Z,
+                MailboxX = (int)Math.Round(o.CursorX), MailboxY = (int)Math.Round(o.CursorY),
+                TabX = (int)Math.Round(t.CursorX), TabY = (int)Math.Round(t.CursorY),
+                SendX = (int)Math.Round(s.CursorX), SendY = (int)Math.Round(s.CursorY) };
+            try { WowBMailUiCalibration.Save(value); lblMailControlsStatus.Text = "Mail controls saved; screen geometry and UI state are not independently verified."; }
+            catch (Exception ex) { lblMailControlsStatus.Text = "Could not save controls: " + ex.Message; }
         }
 
         private async void btnMailAttachmentResearch_Click(object sender, RoutedEventArgs e)
@@ -890,6 +961,7 @@ namespace CopilotBuddy.UI
 
             chkAutoSell.IsChecked = ClickAimSettings.AutoSell;
             chkTownReturn.IsChecked = ClickAimSettings.UseTownReturn;
+            chkExperimentalAutoMail.IsChecked = ClickAimSettings.ExperimentalAutoMail;
             txtMailRecipient.Text = ClickAimSettings.MailRecipient;
             txtSellAfter.Text = Text(ClickAimSettings.SellAfterLoots);
             txtVendorWait.Text = Text(ClickAimSettings.VendorWaitMs);
@@ -960,7 +1032,11 @@ namespace CopilotBuddy.UI
                 System.Windows.MessageBox.Show("Stop the bot before changing the town return option.", "Combat settings", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return false;
             }
+            if ((ClickAimUi.Running || ClickAimUi.Paused) && (chkExperimentalAutoMail.IsChecked == true) != ClickAimSettings.ExperimentalAutoMail)
+            { System.Windows.MessageBox.Show("Stop the bot before changing experimental mail.", "Combat settings", MessageBoxButton.OK, MessageBoxImage.Warning); return false; }
             string mailRecipient = (txtMailRecipient.Text ?? string.Empty).Trim();
+            if (chkExperimentalAutoMail.IsChecked == true && !WowBMailRecipientText.ValidForTest(mailRecipient))
+            { System.Windows.MessageBox.Show("Experimental mail requires a recipient containing only letters and hyphens.", "Combat settings", MessageBoxButton.OK, MessageBoxImage.Warning); return false; }
             if (!ClickAimSettings.ValidMailRecipient(mailRecipient))
             {
                 System.Windows.MessageBox.Show("Mail recipient must be at most 64 characters and cannot contain control characters, # or =.", "Combat settings", MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -992,6 +1068,7 @@ namespace CopilotBuddy.UI
 
             ClickAimSettings.AutoSell = chkAutoSell.IsChecked == true;
             ClickAimSettings.UseTownReturn = chkTownReturn.IsChecked == true;
+            ClickAimSettings.ExperimentalAutoMail = chkExperimentalAutoMail.IsChecked == true;
             ClickAimSettings.MailRecipient = mailRecipient;
             ClickAimSettings.SellAfterLoots = sellAfter;
             ClickAimSettings.VendorWaitMs = vendorWait;
@@ -1325,7 +1402,7 @@ namespace CopilotBuddy.UI
                 + "; saved merchant GUIDs: " + point.MerchantGuids.Count.ToString(CultureInfo.InvariantCulture)
                 + "; mailbox: " + (point.Mailbox == null ? "not recorded" : string.Format(CultureInfo.InvariantCulture,
                     "map {0} ({1:F0}, {2:F0}, {3:F0})", point.Mailbox.Map, point.Mailbox.X, point.Mailbox.Y, point.Mailbox.Z))
-                + ". Mailing is currently skipped; 70938 Grind returns to the active profile after vendor replay when reachable on the same map. Sales are unverified. 70938 may use a unique same-high merchant candidate; verify it.";
+                + ". Opt-in experimental mailing uses this mailbox position and separate controls; sales and mail are unverified. Profile return requires a reachable same-map hotspot. 70938 may use a unique same-high merchant candidate; verify it.";
         }
 
         private void lstVendors_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -1449,7 +1526,7 @@ namespace CopilotBuddy.UI
             var memory = ObjectManager.Wow;
             if (memory == null || !TryTownPosition(reader, out uint map, out double x, out double y, out double z) || _vendors[index].TownMap != map)
             { lblVendorNote.Text = "Stand beside the mailbox on the selected town's recorded map; map or position was unavailable or mismatched."; return; }
-            if (System.Windows.MessageBox.Show("Record where you are standing as the mailbox location for this town? The location is saved for future use; mailing is currently skipped. The bot does not verify a sale or send mail.",
+            if (System.Windows.MessageBox.Show("Record where you are standing as this town's mailbox location? Opt-in experimental mailing also requires separate screen controls and a grid calibration. Sales and mail are not independently verified.",
                 "Record mailbox", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
             if (ClickAimUi.Running || ClickAimUi.Paused || ObjectManager.Wow != memory || ObjectManager.WowB != reader ||
                 lstVendors.SelectedItem is not VendorRow finalRow || finalRow.Index != index ||
@@ -1459,7 +1536,7 @@ namespace CopilotBuddy.UI
             if (!VendorFile.SetMailbox(index, fx, fy, fz, map, out string error))
             { lblVendorNote.Text = "Mailbox position could not be saved: " + error; return; }
             LoadVendor(); lstVendors.SelectedIndex = index;
-            lblVendorNote.Text = "Mailbox standing position saved for future use. Mailing is currently skipped.";
+            lblVendorNote.Text = "Mailbox standing position saved. Experimental mail also needs separately calibrated controls and grid.";
         }
 
         private void btnRememberMerchant_Click(object sender, RoutedEventArgs e)
