@@ -267,7 +267,7 @@ namespace CopilotBuddy.UI
             { _mailHoverAway = null; _mailHoverBox = null; btnMailClickTest.IsEnabled = false; lblMailHoverStatus.Text = "Stop the bot and attach to the 70938 game window first."; return; }
             if (!mailbox) _mailHoverAway = null;
             _mailHoverBox = null;
-            _mailHoverBusy = true; btnMailHoverAway.IsEnabled = false; btnMailHoverBox.IsEnabled = false; btnMailClickTest.IsEnabled = false; btnMailTabTest.IsEnabled = false;
+            _mailHoverBusy = true; btnMailHoverAway.IsEnabled = false; btnMailHoverBox.IsEnabled = false; btnMailClickTest.IsEnabled = false; btnMailTabTest.IsEnabled = false; btnMailRecipientTest.IsEnabled = false;
             lblMailHoverStatus.Text = mailbox ? "Focus the game and hover over the mailbox; do not click." : "Focus the game and hover over empty ground away from objects; do not click.";
             try
             {
@@ -303,7 +303,7 @@ namespace CopilotBuddy.UI
                 lblMailHoverStatus.Text = "Mailbox hover recorded; candidate " + (second.Hover.IsEmpty ? "is empty" : changed ? "changed from away" : "did not change from away") + ". Send the log for analysis if comfortable sharing GUIDs. No click was sent; mailbox identity and UI state remain unverified.";
             }
             catch (Exception ex) { lblMailHoverStatus.Text = "Mailbox observation failed: " + ex.Message; }
-            finally { _mailHoverBusy = false; if (IsLoaded) { btnMailHoverAway.IsEnabled = true; btnMailHoverBox.IsEnabled = true; btnMailClickTest.IsEnabled = _mailHoverBox != null; btnMailTabTest.IsEnabled = true; } }
+            finally { _mailHoverBusy = false; if (IsLoaded) { btnMailHoverAway.IsEnabled = true; btnMailHoverBox.IsEnabled = true; btnMailClickTest.IsEnabled = _mailHoverBox != null; btnMailTabTest.IsEnabled = true; btnMailRecipientTest.IsEnabled = true; } }
         }
 
         private async void btnMailClickTest_Click(object sender, RoutedEventArgs e)
@@ -314,7 +314,7 @@ namespace CopilotBuddy.UI
                 "Supervised mailbox click", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
             int generation = ClickAimAbort.Generation;
             var cancel = new CancellationTokenSource(); _mailClickCancellation = cancel;
-            _mailHoverBusy = true; btnMailHoverAway.IsEnabled = false; btnMailHoverBox.IsEnabled = false; btnMailClickTest.IsEnabled = false; btnMailTabTest.IsEnabled = false;
+            _mailHoverBusy = true; btnMailHoverAway.IsEnabled = false; btnMailHoverBox.IsEnabled = false; btnMailClickTest.IsEnabled = false; btnMailTabTest.IsEnabled = false; btnMailRecipientTest.IsEnabled = false;
             // Consume the user-labelled observation even if the attempt fails. No blind retry.
             _mailHoverBox = null; _mailHoverAway = null;
             lblMailHoverStatus.Text = "Focus the game and hover the SAME mailbox for 3 seconds; do not click or hold mouse buttons. STOP cancels.";
@@ -350,7 +350,7 @@ namespace CopilotBuddy.UI
             finally
             {
                 _mailClickCancellation = null; cancel.Dispose(); _mailHoverBusy = false;
-                if (IsLoaded) { btnMailHoverAway.IsEnabled = true; btnMailHoverBox.IsEnabled = true; btnMailClickTest.IsEnabled = false; btnMailTabTest.IsEnabled = true; }
+                if (IsLoaded) { btnMailHoverAway.IsEnabled = true; btnMailHoverBox.IsEnabled = true; btnMailClickTest.IsEnabled = false; btnMailTabTest.IsEnabled = true; btnMailRecipientTest.IsEnabled = true; }
             }
         }
 
@@ -367,7 +367,7 @@ namespace CopilotBuddy.UI
             int generation = ClickAimAbort.Generation;
             var cancel = new CancellationTokenSource(); _mailClickCancellation = cancel;
             _mailHoverAway = null; _mailHoverBox = null;
-            _mailHoverBusy = true; btnMailHoverAway.IsEnabled = false; btnMailHoverBox.IsEnabled = false; btnMailClickTest.IsEnabled = false; btnMailTabTest.IsEnabled = false;
+            _mailHoverBusy = true; btnMailHoverAway.IsEnabled = false; btnMailHoverBox.IsEnabled = false; btnMailClickTest.IsEnabled = false; btnMailTabTest.IsEnabled = false; btnMailRecipientTest.IsEnabled = false;
             lblMailHoverStatus.Text = "Focus the game and hover the Send Mail TAB, not the Send button. Do not click; STOP cancels.";
             try
             {
@@ -400,7 +400,61 @@ namespace CopilotBuddy.UI
             finally
             {
                 _mailClickCancellation = null; cancel.Dispose(); _mailHoverBusy = false;
-                if (IsLoaded) { btnMailHoverAway.IsEnabled = true; btnMailHoverBox.IsEnabled = true; btnMailClickTest.IsEnabled = false; btnMailTabTest.IsEnabled = true; }
+                if (IsLoaded) { btnMailHoverAway.IsEnabled = true; btnMailHoverBox.IsEnabled = true; btnMailClickTest.IsEnabled = false; btnMailTabTest.IsEnabled = true; btnMailRecipientTest.IsEnabled = true; }
+            }
+        }
+
+        private async void btnMailRecipientTest_Click(object sender, RoutedEventArgs e)
+        {
+            if (_mailHoverBusy) return;
+            string name = txtMailRecipient.Text ?? string.Empty;
+            if (!WowBMailRecipientText.ValidForTest(name))
+            { lblMailHoverStatus.Text = "Enter a nonempty recipient of up to 64 letters and hyphens for this test; no text was sent."; return; }
+            GreenMagic.Memory? memory = ObjectManager.Wow; WowBReader? reader = ObjectManager.WowB;
+            IntPtr hwnd = memory?.WindowHandle ?? IntPtr.Zero;
+            if (ClickAimUi.Running || ClickAimUi.Paused || reader?.IsExperimental70938 != true || memory == null ||
+                hwnd == IntPtr.Zero || !ClickAimInput.ClientSize(hwnd, out int width, out int height))
+            { lblMailHoverStatus.Text = "Stop the bot and attach to 70938 before the recipient test."; return; }
+            if (System.Windows.MessageBox.Show("Before starting, open Send Mail in the game, manually clear the recipient field and click it to place the caret. The test posts the name from this settings window after you return to the game. It cannot verify which field has focus; text may go elsewhere. It never presses Enter or Send. Continue?",
+                "Supervised recipient text test", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
+            int generation = ClickAimAbort.Generation;
+            var cancel = new CancellationTokenSource(); _mailClickCancellation = cancel;
+            _mailHoverAway = null; _mailHoverBox = null;
+            _mailHoverBusy = true; btnMailHoverAway.IsEnabled = false; btnMailHoverBox.IsEnabled = false; btnMailClickTest.IsEnabled = false; btnMailTabTest.IsEnabled = false; btnMailRecipientTest.IsEnabled = false;
+            lblMailHoverStatus.Text = "Return to the game without clicking; hold the cursor over the already focused empty recipient field. STOP cancels. Check text manually afterward.";
+            try
+            {
+                await Task.Delay(3000, cancel.Token);
+                // Tab must already be open; wait at least one additional second
+                // before text, independently of the preceding tab experiment.
+                await Task.Delay(1000, cancel.Token);
+                if (!IsLoaded) return;
+                if (cancel.IsCancellationRequested || ClickAimAbort.Generation != generation)
+                { lblMailHoverStatus.Text = "Recipient test cancelled; no text was posted."; return; }
+                var attempt = await Task.Run(() => {
+                    bool running() => !cancel.IsCancellationRequested && ClickAimAbort.Generation == generation;
+                    if (!running() || !MailHoverSampleNow(memory, reader, hwnd, width, height, out var first) || first == null || !first.ClickSafetyCandidate)
+                        return (false, 0, "initial session, focus, health, combat or ghost check failed");
+                    Thread.Sleep(150);
+                    if (!running() || !MailHoverSampleNow(memory, reader, hwnd, width, height, out var second) || second == null || !second.ClickSafetyCandidate ||
+                        !MailHoverSameSession(first, second) || Math.Abs(first.CursorX - second.CursorX) > 3 || Math.Abs(first.CursorY - second.CursorY) > 3)
+                        return (false, 0, "session or cursor changed before text");
+                    bool safe() => running() && MailHoverSampleNow(memory, reader, hwnd, width, height, out var now) && now != null &&
+                        now.ClickSafetyCandidate && MailHoverSameSession(first, now) &&
+                        Math.Abs(second.CursorX - now.CursorX) <= 3 && Math.Abs(second.CursorY - now.CursorY) <= 3;
+                    bool complete = WowBMailRecipientText.TryPost(name, running,
+                        c => ClickAimInput.DiagnosticRecipientChar(hwnd, c, generation, safe), () => Thread.Sleep(30), out int count);
+                    return (complete, count, complete ? "all character messages posted" : "interrupted or character post failed");
+                });
+                Logging.Write("[Mailbox recipient test] " + attempt.Item3 + "; character count=" + attempt.Item2 + "; focus and text not verified; no mail sent.");
+                if (IsLoaded) lblMailHoverStatus.Text = attempt.Item3 + " (" + attempt.Item2 + " character messages). The game field and recipient are NOT verified. Inspect and clear any partial text before retrying; no mail was sent.";
+            }
+            catch (OperationCanceledException) { if (IsLoaded) lblMailHoverStatus.Text = "Recipient test cancelled; no text was posted."; }
+            catch (Exception ex) { Logging.Write("[Mailbox recipient test] exception; text outcome uncertain: " + ex.Message); if (IsLoaded) lblMailHoverStatus.Text = "Text outcome uncertain; inspect and clear the field before retrying."; }
+            finally
+            {
+                _mailClickCancellation = null; cancel.Dispose(); _mailHoverBusy = false;
+                if (IsLoaded) { btnMailHoverAway.IsEnabled = true; btnMailHoverBox.IsEnabled = true; btnMailClickTest.IsEnabled = false; btnMailTabTest.IsEnabled = true; btnMailRecipientTest.IsEnabled = true; }
             }
         }
 

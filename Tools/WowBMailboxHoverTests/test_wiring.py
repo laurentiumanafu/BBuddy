@@ -57,6 +57,24 @@ class MailboxHoverWiring(unittest.TestCase):
         self.assertNotIn('WM_MOUSEMOVE', helper)
         self.assertNotIn('ClickAimAbort.Clear', helper)
 
+    def test_recipient_test_is_supervised_and_does_not_send(self):
+        self.assertIn('btnMailRecipientTest_Click', xaml)
+        code = ui[ui.index('private async void btnMailRecipientTest_Click'):ui.index('private sealed class MailGridPointRow')]
+        for guard in ('txtMailRecipient.Text', 'ValidForTest', 'MessageBoxButton.YesNo', 'ClickAimUi.Running', 'ClickAimUi.Paused',
+                      'ClickAimAbort.Generation', 'cancel.IsCancellationRequested', 'Task.Delay(3000, cancel.Token)',
+                      'Task.Delay(1000, cancel.Token)', 'MailHoverSameSession', 'ClickSafetyCandidate',
+                      'WowBMailRecipientText.TryPost', 'DiagnosticRecipientChar', 'focus and text not verified'):
+            self.assertIn(guard, code)
+        self.assertNotIn('DiagnosticLeftClick(', code)
+        self.assertNotIn('DiagnosticRightClick(', code)
+        self.assertNotIn('+ name', code)  # no recipient in logs
+        source = (root / 'Styx/Logic/Pathing/ClickAim/ClickAimInput.cs').read_text(encoding='utf-8-sig')
+        helper = source[source.index('internal static bool DiagnosticRecipientChar'):source.index('// One dialog click only')]
+        for guard in ('char.IsLetter', 'ClickAimAbort.Generation', 'GameForeground', 'MouseButtonsUp', 'GetAsyncKeyState', 'confirm()', 'WM_CHAR'):
+            self.assertIn(guard, helper)
+        for forbidden in ('WM_KEYDOWN', 'WM_LBUTTONDOWN', 'WM_RBUTTONDOWN', 'ClickAimAbort.Clear'):
+            self.assertNotIn(forbidden, helper)
+
     def test_not_wired_to_gameplay(self):
         for name in ('GrindRunner.cs', 'GatherRunner.cs'):
             content = (root / 'Styx/Logic/Pathing/ClickAim' / name).read_text(encoding='utf-8-sig')

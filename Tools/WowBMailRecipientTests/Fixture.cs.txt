@@ -1,0 +1,26 @@
+using System;
+using System.Text;
+using Styx.Logic.Pathing;
+static class Fixture
+{
+    static void Check(bool condition, string message) { if (!condition) throw new Exception(message); }
+    public static void Main()
+    {
+        Check(WowBMailRecipientText.ValidForTest("Éowyn-Realm"), "letters and hyphen");
+        foreach (string invalid in new[] { "", "A\nB", "/script", "Test Name", "Hi1", new string('A', 65), "A\u0301" })
+            Check(!WowBMailRecipientText.ValidForTest(invalid), "reject unsafe or unsupported characters");
+        var result = new StringBuilder(); int checks = 0, pauses = 0;
+        bool ok = WowBMailRecipientText.TryPost("Ana", () => { checks++; return true; }, c => { result.Append(c); return true; }, () => pauses++, out int count);
+        Check(ok && result.ToString() == "Ana" && count == 3 && checks == 3 && pauses == 3, "one pass in order");
+        result.Clear(); checks = 0; pauses = 0;
+        ok = WowBMailRecipientText.TryPost("Ana", () => ++checks < 3, c => { result.Append(c); return true; }, () => pauses++, out count);
+        Check(!ok && result.ToString() == "An" && count == 2 && pauses == 2, "stop produces partial text without retry");
+        result.Clear();
+        ok = WowBMailRecipientText.TryPost("Ana", () => true, c => { if (c == 'n') return false; result.Append(c); return true; }, () => { }, out count);
+        Check(!ok && result.ToString() == "A" && count == 1, "failed post terminates sequence");
+        checks = 0;
+        ok = WowBMailRecipientText.TryPost("Bad\n", () => { checks++; return true; }, _ => true, () => { }, out count);
+        Check(!ok && count == 0 && checks == 0, "invalid text never posts");
+        Console.WriteLine("Synthetic recipient sequence cases passed; live focus and text remain unverified.");
+    }
+}

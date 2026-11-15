@@ -26,6 +26,7 @@ internal static class ClickAimInput
     private const uint WM_RBUTTONUP = 0x0205;
     private const uint WM_KEYDOWN = 0x0100;
     private const uint WM_KEYUP = 0x0101;
+    private const uint WM_CHAR = 0x0102;
     private const int MK_RBUTTON = 0x0002;
     private const int MK_LBUTTON = 0x0001;
 
@@ -247,6 +248,20 @@ internal static class ClickAimInput
         bool upAgain = PostMessageInternal(hwnd, WM_LBUTTONUP, IntPtr.Zero, Lp(x, y));
         reason = up || upAgain ? "left-button messages posted; tab state not verified" : "down posted but both button-up messages failed; do not retry blindly";
         return true;
+    }
+
+    // Only for the stopped, supervised recipient diagnostic. WM_CHAR avoids
+    // synthesizing action-bar key presses; posting is NOT proof of edit focus.
+    internal static bool DiagnosticRecipientChar(IntPtr hwnd, char character, int stopGeneration, Func<bool> confirm)
+    {
+        if ((!char.IsLetter(character) && character != '-') || ClickAimAbort.Generation != stopGeneration ||
+            !GameForeground(hwnd) || !MouseButtonsUp() ||
+            (GetAsyncKeyState(0x10) & 0x8000) != 0 || (GetAsyncKeyState(0x11) & 0x8000) != 0 ||
+            (GetAsyncKeyState(0x12) & 0x8000) != 0 || !confirm() ||
+            ClickAimAbort.Generation != stopGeneration || !GameForeground(hwnd) || !MouseButtonsUp() ||
+            (GetAsyncKeyState(0x10) & 0x8000) != 0 || (GetAsyncKeyState(0x11) & 0x8000) != 0 ||
+            (GetAsyncKeyState(0x12) & 0x8000) != 0) return false;
+        return PostMessageInternal(hwnd, WM_CHAR, new IntPtr(character), new IntPtr(1));
     }
 
     // One dialog click only. Recheck the screen and state after the posted move;
