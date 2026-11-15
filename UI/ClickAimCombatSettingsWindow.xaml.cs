@@ -688,7 +688,7 @@ namespace CopilotBuddy.UI
                 + "; saved merchant GUIDs: " + point.MerchantGuids.Count.ToString(CultureInfo.InvariantCulture)
                 + "; mailbox: " + (point.Mailbox == null ? "not recorded" : string.Format(CultureInfo.InvariantCulture,
                     "map {0} ({1:F0}, {2:F0}, {3:F0})", point.Mailbox.Map, point.Mailbox.X, point.Mailbox.Y, point.Mailbox.Z))
-                + ". On 70938 Grind, a saved mailbox is reached by mesh after vendor replay, then the bot stops for manual mailing. Sales are unverified. 70938 may use a unique same-high merchant candidate; verify it.";
+                + ". Mailing is currently skipped; 70938 Grind returns to the active profile after vendor replay when reachable on the same map. Sales are unverified. 70938 may use a unique same-high merchant candidate; verify it.";
         }
 
         private void lstVendors_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -812,7 +812,7 @@ namespace CopilotBuddy.UI
             var memory = ObjectManager.Wow;
             if (memory == null || !TryTownPosition(reader, out uint map, out double x, out double y, out double z) || _vendors[index].TownMap != map)
             { lblVendorNote.Text = "Stand beside the mailbox on the selected town's recorded map; map or position was unavailable or mismatched."; return; }
-            if (System.Windows.MessageBox.Show("Record where you are standing as the mailbox location for this town? On 70938 Grind, the bot will mesh to this position after vendor replay and stop for manual mailing. It does not verify a sale or send mail.",
+            if (System.Windows.MessageBox.Show("Record where you are standing as the mailbox location for this town? The location is saved for future use; mailing is currently skipped. The bot does not verify a sale or send mail.",
                 "Record mailbox", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
             if (ClickAimUi.Running || ClickAimUi.Paused || ObjectManager.Wow != memory || ObjectManager.WowB != reader ||
                 lstVendors.SelectedItem is not VendorRow finalRow || finalRow.Index != index ||
@@ -822,7 +822,7 @@ namespace CopilotBuddy.UI
             if (!VendorFile.SetMailbox(index, fx, fy, fz, map, out string error))
             { lblVendorNote.Text = "Mailbox position could not be saved: " + error; return; }
             LoadVendor(); lstVendors.SelectedIndex = index;
-            lblVendorNote.Text = "Mailbox standing position saved. 70938 Grind walks there after vendor replay, then stops; mailing remains manual.";
+            lblVendorNote.Text = "Mailbox standing position saved for future use. Mailing is currently skipped.";
         }
 
         private void btnRememberMerchant_Click(object sender, RoutedEventArgs e)

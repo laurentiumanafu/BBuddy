@@ -298,7 +298,7 @@
                         <Button Content="Record town hotspot" Height="24" Padding="8,0" Margin="0,4,4,0" Click="btnRecordTown_Click"/>
                         <Button Content="Remember selected merchant" Height="24" Padding="8,0" Margin="0,4,0,0" Click="btnRememberMerchant_Click"/>
                         <Button Content="Record mailbox here" Height="24" Padding="8,0" Margin="0,4,0,0" Click="btnRecordMailbox_Click"
-                                ToolTip="Stand beside the mailbox and record this position for the selected town. On 70938 Grind, after vendor replay the bot will mesh to this point and stop for manual mailing; it does not send mail."/>
+                                ToolTip="Save this mailbox position for future mailing support. Mailing is currently skipped; 70938 Grind returns to its profile after the vendor replay."/>
                     </WrapPanel>
                     <StackPanel Grid.Row="3" Grid.Column="0" Margin="0,2,0,0">
                         <TextBlock Text="Copy steps from:" Margin="0,0,0,3"/>

@@ -1,0 +1,75 @@
+using System;
+using System.Collections.Generic;
+namespace GreenMagic { sealed class Memory {} }
+namespace Styx.Logic.Pathing
+{
+    static class Environment { public static int TickCount; }
+    struct WowBGuid { public int Id; public bool IsEmpty => Id==0; public static bool operator ==(WowBGuid a,WowBGuid b)=>a.Id==b.Id; public static bool operator !=(WowBGuid a,WowBGuid b)=>a.Id!=b.Id; public override bool Equals(object? o)=>o is WowBGuid g && g==this; public override int GetHashCode()=>Id; }
+    struct Point { public double X,Y,Z; }
+    struct WowBObservedUnit { public WowBGuid Guid; public Point Location; }
+    sealed class WowBReader
+    {
+        public bool ExperimentalGrindActive=true; public uint Map=1; public WowBGuid Player=new WowBGuid { Id=1 }; public Point Position;
+        public bool TryReadMapId(out uint map) { map=Map; return true; }
+        public bool TryReadTraceLocalGuid(out WowBGuid g) { g=Player; return true; }
+        public bool TryRead70888RecoveryPlayer(out WowBObservedUnit p,out uint hp,out uint max) { p=new WowBObservedUnit { Guid=Player, Location=Position }; hp=max=100; return true; }
+    }
+    sealed class RoutePoint { public double X,Y,Z; }
+    sealed class ClickAimMover {}
+    static class ObjectManager { public static WowBReader? WowB; public static GreenMagic.Memory? Wow; }
+    static class ClickAimAbort { public static bool Requested; }
+    static class ClickAimKeySteer { public static void ReleaseHeld() {} }
+    static class ClickAimMath { public static double Len(double x,double y)=>Math.Sqrt(x*x+y*y); }
+    static class WowBGrindFactions
+    {
+        public static bool Experimental70707BarSafe(WowBReader r)=>Fixture.BarSafe;
+        public static bool TryReadGhostFlagCandidate(GreenMagic.Memory m,WowBReader r,WowBObservedUnit p,out bool ghost) { ghost=false; return true; }
+    }
+    static class Logging { public static void Write(string s) {} }
+    static class RouteRunner
+    {
+        public static bool StopRequested, PollInterruptDuringWalk, RequireMeshDuringSession, LastRunInterrupted;
+        public static Func<bool>? ShouldInterrupt;
+        public static bool RunWithinSession(ClickAimMover m,List<RoutePoint> route,int count)
+        {
+            Fixture.RouteCalls++; LastRunInterrupted=false;
+            if (Fixture.InterruptRoute) { Fixture.Combat=true; LastRunInterrupted=true; return false; }
+            if (Fixture.FailRoute) return false;
+            ObjectManager.WowB!.Position=new Point { X=route[0].X,Y=route[0].Y,Z=route[0].Z };
+            return true;
+        }
+    }
+    static class Fixture
+    {
+        private static RoutePoint? _vendorReturnHotspot; private static WowBReader? _vendorReturnReader, _townReader;
+        private static GreenMagic.Memory? _vendorReturnMemory, _townMemory; private static WowBGuid _vendorReturnPlayer, _townPlayer;
+        private static bool _townTransit, _stop; private static object? _activeProfileArea; private static uint _profileSessionMap; private static int _vendorRetryAt;
+        public static bool BarSafe, Combat, InterruptRoute, FailRoute; public static int RouteCalls;
+        static bool CheckDeathCheckpoint(bool trackerOnly=false)=>false;
+        static bool TryReadGatherCombat(out bool fighting) { fighting=Combat; return true; }
+        static bool AutoVendorIdentityMatches(WowBReader r,GreenMagic.Memory m,WowBGuid g)=>ObjectManager.WowB==r && ObjectManager.Wow==m && r.Player==g;
+        static void Stop() { _stop=true; ClickAimAbort.Requested=true; }
+        // __PRODUCTION__
+        static void Check(bool b,string why) { if(!b) throw new Exception(why); }
+        static void Reset()
+        {
+            var r=new WowBReader(); var m=new GreenMagic.Memory(); ObjectManager.WowB=r; ObjectManager.Wow=m;
+            _vendorReturnHotspot=new RoutePoint { X=100,Y=200,Z=5 }; _vendorReturnReader=_townReader=r; _vendorReturnMemory=_townMemory=m;
+            _vendorReturnPlayer=_townPlayer=r.Player; _townTransit=true; _activeProfileArea=new object(); _profileSessionMap=1;
+            _stop=ClickAimAbort.Requested=RouteRunner.StopRequested=Combat=InterruptRoute=FailRoute=false; BarSafe=true; RouteCalls=0;
+            RouteRunner.ShouldInterrupt=null; RouteRunner.PollInterruptDuringWalk=RouteRunner.RequireMeshDuringSession=false;
+        }
+        public static void Main()
+        {
+            Reset(); Check(WalkBackToProfile(new ClickAimMover()) && _vendorReturnHotspot==null && !_townTransit && RouteCalls==1,"mesh arrival resumes profile");
+            Reset(); InterruptRoute=true; Check(!WalkBackToProfile(new ClickAimMover()) && _vendorReturnHotspot!=null && !_stop,"combat interruption retains return");
+            Combat=false; InterruptRoute=false; Check(WalkBackToProfile(new ClickAimMover()) && RouteCalls==2,"return resumes after combat");
+            Reset(); FailRoute=true; Check(!WalkBackToProfile(new ClickAimMover()) && _stop && _vendorReturnHotspot!=null,"mesh failure stops");
+            Reset(); ObjectManager.WowB!.Map=2; Check(!WalkBackToProfile(new ClickAimMover()) && _stop && RouteCalls==0,"cross-map stops before movement");
+            Reset(); ObjectManager.WowB!.Player=new WowBGuid { Id=2 }; Check(!WalkBackToProfile(new ClickAimMover()) && _stop && RouteCalls==0,"changed identity stops");
+            Reset(); BarSafe=false; Check(!WalkBackToProfile(new ClickAimMover()) && !_stop && RouteCalls==0 && _vendorReturnHotspot!=null,"unsafe bar holds return");
+            Reset(); ClickAimAbort.Requested=true; Check(!WalkBackToProfile(new ClickAimMover()) && RouteCalls==0,"STOP blocks route");
+            Console.WriteLine("Profile return synthetic cases passed.");
+        }
+    }
+}

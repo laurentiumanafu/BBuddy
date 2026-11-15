@@ -14,7 +14,7 @@ class Flow(unittest.TestCase):
   self.assertIn('if (!TownReturn(hwnd, points)) return false',trip)
   self.assertIn('points[i].TownMap != currentMap',trip)
  def test_observation_and_town_guards(self):
-  f=g[g.index('private static ClickAimAction? TownReturnAction('):g.index('private static bool WalkToRecordedMailbox(')]
+  f=g[g.index('private static ClickAimAction? TownReturnAction('):g.index('private static bool WalkBackToProfile(')]
   for t in ('action.Id == 556', 'action.Id == 6948', 'WowBTownCastCandidate.Observe', 'progress.Update', 'DefendNearby', 'Result.Interrupted', 'TownHasPlanNearby', 'destinationCount >= 2', 'ClickAimAbort.Wait', 'elapsed > 4000', '_townTransit = true'):
    self.assertIn(t,f)
   self.assertIn('!_townTransit && roam != null && !roam.MapCurrent()',g)

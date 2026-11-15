@@ -51,7 +51,7 @@ namespace Styx.Logic.Pathing
         private static WowBGuid _vendorAutoPlayer;
         private static WowBReader? _vendorAutoReader;
         private static GreenMagic.Memory? _vendorAutoMemory;
-        private static object? _vendorMailboxPending;
+        private static object? _vendorMailboxPending, _vendorReturnHotspot;
         // __PRODUCTION_PENDING_HELPERS__
         private static readonly WowBBagSellMonitor BagSellMonitor = new WowBBagSellMonitor();
         private static bool UnderAttack() => combat;
@@ -95,7 +95,10 @@ namespace Styx.Logic.Pathing
             ClickAimAbort.Requested = true; Check(!VendorDue(), "STOP blocks mailbox route"); ClickAimAbort.Requested = false;
             _vendorRetryAt = unchecked(Environment.TickCount + 10000); Check(!VendorDue() && AutoVendorPending(), "mailbox retry holds new pulls");
             _vendorRetryAt = unchecked(Environment.TickCount - 1); Check(VendorDue(), "mailbox route resumes after delay");
-            _vendorMailboxPending = null; _townTransit = true;
+            _vendorMailboxPending = null; _vendorReturnHotspot = new object();
+            Check(VendorDue() && AutoVendorPending(), "profile return remains pending without auto-sell");
+            combat = true; Check(!VendorDue() && AutoVendorPending(), "profile return yields to defence"); combat = false;
+            _vendorReturnHotspot = null; _townTransit = true;
             Check(VendorDue() && AutoVendorPending(), "confirmed town transit remains pending without auto-sell");
             combat = true; Check(!VendorDue() && AutoVendorPending(), "town route yields to defence"); combat = false;
             Console.WriteLine("70707 and legacy vendor-due wiring synthetic fixtures passed");
