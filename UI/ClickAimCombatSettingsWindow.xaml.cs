@@ -460,6 +460,14 @@ namespace CopilotBuddy.UI
 
         // Capture both UI cursor/session and candidate slot observations. The
         // GUI, slot meanings and attachment state are still user-confirmed only.
+        private static List<WowBMailGridLookup.Bag> CopyMailBags(List<WowBContainerResearchProbe.MailBagObservation> observed)
+        {
+            var copy = new List<WowBMailGridLookup.Bag>();
+            foreach (var bag in observed) copy.Add(new WowBMailGridLookup.Bag { Candidate = bag.CandidateIndex,
+                Unknown = bag.Unknown, Identity = bag.Bag, Slots = (WowBGuid[])bag.Slots.Clone() });
+            return copy;
+        }
+
         private static bool CaptureMailAttachment(GreenMagic.Memory memory, WowBReader reader, IntPtr hwnd,
             int width, int height, out MailHoverSample? sample, out List<WowBMailGridLookup.Bag>? bags)
         {
@@ -468,10 +476,7 @@ namespace CopilotBuddy.UI
                 !WowBInventoryProbe.TryReadMailCandidateBags(out WowBGuid player, out var observed) || observed == null || player != before.Player ||
                 !MailHoverSampleNow(memory, reader, hwnd, width, height, out var after) || after == null || !after.ClickSafetyCandidate ||
                 !MailHoverSameSession(before, after) || Math.Abs(before.CursorX - after.CursorX) > 3 || Math.Abs(before.CursorY - after.CursorY) > 3) return false;
-            var copy = new List<WowBMailGridLookup.Bag>();
-            foreach (var bag in observed) copy.Add(new WowBMailGridLookup.Bag { Candidate = bag.CandidateIndex,
-                Unknown = bag.Unknown, Identity = bag.Bag, Slots = (WowBGuid[])bag.Slots.Clone() });
-            sample = after; bags = copy; return true;
+            sample = after; bags = CopyMailBags(observed); return true;
         }
 
         private async void btnMailAttachTest_Click(object sender, RoutedEventArgs e)
@@ -531,6 +536,59 @@ namespace CopilotBuddy.UI
                 _mailClickCancellation = null; cancel.Dispose(); _mailHoverBusy = false;
                 if (IsLoaded) { btnMailHoverAway.IsEnabled = true; btnMailHoverBox.IsEnabled = true; btnMailClickTest.IsEnabled = false; btnMailTabTest.IsEnabled = true; btnMailRecipientTest.IsEnabled = true; btnMailAttachTest.IsEnabled = true;
                     btnMailGridStart.IsEnabled = true; btnMailGridRecord.IsEnabled = _mailGridBags != null; btnMailGridSave.IsEnabled = _mailGridBags != null; }
+            }
+        }
+
+        private async void btnMailBatchPreview_Click(object sender, RoutedEventArgs e)
+        {
+            if (_mailHoverBusy || _mailGridBusy || ClickAimUi.Running || ClickAimUi.Paused)
+            { lblMailGridStatus.Text = "Stop the bot and wait for any calibration or research test to finish."; return; }
+            GreenMagic.Memory? memory = ObjectManager.Wow; WowBReader? reader = ObjectManager.WowB;
+            IntPtr hwnd = memory?.WindowHandle ?? IntPtr.Zero;
+            if (memory == null || reader?.IsExperimental70938 != true || hwnd == IntPtr.Zero ||
+                !ClickAimInput.ClientSize(hwnd, out int width, out int height))
+            { lblMailGridStatus.Text = "Attach to the 70938 game window first."; return; }
+            int generation = ClickAimAbort.Generation;
+            bool current() => !ClickAimUi.Running && !ClickAimUi.Paused && ClickAimAbort.Generation == generation &&
+                ObjectManager.Wow == memory && ObjectManager.WowB == reader && memory.WindowHandle == hwnd &&
+                ClickAimInput.ClientSize(hwnd, out int w, out int h) && w == width && h == height;
+            _mailHoverBusy = true; btnMailBatchPreview.IsEnabled = false;
+            btnMailGridStart.IsEnabled = false; btnMailGridRecord.IsEnabled = false; btnMailGridSave.IsEnabled = false;
+            btnMailHoverAway.IsEnabled = false; btnMailHoverBox.IsEnabled = false; btnMailClickTest.IsEnabled = false; btnMailTabTest.IsEnabled = false; btnMailRecipientTest.IsEnabled = false; btnMailAttachTest.IsEnabled = false;
+            lblMailGridStatus.Text = "Reading candidate bag observations; no clicks or text will be sent...";
+            try
+            {
+                var result = await Task.Run(() => {
+                    if (!current() || !WowBInventoryProbe.TryReadMailCandidateBags(out WowBGuid firstPlayer, out var first) || first == null ||
+                        !current() || !WowBInventoryProbe.TryReadMailCandidateBags(out WowBGuid secondPlayer, out var second) || second == null || firstPlayer != secondPlayer)
+                        return (ok: false, text: "Bag observations unavailable or session changed; no preview.");
+                    var a = CopyMailBags(first); var b = CopyMailBags(second);
+                    if (!WowBMailGridLookup.Same(a, b) || !current() ||
+                        !WowBMailGridLookup.TryLoad(WowBMailGridCalibration.DefaultPath, firstPlayer.ToString(), width, height, b, out var grid) || grid == null ||
+                        !WowBMailGridLookup.TryPreview(grid, firstPlayer.ToString(), width, height, b, out var list, out int count, out bool unknown, out bool fifthUnknown) || !current())
+                        return (ok: false, text: "Bag contents, grid or session changed/unavailable; no preview.");
+                    var text = new System.Text.StringBuilder();
+                    text.AppendLine("Research preview: nonzero raw slot candidates 0–3, not proven items or mailable. No input was sent.");
+                    text.AppendLine("Observed in candidates 0–3: " + count + "; showing " + list.Count + " (maximum 12). " +
+                        (unknown ? "A candidate 0–3 is unknown. " : "Candidates 0–3 observed. ") +
+                        (fifthUnknown ? "Candidate 4 is Unknown, not absent." : "Candidate 4 is observed but its role is unverified."));
+                    text.AppendLine("Backpack contents and mailbox state are not read; this is not a complete inventory or send plan.");
+                    foreach (var slot in list)
+                        text.AppendLine(string.Format(CultureInfo.InvariantCulture, "Candidate {0}, slot {1}: client ({2:F0},{3:F0})",
+                            slot.Candidate, slot.Slot + 1, slot.X, slot.Y));
+                    return (ok: true, text: text.ToString());
+                });
+                if (!IsLoaded) return;
+                if (!current()) { lblMailGridStatus.Text = "Session changed; preview discarded."; return; }
+                txtMailGridPreview.Text = result.ok ? result.text : "";
+                lblMailGridStatus.Text = result.ok ? "Research preview shown; no actions were sent and automatic mailing remains disabled." : result.text;
+            }
+            catch (Exception ex) { if (IsLoaded) lblMailGridStatus.Text = "Research preview failed: " + ex.Message; }
+            finally
+            {
+                _mailHoverBusy = false;
+                if (IsLoaded) { btnMailBatchPreview.IsEnabled = true; btnMailGridStart.IsEnabled = true; btnMailGridRecord.IsEnabled = _mailGridBags != null; btnMailGridSave.IsEnabled = _mailGridBags != null;
+                    btnMailHoverAway.IsEnabled = true; btnMailHoverBox.IsEnabled = true; btnMailClickTest.IsEnabled = _mailHoverBox != null; btnMailTabTest.IsEnabled = true; btnMailRecipientTest.IsEnabled = true; btnMailAttachTest.IsEnabled = true; }
             }
         }
 

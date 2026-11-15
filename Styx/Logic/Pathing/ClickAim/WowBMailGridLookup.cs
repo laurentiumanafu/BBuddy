@@ -95,6 +95,51 @@ internal static class WowBMailGridLookup
         return true;
     }
 
+    internal readonly struct PreviewSlot
+    {
+        internal readonly int Candidate, Slot;
+        internal readonly WowBGuid Item;
+        internal readonly double X, Y;
+        internal PreviewSlot(int candidate, int slot, WowBGuid item, double x, double y)
+        { Candidate = candidate; Slot = slot; Item = item; X = x; Y = y; }
+    }
+
+    // A partial research preview of nonzero entries in candidates 0–3 only.
+    // Unknown candidates (especially 4) and the unobserved backpack mean this
+    // is never a complete-inventory or mailable-items verdict.
+    internal static bool TryPreview(WowBMailGridCalibration.Result grid, string player, int width, int height,
+        IReadOnlyList<Bag> bags, out List<PreviewSlot> preview, out int observedCount, out bool unknownPrimary, out bool candidate4Unknown)
+    {
+        preview = new List<PreviewSlot>(); observedCount = 0; unknownPrimary = true; candidate4Unknown = true;
+        if (!Validate(grid, player, width, height, bags)) return false;
+        var seen = new HashSet<WowBGuid>();
+        foreach (Bag bag in bags)
+            foreach (WowBGuid item in bag.Slots)
+                if (!item.IsEmpty && !seen.Add(item)) return false;
+        // Candidate 4's zero identity is unknown; even nonzero identity does
+        // not yet establish whether it is another equipped bag.
+        unknownPrimary = false;
+        foreach (Bag bag in bags) if (bag.Candidate == 4) candidate4Unknown = bag.Unknown;
+        for (int candidate = 0; candidate <= 3; candidate++)
+        {
+            Bag? bag = null; WowBMailGridCalibration.SavedBag? saved = null;
+            foreach (Bag item in bags) if (item.Candidate == candidate) bag = item;
+            foreach (var item in grid.Bags) if (item.Candidate == candidate) saved = item;
+            if (bag == null || saved == null) return false;
+            if (bag.Unknown) { unknownPrimary = true; continue; }
+            for (int index = 0; index < bag.Slots.Length; index++)
+            {
+                WowBGuid item = bag.Slots[index];
+                if (item.IsEmpty) continue;
+                observedCount++;
+                if (preview.Count == WowBMailBatchPolicy.BatchLimit) continue;
+                var p = Center(grid, saved.FirstOrdinal + index);
+                preview.Add(new PreviewSlot(candidate, index, item, p.X, p.Y));
+            }
+        }
+        return true;
+    }
+
     // Only user-established candidates 0–3; never the backpack, empty raw
     // slot, or candidate 4. Nonzero is an observation, not mailable proof.
     internal static bool TryMatch(WowBMailGridCalibration.Result grid, IReadOnlyList<Bag> bags, double x, double y, out Match match)

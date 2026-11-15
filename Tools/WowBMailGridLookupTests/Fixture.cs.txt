@@ -32,6 +32,13 @@ static class Fixture
         Check(!L.TryMatch(g,b,180,200,out _),"backpack is excluded");
         Check(!L.TryMatch(g,b,220,240,out _),"empty slot rejected");
         Check(!L.TryMatch(g,b,192,240,out _),"off-center rejected");
+        Check(L.TryPreview(g,"player",600,600,b,out var preview,out var total,out var primaryUnknown,out var fifthUnknown) &&
+            total == 4 && preview.Count == 4 && preview[0].Candidate == 0 && !primaryUnknown && fifthUnknown,"partial preview includes candidate zero and reports unknown fifth");
+        for (int i=0;i<12;i++) b[0].Slots[i]=new WowBGuid((ulong)(100+i), 3);
+        Check(L.TryPreview(g,"player",600,600,b,out preview,out total,out _,out _) && total==15 && preview.Count==12 && preview[0].Candidate==0,"preview caps batch at twelve");
+        b[1].Slots[0]=b[0].Slots[0];
+        Check(!L.TryPreview(g,"player",600,600,b,out _,out _,out _,out _),"duplicate item identity rejected");
+        (g,b)=Sample();
         Check(!L.Validate(g,"other",600,600,b) && !L.Validate(g,"player",601,600,b),"player and size match");
         var (other,changed) = Sample(); changed[0].Identity = new WowBGuid(55,7);
         Check(!L.Validate(g,"player",600,600,changed) && !L.Same(b,changed),"changed bag rejected");

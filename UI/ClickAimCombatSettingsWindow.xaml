@@ -281,6 +281,7 @@
                     <WrapPanel>
                         <Button x:Name="btnMailGridRecord" Content="Record selected cell (3 s)" Height="24" Padding="8,0" IsEnabled="False" Click="btnMailGridRecord_Click"/>
                         <Button x:Name="btnMailGridSave" Content="Validate and save grid" Height="24" Padding="8,0" Margin="8,0,0,0" IsEnabled="False" Click="btnMailGridSave_Click"/>
+                        <Button x:Name="btnMailBatchPreview" Content="Preview next 12 candidates (no clicks)" Height="24" Padding="8,0" Margin="8,0,0,0" Click="btnMailBatchPreview_Click"/>
                     </WrapPanel>
                     <TextBlock x:Name="lblMailGridStatus" TextWrapping="Wrap" Margin="0,4,0,6" FontSize="11" Text="No grid calibration recorded. Automatic mailing is not enabled."/>
                     <TextBox x:Name="txtMailGridPreview" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" Height="100" Margin="0,0,0,6" ToolTip="Calculated cell centers, in game client pixels. This preview never sends input."/>

@@ -6,6 +6,6 @@ with tempfile.TemporaryDirectory(prefix='mail-grid-lookup-') as d:
     p=Path(d)
     (p/'Test.csproj').write_text('<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><Nullable>enable</Nullable></PropertyGroup></Project>')
     (p/'Fixture.cs').write_text(Path(__file__).with_name('Fixture.cs.txt').read_text())
-    for source in ('Styx/Logic/Pathing/ClickAim/WowBMailGridLookup.cs', 'Styx/Logic/Pathing/ClickAim/WowBMailGridCalibration.cs', 'Styx/WoWInternals/WowBGuid.cs'):
+    for source in ('Styx/Logic/Pathing/ClickAim/WowBMailGridLookup.cs', 'Styx/Logic/Pathing/ClickAim/WowBMailGridCalibration.cs', 'Styx/Logic/Pathing/ClickAim/WowBMailBatchPolicy.cs', 'Styx/WoWInternals/WowBGuid.cs'):
         (p/Path(source).name).write_text((root/source).read_text())
     subprocess.run(['dotnet','run','--project',str(p/'Test.csproj')],check=True)

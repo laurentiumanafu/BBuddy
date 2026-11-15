@@ -1,0 +1,53 @@
+using System;
+using System.Collections.Generic;
+using Styx.Logic.Pathing;
+using Styx.WoWInternals;
+using P = Styx.Logic.Pathing.WowBMailBatchPolicy;
+using F = Styx.Logic.Pathing.WowBMailSequence;
+static class Fixture
+{
+    static void Check(bool value,string why) { if (!value) throw new Exception(why); }
+    static P.Slot Slot(int bag,int slot,ulong id) => new P.Slot(bag,slot,new WowBGuid(id,1));
+    static F Ready()
+    {
+        var f=new F(); Check(f.TabPosted(100),"tab post"); f.TabObserved(true);
+        Check(!f.RecipientDue(1099),"delay one millisecond short"); Check(f.RecipientDue(1100),"one second delay");
+        Check(f.RecipientPosted(),"text post"); f.RecipientObserved(true); return f;
+    }
+    static List<P.Slot> Batch() => new() { Slot(-1,0,20),Slot(0,1,21),Slot(1,2,22) };
+    static void Attach(F f)
+    {
+        f.BeginBatch(true,Batch());
+        Check(f.NextAttachment(out var a) && a.Candidate==0 && f.AttachmentPosted(a),"candidate 0 attached first");
+        f.AttachmentObserved(new[]{a.Item});
+        Check(f.NextAttachment(out var b) && b.Candidate==1 && f.AttachmentPosted(b),"candidate 1 attached");
+        f.AttachmentObserved(new[]{a.Item,b.Item});
+        Check(f.Current==F.Stage.Send && f.SendPosted() && !f.SendPosted(),"one send only until outcome");
+    }
+    static void Main()
+    {
+        var f=Ready(); Attach(f);
+        f.SendObserved(P.SendEvidence.Accepted,true,true,new List<P.Slot>{Slot(-1,0,20)});
+        Check(f.Current==F.Stage.Batch && f.Failures==0,"accepted disappearance moves to new batch");
+        f.BeginBatch(true,new List<P.Slot>{Slot(-1,0,20)}); Check(f.Current==F.Stage.Return,"backpack untouched, return");
+        f=Ready(); Attach(f); f.SendObserved(P.SendEvidence.Unknown,true,true,new List<P.Slot>{Slot(-1,0,20)});
+        Check(f.Current==F.Stage.Hold && !f.SendPosted(),"unknown outcome never resends");
+        f=Ready(); f.BeginBatch(false,Batch()); Check(f.Current==F.Stage.Hold,"unknown inventory never treated empty");
+        f=Ready(); f.BeginBatch(true,Batch()); Check(f.NextAttachment(out var item) && f.AttachmentPosted(item),"first attach");
+        f.AttachmentObserved(new[]{new WowBGuid(44,1)}); Check(f.Current==F.Stage.Hold,"different attached identity holds");
+        f=Ready(); Attach(f);
+        for (int i=0;i<3;i++)
+        {
+            f.SendObserved(P.SendEvidence.Rejected,true,true,Batch());
+            Check(f.Failures==i+1,"failure counted only on confirmed reset");
+            if(i<2) { Check(f.Current==F.Stage.Batch,"retry stage"); Attach(f); }
+        }
+        Check(f.Current==F.Stage.Return,"return after third confirmed failure");
+        f=Ready(); f.Interrupt(); f.BeginBatch(true,Batch()); Check(f.Current==F.Stage.Hold,"interrupt halts");
+        var many=new List<P.Slot>(); for(int i=0;i<15;i++) many.Add(Slot(0,i,(ulong)(100+i)));
+        f=Ready(); f.BeginBatch(true,many); int n=0; var attached=new List<WowBGuid>();
+        while(f.NextAttachment(out item)) { n++; Check(f.AttachmentPosted(item),"post once"); attached.Add(item.Item); f.AttachmentObserved(attached); }
+        Check(n==12 && f.Current==F.Stage.Send,"one batch never exceeds twelve");
+        Console.WriteLine("Synthetic mail sequence cases passed; observations and runtime wiring remain unimplemented.");
+    }
+}
