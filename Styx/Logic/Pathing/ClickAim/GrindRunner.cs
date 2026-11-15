@@ -6072,6 +6072,55 @@ internal static class GrindRunner
         catch { nodes = new List<WowBStormstrikeReset.Node>(); return false; }
     }
 
+    // An attempt is not proof the proc was consumed. Keep a session-wide
+    // backoff even across target changes rather than repeatedly pressing Bolt.
+    private static long _maelstromBoltNextAttempt;
+
+    private static bool MaelstromBoltAllowed(IntPtr hwnd, WowBReader reader, GreenMagic.Memory memory,
+        WowBObservedUnit expectedPlayer, WowBObservedUnit expectedTarget, uint map, ClickAimAction bolt,
+        uint minimumPower, bool enforceFaction, bool requireCombat, bool enforceProfile)
+    {
+        try
+        {
+            using var uncached = memory.TemporaryCacheState(false);
+            if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested || _vendorDue || hwnd == IntPtr.Zero ||
+                memory.WindowHandle != hwnd || !reader.IsExperimental70938 || !reader.ExperimentalGrindActive ||
+                map == uint.MaxValue || ObjectManager.Wow != memory || ObjectManager.WowB != reader ||
+                !bolt.IsDamage || bolt.KeyVk == 0 || !ClickAimClassRotation.IsLightningBolt(bolt) ||
+                !reader.TryReadMapId(out uint mapBefore) || mapBefore != map ||
+                !WowBGrindFactions.TraceIdentity70707(memory, reader, expectedPlayer, true) ||
+                !FightAttackInputAllowed(reader, memory, expectedTarget.Guid, expectedTarget, enforceFaction, requireCombat, enforceProfile) ||
+                !Capture(out WowBWorldSnapshot? snapshot) || snapshot == null ||
+                !snapshot.TryGetLocalPlayer(out WowBObservedUnit player) ||
+                player.Guid != expectedPlayer.Guid || player.UnitAddress != expectedPlayer.UnitAddress || player.RecordAddress != expectedPlayer.RecordAddress ||
+                !snapshot.TryGetSelectedTarget(out WowBObservedUnit target) || target.Guid != expectedTarget.Guid ||
+                target.UnitAddress != expectedTarget.UnitAddress || target.RecordAddress != expectedTarget.RecordAddress || target.IsLocalPlayer || target.HasPlayerVtable ||
+                !reader.TryGetUnitFields(player.UnitAddress, out WowBReader.WowBUnitFields self) || self.Health == 0 || self.MaxHealth == 0 ||
+                self.Health > self.MaxHealth || self.PlayerPowerTypeCandidate != 0 || self.Power < minimumPower ||
+                !WowBGrindFactions.TryReadGhostFlagCandidate(memory, reader, player, out bool ghost) || ghost ||
+                !reader.TryGetUnitFields(target.UnitAddress, out WowBReader.WowBUnitFields mob) || !DefenceFieldsValid(mob.Health, mob.UnitFlags, false)) return false;
+            double dx = target.Location.X - player.Location.X, dy = target.Location.Y - player.Location.Y, dz = target.Location.Z - player.Location.Z;
+            double distance = Math.Sqrt(dx * dx + dy * dy + dz * dz);
+            if (!double.IsFinite(distance) || bolt.RangeYd <= 0 || distance > bolt.RangeYd ||
+                !WowBMaelstromWeapon.ReadFive(memory, reader, player)) return false;
+            bool slotCurrent = false;
+            foreach (ClickAimAction current in ClickAimCombat.ReadBar(reader))
+                if (current.Slot == bolt.Slot && current.Raw == bolt.Raw && current.Id == bolt.Id && current.KeyVk == bolt.KeyVk && current.IsDamage)
+                { slotCurrent = true; break; }
+            return slotCurrent && bolt.IsDamage && !_stop && !ClickAimAbort.Requested && !RouteRunner.StopRequested && !_vendorDue &&
+                memory.WindowHandle == hwnd && ObjectManager.Wow == memory && ObjectManager.WowB == reader && reader.ExperimentalGrindActive &&
+                WowBGrindFactions.TraceIdentity70707(memory, reader, expectedPlayer, true) &&
+                reader.TryReadMapId(out uint mapAfter) && mapAfter == map &&
+                reader.TryGetUnitFields(player.UnitAddress, out WowBReader.WowBUnitFields selfAfter) &&
+                selfAfter.Health > 0 && selfAfter.MaxHealth > 0 && selfAfter.Health <= selfAfter.MaxHealth &&
+                selfAfter.PlayerPowerTypeCandidate == 0 && selfAfter.Power >= minimumPower &&
+                reader.TryGetUnitFields(target.UnitAddress, out WowBReader.WowBUnitFields mobAfter) &&
+                DefenceFieldsValid(mobAfter.Health, mobAfter.UnitFlags, false) &&
+                FightAttackInputAllowed(reader, memory, expectedTarget.Guid, expectedTarget, enforceFaction, requireCombat, enforceProfile);
+        }
+        catch { return false; }
+    }
+
     /// <summary>
     /// One fight using a hotbar-only class priority or the legacy generic selector.
     /// Healing, estimated DoT timing and optional instants share the existing
@@ -6117,6 +6166,7 @@ internal static class GrindRunner
         WowBObservedUnit macroPlayer = default;
         uint macroMap = uint.MaxValue;
         bool shockMeleeLogged = false, conservativeShockAttack = false, damagedPullLogged = false;
+        long nextMaelstromCheck = 0, nextMaelstromReport = 0;
         int lastShockDamageMs = 0;
         bool noSafeAutoLogged = false;
         int lastMeleeClickMs = 0;
@@ -6182,6 +6232,11 @@ internal static class GrindRunner
         ClickAimAction? auto = ClickAimCombat.AutoAttack(bar);          // Attack (6603)
         ClickAimAction? dot = rotation.Dot;
         ClickAimAction? meleeHit = rotation.Melee;
+        WowBObservedUnit maelstromPlayer = default;
+        uint maelstromMap = uint.MaxValue;
+        if (rotation.MaelstromBolt != null && snap.TryGetLocalPlayer(out WowBObservedUnit startPlayer) &&
+            reader.TryReadMapId(out uint startMap) && startMap != uint.MaxValue)
+        { maelstromPlayer = startPlayer; maelstromMap = startMap; }
         var stormReset = new WowBStormstrikeReset();
         WowBObservedUnit stormPlayer = default;
         uint stormMap = uint.MaxValue;
@@ -6208,7 +6263,8 @@ internal static class GrindRunner
         Logging.Write("[Grind] hotbar rotation: " + rotation.Class + " (requested " + ClickAimSettings.RotationClass
             + "); damage=" + (damage?.Name ?? "none") + ", extra=" + (rotation.Supplemental?.Name ?? "none")
             + ", DoT=" + (dot?.Name ?? "none") + ", melee=" + (meleeHit?.Name ?? "none")
-            + ", heal=" + (heal?.Name ?? "none") + ". Cooldowns and DoT duration are estimates; 70938 Stormstrike can use an experimental early-reset candidate.");
+            + ", heal=" + (heal?.Name ?? "none") + ", five-stack Bolt=" + (rotation.MaelstromBolt?.Name ?? "none")
+            + ". Cooldowns and DoT duration are estimates; 70938 Stormstrike and Maelstrom use experimental candidates.");
 
         /* How far the damage spell actually reaches. Every spell used to be treated as a 28 yd
          * cast, so a cat stood 25 yd off a mob pressing a 5 yd Claw - the user's "the bot thinks
@@ -6926,8 +6982,26 @@ internal static class GrindRunner
             ClickAimAction? optional = ClickAimClassRotation.SelectSupplemental(rotation, melee,
                 _focusedFightGuid == target.Guid && _focusedDamageObserved, d, myMana,
                 PowerForCast(rotation.Supplemental, 10), Environment.TickCount, _rotationCooldowns);
-            ClickAimAction? castDamage = optional ?? damage;
-            bool supplemental = optional != null;
+            ClickAimAction? bolt = rotation.MaelstromBolt;
+            uint boltEstimate = bolt == null ? 0 : WowBMaelstromWeapon.ManaEstimate(bolt.Id);
+            uint boltPower = bolt == null ? 0 : Math.Max(boltEstimate, PowerForCast(bolt, 10));
+            bool maelstromCast = false;
+            long maelstromNow = Environment.TickCount64;
+            if (bolt != null && boltEstimate > 0 && myMana >= boltPower && maelstromNow >= nextMaelstromCheck &&
+                maelstromNow >= _maelstromBoltNextAttempt && (lastCastMs == 0 ||
+                unchecked(Environment.TickCount - lastCastMs) >= ClickAimCombat.CastSettleMs))
+            {
+                nextMaelstromCheck = maelstromNow + 250;
+                maelstromCast = MaelstromBoltAllowed(hwnd, reader, fightMemory, maelstromPlayer, expectedPull, maelstromMap, bolt, boltPower,
+                    !defenceOnly || defenceFactionFilter, defenceOnly, !defenceOnly);
+                if (!maelstromCast && maelstromNow >= nextMaelstromReport)
+                {
+                    nextMaelstromReport = maelstromNow + 15000;
+                    Logging.Write("[Grind] Lightning Bolt withheld: five-stack candidate or fight safety not confirmed (unknown is not absence)");
+                }
+            }
+            ClickAimAction? castDamage = maelstromCast ? bolt : optional ?? damage;
+            bool supplemental = !maelstromCast && optional != null;
             double selectedRange = castDamage != null && castDamage.RangeYd > 0 ? castDamage.RangeYd : castRange;
             uint needForCast = PowerForCast(castDamage, 10);
             // Classic Hunter shots have an estimated minimum range. If the target is
@@ -6935,7 +7009,7 @@ internal static class GrindRunner
             bool hunterTooClose = rotation.Class == ClickAimRotationClass.Hunter && d < 8.0;
             bool shockReady = ClickAimClassRotation.Ready(_rotationCooldowns, rotation.DamageGroup, Environment.TickCount);
             bool shockMelee = !melee && ClickAimClassRotation.PreferShockMelee(shockAutoPlan, shockReady);
-            bool canCast = !melee && !shockMelee && castDamage != null && !castDamage.IsMelee && !hunterTooClose && myMana >= needForCast;
+            bool canCast = (maelstromCast || (!melee && !shockMelee)) && castDamage != null && !castDamage.IsMelee && !hunterTooClose && myMana >= needForCast;
 
             if (!canCast && !melee && damage != null && !damage.IsMelee && myMana < PowerForCast(damage, 10)
                 && !powerShortLogged)
@@ -6976,7 +7050,7 @@ internal static class GrindRunner
                 continue;
             }
 
-            if (canCast && !supplemental && !ClickAimClassRotation.Ready(_rotationCooldowns, rotation.DamageGroup, Environment.TickCount))
+            if (canCast && !maelstromCast && !supplemental && !ClickAimClassRotation.Ready(_rotationCooldowns, rotation.DamageGroup, Environment.TickCount))
             {
                 Thread.Sleep(120); // estimated cooldown, still refresh target, health and STOP each loop
                 continue;
@@ -7007,20 +7081,30 @@ internal static class GrindRunner
 
                 if (!FightAttackInputAllowed(reader, fightMemory, defenceTarget, expectedPull, !defenceOnly || defenceFactionFilter, defenceOnly, !defenceOnly))
                 { return YieldForTargetChange(reader, fightMemory, defenceTarget); }
-                if (supplemental ? !castDamage!.IsDamage : (damageWasDot ? !castDamage!.IsDot || !ClickAimSettings.UseDamageOverTime : !castDamage!.IsDamage))
+                if (maelstromCast || supplemental ? !castDamage!.IsDamage : (damageWasDot ? !castDamage!.IsDot || !ClickAimSettings.UseDamageOverTime : !castDamage!.IsDamage))
                     return "damage role or DoT setting changed; attack withheld";
                 if (!ResourceInputStillAllowed(reader)) continue;
+                // Facing and stopping take time. A new full, guarded sample is
+                // mandatory immediately before Bolt; unknown or fewer than five
+                // never falls through to a normal Lightning Bolt press.
+                if (maelstromCast && (bolt == null || Environment.TickCount64 < _maelstromBoltNextAttempt ||
+                    !MaelstromBoltAllowed(hwnd, reader, fightMemory, maelstromPlayer, expectedPull, maelstromMap, bolt, boltPower,
+                        !defenceOnly || defenceFactionFilter, defenceOnly, !defenceOnly))) continue;
                 lastCastMs = Environment.TickCount;
-                // Instant Shock does not prove the auto-attack toggle stopped.
-                if (!shockAutoPlan) meleeSwinging = false;
+                // Instant Shock or the experimental proc does not prove Attack stopped.
+                if (!shockAutoPlan && !maelstromCast) meleeSwinging = false;
                 uint manaBefore = myMana;
                 int mobBeforeHealth = lastHealth;
                 _pendingCastId = castDamage!.Id;
                 _pendingCastMana = manaBefore;
+                if (maelstromCast) _maelstromBoltNextAttempt = Environment.TickCount64 + WowBMaelstromWeapon.AttemptBackoffMs;
                 ClickAimInput.TapKey(hwnd, castDamage!.KeyVk, 40);
-                ClickAimClassRotation.Defer(_rotationCooldowns,
-                    supplemental ? rotation.SupplementalGroup : rotation.DamageGroup,
-                    supplemental ? rotation.SupplementalIntervalMs : rotation.DamageIntervalMs, Environment.TickCount);
+                if (maelstromCast)
+                    Logging.Write("[Grind] attempted Lightning Bolt with experimental Maelstrom five-stack candidate; cast and proc consumption unverified");
+                else
+                    ClickAimClassRotation.Defer(_rotationCooldowns,
+                        supplemental ? rotation.SupplementalGroup : rotation.DamageGroup,
+                        supplemental ? rotation.SupplementalIntervalMs : rotation.DamageIntervalMs, Environment.TickCount);
                 if (keyOneMacro && ClickAimClassRotation.IsAnyShock(castDamage))
                 {
                     if (TryFightKeyOneMacro(hwnd, reader, fightMemory, macroPlayer, expectedPull, macroMap,
@@ -7090,11 +7174,11 @@ internal static class GrindRunner
                 }
 
                 LearnCastCost(castDamage!.Id, manaBefore, manaAfter);   // a refusal costs nothing, a cast does
-                if (supplemental)
+                if (supplemental || maelstromCast)
                 {
-                    // A cooldown/range/resource estimate can be wrong. Do not let one
-                    // optional key force the whole fight into melee; retry the filler.
-                    Logging.Write("[Grind] optional " + castDamage!.Name + " had no observed effect; estimated cooldown applied, returning to the main spell");
+                    // A failed proc/optional attempt must not suppress Shock or
+                    // permanently alter the melee rotation.
+                    Logging.Write("[Grind] optional " + castDamage!.Name + " had no observed effect; returning to the main rotation");
                     continue;
                 }
                 castFailures++;

@@ -90,6 +90,26 @@ internal static class RotationTests
             "Lightning Bolt filler retains ranged rotation");
     }
 
+    private static void Maelstrom70938Tests()
+    {
+        ClickAimCombat.ClearRoleOverrides();
+        var bar = Bar(6603, 403, 8042, 17364);
+        var plan = ClickAimClassRotation.Build(ClickAimRotationClass.Shaman, bar, true);
+        Check(plan.MaelstromBolt?.Id == 403 && plan.Damage?.Id == 8042 && plan.Melee?.Id == 17364,
+            "70938 Bolt is separately gated; Shock and Stormstrike stay available");
+        Check(ClickAimClassRotation.ShockAutoPlan(plan, bar[0]), "Shock and Attack continue while Bolt is gated");
+        var older = ClickAimClassRotation.Build(ClickAimRotationClass.Shaman, bar);
+        Check(older.MaelstromBolt == null && older.Damage?.Id == 403, "older build keeps Bolt rotation");
+        ClickAimCombat.SetRoleOverride(403, ClickAimSpellRole.Ignore);
+        Check(ClickAimClassRotation.Build(ClickAimRotationClass.Shaman, bar, true).MaelstromBolt == null, "Ignore suppresses Bolt");
+        ClickAimCombat.SetRoleOverride(403, ClickAimSpellRole.Dot);
+        var dot = ClickAimClassRotation.Build(ClickAimRotationClass.Generic, bar, true);
+        Check(dot.MaelstromBolt == null && dot.Damage?.Id != 403 && dot.Dot?.Id != 403, "Dot override cannot bypass five-stack gate");
+        ClickAimCombat.ClearRoleOverrides();
+        var unbound = Bar(403); unbound[0].KeyVk = 0;
+        Check(ClickAimClassRotation.Build(ClickAimRotationClass.Shaman, unbound, true).MaelstromBolt == null, "unbound Bolt withheld");
+    }
+
     private static void Stormstrike70938Tests()
     {
         ClickAimCombat.ClearRoleOverrides();
@@ -129,6 +149,7 @@ internal static class RotationTests
         try
         {
             Stormstrike70938Tests();
+            Maelstrom70938Tests();
             var shaman = Bar(8042, 403, 331, 8050); // shock before bolt on the bar
             var plan = ClickAimClassRotation.Build(ClickAimRotationClass.Auto, shaman);
             Check(plan.Class == ClickAimRotationClass.Shaman && plan.Damage?.Id == 403 &&

@@ -1,0 +1,70 @@
+using System;
+using GreenMagic;
+using Styx.WoWInternals;
+using Styx.Logic.Pathing;
+namespace GreenMagic
+{
+    sealed class Memory
+    {
+        public uint Count, Clock = 1000; public bool ChangeCount, Unreadable; private int reads;
+        public byte[]? ReadBytes64(ulong address, int size)
+        {
+            if (Unreadable || size != 4) return null;
+            if (address == 0x20000 + WowBMaelstromWeapon.ClockOffset) return BitConverter.GetBytes(Clock);
+            return BitConverter.GetBytes(Count + (ChangeCount && ++reads % 2 == 0 ? 1U : 0U));
+        }
+        public IDisposable TemporaryCacheState(bool b) => new Scope();
+        sealed class Scope : IDisposable { public void Dispose() {} }
+    }
+}
+namespace Styx.WoWInternals
+{
+    readonly struct GuidCandidate { public bool IsEmpty { get; init; } }
+    struct WowBObservedUnit { public GuidCandidate Guid; public ulong UnitAddress; }
+    sealed class WowBReader { public bool IsExperimental70938 = true; }
+}
+namespace Styx.Logic.Pathing
+{
+    static class WowBCombatResearch
+    {
+        public const int ExternalCandidateStride = 0x128, External70938MaxSlots = 30;
+        public static byte[]? Data; public static Action? OnRead;
+        public sealed class ExternalCandidateSample { public byte[] Bytes = Array.Empty<byte>(); }
+        public static ExternalCandidateSample? ReadExternalCandidate(Memory m, ulong unit, out string reason, bool a, bool b)
+        { reason = ""; OnRead?.Invoke(); return Data == null ? null : new ExternalCandidateSample { Bytes = (byte[])Data.Clone() }; }
+    }
+}
+static class Program
+{
+    static void Check(bool value, string label) { if (!value) throw new Exception(label); }
+    static void Put(byte[] data, int slot, int offset, uint value) => BitConverter.GetBytes(value).CopyTo(data, slot * 0x128 + offset);
+    static void Main()
+    {
+        var bytes = new byte[30 * 0x128]; Put(bytes, 0, 0xe8, 777); Put(bytes, 29, 0xe8, WowBMaelstromWeapon.CandidateId);
+        Put(bytes, 29, 0xf4, 30000); Put(bytes, 29, 0xf8, 30000);
+        for (uint stacks = 0; stacks <= 6; stacks++)
+        {
+            Put(bytes, 29, 0x104, stacks);
+            Check(WowBMaelstromWeapon.IsFive(bytes, 2, 1000) == (stacks == 5), "only five: " + stacks);
+        }
+        Put(bytes, 29, 0x104, 5);
+        Check(!WowBMaelstromWeapon.IsFive(bytes, 1, 1000), "count mismatch");
+        Check(!WowBMaelstromWeapon.IsFive(bytes, 2, 30000), "expired candidate denied");
+        Put(bytes, 29, 0xf4, 20000); Check(!WowBMaelstromWeapon.IsFive(bytes, 2, 1000), "unknown duration denied");
+        Put(bytes, 29, 0xf4, 30000);
+        Put(bytes, 1, 0xe8, 777); Check(!WowBMaelstromWeapon.IsFive(bytes, 3, 1000), "duplicate rejected"); Put(bytes, 1, 0xe8, 0);
+        Put(bytes, 29, 0xe8, 999); Check(!WowBMaelstromWeapon.IsFive(bytes, 2, 1000), "unknown candidate not accepted");
+        Put(bytes, 29, 0xe8, WowBMaelstromWeapon.CandidateId);
+        Check(!WowBMaelstromWeapon.IsFive(new byte[31 * 0x128], 1, 1000), "oversized buffer rejected");
+        Check(!WowBMaelstromWeapon.IsFive(new byte[5], 1, 1000) && !WowBMaelstromWeapon.IsFive(null, 1, 1000), "malformed/unreadable rejected");
+        var memory = new Memory { Count = 2 }; var reader = new WowBReader(); var player = new WowBObservedUnit { UnitAddress = 0x20000 };
+        WowBCombatResearch.Data = bytes;
+        Check(WowBMaelstromWeapon.ReadFive(memory, reader, player), "stable sample accepted");
+        memory.ChangeCount = true; Check(!WowBMaelstromWeapon.ReadFive(memory, reader, player), "changing count denied");
+        memory.ChangeCount = false; WowBCombatResearch.Data = null; Check(!WowBMaelstromWeapon.ReadFive(memory, reader, player), "missing data denied");
+        WowBCombatResearch.Data = bytes; reader.IsExperimental70938 = false; Check(!WowBMaelstromWeapon.ReadFive(memory, reader, player), "other builds denied");
+        Check(WowBMaelstromWeapon.ManaEstimate(403) == 15 && WowBMaelstromWeapon.ManaEstimate(15208) == 220 &&
+              WowBMaelstromWeapon.ManaEstimate(999) == 0, "known mana estimate and unknown denied");
+        Console.WriteLine("Synthetic Maelstrom reader fixtures passed; no live client verified.");
+    }
+}

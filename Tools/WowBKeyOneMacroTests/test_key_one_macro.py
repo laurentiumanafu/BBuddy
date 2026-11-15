@@ -40,7 +40,7 @@ class MacroWiring(unittest.TestCase):
         self.assertIn('if (!keyOneMacro && ClickAimClassRotation.MayPressConservativeAttack', G)
 
     def test_safe_guard_and_identity(self):
-        helper = section(G, 'private static bool TryFightKeyOneMacro(', '    /// <summary>\n    /// One fight')
+        helper = section(G, 'private static bool TryFightKeyOneMacro(', '    // A stable list read')
         key = helper.index('ClickAimInput.TapKey(hwnd, 0x31, 40)')
         for condition in ('reader.Uses70862Features', 'UseKeyOneStartAttackMacro', 'CheckDeathCheckpoint(trackerOnly: true)',
                           'TryReadMapId', 'map != expectedMap', 'TryReadExperimentalActionSnapshot', 'bar[0] == 0',

@@ -14,7 +14,7 @@ internal enum ClickAimRotationClass
 internal sealed class ClickAimRotationPlan
 {
     public ClickAimRotationClass Class;
-    public ClickAimAction? Damage, Melee, Dot, Heal, Supplemental;
+    public ClickAimAction? Damage, Melee, Dot, Heal, Supplemental, MaelstromBolt;
     public int SupplementalIntervalMs, DamageIntervalMs, MeleeIntervalMs;
     public string SupplementalGroup = "", DamageGroup = "", MeleeGroup = "";
 }
@@ -94,6 +94,17 @@ internal static class ClickAimClassRotation
     internal static ClickAimRotationPlan Build(ClickAimRotationClass requested, List<ClickAimAction> bar, bool experimental70938 = false)
     {
         var plan = new ClickAimRotationPlan { Class = Resolve(requested, bar) };
+        if (experimental70938)
+        {
+            // Lightning Bolt is no longer the opener/filler on 70938. Keep it
+            // separately only when its role is Damage, so Shock/Attack still
+            // work while the five-stack candidate is absent or unreadable.
+            plan.MaelstromBolt = Find(bar, new[] { "Lightning Bolt" }, ClickAimSpellRole.Damage);
+            var withoutBolt = new List<ClickAimAction>();
+            foreach (ClickAimAction action in bar)
+                if (!IsLightningBolt(action)) withoutBolt.Add(action);
+            bar = withoutBolt;
+        }
         if (!Definitions.TryGetValue(plan.Class, out Definition? def))
         {
             plan.Damage = ClickAimCombat.FirstDamageOrDot(bar);
@@ -167,6 +178,10 @@ internal static class ClickAimClassRotation
             plan.MeleeIntervalMs = StormstrikeInterval70938Ms;
         }
     }
+
+    internal static bool IsLightningBolt(ClickAimAction action)
+        => action.Kind == ClickAimActionKind.Spell &&
+           string.Equals(ClickAimCombat.NameOf(action.Id), "Lightning Bolt", StringComparison.OrdinalIgnoreCase);
 
     internal static bool IsDirectShock(ClickAimAction action)
         => string.Equals(ClickAimCombat.NameOf(action.Id), "Earth Shock", StringComparison.OrdinalIgnoreCase) ||
