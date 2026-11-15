@@ -143,6 +143,32 @@ internal static class WowBInventoryProbe
         }
     }
 
+    // Stopped-only research API for the user-requested mail candidates. This
+    // does not read the backpack, verify the UI or authorize any mail input.
+    internal static bool TryReadMailCandidateBags(out WowBGuid playerGuid,
+        out List<WowBContainerResearchProbe.MailBagObservation>? bags)
+    {
+        playerGuid = default; bags = null;
+        lock (Gate)
+        {
+            Memory? memory = ObjectManager.Wow; WowBReader? reader = ObjectManager.WowB;
+            if (ClickAimUi.Running || ClickAimUi.Paused || memory == null || reader?.IsExperimental70938 != true || !memory.Is64BitTarget)
+                return false;
+            try
+            {
+                using var uncached = memory.TemporaryCacheState(false);
+                if (!reader.TryCaptureWorldSnapshot(out WowBWorldSnapshot? world) || world == null ||
+                    !world.TryGetLocalPlayer(out WowBObservedUnit player) || !ValidPlayer(memory, reader, player) ||
+                    !WowBContainerResearchProbe.TryCaptureMailBags(memory, reader, player, out bags) || bags == null ||
+                    ClickAimUi.Running || ClickAimUi.Paused || ObjectManager.Wow != memory || ObjectManager.WowB != reader)
+                { bags = null; return false; }
+                playerGuid = player.Guid;
+                return true;
+            }
+            catch { bags = null; return false; }
+        }
+    }
+
     internal static List<WowBContainerResearchProbe.BagChoice> ObservedBags()
     {
         lock (Gate)

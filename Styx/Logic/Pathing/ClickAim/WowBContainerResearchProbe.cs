@@ -52,9 +52,20 @@ internal static class WowBContainerResearchProbe
     private sealed class Candidate
     {
         public WowBGuid Guid;
-        public ulong Data;
+        public ulong Data, SourceOffset;
+        public WowBReader.WowBPoolObject Record;
+        public byte[] PointerBytes = Array.Empty<byte>(), Header = Array.Empty<byte>();
         public uint Count;
         public byte[] Slots = Array.Empty<byte>();
+    }
+
+    // Read-only research snapshots, never direct permission for GUI clicks.
+    // Slots are full 128-bit candidates, including zero entries.
+    internal sealed class MailBagObservation
+    {
+        internal int CandidateIndex;
+        internal WowBGuid Bag;
+        internal WowBGuid[] Slots = Array.Empty<WowBGuid>();
     }
     private static Memory? _previousMemory;
     private static WowBReader? _previousReader;
@@ -298,8 +309,25 @@ internal static class WowBContainerResearchProbe
     // Caller holds the inventory probe lock and has disabled the memory cache.
     public static string Capture(Memory memory, WowBReader reader, WowBObservedUnit player,
         out (int CandidateSize, int ZeroTags, int Resolved, int ZeroIdentities, int OrdinarySize, int OrdinaryZeroTags, int Unclassified)? subtotal, bool active = false)
+        => CaptureCore(memory, reader, player, out subtotal, out _, active, false);
+
+    // Caller holds the inventory probe gate and disabled the memory cache.
+    // This returns only observed 1..3 entries, never backpack/0/4 or mail
+    // authorization; missing bags or a changed value fail closed.
+    internal static bool TryCaptureMailBags(Memory memory, WowBReader reader, WowBObservedUnit player,
+        out List<MailBagObservation>? bags)
     {
-        subtotal = null;
+        bags = null;
+        if (!reader.IsExperimental70938 || ClickAimUi.Running || ClickAimUi.Paused) return false;
+        CaptureCore(memory, reader, player, out _, out bags, false, true);
+        return bags != null;
+    }
+
+    private static string CaptureCore(Memory memory, WowBReader reader, WowBObservedUnit player,
+        out (int CandidateSize, int ZeroTags, int Resolved, int ZeroIdentities, int OrdinarySize, int OrdinaryZeroTags, int Unclassified)? subtotal,
+        out List<MailBagObservation>? mailBags, bool active, bool captureMailBags)
+    {
+        subtotal = null; mailBags = null;
         try
         {
             if (!SamePlayer(memory, reader, player, active))
@@ -353,7 +381,8 @@ internal static class WowBContainerResearchProbe
                     recordGuid == null || recordGuid.Length != 16 || GuidAt(recordGuid, 0) != guid || !reader.IsPoolRecordCurrent(record))
                 { text.AppendFormat(CultureInfo.InvariantCulture, "container-candidate[{0}] unstable or unreadable; discarded.\n", i); continue; }
                 allExcludedHeaders.AddRange(excludedHeaders);
-                var current = new Candidate { Guid = guid, Data = data, Count = count, Slots = slots! };
+                var current = new Candidate { Guid = guid, Data = data, Count = count, Slots = slots!,
+                    Record = record, SourceOffset = sourceOffset, PointerBytes = pointerBytes!, Header = header! };
                 next[i] = current;
                 int zeroTags = 0;
                 for (int j = 0; j < (int)count; j++) if ((BitConverter.ToUInt64(slots!, j * SlotStride + 8) >> 58) == 0) zeroTags++;
@@ -430,10 +459,64 @@ internal static class WowBContainerResearchProbe
             bool complete = allResolved && (resolved > 0 || reader.UsesOrdinaryBagPolicy);
             if (complete) subtotal = (sizeSum, zeroSum, resolved, zeroIdentities, ordinarySize, ordinaryZero, unclassified);
             if (!active) { _previousMemory = memory; _previousReader = reader; _previousPlayer = player.Guid; _previous = next; _lastComplete = complete; }
+            if (captureMailBags && !active && reader.IsExperimental70938 &&
+                TryBuildMailObservation(memory, reader, player, table, identityBytes, next, out List<MailBagObservation>? observed))
+                mailBags = observed;
             text.AppendLine("Container code markers after: " + markerAfter + "; unreadable is not confirmation of a match.");
             text.AppendLine("Container reads are non-atomic; unresolved/zero candidates are unknown. Grind may use the subtotal experimentally for selling on 70707/70755/70790/70862/70888/70938.");
             return text.ToString();
         }
-        catch (Exception ex) { subtotal = null; Forget(); return "Container research unavailable: " + ex.Message + "\n"; }
+        catch (Exception ex) { subtotal = null; mailBags = null; Forget(); return "Container research unavailable: " + ex.Message + "\n"; }
+    }
+
+    private static bool TryBuildMailObservation(Memory memory, WowBReader reader, WowBObservedUnit player,
+        ulong table, byte[] identities, Candidate?[] candidates, out List<MailBagObservation>? observations)
+    {
+        observations = null;
+        var seenBags = new HashSet<WowBGuid>();
+        for (int i = 0; i < CandidateIdentities; i++)
+        {
+            WowBGuid id = GuidAt(identities, i * SlotStride);
+            if (!id.IsEmpty && !seenBags.Add(id)) return false;
+        }
+        var observed = new List<MailBagObservation>();
+        var seenItems = new HashSet<WowBGuid>();
+        var seenAddresses = new HashSet<ulong>();
+        for (int i = 1; i <= 3; i++)
+        {
+            Candidate? bag = candidates[i];
+            if (bag == null || bag.Guid.IsEmpty || bag.Count == 0 || bag.Count > MaxSlots || !seenAddresses.Add(bag.Data) ||
+                bag.Guid != GuidAt(identities, i * SlotStride) || bag.Slots.Length != bag.Count * SlotStride) return false;
+            var slots = new WowBGuid[bag.Count];
+            for (int j = 0; j < slots.Length; j++)
+            {
+                WowBGuid item = GuidAt(bag.Slots, j * SlotStride);
+                if (!item.IsEmpty && !seenItems.Add(item)) return false;
+                slots[j] = item;
+            }
+            observed.Add(new MailBagObservation { CandidateIndex = i, Bag = bag.Guid, Slots = slots });
+        }
+        // Earlier per-bag reads are not simultaneous. Repeat all selected bags
+        // after the whole scan; changed, ambiguous or unreadable means unknown.
+        foreach (MailBagObservation observation in observed)
+        {
+            Candidate bag = candidates[observation.CandidateIndex]!;
+            byte[]? capacity = memory.ReadBytes64(bag.Data + CapacityOffset, 4);
+            byte[]? recordGuid = memory.ReadBytes64(bag.Record.RecordPtr + WowBOffsets.RecordGuidLoOffset, 16);
+            if (capacity == null || capacity.Length != 4 || BitConverter.ToUInt32(capacity, 0) != bag.Count ||
+                recordGuid == null || recordGuid.Length != 16 || GuidAt(recordGuid, 0) != bag.Guid ||
+                !Same(bag.Slots, memory.ReadBytes64(bag.Data + SlotsOffset, bag.Slots.Length)) ||
+                !Same(bag.Header, memory.ReadBytes64(bag.Data, 0x20)) ||
+                !Same(bag.PointerBytes, memory.ReadBytes64(bag.Record.RecordPtr + bag.SourceOffset, 8)) ||
+                !reader.IsPoolRecordCurrent(bag.Record)) return false;
+        }
+        if (!Same(identities, memory.ReadBytes64(table, CandidateIdentities * SlotStride)) ||
+            !Signatures(memory, reader.ExperimentalBuildNumber, out _) || !SamePlayer(memory, reader, player, false) ||
+            !reader.TryCaptureWorldSnapshot(out WowBWorldSnapshot? world) || world == null ||
+            !world.TryGetLocalPlayer(out WowBObservedUnit final) || final.Guid != player.Guid ||
+            final.UnitAddress != player.UnitAddress || final.RecordAddress != player.RecordAddress ||
+            !SamePlayer(memory, reader, final, false)) return false;
+        observations = observed;
+        return true;
     }
 }

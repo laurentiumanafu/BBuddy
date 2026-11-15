@@ -9,7 +9,7 @@ static class Fixture
     static void Check(bool b,string why) { if (!b) throw new Exception(why); }
     static void Main()
     {
-        var all=new List<P.Slot> {Slot(0,0,1),Slot(4,0,2)};
+        var all=new List<P.Slot> {Slot(0,0,1),Slot(4,0,2),Slot(-1,0,3)};
         for(int i=0;i<17;i++) all.Add(Slot(1+i%3,i,(ulong)(10+i)));
         Check(P.Plan(false, all,out _) == P.Selection.Unknown,"unknown inventory cannot plan");
         Check(P.Plan(true, all,out var batch) == P.Selection.Batch && batch.Count==12,"first batch capped at twelve");
@@ -24,9 +24,9 @@ static class Fixture
         Check(P.AfterSend(P.SendEvidence.Rejected,true,true,batch,all,1)==P.Decision.Retry,"second confirmed failure retries");
         Check(P.AfterSend(P.SendEvidence.Rejected,true,true,batch,all,2)==P.Decision.ReturnToProfile,"third confirmed failure returns");
         Check(P.AfterSend(P.SendEvidence.Rejected,true,true,batch,after,2)==P.Decision.Hold,"partial or unknown failure does not retry or return blindly");
-        after.Add(Slot(0,5,batch[0].Item.Low));
-        Check(P.AfterSend(P.SendEvidence.Accepted,true,true,batch,after,0)==P.Decision.Hold,"moved into an excluded candidate is not gone");
-        Check(P.Plan(true,new List<P.Slot>{Slot(0,0,1),Slot(4,0,2)},out _)==P.Selection.Empty,"only excluded bags is empty for mailing");
+        after.Add(Slot(-1,5,batch[0].Item.Low));
+        Check(P.AfterSend(P.SendEvidence.Accepted,true,true,batch,after,0)==P.Decision.Hold,"moved into backpack range is not gone");
+        Check(P.Plan(true,new List<P.Slot>{Slot(-1,0,3),Slot(0,0,1),Slot(4,0,2)},out _)==P.Selection.Empty,"backpack and excluded bags are never mailed");
         Check(P.Plan(true,new List<P.Slot>{Slot(1,0,1),Slot(2,1,1)},out _)==P.Selection.Unknown,"duplicate item identity");
         Check(P.Plan(true,new List<P.Slot>{Slot(1,0,1),Slot(1,0,2)},out _)==P.Selection.Unknown,"duplicate slot");
         Check(P.Plan(true,new List<P.Slot>{Slot(5,0,1)},out _)==P.Selection.Unknown,"unknown candidate");

@@ -24,11 +24,13 @@ internal static class WowBMailBatchPolicy
         { Candidate = candidate; Index = index; Item = item; }
     }
 
-    // All five candidate inventories must be complete and identity-stable,
-    // including excluded candidates 0 and 4, so a move to an excluded bag
-    // cannot be misread as disappearance. Which is the backpack is unverified.
-    // 'complete' is not a substitute for a
-    // verified live reader; no such reader or UI mapper is wired yet.
+    // Require complete, stable observations of the separately represented
+    // backpack (candidate -1) and all five container candidates 0..4, so a move
+    // into an excluded bag cannot be misread as disappearance. The supplied
+    // 70938 trace places the backpack in the player range, not container 0.
+    // Zero or unavailable identities still need an evidence-backed treatment.
+    // 'complete' is not a substitute for a verified live reader; no such
+    // reader or UI mapper is wired yet.
     internal static Selection Plan(bool complete, IReadOnlyList<Slot> occupied, out List<Slot> batch)
     {
         batch = new List<Slot>();
@@ -38,7 +40,7 @@ internal static class WowBMailBatchPolicy
         var allowed = new List<Slot>();
         foreach (Slot slot in occupied)
         {
-            if (slot.Candidate < 0 || slot.Candidate > 4 || slot.Index < 0 || slot.Index >= 64 || slot.Item.IsEmpty ||
+            if (slot.Candidate < -1 || slot.Candidate > 4 || slot.Index < 0 || slot.Index >= 64 || slot.Item.IsEmpty ||
                 !positions.Add((slot.Candidate, slot.Index)) || !identities.Add(slot.Item)) return Selection.Unknown;
             if (slot.Candidate >= 1 && slot.Candidate <= 3) allowed.Add(slot);
         }
