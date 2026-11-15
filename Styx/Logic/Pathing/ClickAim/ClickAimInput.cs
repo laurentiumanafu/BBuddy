@@ -264,6 +264,23 @@ internal static class ClickAimInput
         return PostMessageInternal(hwnd, WM_CHAR, new IntPtr(character), new IntPtr(1));
     }
 
+    // Active experimental background mail only. Posts directly to the game
+    // window, never synthesizes desktop keystrokes. This does not prove that
+    // the recipient field is focused or that the client accepted the text.
+    internal static bool BackgroundMailRecipientChar(IntPtr hwnd, char character, int stopGeneration, Func<bool> confirm)
+    {
+        bool focus() => GatherBackgroundFocus.Current(hwnd) == GatherBackgroundFocus.State.OtherApplication &&
+            GatherBackgroundFocus.TryClientOrigin(hwnd, out _, out _);
+        if ((!char.IsLetter(character) && character != '-') || ClickAimAbort.Generation != stopGeneration ||
+            !focus() || !MouseButtonsUp() ||
+            (GetAsyncKeyState(0x10) & 0x8000) != 0 || (GetAsyncKeyState(0x11) & 0x8000) != 0 ||
+            (GetAsyncKeyState(0x12) & 0x8000) != 0 || !confirm() ||
+            ClickAimAbort.Generation != stopGeneration || !focus() || !MouseButtonsUp() ||
+            (GetAsyncKeyState(0x10) & 0x8000) != 0 || (GetAsyncKeyState(0x11) & 0x8000) != 0 ||
+            (GetAsyncKeyState(0x12) & 0x8000) != 0) return false;
+        return PostMessageInternal(hwnd, WM_CHAR, new IntPtr(character), new IntPtr(1));
+    }
+
     // One dialog click only. Recheck the screen and state after the posted move;
     // always release the button if down was sent, including after STOP.
     internal static bool ConfirmedLeftClick(IntPtr hWnd, int x, int y, int expectedWidth, int expectedHeight,

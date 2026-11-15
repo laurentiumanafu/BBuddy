@@ -13,7 +13,7 @@ class MailboxWiring(unittest.TestCase):
   self.assertIn('_vendorReturnHotspot != null',due)
  def test_safe_mesh_and_uncertain_input_stop(self):
   route=s[s.index('private static bool WalkToRecordedMailbox('):s.index('private static bool WaitVendorSafe(')]
-  for part in ('RequireMeshDuringSession = true', 'PollInterruptDuringWalk = true', 'TryReadGatherCombat', 'TryRead70888RecoveryPlayer', 'AutoVendorIdentityMatches', 'RouteRunner.LastRunInterrupted', 'ClickAimMath.Len(finalPlayer.Location.X', 'WowBExperimentalMail.Run', 'GameForeground', 'Stop();'):
+  for part in ('RequireMeshDuringSession = true', 'PollInterruptDuringWalk = true', 'TryReadGatherCombat', 'TryRead70888RecoveryPlayer', 'AutoVendorIdentityMatches', 'RouteRunner.LastRunInterrupted', 'ClickAimMath.Len(finalPlayer.Location.X', 'WowBExperimentalMail.Run', 'ReturnWithoutMail', 'Stop();'):
    self.assertIn(part,route)
   self.assertIn('return WalkBackToProfile(mover)',route)
   self.assertIn('no automatic', (Path(__file__).resolve().parents[2] / 'Styx/Logic/Pathing/ClickAim/WowBExperimentalMail.cs').read_text())

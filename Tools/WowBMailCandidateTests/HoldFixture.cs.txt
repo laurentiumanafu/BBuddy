@@ -1,0 +1,24 @@
+using System;
+using System.IO;
+using H = Styx.Logic.Pathing.WowBMailSafetyHold;
+namespace Styx.Logic.Pathing { static class ClickAimCalibration { public static string DefaultPath = ""; } }
+static class Fixture
+{
+ static void Check(bool ok,string why) { if(!ok) throw new Exception(why); }
+ static void Main()
+ {
+  string dir=Path.Combine(Path.GetTempPath(),"mail-hold-"+Guid.NewGuid());
+  Directory.CreateDirectory(dir);
+  Styx.Logic.Pathing.ClickAimCalibration.DefaultPath=Path.Combine(dir,"cal.txt");
+  try {
+   Check(!H.IsHeld(),"initially clear");
+   Check(H.TryBegin(out _),"create durable hold");
+   Check(H.IsHeld() && File.Exists(H.Path),"hold survives object scope");
+   Check(!H.TryBegin(out _),"second composition refused");
+   Check(H.IsHeld(),"failed begin preserves hold");
+   Check(H.TryClear(out _) && !H.IsHeld(),"inspection clears hold");
+   Check(H.TryBegin(out _) && H.IsHeld(),"new composition can begin");
+  } finally { Directory.Delete(dir,true); }
+  Console.WriteLine("Synthetic mail hold persistence checks passed; no game actions performed.");
+ }
+}

@@ -36,7 +36,8 @@ class ProfileFreeMail(unittest.TestCase):
                 'RouteRunner.LastRunInterrupted', 'ClearRoamMailReturn();'):
    self.assertIn(guard,route)
   mail = s[s.index('private static bool WalkToRecordedMailbox('):s.index('private static bool WaitVendorSafe(')]
-  self.assertIn('stopping to avoid repeating a possible send',mail)
+  self.assertIn('experiment interrupted or uncertain; no automatic resend',mail)
+  self.assertIn('ReturnWithoutMail',mail)
   self.assertIn('return WalkBackToProfile(mover)',mail)
  def test_explicit_diagnostic_reports_no_recipient(self):
   self.assertIn('[Mail] experimental post-sell option ',s)

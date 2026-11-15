@@ -8,19 +8,25 @@ with a same-map return hotspot or a profile-free pre-vendor return position, a
 saved recipient containing only letters/hyphens, the prior combined-bag grid,
 and separately recorded mailbox, Send Mail tab and
 Send button coordinates. At the recorded standing point, the mailbox hover
-candidate must match the saved full GUID. Client size, foreground, map, player,
+candidate must match the saved full GUID. Client size, focus mode, map, player,
 health, ghost, combat and STOP guards are checked. Changes to camera, UI scale,
 window layout, bag configuration or client size require recalibration; the
 controls are user-labelled, not independently detected. The merchant plan must
 leave the calibrated combined bag open.
 
 Before interaction, preflight reports the specific failed safety/geometry check.
-Only a foreground/finger-held-mouse-button failure gets a three-second grace
-period before any input; no input is sent while unsafe. The game must remain
-foreground. After a matching mailbox hover and posted interaction, the log
-reports bag/grid/table checks and whether tab button messages were posted. A
-posted click is not proof of a visible frame or tab. The experiment then waits
-one second, posts recipient text, attaches at most 12 candidate 0–3 raw slots and compares the mail record
+Foreground and non-minimized background modes are supported experimentally;
+focus mode is fixed for a mail attempt, and switching between game and another
+application interrupts it. In background, mouse and character messages are
+posted directly to the game window, not typed into the foreground application;
+background recipient focus and client behavior are not verified. A held mouse
+button gets a three-second grace period before any input; no input is sent while
+unsafe. After a matching mailbox hover and posted interaction, the log reports
+bag/grid/table checks and whether tab button messages were posted. A posted
+click is not proof of a visible frame or tab. For every nonempty batch, including
+after each observed send, the experiment clicks the tab, waits one second and
+posts the recipient again; it cannot read back or clear the recipient field. It
+attaches at most 12 candidate 0–3 raw slots and compares the mail record
 candidate after each click. It sends once per batch, then requires a stable
 zero-like candidate table and disappearance of the actually observed attached
 raw IDs from observed bag candidates before attempting another batch. A single
@@ -48,21 +54,32 @@ A profile-free run latches the live position and character before starting the
 town trip and meshes back there after mailing, without using the synthetic roam
 placeholder. Cross-map return is not supported. The mailbox must belong to the
 same sell plan the bot selects (the log names that plan); saving it for another
-vendor is insufficient. Missing configuration before routing skips mail and
-returns to the grind destination. Once interaction begins, any interruption, partial input, unreadable observation or
-uncertain send stops for inspection without retrying a possible send. Confirmed
-rejection is not independently observed, so the requested three-confirmed-
-failures retry/continue behavior is **not yet implemented**. Cross-map return
-remains unsupported; the experiment is limited to 64 batches. No Lua is used.
+vendor is insufficient. Missing configuration or a mailbox-stage failure skips
+mail and attempts a guarded mesh return to grind; combat, STOP, unreadable map or
+identity, and unreachable routes still take priority. Failures before beginning
+composition may be attempted on the next sell trip. Before clicking the tab a
+durable `Settings/clickaim-mail-hold.txt` is created. It remains on partial
+recipient input, uncertain attachments, failed/uncertain sends, crashes and an
+empty unsent composition. On later trips it blocks automatic mail (not grind),
+including across restarts, so an uncertain send is never blindly retried. Stop
+the bot, inspect the mailbox and sent mail, resolve any uncertainty, clear
+recipient text and attachments, and use **Clear mail safety hold after
+inspection** before attempting mail again. The hold is removed automatically
+only after a sent batch has a zero-like table and its observed IDs have vanished;
+these observations are not proof of acceptance or delivery. The recipient
+clearing/reset and UI state remain unverified. Confirmed rejection is not
+independently observed, so three-confirmed-failure retry/continue behavior is
+**not yet implemented**. Cross-map return remains unsupported; the experiment is
+limited to 64 batches. No Lua is used.
 The Windows build and live workflow have not been tested here. The historical
 notes below describe the earlier disabled research stages and should not be
 read as the current opt-in status.
 
 Requested behavior: after the recorded sell plan, navigate to the recorded mailbox, open Send Mail, wait one second, type the user-editable recipient, attach at most 12 items per mail from equipped bags, send and verify those items left the bags. The user clarified that **only the separate 20-slot main backpack is excluded**; observed container candidates 0, 1, 2 and 3 must all be included. A future candidate 4 must not be silently excluded if established to be another equipped bag. After all eligible items are gone or three failed attempts, mesh back to the active profile hotspot. STOP, death, combat, player/map identity and no-Lua rules still apply. A saved sell plan can itself click any bag slot; the user must configure it not to sell things intended for mail.
 
-## What is available now
+## Historical research notes (before the opt-in workflow)
 
-* Selling settings has a persistent recipient field, explicitly labelled as future use. It never sends mail or changes the existing selling/return workflow.
+* At this earlier stage Selling settings had a persistent recipient field for future use; the current opt-in workflow is described above.
 * `WowBMailBatchPolicy` is an isolated, unconnected policy: it includes candidate 0–4 equipped-bag observations and excludes the separate backpack, up to 12 per batch, holds on unknown state and models three *confirmed* failures. Candidate 4 is eligible only if its identity and equipped-bag meaning are established; an unknown identity is not evidence of an absent bag or complete inventory. It requires a verified complete inventory and an independently observed send acknowledgement with cleared attachments. Its synthetic C# fixture does not validate the live client.
 * Stopped-only **Bag research snapshot** logs the full candidate bytes at every snapshot, including comparable observations, as well as the prior per-entry deltas. `Tools/analyze_mail_bag_snapshots.py <log>` compares candidate and player-array indexes; neither the raw bytes nor a delta independently proves item, empty-slot, mailbox or delivery semantics. Logs contain process addresses, GUIDs and potentially sensitive data.
 * `TryReadMailCandidateBags` is a stopped-only 70938 research API. It reports candidates 0–4, preserves full 128-bit raw slot identities, and rechecks bags, pool records, table and player/session identity after scanning. A zero candidate identity is reported explicitly as Unknown; a nonzero but unresolved candidate, instability, duplicate identity or unreadability prevents a result. It does not read the backpack or validate mailbox state and cannot authorize input. The 70938 reads are not atomic.

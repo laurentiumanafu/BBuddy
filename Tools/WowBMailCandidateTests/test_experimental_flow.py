@@ -20,7 +20,8 @@ class Flow(unittest.TestCase):
   self.assertIn('if (!progressed)',r)
  def test_position_and_stop(self):
   for v in ('ClickAimSettings.ExperimentalAutoMail','controls.Player == player.ToString()',
-            '_vendorMailboxPending = mailbox','ClickAimInput.GameForeground(hwnd)',
-            'WowBExperimentalMail.Run', 'stopping to avoid repeating a possible send'):
+            '_vendorMailboxPending = mailbox','WowBMailSafetyHold.IsHeld()',
+            'WowBExperimentalMail.Run', 'experiment interrupted or uncertain; no automatic resend'):
    self.assertIn(v,g)
+  self.assertIn('ClickAimInput.GameForeground(hwnd)',r)
 if __name__ == '__main__': unittest.main()

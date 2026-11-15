@@ -893,6 +893,19 @@ namespace CopilotBuddy.UI
             catch (Exception ex) { lblMailControlsStatus.Text = "Could not save controls: " + ex.Message; }
         }
 
+        private void btnClearMailHold_Click(object sender, RoutedEventArgs e)
+        {
+            if (ClickAimUi.Running || ClickAimUi.Paused || _mailHoverBusy || _mailGridBusy)
+            { lblMailControlsStatus.Text = "Stop the bot and finish other mail operations before clearing the hold."; return; }
+            if (System.Windows.MessageBox.Show("Have you inspected the mailbox and sent mail, resolved any uncertain send, and cleared all leftover recipient text and attachments? Clearing this hold permits a later trip to send again.",
+                "Clear mail safety hold", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
+            if (ClickAimUi.Running || ClickAimUi.Paused || _mailHoverBusy || _mailGridBusy)
+            { lblMailControlsStatus.Text = "Bot or mail operation started; hold not cleared."; return; }
+            if (!WowBMailSafetyHold.TryClear(out string why))
+            { lblMailControlsStatus.Text = why; return; }
+            lblMailControlsStatus.Text = "Mail safety hold cleared after user confirmation. Mail and recipient state remain unverified.";
+        }
+
         private async void btnMailAttachmentResearch_Click(object sender, RoutedEventArgs e)
         {
             if (ClickAimUi.Running || ClickAimUi.Paused || _mailHoverBusy || _mailGridBusy)

@@ -3770,6 +3770,11 @@ internal static class GrindRunner
             _vendorReturnReader = vendorReader; _vendorReturnMemory = vendorMemory; _vendorReturnPlayer = player;
             if (ClickAimSettings.ExperimentalAutoMail)
             {
+                if (WowBMailSafetyHold.IsHeld())
+                {
+                    Logging.Write("[Mail] prior composition or send requires inspection; skipping mailbox this trip and returning to grind.");
+                    return WalkBackToProfile(mover);
+                }
                 VendorFile.MailboxPoint? mailbox = point.Mailbox;
                 if (mailbox != null && mailbox.Map == returnMap && WowBMailRecipientText.ValidForTest(ClickAimSettings.MailRecipient) &&
                     WowBMailUiCalibration.TryLoad(out var controls) && controls != null && controls.Map == mailbox.Map &&
@@ -4082,12 +4087,16 @@ internal static class GrindRunner
             return null;
         }
         bool Safe() => RouteSafetyFailure() == null;
+        bool ReturnWithoutMail(string reason)
+        {
+            _vendorMailboxPending = null; _vendorMailboxReader = null; _vendorMailboxMemory = null; _vendorMailboxPlayer = default;
+            Logging.Write("[Mail] " + reason + "; leaving mail for this trip and returning to grind when safe. An inspection hold, if present, blocks later mail.");
+            if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested) return false;
+            return WalkBackToProfile(mover);
+        }
 
         if (!Safe())
-        {
-            _vendorRetryAt = unchecked(Environment.TickCount + 500);
-            return false; // existing loop defends if in combat; unknown state holds input
-        }
+            return ReturnWithoutMail("mailbox route safety check failed");
         var previousInterrupt = RouteRunner.ShouldInterrupt;
         bool previousPoll = RouteRunner.PollInterruptDuringWalk;
         bool previousRequireMesh = RouteRunner.RequireMeshDuringSession;
@@ -4110,25 +4119,20 @@ internal static class GrindRunner
         }
         if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested) return false;
         if (RouteRunner.LastRunInterrupted || !Safe())
-        {
-            _vendorRetryAt = unchecked(Environment.TickCount + 500);
-            Logging.Write("[Mailbox] walk interrupted by combat or an unsafe/unreadable state; the mailbox stage remains pending, without repeating vendor clicks.");
-            return false;
-        }
+            return ReturnWithoutMail("mailbox walk interrupted by combat or unsafe/unreadable state");
         if (!arrived || !reader.TryRead70888RecoveryPlayer(out WowBObservedUnit finalPlayer, out uint finalHp, out uint finalMaxHp) ||
             finalPlayer.Guid != playerGuid || finalHp == 0 || finalMaxHp == 0 || finalHp > finalMaxHp ||
             !double.IsFinite(finalPlayer.Location.X) || !double.IsFinite(finalPlayer.Location.Y) || !double.IsFinite(finalPlayer.Location.Z) ||
             ClickAimMath.Len(finalPlayer.Location.X - mailbox.X, finalPlayer.Location.Y - mailbox.Y) > 3.0 ||
             Math.Abs(finalPlayer.Location.Z - mailbox.Z) > 5.0 || !Safe())
         {
-            Logging.Write("[Mailbox] no complete mesh route or confirmed arrival at the recorded point; stopping without interaction.");
-            Stop(); return false;
+            return ReturnWithoutMail("mailbox mesh route or arrival could not be confirmed; no mailbox interaction");
         }
         if (!ClickAimSettings.ExperimentalAutoMail || !WowBMailUiCalibration.TryLoad(out var controls) || controls == null ||
             controls.Map != mailbox.Map || controls.Player != playerGuid.ToString() ||
             ClickAimMath.Len(controls.X - finalPlayer.Location.X, controls.Y - finalPlayer.Location.Y) > 3.0 ||
             Math.Abs(controls.Z - finalPlayer.Location.Z) > 5.0)
-        { Logging.Write("[Mail] control calibration changed or does not match arrival; stopping without input."); Stop(); return false; }
+        { return ReturnWithoutMail("control calibration changed or does not match arrival; no mailbox input"); }
         IntPtr hwnd = memory.WindowHandle;
         string? InputSafetyFailure()
         {
@@ -4136,7 +4140,6 @@ internal static class GrindRunner
             if (routeFailure != null) return routeFailure;
             if (!ClickAimSettings.ExperimentalAutoMail) return "experimental mail disabled";
             if (hwnd == IntPtr.Zero || memory.WindowHandle != hwnd) return "game window handle changed or unavailable";
-            if (!ClickAimInput.GameForeground(hwnd)) return "game window is not foreground";
             if (!ClickAimInput.MouseButtonsUp()) return "a physical mouse button is held";
             if (!reader.TryRead70888RecoveryPlayer(out WowBObservedUnit currentPlayer, out uint hp, out uint max) ||
                 currentPlayer.Guid != playerGuid || hp == 0 || max < hp) return "player identity or health unreadable or changed";
@@ -4146,11 +4149,9 @@ internal static class GrindRunner
             return null;
         }
         bool completed = WowBExperimentalMail.Run(hwnd, memory, reader, playerGuid, controls, ClickAimSettings.MailRecipient, InputSafetyFailure);
-        _vendorMailboxPending = null; _vendorMailboxReader = null; _vendorMailboxMemory = null; _vendorMailboxPlayer = default;
         if (!completed)
-        { Logging.Write("[Mail] experiment interrupted or uncertain; stopping to avoid repeating a possible send. Inspect the game before restarting."); Stop(); return false; }
-        Logging.Write("[Mail] no further unskipped candidates for this trip; returning to grind. Skipped items may remain; candidate 4 and delivery are unverified.");
-        return WalkBackToProfile(mover);
+            return ReturnWithoutMail("experiment interrupted or uncertain; no automatic resend");
+        return ReturnWithoutMail("no further unskipped candidates for this trip; skipped items may remain, and delivery is unverified");
     }
 
     /// <summary>

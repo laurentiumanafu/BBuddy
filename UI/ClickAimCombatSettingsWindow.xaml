@@ -237,7 +237,7 @@
                         <TextBlock Text="Mail recipient:" VerticalAlignment="Center" Margin="0,0,8,0"/>
                         <TextBox x:Name="txtMailRecipient" Width="180" MaxLength="64" ToolTip="Saved recipient for experimental mailing; sending requires the separate opt-in."/>
                     </StackPanel>
-                    <TextBlock Margin="0,0,0,8" TextWrapping="Wrap" FontSize="11" Text="Experimental: enable the checkbox, save a recipient, and record the mailbox on the vendor plan the bot will select. The recipient field, UI layout, item eligibility and server delivery cannot be independently verified. Wrong settings can mail the wrong items or recipient. Calibrate grid and controls; test with disposable items. Unknown outcomes never trigger an automatic resend."/>
+                    <TextBlock Margin="0,0,0,8" TextWrapping="Wrap" FontSize="11" Text="Experimental: enable the checkbox, save a recipient, and record the mailbox on the vendor plan the bot will select. Foreground and non-minimized background mail use game-window messages; background interaction is unverified. The recipient field, UI layout, item eligibility and server delivery cannot be independently verified. Wrong settings can mail the wrong items or recipient. Calibrate grid and controls; test with disposable items. Unknown outcomes never trigger an automatic resend."/>
                 </StackPanel>
 
                 <TextBlock Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2" VerticalAlignment="Center" Margin="0,0,8,8"
@@ -276,6 +276,8 @@
                         <Button Content="Save mail controls" Click="btnSaveMailControls_Click" Height="24" Padding="8,0" Margin="0,0,5,4"/>
                     </WrapPanel>
                     <TextBlock x:Name="lblMailControlsStatus" TextWrapping="Wrap" FontSize="11" Text="Mail controls not recorded in this window."/>
+                    <Button Content="Clear mail safety hold after inspection" Click="btnClearMailHold_Click" Height="24" Padding="8,0" HorizontalAlignment="Left" Margin="0,4,0,4"/>
+                    <TextBlock TextWrapping="Wrap" FontSize="11" Text="An uncertain composition or send blocks future automatic mail, even after restarting. Stop the bot, inspect the mailbox and any sent mail, clear leftover recipient/attachments, then clear the hold. Grinding can continue while mail is held."/>
                     <Button x:Name="btnMailAttachmentResearch" Content="Mail attachment candidate snapshot" Height="24" Padding="10,0" HorizontalAlignment="Left" Click="btnMailAttachmentResearch_Click"/>
                     <TextBlock TextWrapping="Wrap" Margin="0,4,0,4" Text="70938 only, bot stopped: logs a static mail-code candidate as raw bytes. No clicks or text are sent; it does not verify attachments, recipient, mail state or delivery. Logs may contain sensitive item identifiers."/>
                     <TextBlock Text="Combined bag grid calibration (research only)" FontWeight="SemiBold"/>

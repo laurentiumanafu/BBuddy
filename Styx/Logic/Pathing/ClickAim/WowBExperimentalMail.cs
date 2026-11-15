@@ -35,9 +35,9 @@ internal static class WowBExperimentalMail
     }
     private static bool Move(IntPtr hwnd, int x, int y, int w, int h, Func<bool> safe)
         => safe() && ClickAimInput.PostMouseMoveFraction(hwnd, x / (double)(w - 1), y / (double)(h - 1)) && Wait(200, safe);
-    private static bool Left(IntPtr hwnd, int x, int y, int w, int h, Func<bool> safe, out string reason)
+    private static bool Left(IntPtr hwnd, int x, int y, int w, int h, bool background, Func<bool> safe, out string reason)
     {
-        bool down = ClickAimInput.ConfirmedLeftClick(hwnd, x, y, w, h, false, () => safe() ? null : "unsafe mail state", out reason);
+        bool down = ClickAimInput.ConfirmedLeftClick(hwnd, x, y, w, h, background, () => safe() ? null : "unsafe mail state", out reason);
         return down && reason == "left-button messages posted" && safe();
     }
 
@@ -46,10 +46,16 @@ internal static class WowBExperimentalMail
     internal static bool Run(IntPtr hwnd, Memory memory, WowBReader reader, WowBGuid player,
         WowBMailUiCalibration.Result ui, string recipient, Func<string?> safetyFailure)
     {
-        bool safe() => safetyFailure() == null && ClickAimInput.ClientSize(hwnd, out int width, out int height) &&
-            width == ui.Width && height == ui.Height;
+        bool background = false, focusSelected = false;
+        bool safe() => focusSelected && safetyFailure() == null &&
+            (background ? GatherBackgroundFocus.Current(hwnd) == GatherBackgroundFocus.State.OtherApplication &&
+                          GatherBackgroundFocus.TryClientOrigin(hwnd, out _, out _)
+                        : ClickAimInput.GameForeground(hwnd)) &&
+            ClickAimInput.ClientSize(hwnd, out int width, out int height) && width == ui.Width && height == ui.Height;
         try
         {
+            if (WowBMailSafetyHold.IsHeld())
+            { Logging.Write("[Mail] previous composition or send requires inspection; mail held while grinding continues. Clear the hold only after inspecting and clearing the mailbox."); return false; }
             if (!WowBMailUiCalibration.Valid(ui) || ui.Player != player.ToString())
             { Logging.Write("[Mail] preflight: controls invalid or for another character; no input sent."); return false; }
             if (!WowBMailRecipientText.ValidForTest(recipient))
@@ -58,16 +64,22 @@ internal static class WowBExperimentalMail
             { Logging.Write("[Mail] preflight: game client size unavailable; no input sent."); return false; }
             if (w != ui.Width || h != ui.Height)
             { Logging.Write("[Mail] preflight: client size " + w + "x" + h + " differs from controls " + ui.Width + "x" + ui.Height + "; no input sent."); return false; }
-            // A human can briefly be finishing a click or switching focus after
-            // pressing Sell Now. Only before any input, allow a bounded grace
-            // period for these two conditions. Never retry an interaction.
+            if (!GatherBackgroundFocus.TryClientOrigin(hwnd, out _, out _))
+            { Logging.Write("[Mail] preflight: game window minimized or geometry unavailable; no input sent."); return false; }
+            if (ClickAimInput.GameForeground(hwnd)) background = false;
+            else if (GatherBackgroundFocus.Current(hwnd) == GatherBackgroundFocus.State.OtherApplication) background = true;
+            else { Logging.Write("[Mail] preflight: focus state unavailable or another game window focused; no input sent."); return false; }
+            focusSelected = true;
+            Logging.Write("[Mail] input mode: " + (background ? "background (experimental)" : "foreground") +
+                "; switching between game and background interrupts mail. Recipient focus remains unverified.");
+            // Only before any input, allow a short grace period for a held
+            // physical button. No click or send is automatically retried.
             string? issue = safetyFailure();
-            if (issue == "game window is not foreground" || issue == "a physical mouse button is held")
+            if (issue == "a physical mouse button is held")
             {
                 Logging.Write("[Mail] preflight waiting briefly: " + issue + "; no input sent.");
                 int start = Environment.TickCount;
-                while (issue != null && unchecked(Environment.TickCount - start) < 3000 &&
-                    (issue == "game window is not foreground" || issue == "a physical mouse button is held"))
+                while (issue == "a physical mouse button is held" && unchecked(Environment.TickCount - start) < 3000)
                 {
                     if (ClickAimAbort.Wait(100)) { issue = "STOP requested"; break; }
                     issue = safetyFailure();
@@ -114,8 +126,10 @@ internal static class WowBExperimentalMail
                 { Logging.Write("[Mail] attachment candidate table unreadable or safety changed; no tab or send input in this batch."); return false; }
                 if (!WowBMailCandidateTable.Matches(raw, expected))
                 { Logging.Write("[Mail] attachment candidate is not empty-like; no tab or send input in this batch."); return false; }
+                if (!WowBMailSafetyHold.TryBegin(out string holdReason))
+                { Logging.Write("[Mail] cannot start composition: " + holdReason + "; mail is held, no tab or send input in this batch."); return false; }
                 Logging.Write("[Mail] bag/grid and empty-like table prechecks passed; attempting recorded Send Mail tab (UI state unverified).");
-                if (!Left(hwnd, ui.TabX, ui.TabY, w, h, safe, out string tabReason))
+                if (!Left(hwnd, ui.TabX, ui.TabY, w, h, background, safe, out string tabReason))
                 { Logging.Write("[Mail] tab click withheld or uncertain: " + tabReason + "; safety: " + (safetyFailure() ?? "client geometry or button-release check") + ". No send input in this batch."); return false; }
                 Logging.Write("[Mail] Send Mail tab click messages posted; tab opening and field focus are not verified.");
                 if (!Wait(1000, safe))
@@ -123,11 +137,12 @@ internal static class WowBExperimentalMail
                 int generation = ClickAimAbort.Generation;
                 foreach (char c in recipient)
                 {
-                    if (!ClickAimInput.DiagnosticRecipientChar(hwnd, c, generation, safe))
+                    if (!(background ? ClickAimInput.BackgroundMailRecipientChar(hwnd, c, generation, safe)
+                                     : ClickAimInput.DiagnosticRecipientChar(hwnd, c, generation, safe)))
                     { Logging.Write("[Mail] recipient entry interrupted or partial; inspect manually. No send attempted."); return false; }
                     if (ClickAimAbort.Wait(30)) return false;
                 }
-                Logging.Write("[Mail] recipient characters posted; field focus and text are not verified.");
+                Logging.Write("[Mail] recipient characters posted for batch " + (batches + 1) + "; field focus and text are not verified.");
                 // Each scan group contains at most 12 clicks. If every item in
                 // a group is skipped, scan the next group without retyping the
                 // recipient into the still-open, empty composition.
@@ -186,7 +201,7 @@ internal static class WowBExperimentalMail
                     if (count == 0)
                     {
                         Logging.Write("[Mail] no further unskipped candidates; skipped=" + skipped.Count +
-                            ". No send input for the empty composition; skipped items may remain. Candidate 4 and delivery are unverified.");
+                            ". No send input for the empty composition. Recipient text may remain, so the mail safety hold stays set until manual inspection; skipped items may remain. Candidate 4 and delivery are unverified.");
                         return true;
                     }
                 }
@@ -194,7 +209,7 @@ internal static class WowBExperimentalMail
                     !WowBMailCandidateReader.TryRead(memory, reader, player, safe, out raw) || !WowBMailCandidateTable.Matches(raw, expected) ||
                     !ReadBags(memory, reader, player, out var beforeSend) || beforeSend == null || !WowBMailGridLookup.Same(bags, beforeSend))
                 { Logging.Write("[Mail] final pre-send observations or safety changed; no send input in this batch. Inspect manually."); return false; }
-                if (!Left(hwnd, ui.SendX, ui.SendY, w, h, safe, out string sendReason))
+                if (!Left(hwnd, ui.SendX, ui.SendY, w, h, background, safe, out string sendReason))
                 { Logging.Write("[Mail] send input withheld or uncertain: " + sendReason + "; no retry. Inspect manually."); return false; }
                 Logging.Write("[Mail] Send button messages posted once; recipient and server acceptance not verified. Never retry an uncertain send.");
                 bool progressed = false;
@@ -210,9 +225,13 @@ internal static class WowBExperimentalMail
                         foreach (var sent in expected) if (id == sent.Item) found = true;
                     if (!found) { progressed = true; break; }
                 }
-                if (!progressed) { Logging.Write("[Mail] send outcome uncertain; no retry. Inspect before resuming."); return false; }
-                batches++;
+                if (!progressed) { Logging.Write("[Mail] send outcome uncertain; no retry. Inspect before resuming mail."); return false; }
                 Logging.Write("[Mail] batch items no longer observed in candidates 0–4 and mail table is zero-like; server delivery and backpack contents remain unverified.");
+                if (!safe()) { Logging.Write("[Mail] safety changed after observed progress; inspection hold retained."); return false; }
+                if (!WowBMailSafetyHold.TryClear(out string clearReason))
+                { Logging.Write("[Mail] could not clear hold after observed progress: " + clearReason + "; no further mail this trip."); return false; }
+                batches++;
+                Logging.Write("[Mail] next nonempty batch will post the recipient again; field contents are not readable.");
             }
             Logging.Write("[Mail] safety interruption or 64-batch limit; no automatic resend.");
             return false;

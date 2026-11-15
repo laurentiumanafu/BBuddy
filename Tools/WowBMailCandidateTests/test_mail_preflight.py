@@ -17,7 +17,10 @@ class MailPreflight(unittest.TestCase):
   self.assertLess(run.index('ConfirmedRightClick(hwnd, ui.MailboxX'),run.index('Left(hwnd, ui.TabX'))
  def test_grace_only_for_focus_or_button_before_first_action(self):
   run=m[m.index('internal static bool Run('):]
-  self.assertIn('issue == "game window is not foreground" || issue == "a physical mouse button is held"',run)
+  self.assertIn('issue == "a physical mouse button is held"',run)
+  self.assertIn('GatherBackgroundFocus.State.OtherApplication',run)
+  self.assertIn('ClickAimInput.GameForeground(hwnd)',run)
+  self.assertIn('GatherBackgroundFocus.TryClientOrigin',run)
   self.assertIn('unchecked(Environment.TickCount - start) < 3000',run)
   self.assertLess(run.index('unchecked(Environment.TickCount - start) < 3000'),run.index('if (!Move(hwnd, ui.MailboxX'))
   self.assertEqual(run.count('Left(hwnd, ui.SendX'),1)
@@ -26,8 +29,8 @@ class MailPreflight(unittest.TestCase):
   route=g[g.index('private static bool WalkToRecordedMailbox('):g.index('private static bool WaitVendorSafe(')]
   for v in ('AutoVendorIdentityMatches', 'ExperimentalGrindActive', 'Experimental70707BarSafe',
             'TryReadGatherCombat', 'TryRead70888RecoveryPlayer', 'TryReadGhostFlagCandidate',
-            'ClickAimInput.GameForeground(hwnd)', 'ClickAimInput.MouseButtonsUp()', 'InputSafetyFailure',
-            'stopping to avoid repeating a possible send'):
+            'ClickAimInput.MouseButtonsUp()', 'InputSafetyFailure',
+            'experiment interrupted or uncertain; no automatic resend', 'return WalkBackToProfile(mover)'):
    self.assertIn(v,route)
  def test_post_interaction_milestones_are_explicit(self):
   for v in ('mailbox interaction posted', 'active bag observations unavailable',
