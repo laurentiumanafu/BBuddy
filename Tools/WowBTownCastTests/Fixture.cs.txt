@@ -1,0 +1,58 @@
+using System;
+using GreenMagic;
+using Styx.WoWInternals;
+using Styx.Logic.Pathing;
+namespace GreenMagic
+{
+    public class Memory
+    {
+        public byte[] Data = new byte[0x78]; public uint Clock = 1000; public bool Unreadable; public int Reads; public Action<int>? OnRead;
+        public byte[]? ReadBytes64(ulong address,int count) { OnRead?.Invoke(++Reads); if (Unreadable) return null; return count == 4 ? BitConverter.GetBytes(Clock) : (byte[])Data.Clone(); }
+        public IDisposable TemporaryCacheState(bool enabled) => new Scope(); private sealed class Scope : IDisposable { public void Dispose() {} }
+    }
+}
+namespace Styx.WoWInternals
+{
+    public struct WowBObservedUnit { public ulong UnitAddress; }
+    public class WowBReader { public bool IsExperimental70938=true, ExperimentalGrindActive=true; }
+    public static class ObjectManager { public static Memory? Wow; public static WowBReader? WowB; }
+}
+namespace Styx.Logic.Pathing { static class WowBGrindFactions { internal static bool Stable=true; internal static bool TraceIdentity70707(Memory m,WowBReader r,WowBObservedUnit p,bool local)=>Stable; } }
+static class Program
+{
+    static void Check(bool value,string why) { if (!value) throw new Exception(why); }
+    static void Put(byte[] b,int offset,uint value) => BitConverter.GetBytes(value).CopyTo(b,offset);
+    static WowBTownCastProgress.Result Sample(WowBTownCastProgress p, WowBTownCastCandidate.State state, uint clock, long time, uint map=1,double x=0,double y=0,double z=0)
+        => p.Update(state, state == WowBTownCastCandidate.State.Idle ? 0u : 1000u, state == WowBTownCastCandidate.State.Idle ? 0u : 11000u, clock,time,map,x,y,z);
+    static void Main()
+    {
+        var m=new Memory(); var r=new WowBReader(); ObjectManager.Wow=m; ObjectManager.WowB=r; var player=new WowBObservedUnit { UnitAddress=0x100000 };
+        Check(WowBTownCastCandidate.Observe(m,r,player,out _,out _,out _) == WowBTownCastCandidate.State.Idle,"idle");
+        foreach (uint id in new uint[] {556,8690})
+        {
+            Put(m.Data,0,id); Put(m.Data,0x2C,id); Put(m.Data,0x58,1000); Put(m.Data,0x5C,11000); m.Clock=1050;
+            var expected=id==556 ? WowBTownCastCandidate.State.AstralRecall : WowBTownCastCandidate.State.Hearthstone;
+            Check(WowBTownCastCandidate.Observe(m,r,player,out uint s,out uint e,out uint c)==expected && s==1000 && e==11000 && c==1050,"observed cast");
+            Put(m.Data,0x2C,id+1); Check(WowBTownCastCandidate.Observe(m,r,player,out _,out _,out _)==WowBTownCastCandidate.State.Unknown,"partial id"); Put(m.Data,0x2C,id);
+            Put(m.Data,0x5C,10999); Check(WowBTownCastCandidate.Observe(m,r,player,out _,out _,out _)==WowBTownCastCandidate.State.Unknown,"duration");
+        }
+        m.Data=new byte[0x78]; Put(m.Data,0x64,1); Check(WowBTownCastCandidate.Observe(m,r,player,out _,out _,out _)==WowBTownCastCandidate.State.Unknown,"other cluster");
+        m.Data=new byte[0x78]; m.Unreadable=true; Check(WowBTownCastCandidate.Observe(m,r,player,out _,out _,out _)==WowBTownCastCandidate.State.Unknown,"unreadable"); m.Unreadable=false;
+        r.IsExperimental70938=false; Check(WowBTownCastCandidate.Observe(m,r,player,out _,out _,out _)==WowBTownCastCandidate.State.Unknown,"wrong build"); r.IsExperimental70938=true;
+        var a=WowBTownCastCandidate.State.AstralRecall; var idle=WowBTownCastCandidate.State.Idle;
+        var p=new WowBTownCastProgress(a,1,0,0,0);
+        Check(Sample(p,idle,1200,0)==WowBTownCastProgress.Result.Waiting,"no cast no retry");
+        Check(Sample(p,a,10300,9000)==WowBTownCastProgress.Result.Waiting,"cast observed");
+        Check(Sample(p,idle,10500,9200)==WowBTownCastProgress.Result.Waiting,"one idle");
+        Check(Sample(p,idle,10700,9400)==WowBTownCastProgress.Result.Interrupted,"early clear retry candidate");
+        p=new WowBTownCastProgress(a,1,0,0,0); Sample(p,a,10500,9000); Sample(p,idle,11100,9700);
+        Check(Sample(p,idle,11300,9900)==WowBTownCastProgress.Result.Waiting,"clear after end cannot prove interrupt");
+        p=new WowBTownCastProgress(a,1,0,0,0); Sample(p,a,10900,9900); Sample(p,idle,11000,10000,2,100,50,10);
+        Check(Sample(p,idle,11200,10200,2,100,50,10)==WowBTownCastProgress.Result.ArrivedCandidate,"idle and stable changed position");
+        p=new WowBTownCastProgress(a,1,0,0,0); Sample(p,a,5000,1000); Sample(p,idle,6000,2000,2,100,50,10);
+        Check(Sample(p,idle,6200,2200,2,100,50,10)!=WowBTownCastProgress.Result.ArrivedCandidate,"early clear followed by movement is not completion");
+        p=new WowBTownCastProgress(a,1,0,0,0); Sample(p,a,5000,1000); Sample(p,WowBTownCastCandidate.State.Unknown,0,1200);
+        Check(Sample(p,idle,6000,1400)==WowBTownCastProgress.Result.Uncertain,"unknown cannot authorize retry");
+        Console.WriteLine("Town cast candidate and progress fixtures passed; not live cast proof.");
+    }
+}
