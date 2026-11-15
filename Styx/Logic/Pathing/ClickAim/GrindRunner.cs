@@ -4446,11 +4446,10 @@ internal static class GrindRunner
         if (!fastRecentProbe)
             ClickAimKeySteer.Face(corpse.Location.X, corpse.Location.Y, hwnd, 30.0, 4);
 
-        // A killing blow commonly leaves this corpse selected. For an opted-in
-        // beast, clear it safely before the loot probe so that both the first
-        // interaction and the later skinning click can use a confirmed pixel.
+        // Older builds may need the selected beast cleared before a selection
+        // probe. 70938 recent corpses use hover and do not need this F1 input.
         GreenMagic.Memory? lootMemory = ObjectManager.Wow;
-        if (_running && GatherSettings.Skinning && lootReader != null && lootMemory != null &&
+        if (_running && GatherSettings.Skinning && lootReader != null && !lootReader.IsExperimental70938 && lootMemory != null &&
             WowBSkinning.IsConfirmed(lootReader.IsExperimental70707, corpse.Guid) &&
             lootReader.ReadTargetGuid() == corpse.Guid &&
             Capture(out WowBWorldSnapshot? preLoot) && preLoot != null && preLoot.TryGetLocalPlayer(out WowBObservedUnit lootPlayer) &&
@@ -6063,10 +6062,11 @@ internal static class GrindRunner
         GreenMagic.Memory? clickMemory = ObjectManager.Wow;
         if (strictClick && (clickReader == null || clickMemory == null)) { how = "client attachment unavailable"; return false; }
         using var uncachedClick = strictClick ? clickMemory?.TemporaryCacheState(false) : null;
-        // Recent, user-confirmed beast corpses are often looted immediately
-        // before skinning. Do not left-click search rings over nearby totems.
-        if (strictClick && clickReader?.IsExperimental70938 == true && clickMemory != null && safeToClick != null &&
-            (GatherSettings.Skinning || GatherSettings.SkinNearby) && WowBSkinning.IsConfirmed(true, unit.Guid))
+        // For 70938 recent corpses, search by hover before selecting anything.
+        // This also preserves the existing hover-only path for confirmed beasts.
+        // A failed or interrupted hover search never falls through to left-click
+        // probes: those can select nearby totems or other unintended units.
+        if (strictClick && clickReader?.IsExperimental70938 == true && clickMemory != null && safeToClick != null)
         {
             if (!FindCorpseHover(hwnd, clickReader, clickMemory, unit, px, py, safeToClick, maxProbes,
                 out int hx, out int hy, out int hw, out int hh, out searchExhausted, out how, out Func<bool>? hoverSafe) || hoverSafe == null)
@@ -7853,7 +7853,8 @@ internal static class GrindRunner
              *
              * So: nothing here moves the character. The walk in is above; inside
              * AttackRangeYd the only things sent are the Attack key, a melee ability key, and -
-             * when the swing is NOT running - at most one click every few seconds to start it.
+             * on older, non-strict paths only - occasional clicks to start the swing. 70938
+             * never uses that unverified right-click fallback.
              * And the arrow keys are used only when no swing has landed for a while, because a
              * character that is hurting the mob is already facing it and turning is what broke
              * the last run. */
@@ -7939,7 +7940,7 @@ internal static class GrindRunner
                                 + "something stops it; pressing it again would turn it off)");
                 }
             }
-            else if (!keyOneMacro && !swinging && !pressPending && !preserveAttackAfterHeal
+            else if (!reader.IsExperimental70938 && !keyOneMacro && !swinging && !pressPending && !preserveAttackAfterHeal
                      && !((!defenceOnly || defenceFactionFilter || reader.Uses70862Features) && GrindFactionSettings.Rules.Enabled)
                      && unchecked(Environment.TickCount - lastMeleeClickMs) >= MeleeClickMs)
             {
@@ -7953,10 +7954,11 @@ internal static class GrindRunner
                 }
             }
 
-            if (!keyOneMacro && auto == null && !noSafeAutoLogged && (!defenceOnly || defenceFactionFilter || reader.Uses70862Features) && GrindFactionSettings.Rules.Enabled)
+            if (!keyOneMacro && auto == null && !noSafeAutoLogged &&
+                (reader.IsExperimental70938 || ((!defenceOnly || defenceFactionFilter || reader.Uses70862Features) && GrindFactionSettings.Rules.Enabled)))
             {
                 noSafeAutoLogged = true;
-                Logging.Write("[Grind] faction filter: unverified melee right-click withheld; put Attack on an action bar to start auto-attack safely");
+                Logging.Write("[Grind] unverified melee right-click withheld; put Attack on an action bar or configure the repeat-safe key 1 macro to start auto-attack");
             }
 
             /* The melee half of the bar is only used at arm's length. On 70707,

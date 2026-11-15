@@ -193,10 +193,17 @@ internal static class ClickAimKeySteer
     {
         if (hwnd == IntPtr.Zero) return;
         _lastHwnd = hwnd;                       // so a caller without one can still stop us
+        if (down && ClickAimAbort.Requested) down = false;
         if (down == _keyDown) return;
 
         ClickAimInput.HoldKey(hwnd, ForwardVk, down);
         _keyDown = down;
+        // STOP can race the key-down post. Release again if it arrived in between.
+        if (down && ClickAimAbort.Requested)
+        {
+            ClickAimInput.HoldKey(hwnd, ForwardVk, false);
+            _keyDown = false;
+        }
     }
 
     public static void Release(IntPtr hwnd)
@@ -346,10 +353,12 @@ internal static class ClickAimKeySteer
         double before;
         if (!TryReadFacing(out before)) { report = "lost the facing field"; return false; }
 
+        if (ClickAimAbort.Requested) { report = "calibration stopped before probe walk"; return false; }
+        bool probeStopped;
         SetForward(hwnd, true);
-        Thread.Sleep(ProbeWalkMs);
-        SetForward(hwnd, false);
-        Thread.Sleep(250);
+        try { probeStopped = ClickAimAbort.Wait(ProbeWalkMs); }
+        finally { SetForward(hwnd, false); }
+        if (probeStopped || ClickAimAbort.Wait(250)) { report = "calibration stopped during probe walk"; return false; }
 
         double fx, fy;
         if (!ClickAimPositions.TryRead(out fx, out fy)) { report = "lost the position"; return false; }
@@ -464,7 +473,7 @@ internal static class ClickAimKeySteer
         double a, b;
         if (!TryReadFacing(out a)) { report = "cannot read the facing field"; return double.NaN; }
         if (ClickAimAbort.Requested) return double.NaN;
-        ClickAimInput.TapKey(hwnd, vk, ms);
+        if (!ClickAimInput.TapMovementKey(hwnd, vk, ms)) return double.NaN;
         if (ClickAimAbort.Wait(180)) return double.NaN;
         if (!TryReadFacing(out b)) { report = "lost the facing field"; return double.NaN; }
         return ClickAimMath.WrapDeg((b - a) * 180.0 / Math.PI);
@@ -565,7 +574,7 @@ internal static class ClickAimKeySteer
         }
 
         double px, py;
-        if (!ClickAimPositions.TryRead(out px, out py)) return false;
+        if (!ClickAimPositions.TryRead(out px, out py)) { ReleaseHeld(); return false; }
 
         remaining = ClickAimMath.Len(tx - px, ty - py);
         double wantedBearing = ClickAimMath.HeadingDeg(tx - px, ty - py);
@@ -573,11 +582,10 @@ internal static class ClickAimKeySteer
         double facingRad;
         if (!TryReadFacing(out facingRad))
         {
-            if (requireFacing) { ReleaseHeld(); return false; }
-            // No facing: walk anyway. Wrong direction is still information, and the
-            // caller measures the result from positions.
-            SetForward(hwnd, forward);
-            return true;
+            // Never continue a held walk without a readable heading. Progress
+            // checks alone cannot prevent a long walk in the wrong direction.
+            ReleaseHeld();
+            return false;
         }
 
         double facingDeg = facingRad * 180.0 / Math.PI;
@@ -630,8 +638,8 @@ internal static class ClickAimKeySteer
             if (ms < 10) ms = 10;   // the shortest tap that still registers
             if (ms > MaxTurnTapMs) ms = MaxTurnTapMs;
 
-            ClickAimInput.TapKey(hwnd, vk, ms);
-            Thread.Sleep(60);
+            if (!ClickAimInput.TapMovementKey(hwnd, vk, ms) || ClickAimAbort.Wait(60))
+            { ReleaseHeld(); return false; }
 
             if (Math.Abs(error) > 45.0)
             {
@@ -690,8 +698,12 @@ internal static class ClickAimKeySteer
         if (!TryReadFacing(out facingRad)) return true;                // nothing to steer on
 
         double wanted = ClickAimMath.HeadingDeg(tx - px, ty - py);
-        double rate = Math.Max(0.05, Math.Min(_turnPosRate, _turnNegRate));
+        // Keep learning local to this face operation and to each physical key.
+        // A combat turn or its drift must not rewrite the walking calibration.
+        double posRate = Math.Max(0.05, _turnPosRate);
+        double negRate = Math.Max(0.05, _turnNegRate);
         int lastTapMs = 0;
+        int lastVk = 0;
         double lastDelta = 0;
         bool swapped = false;      // try the opposite direction locally; never corrupt walk calibration
 
@@ -722,23 +734,29 @@ internal static class ClickAimKeySteer
 
             if (lastTapMs > 0 && Math.Abs(lastDelta) > 0.5)
             {
-                /* What the last tap actually did, not what the table says it should do. */
+                // Never use a sample in the wrong direction to train that key.
+                // This also excludes the sample that caused a local key swap.
                 double measured = Math.Abs(lastDelta) / lastTapMs;
                 if (measured > 0.02 && measured < 5.0)
-                    rate = 0.6 * measured + 0.4 * rate;
+                {
+                    if (lastVk == _turnPosVk && lastDelta > 0)
+                        posRate = 0.6 * measured + 0.4 * posRate;
+                    else if (lastVk == _turnNegVk && lastDelta < 0)
+                        negRate = 0.6 * measured + 0.4 * negRate;
+                }
             }
 
+            bool up = error > 0;
+            int vk = up != swapped ? _turnPosVk : _turnNegVk;
+            double rate = vk == _turnPosVk ? posRate : negRate;
             double ms = Math.Abs(error) / Math.Max(0.05, rate);
             if (ms < 25) ms = 25;                     // a shorter tap is not a turn
             if (ms > 220) ms = 220;                   // overshoot costs a whole tick to undo
 
-            bool up = error > 0;
-            int vk = up != swapped ? _turnPosVk : _turnNegVk;
-
             ReleaseArrows(hwnd);
-            ClickAimInput.TapKey(hwnd, vk, (int)Math.Round(ms));
+            bool turned = ClickAimInput.TapMovementKey(hwnd, vk, (int)Math.Round(ms));
             ReleaseArrows(hwnd);                      // never leave a turn key down
-            Thread.Sleep(70);
+            if (!turned || ClickAimAbort.Wait(70)) return false;
 
             double nextFacing;
             if (!TryReadFacing(out nextFacing)) return true;
@@ -756,6 +774,7 @@ internal static class ClickAimKeySteer
             }
 
             lastTapMs = (int)Math.Round(ms);
+            lastVk = vk;
             lastDelta = delta;
             facingRad = nextFacing;
         }

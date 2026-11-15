@@ -431,6 +431,27 @@ internal static class ClickAimInput
         PostMessageInternal(hWnd, WM_KEYUP, new IntPtr(vk), new IntPtr(upLp));
     }
 
+    // Movement taps belong to an active run, unlike explicit stopped diagnostics.
+    // Always post key-up even when STOP arrives during the hold.
+    internal static bool TapMovementKey(IntPtr hWnd, int vk, int ms)
+    {
+        if (hWnd == IntPtr.Zero || vk <= 0 || ClickAimAbort.Requested) return false;
+        if (ms < 20) ms = 20;
+        int scan = (int)MapVirtualKey((uint)vk, 0);
+        int downLp = 1 | (scan << 16);
+        int upLp = unchecked((int)0xC0000001) | (scan << 16) | 1;
+        if (ClickAimAbort.Requested) return false;
+        try
+        {
+            if (!PostMessageInternal(hWnd, WM_KEYDOWN, new IntPtr(vk), new IntPtr(downLp))) return false;
+            return !ClickAimAbort.Wait(ms);
+        }
+        finally
+        {
+            PostMessageInternal(hWnd, WM_KEYUP, new IntPtr(vk), new IntPtr(upLp));
+        }
+    }
+
     /// <summary>
     /// The panic: release both buttons twice, click once at the centre and hold
     /// the stop key. Field use only - a stuck right button makes every later
