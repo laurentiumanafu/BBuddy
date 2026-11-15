@@ -171,6 +171,110 @@ namespace CopilotBuddy.UI
             finally { btnTargetInfo.IsEnabled = true; }
         }
 
+        // Research only: user-driven hover observations, never mouse input or
+        // automatic interaction. A matching candidate is not a mailbox verdict.
+        private sealed class MailHoverSample
+        {
+            public GreenMagic.Memory Memory = null!;
+            public WowBReader Reader = null!;
+            public IntPtr Window;
+            public int Width, Height;
+            public WowBGuid Player, Hover;
+            public uint Map;
+            public double X, Y, Z, CursorX, CursorY;
+        }
+        private MailHoverSample? _mailHoverAway;
+        private bool _mailHoverBusy;
+
+        private static bool MailHoverSampleNow(GreenMagic.Memory memory, WowBReader reader, IntPtr hwnd,
+            int width, int height, out MailHoverSample? sample)
+        {
+            sample = null;
+            if (ClickAimUi.Running || ClickAimUi.Paused || ObjectManager.Wow != memory || ObjectManager.WowB != reader ||
+                memory.WindowHandle != hwnd || !reader.IsExperimental70938 || !ClickAimInput.GameForeground(hwnd) ||
+                !ClickAimInput.ClientSize(hwnd, out int w, out int h) || w != width || h != height ||
+                !ClickAimInput.TryCursorFraction(hwnd, out double fx, out double fy)) return false;
+            try
+            {
+                using var uncached = memory.TemporaryCacheState(false);
+                if (!WowBGrindFactions.TraceBuild70707(memory, reader) ||
+                    !reader.TryReadTraceLocalGuid(out WowBGuid player) || player.IsEmpty ||
+                    !reader.TryReadExperimentalMapCandidate(out uint map) ||
+                    !reader.TryCaptureWorldSnapshot(out WowBWorldSnapshot? world) || world == null ||
+                    !world.TryGetLocalPlayer(out WowBObservedUnit unit) || unit.Guid != player ||
+                    !WowBGrindFactions.TraceIdentity70707(memory, reader, unit, true) ||
+                    !double.IsFinite(unit.Location.X) || !double.IsFinite(unit.Location.Y) || !double.IsFinite(unit.Location.Z) ||
+                    !reader.TryReadMouseoverGuidCandidate(out WowBGuid hover) ||
+                    !reader.TryReadTraceLocalGuid(out WowBGuid after) || after != player ||
+                    !reader.TryReadExperimentalMapCandidate(out uint mapAfter) || mapAfter != map ||
+                    ObjectManager.Wow != memory || ObjectManager.WowB != reader || ClickAimUi.Running || ClickAimUi.Paused ||
+                    memory.WindowHandle != hwnd || !ClickAimInput.GameForeground(hwnd) ||
+                    !ClickAimInput.ClientSize(hwnd, out int wAfter, out int hAfter) || wAfter != width || hAfter != height ||
+                    !ClickAimInput.TryCursorFraction(hwnd, out double fxAfter, out double fyAfter) ||
+                    Math.Abs(fxAfter - fx) * width > 3 || Math.Abs(fyAfter - fy) * height > 3) return false;
+                sample = new MailHoverSample { Memory = memory, Reader = reader, Window = hwnd, Width = width, Height = height,
+                    Player = player, Hover = hover, Map = map, X = unit.Location.X, Y = unit.Location.Y, Z = unit.Location.Z,
+                    CursorX = fx * width, CursorY = fy * height };
+                return true;
+            }
+            catch { return false; }
+        }
+
+        private static bool MailHoverSameSession(MailHoverSample a, MailHoverSample b)
+            => a.Memory == b.Memory && a.Reader == b.Reader && a.Window == b.Window && a.Width == b.Width && a.Height == b.Height &&
+               a.Player == b.Player && a.Map == b.Map && Math.Abs(a.X - b.X) < 0.5 && Math.Abs(a.Y - b.Y) < 0.5 && Math.Abs(a.Z - b.Z) < 0.5;
+
+        private async void btnMailHoverAway_Click(object sender, RoutedEventArgs e) => await RecordMailHover(false);
+        private async void btnMailHoverBox_Click(object sender, RoutedEventArgs e) => await RecordMailHover(true);
+
+        private async Task RecordMailHover(bool mailbox)
+        {
+            if (_mailHoverBusy) return;
+            if (mailbox && _mailHoverAway == null) { lblMailHoverStatus.Text = "Record the away observation first."; return; }
+            GreenMagic.Memory? memory = ObjectManager.Wow; WowBReader? reader = ObjectManager.WowB;
+            IntPtr hwnd = memory?.WindowHandle ?? IntPtr.Zero;
+            if (ClickAimUi.Running || ClickAimUi.Paused || reader?.IsExperimental70938 != true || memory == null ||
+                hwnd == IntPtr.Zero || !ClickAimInput.ClientSize(hwnd, out int width, out int height))
+            { _mailHoverAway = null; lblMailHoverStatus.Text = "Stop the bot and attach to the 70938 game window first."; return; }
+            if (!mailbox) _mailHoverAway = null;
+            _mailHoverBusy = true; btnMailHoverAway.IsEnabled = false; btnMailHoverBox.IsEnabled = false;
+            lblMailHoverStatus.Text = mailbox ? "Focus the game and hover over the mailbox; do not click." : "Focus the game and hover over empty ground away from objects; do not click.";
+            try
+            {
+                await Task.Delay(3000);
+                if (!IsLoaded) return;
+                var capture1 = await Task.Run(() => { bool ok = MailHoverSampleNow(memory, reader, hwnd, width, height, out var value); return (ok, value); });
+                if (!IsLoaded) return;
+                MailHoverSample? first = capture1.value;
+                if (!capture1.ok || first == null)
+                { lblMailHoverStatus.Text = "Observation unavailable: check focus, stopped state, player and cursor; retry."; return; }
+                await Task.Delay(150);
+                var capture2 = await Task.Run(() => { bool ok = MailHoverSampleNow(memory, reader, hwnd, width, height, out var value); return (ok, value); });
+                if (!IsLoaded) return;
+                MailHoverSample? second = capture2.value;
+                if (!capture2.ok || second == null ||
+                    !MailHoverSameSession(first, second) || first.Hover != second.Hover ||
+                    Math.Abs(first.CursorX - second.CursorX) > 3 || Math.Abs(first.CursorY - second.CursorY) > 3)
+                { lblMailHoverStatus.Text = "Observation changed or became unreadable; keep the character and cursor still and retry."; return; }
+                if (!mailbox)
+                {
+                    _mailHoverAway = second;
+                    Logging.Write("[Mailbox research] away hover candidate=" + second.Hover + " (user-labelled; not object identity proof)");
+                    lblMailHoverStatus.Text = "Away observation recorded. Now record the mailbox hover without moving the character or camera.";
+                    return;
+                }
+                if (_mailHoverAway == null || !MailHoverSameSession(_mailHoverAway, second))
+                { _mailHoverAway = null; lblMailHoverStatus.Text = "Session, map, client size or player position changed; record away again."; return; }
+                bool changed = _mailHoverAway.Hover != second.Hover;
+                Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                    "[Mailbox research] away={0} mailbox-hover={1} changed={2} entry-candidate={3} client={4}x{5} cursor=({6:F0},{7:F0}); user-labelled only, no input sent",
+                    _mailHoverAway.Hover, second.Hover, changed, (second.Hover.High >> 6) & 0x7FFFFFUL, width, height, second.CursorX, second.CursorY));
+                lblMailHoverStatus.Text = "Mailbox hover recorded; candidate " + (second.Hover.IsEmpty ? "is empty" : changed ? "changed from away" : "did not change from away") + ". Send the log for analysis if comfortable sharing GUIDs. No click was sent; mailbox identity and UI state remain unverified.";
+            }
+            catch (Exception ex) { lblMailHoverStatus.Text = "Mailbox observation failed: " + ex.Message; }
+            finally { _mailHoverBusy = false; if (IsLoaded) { btnMailHoverAway.IsEnabled = true; btnMailHoverBox.IsEnabled = true; } }
+        }
+
         private sealed class MailGridPointRow
         {
             public string Key { get; set; } = "";
