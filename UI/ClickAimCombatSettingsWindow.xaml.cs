@@ -182,9 +182,37 @@ namespace CopilotBuddy.UI
             public WowBGuid Player, Hover;
             public uint Map;
             public double X, Y, Z, CursorX, CursorY;
+            public bool ClickSafetyCandidate;
         }
-        private MailHoverSample? _mailHoverAway;
+        private MailHoverSample? _mailHoverAway, _mailHoverBox;
         private bool _mailHoverBusy;
+        private CancellationTokenSource? _mailClickCancellation;
+
+        // These are the same experimental health, combat and ghost candidates
+        // used by Grind. They veto the supervised test, not prove safety.
+        private static bool MailClickSafetyCandidate(GreenMagic.Memory memory, WowBReader reader, WowBObservedUnit unit)
+        {
+            try
+            {
+                if (!WowBGrindFactions.TraceIdentity70707(memory, reader, unit, true) ||
+                    unit.UnitAddress <= 0x10000 || unit.UnitAddress >= 0x00007FFFFFFFF000UL) return false;
+                byte[]? hp = memory.ReadBytes64(unit.UnitAddress + Styx.Offsets.Wow70707Offsets.HealthCandidateOffset, 16);
+                byte[]? flags = memory.ReadBytes64(unit.UnitAddress + 0x1E58, 4);
+                byte[]? ghost = memory.ReadBytes64(unit.UnitAddress + Styx.Offsets.Wow70707Offsets.GhostFlagsCandidateOffset, 1);
+                byte[]? hp2 = memory.ReadBytes64(unit.UnitAddress + Styx.Offsets.Wow70707Offsets.HealthCandidateOffset, 16);
+                byte[]? flags2 = memory.ReadBytes64(unit.UnitAddress + 0x1E58, 4);
+                byte[]? ghost2 = memory.ReadBytes64(unit.UnitAddress + Styx.Offsets.Wow70707Offsets.GhostFlagsCandidateOffset, 1);
+                if (hp == null || hp.Length != 16 || flags == null || flags.Length != 4 || ghost == null || ghost.Length != 1 ||
+                    hp2 == null || flags2 == null || ghost2 == null || !hp.AsSpan().SequenceEqual(hp2) ||
+                    !flags.AsSpan().SequenceEqual(flags2) || !ghost.AsSpan().SequenceEqual(ghost2)) return false;
+                ulong current = BitConverter.ToUInt64(hp, 0), maximum = BitConverter.ToUInt64(hp, 8);
+                return current > 0 && maximum > 0 && maximum <= uint.MaxValue && current <= maximum &&
+                    (BitConverter.ToUInt32(flags, 0) & 0x80000U) == 0 &&
+                    (ghost[0] & Styx.Offsets.Wow70707Offsets.GhostFlagCandidate) == 0 &&
+                    WowBGrindFactions.TraceIdentity70707(memory, reader, unit, true);
+            }
+            catch { return false; }
+        }
 
         private static bool MailHoverSampleNow(GreenMagic.Memory memory, WowBReader reader, IntPtr hwnd,
             int width, int height, out MailHoverSample? sample)
@@ -203,8 +231,9 @@ namespace CopilotBuddy.UI
                     !reader.TryCaptureWorldSnapshot(out WowBWorldSnapshot? world) || world == null ||
                     !world.TryGetLocalPlayer(out WowBObservedUnit unit) || unit.Guid != player ||
                     !WowBGrindFactions.TraceIdentity70707(memory, reader, unit, true) ||
-                    !double.IsFinite(unit.Location.X) || !double.IsFinite(unit.Location.Y) || !double.IsFinite(unit.Location.Z) ||
-                    !reader.TryReadMouseoverGuidCandidate(out WowBGuid hover) ||
+                    !double.IsFinite(unit.Location.X) || !double.IsFinite(unit.Location.Y) || !double.IsFinite(unit.Location.Z)) return false;
+                bool clickSafety = MailClickSafetyCandidate(memory, reader, unit);
+                if (!reader.TryReadMouseoverGuidCandidate(out WowBGuid hover) ||
                     !reader.TryReadTraceLocalGuid(out WowBGuid after) || after != player ||
                     !reader.TryReadExperimentalMapCandidate(out uint mapAfter) || mapAfter != map ||
                     ObjectManager.Wow != memory || ObjectManager.WowB != reader || ClickAimUi.Running || ClickAimUi.Paused ||
@@ -214,7 +243,7 @@ namespace CopilotBuddy.UI
                     Math.Abs(fxAfter - fx) * width > 3 || Math.Abs(fyAfter - fy) * height > 3) return false;
                 sample = new MailHoverSample { Memory = memory, Reader = reader, Window = hwnd, Width = width, Height = height,
                     Player = player, Hover = hover, Map = map, X = unit.Location.X, Y = unit.Location.Y, Z = unit.Location.Z,
-                    CursorX = fx * width, CursorY = fy * height };
+                    CursorX = fx * width, CursorY = fy * height, ClickSafetyCandidate = clickSafety };
                 return true;
             }
             catch { return false; }
@@ -235,9 +264,10 @@ namespace CopilotBuddy.UI
             IntPtr hwnd = memory?.WindowHandle ?? IntPtr.Zero;
             if (ClickAimUi.Running || ClickAimUi.Paused || reader?.IsExperimental70938 != true || memory == null ||
                 hwnd == IntPtr.Zero || !ClickAimInput.ClientSize(hwnd, out int width, out int height))
-            { _mailHoverAway = null; lblMailHoverStatus.Text = "Stop the bot and attach to the 70938 game window first."; return; }
+            { _mailHoverAway = null; _mailHoverBox = null; btnMailClickTest.IsEnabled = false; lblMailHoverStatus.Text = "Stop the bot and attach to the 70938 game window first."; return; }
             if (!mailbox) _mailHoverAway = null;
-            _mailHoverBusy = true; btnMailHoverAway.IsEnabled = false; btnMailHoverBox.IsEnabled = false;
+            _mailHoverBox = null;
+            _mailHoverBusy = true; btnMailHoverAway.IsEnabled = false; btnMailHoverBox.IsEnabled = false; btnMailClickTest.IsEnabled = false;
             lblMailHoverStatus.Text = mailbox ? "Focus the game and hover over the mailbox; do not click." : "Focus the game and hover over empty ground away from objects; do not click.";
             try
             {
@@ -266,13 +296,62 @@ namespace CopilotBuddy.UI
                 if (_mailHoverAway == null || !MailHoverSameSession(_mailHoverAway, second))
                 { _mailHoverAway = null; lblMailHoverStatus.Text = "Session, map, client size or player position changed; record away again."; return; }
                 bool changed = _mailHoverAway.Hover != second.Hover;
+                if (_mailHoverAway.Hover.IsEmpty && !second.Hover.IsEmpty && changed) _mailHoverBox = second;
                 Logging.Write(string.Format(CultureInfo.InvariantCulture,
                     "[Mailbox research] away={0} mailbox-hover={1} changed={2} entry-candidate={3} client={4}x{5} cursor=({6:F0},{7:F0}); user-labelled only, no input sent",
                     _mailHoverAway.Hover, second.Hover, changed, (second.Hover.High >> 6) & 0x7FFFFFUL, width, height, second.CursorX, second.CursorY));
                 lblMailHoverStatus.Text = "Mailbox hover recorded; candidate " + (second.Hover.IsEmpty ? "is empty" : changed ? "changed from away" : "did not change from away") + ". Send the log for analysis if comfortable sharing GUIDs. No click was sent; mailbox identity and UI state remain unverified.";
             }
             catch (Exception ex) { lblMailHoverStatus.Text = "Mailbox observation failed: " + ex.Message; }
-            finally { _mailHoverBusy = false; if (IsLoaded) { btnMailHoverAway.IsEnabled = true; btnMailHoverBox.IsEnabled = true; } }
+            finally { _mailHoverBusy = false; if (IsLoaded) { btnMailHoverAway.IsEnabled = true; btnMailHoverBox.IsEnabled = true; btnMailClickTest.IsEnabled = _mailHoverBox != null; } }
+        }
+
+        private async void btnMailClickTest_Click(object sender, RoutedEventArgs e)
+        {
+            MailHoverSample? expected = _mailHoverBox;
+            if (_mailHoverBusy || expected == null || ClickAimUi.Running || ClickAimUi.Paused) return;
+            if (System.Windows.MessageBox.Show("This test posts ONE right-click where you hover after 3 seconds. Stand next to the mailbox, close all game windows, and remain out of combat. It does not verify opening or send mail. Continue?",
+                "Supervised mailbox click", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
+            int generation = ClickAimAbort.Generation;
+            var cancel = new CancellationTokenSource(); _mailClickCancellation = cancel;
+            _mailHoverBusy = true; btnMailHoverAway.IsEnabled = false; btnMailHoverBox.IsEnabled = false; btnMailClickTest.IsEnabled = false;
+            // Consume the user-labelled observation even if the attempt fails. No blind retry.
+            _mailHoverBox = null; _mailHoverAway = null;
+            lblMailHoverStatus.Text = "Focus the game and hover the SAME mailbox for 3 seconds; do not click or hold mouse buttons. STOP cancels.";
+            try
+            {
+                await Task.Delay(3000, cancel.Token);
+                if (!IsLoaded) return;
+                if (cancel.IsCancellationRequested || ClickAimAbort.Generation != generation)
+                { lblMailHoverStatus.Text = "Mailbox test cancelled; no click was posted."; return; }
+                var attempt = await Task.Run(() => {
+                    bool safe(MailHoverSample? s) => s != null && MailHoverSameSession(expected, s) &&
+                        s.Hover == expected.Hover && !s.Hover.IsEmpty && s.ClickSafetyCandidate &&
+                        !cancel.IsCancellationRequested && ClickAimAbort.Generation == generation;
+                    if (!MailHoverSampleNow(expected.Memory, expected.Reader, expected.Window, expected.Width, expected.Height, out var one) || !safe(one))
+                        return (false, "first hover, health, combat, ghost or session check failed");
+                    Thread.Sleep(150);
+                    if (!MailHoverSampleNow(expected.Memory, expected.Reader, expected.Window, expected.Width, expected.Height, out var two) || !safe(two) || one == null || two == null ||
+                        Math.Abs(one.CursorX - two.CursorX) > 3 || Math.Abs(one.CursorY - two.CursorY) > 3)
+                        return (false, "second hover or cursor check failed");
+                    int x = (int)Math.Round(two.CursorX), y = (int)Math.Round(two.CursorY);
+                    bool posted = ClickAimInput.DiagnosticRightClick(expected.Window, x, y, expected.Width, expected.Height, generation,
+                        () => MailHoverSampleNow(expected.Memory, expected.Reader, expected.Window, expected.Width, expected.Height, out var final) && safe(final) &&
+                              final != null && Math.Abs(final.CursorX - x) <= 3 && Math.Abs(final.CursorY - y) <= 3,
+                        out string reason);
+                    return (posted, reason);
+                });
+                Logging.Write("[Mailbox interaction test] " + attempt.Item2 + "; a posted click is not proof the mailbox opened; no mail was sent.");
+                if (IsLoaded) lblMailHoverStatus.Text = (attempt.Item1 ? "One right-click was posted. " : "No right-button down was posted. ") +
+                    attempt.Item2 + ". Check the game visually and report the result. To try again, record away and mailbox hover again.";
+            }
+            catch (OperationCanceledException) { if (IsLoaded) lblMailHoverStatus.Text = "Mailbox test cancelled; no click was posted."; }
+            catch (Exception ex) { Logging.Write("[Mailbox interaction test] exception, outcome uncertain: " + ex.Message); if (IsLoaded) lblMailHoverStatus.Text = "Test failed or outcome uncertain; check the game and do not retry blindly."; }
+            finally
+            {
+                _mailClickCancellation = null; cancel.Dispose(); _mailHoverBusy = false;
+                if (IsLoaded) { btnMailHoverAway.IsEnabled = true; btnMailHoverBox.IsEnabled = true; btnMailClickTest.IsEnabled = false; }
+            }
         }
 
         private sealed class MailGridPointRow
@@ -1430,6 +1509,7 @@ namespace CopilotBuddy.UI
         protected override void OnClosed(EventArgs e)
         {
             _combatResearchCancellation?.Cancel();
+            _mailClickCancellation?.Cancel();
             if (!Saved)
             {
                 ClickAimCombat.ClearRoleOverrides();

@@ -196,6 +196,33 @@ internal static class ClickAimInput
         return true;
     }
 
+    // Stopped, explicitly requested diagnostic: a prior STOP may already be
+    // latched, so cancel on a NEW STOP generation without clearing that latch.
+    // Never move the cursor; confirmation rechecks the user-labelled hover.
+    // True means DOWN was posted, not that the window opened or UP succeeded.
+    internal static bool DiagnosticRightClick(IntPtr hwnd, int x, int y, int width, int height,
+        int stopGeneration, Func<bool> confirm, out string reason)
+    {
+        reason = "stop, focus, mouse buttons or client geometry changed";
+        if (ClickAimAbort.Generation != stopGeneration || !GameForeground(hwnd) || !MouseButtonsUp() ||
+            !ClientSize(hwnd, out int w, out int h) || w != width || h != height ||
+            x <= 0 || x >= w - 1 || y <= 0 || y >= h - 1) return false;
+        reason = "final diagnostic validation failed";
+        if (!confirm() || ClickAimAbort.Generation != stopGeneration || !GameForeground(hwnd) || !MouseButtonsUp() ||
+            !ClientSize(hwnd, out w, out h) || w != width || h != height ||
+            !TryCursorFraction(hwnd, out double fx, out double fy) ||
+            Math.Abs(fx * width - x) > 3 || Math.Abs(fy * height - y) > 3 ||
+            ClickAimAbort.Generation != stopGeneration) return false;
+        reason = "right-button down could not be posted";
+        if (!PostMessageInternal(hwnd, WM_RBUTTONDOWN, new IntPtr(MK_RBUTTON), Lp(x, y))) return false;
+        Thread.Sleep(45);
+        bool up = PostMessageInternal(hwnd, WM_RBUTTONUP, IntPtr.Zero, Lp(x, y));
+        Thread.Sleep(5);
+        bool upAgain = PostMessageInternal(hwnd, WM_RBUTTONUP, IntPtr.Zero, Lp(x, y));
+        reason = up || upAgain ? "right-button messages posted; opening not verified" : "down posted but both button-up messages failed; do not retry blindly";
+        return true;
+    }
+
     // One dialog click only. Recheck the screen and state after the posted move;
     // always release the button if down was sent, including after STOP.
     internal static bool ConfirmedLeftClick(IntPtr hWnd, int x, int y, int expectedWidth, int expectedHeight,

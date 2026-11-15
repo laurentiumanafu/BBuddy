@@ -11,7 +11,7 @@ class MailboxHoverWiring(unittest.TestCase):
             self.assertIn(handler, xaml)
             self.assertIn(handler, ui)
         start = ui.index('private sealed class MailHoverSample')
-        end = ui.index('private sealed class MailGridPointRow', start)
+        end = ui.index('private async void btnMailClickTest_Click', start)
         code = ui[start:end]
         for guard in ('ClickAimUi.Running', 'ClickAimUi.Paused', 'GameForeground', 'TryCursorFraction',
                       'TryReadTraceLocalGuid', 'TryReadExperimentalMapCandidate', 'TryCaptureWorldSnapshot', 'TraceIdentity70707',
@@ -21,6 +21,23 @@ class MailboxHoverWiring(unittest.TestCase):
         for forbidden in ('PostMessage', 'SendInput', 'ClickAimInput.Click', 'ClickAimInput.Move', 'Lua.', 'Send Mail'):
             self.assertNotIn(forbidden, code)
         self.assertIn('user-labelled only, no input sent', code)
+
+    def test_supervised_click_has_guards_and_no_retry(self):
+        self.assertIn('btnMailClickTest_Click', xaml)
+        click = ui[ui.index('private async void btnMailClickTest_Click'):ui.index('private sealed class MailGridPointRow')]
+        for guard in ('MessageBoxButton.YesNo', 'ClickAimAbort.Generation', 'cancel.IsCancellationRequested',
+                      'ClickSafetyCandidate', 's.Hover == expected.Hover', 'MailHoverSameSession',
+                      'Task.Delay(3000, cancel.Token)', 'DiagnosticRightClick', '_mailHoverBox = null; _mailHoverAway = null'):
+            self.assertIn(guard, click)
+        self.assertEqual(click.count('DiagnosticRightClick('), 1)
+        self.assertIn('_mailClickCancellation?.Cancel()', ui)
+        source = (root / 'Styx/Logic/Pathing/ClickAim/ClickAimInput.cs').read_text(encoding='utf-8-sig')
+        helper = source[source.index('internal static bool DiagnosticRightClick'):source.index('// One dialog click only')]
+        for guard in ('ClickAimAbort.Generation', 'GameForeground', 'MouseButtonsUp', 'TryCursorFraction', 'confirm()', 'WM_RBUTTONDOWN', 'WM_RBUTTONUP'):
+            self.assertIn(guard, helper)
+        self.assertNotIn('WM_MOUSEMOVE', helper)
+        self.assertNotIn('ClickAimAbort.Clear', helper)
+        self.assertIn('both button-up messages failed', helper)
 
     def test_not_wired_to_gameplay(self):
         for name in ('GrindRunner.cs', 'GatherRunner.cs'):
