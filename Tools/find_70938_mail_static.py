@@ -79,6 +79,31 @@ def find_leads(data, image_sections, names=NAMES):
     return locations, refs
 
 
+def find_pointer_pairs(data, base, image_sections, locations):
+    """Find exact preferred-base name pointers with an executable next qword.
+
+    These are table-shaped byte patterns only; relocation and handler semantics
+    are not established by this search. Restrict to naturally aligned qwords.
+    """
+    out = {name: [] for name in locations}
+    executable = [(rva, rva + size) for _, rva, _, size, flags in image_sections if flags & 0x20000000]
+    for name, hits in locations.items():
+        for hit in hits:
+            needle = struct.pack('<Q', base + hit)
+            for section, rva, raw, size, flags in image_sections:
+                if flags & 0x20000000: continue
+                pos, end = raw, raw + size
+                while True:
+                    pos = data.find(needle, pos, end)
+                    if pos < 0: break
+                    if (rva + pos - raw) % 8 == 0 and pos + 16 <= end:
+                        target = struct.unpack_from('<Q', data, pos + 8)[0] - base
+                        if any(start <= target < stop for start, stop in executable):
+                            out[name].append((section, rva + pos - raw, target))
+                    pos += 1
+    return out
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('image', type=Path)
@@ -88,11 +113,14 @@ def main():
     if digest != EXPECTED_SHA256: raise SystemExit('Unexpected image SHA-256: ' + digest)
     base, image_sections = sections(data)
     locations, refs = find_leads(data, image_sections)
+    pairs = find_pointer_pairs(data, base, image_sections, locations)
     print('Exact recorded SHA-256:', digest, 'preferred image base:', hex(base))
     print('Static byte-pattern leads only; no instruction boundaries or API handlers proven.')
     for name in NAMES:
         print('\n' + name + ': strings=' + ', '.join(hex(x) for x in locations[name]))
         if not refs[name]: print('  No matching RIP-relative LEA found; this does not prove absence.')
+        for section, address, target in pairs[name]:
+            print(f'  {section} name-pointer pair RVA {address:#x}; next executable pointer RVA {target:#x} (unverified)')
         for section, insn, dest, nearby in refs[name]:
             print(f'  {section} RVA {insn:#x} -> name RVA {dest:#x}')
             for address, target in nearby:

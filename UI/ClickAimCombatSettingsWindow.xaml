@@ -267,6 +267,8 @@
                         <Button Content="Mark specialty" Height="24" Padding="8,0" Margin="8,0,0,0" Click="btnBagSpecialty_Click"/>
                     </StackPanel>
                     <Separator Margin="0,10,0,6"/>
+                    <Button x:Name="btnMailAttachmentResearch" Content="Mail attachment candidate snapshot" Height="24" Padding="10,0" HorizontalAlignment="Left" Click="btnMailAttachmentResearch_Click"/>
+                    <TextBlock TextWrapping="Wrap" Margin="0,4,0,4" Text="70938 only, bot stopped: logs a static mail-code candidate as raw bytes. No clicks or text are sent; it does not verify attachments, recipient, mail state or delivery. Logs may contain sensitive item identifiers."/>
                     <TextBlock Text="Combined bag grid calibration (research only)" FontWeight="SemiBold"/>
                     <TextBlock TextWrapping="Wrap" Margin="0,4,0,4" Text="Stop the bot and open Combined Backpack in the game. Keep the game client size, UI scale, bag positions and bag configuration unchanged. Record each listed cell center; no clicks are sent. Mark the 20 visible main-backpack slots including locked slots. Identify the first and last visible slot of each candidate using the bag snapshots; do not guess."/>
                     <WrapPanel Margin="0,2,0,4">

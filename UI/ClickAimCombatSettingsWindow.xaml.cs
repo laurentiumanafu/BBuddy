@@ -822,6 +822,25 @@ namespace CopilotBuddy.UI
             finally { btnInventoryProbe.IsEnabled = true; }
         }
 
+        private async void btnMailAttachmentResearch_Click(object sender, RoutedEventArgs e)
+        {
+            if (ClickAimUi.Running || ClickAimUi.Paused || _mailHoverBusy || _mailGridBusy)
+            { lblVendorNote.Text = "Stop the bot and wait for other mail research to finish."; return; }
+            _mailHoverBusy = true; _mailGridBusy = true; btnMailAttachmentResearch.IsEnabled = false;
+            lblVendorNote.Text = "Reading mail candidate bytes; keep the game state unchanged...";
+            try
+            {
+                string report = await Task.Run(() => WowBMailAttachmentResearch.Capture());
+                foreach (string line in report.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+                    Logging.Write("[Mail attachment research] " + line);
+                if (IsLoaded) lblVendorNote.Text = report.StartsWith("70938 read-only", StringComparison.Ordinal)
+                    ? "Mail candidate snapshot written to the bot log. Raw identifiers may be sensitive; nothing was sent."
+                    : report;
+            }
+            catch (Exception ex) { if (IsLoaded) lblVendorNote.Text = "Mail candidate snapshot failed: " + ex.Message; }
+            finally { _mailHoverBusy = false; _mailGridBusy = false; if (IsLoaded) btnMailAttachmentResearch.IsEnabled = true; }
+        }
+
         private bool SaveFactionSettings()
         {
             if (!_factionLoaded)

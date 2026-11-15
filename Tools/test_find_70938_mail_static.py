@@ -31,6 +31,15 @@ class StaticMailTests(unittest.TestCase):
         _, refs = scan.find_leads(bytes(data), [('data',0,0,64,0x40000000)], ('SendMail',))
         self.assertEqual(refs['SendMail'], [])
 
+    def test_pointer_pairs_require_alignment_and_executable_target(self):
+        data = bytearray(0x200)
+        base = 0x140000000
+        data[0:16] = struct.pack('<QQ', base + 0x2000, base + 0x1020)
+        data[16:32] = struct.pack('<QQ', base + 0x2000, base + 0x3000)
+        sections = [('data',0x2000,0,0x100,0x40000000), ('code',0x1000,0x100,0x100,0x60000000)]
+        pairs = scan.find_pointer_pairs(bytes(data), base, sections, {'SendMail':[0x2000]})
+        self.assertEqual(pairs['SendMail'], [('data',0x2000,0x1020)])
+
     def test_invalid_pe(self):
         with self.assertRaises(ValueError): scan.sections(b'not a PE')
 

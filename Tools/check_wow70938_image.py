@@ -27,6 +27,9 @@ MARKERS = {
     0x1F51133: "3977100F858C0000008B45603947140F8580000000",
     0x1F51166: "8B471C448D0401",
     0x1F51364: "488B7F08",
+    # Static mail attachment-table candidate, research only.
+    0x26B4F78: "FFC883F8107338488D0C80488D05067B7B02488D04C84885C0",
+    0x26B501A: "FFC883F8100F83E2010000488D0C80488D05607A7B02488D0CC848",
 }
 
 
@@ -88,6 +91,8 @@ def check(path):
         (0x28A242A, 3, 7, 0x48EC7E0), # indexed candidate state array
         (0x28A2480, 1, 5, 0x1F50E20), # cooldown calculation helper
         (0x1F51391, 1, 5, 0x27BEE40), # additional cooldown path
+        (0x26B4F83, 3, 7, 0x4E6CA90), # HasSendMailItem table candidate
+        (0x26B5029, 3, 7, 0x4E6CA90), # GetSendMailItem table candidate
     ]:
         if relative(rva, displacement, length) != target:
             raise ValueError(f"Relative target mismatch at 0x{rva:X}")

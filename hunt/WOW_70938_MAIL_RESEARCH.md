@@ -67,19 +67,41 @@ The parser previously discarded successfully read bags when a later `user catego
 
 `Tools/find_70938_mail_static.py <decoded-exe>` is a read-only, standard-library
 scanner for the **exact recorded** 70938 executable SHA-256. It searches
-section-backed ASCII mail API names and RIP-relative LEA-like byte patterns in
-executable sections, reporting name references and nearby LEA-like targets as
-RVAs. It does not open the process, use Lua, or invoke client functions. It
-rejects a different file instead of applying 70291 addresses to 70938.
+section-backed ASCII mail API names, RIP-relative LEA-like byte patterns in
+executable sections, and aligned name-pointer/next-executable-pointer pairs,
+reporting candidate RVAs. It does not open the process, use Lua, or invoke
+client functions. It rejects a different file instead of applying 70291
+addresses to 70938. Pattern matches are leads, not established instruction
+boundaries or handler semantics; missing matches do not establish absence.
 
-A byte-pattern match can be in the middle of another instruction; proximity is
-not proof of a registration, handler, attachment list, UI state or send result.
-Missing matches do not establish absence. Any leads need independent static
-disassembly/dataflow review followed by controlled, repeated live observations,
-including rejected sends. The scanner has been tested on synthetic bytes only;
-the 70938 image was not available in this workspace for this investigation,
-so no 70938 mail handler or runtime state is claimed. Its output can expose
-client internals; review before sharing. No gameplay or mail input is enabled.
+The user-provided ZIP's MD5 matches the recorded 70938 archive; its decoded PE
+SHA-256 matches the recorded image. Offline scan and Capstone inspection found
+a contiguous name/function-pointer-shaped table at RVA `0x494DE50` onward:
+`HasSendMailItem` points to `0x26B4F40`, `GetSendMailItem` to `0x26B4FD0`,
+and `SendMail` to `0x26B53C0`. Separate named registration-like code at
+`0x170E044`/`0x170E050` points to `0x16EDDB0` and the same `GetSendMailItem`
+string; it must not be conflated with the table entry. These are static leads,
+not callable APIs. No Lua or client code was executed.
+
+Both `0x26B4F40` and `0x26B4FD0` take a converted argument, subtract one,
+reject indexes >=16, multiply the index by 40, and reference an image-relative
+base at `0x4E6CA90`. Both inspect the high six bits of the qword at entry +8;
+the latter passes the entry address to a helper before reading additional item
+fields. The instruction paths support a candidate array, not a proof of GUID
+format, UI attachment identity, recipient, server acceptance or delivery. A
+16-slot internal bound does not change the user's 12-item send limit.
+
+Selling now has a **Mail attachment candidate snapshot** diagnostic, restricted
+to a stopped 70938 session. It checks player/build/session and a readable exact
+code marker, reads the 16×40 bytes twice uncached and logs only matching bytes;
+any failed or changing read returns unknown. STOP and a new session veto the
+snapshot. Reads are not atomic, logged identifiers may be sensitive, and stable
+bytes do not prove completeness or attachment semantics. The diagnostic sends no
+input and is not wired into automatic mail. The executable and the resulting
+runtime candidate still require independent verification against controlled
+visual changes, including an empty control and failed sends. The scanner was run
+on the real image and synthetic scanner tests were run; neither is live proof.
+No Windows build or live candidate snapshot was run here.
 
 ## Further evidence and integration
 
