@@ -26,9 +26,11 @@ internal static class WowBMailBatchPolicy
 
     // Require complete, stable observations of the separately represented
     // backpack (candidate -1) and all five container candidates 0..4, so a move
-    // into an excluded bag cannot be misread as disappearance. The supplied
+    // into the excluded backpack cannot be misread as disappearance. The supplied
     // 70938 trace places the backpack in the player range, not container 0.
-    // Zero or unavailable identities still need an evidence-backed treatment.
+    // Every verified equipped container, including 0 and a future proven 4,
+    // is eligible. Zero or unavailable identities remain unknown; they do not
+    // establish that a bag is absent or the inventory is complete.
     // 'complete' is not a substitute for a verified live reader; no such
     // reader or UI mapper is wired yet.
     internal static Selection Plan(bool complete, IReadOnlyList<Slot> occupied, out List<Slot> batch)
@@ -42,7 +44,7 @@ internal static class WowBMailBatchPolicy
         {
             if (slot.Candidate < -1 || slot.Candidate > 4 || slot.Index < 0 || slot.Index >= 64 || slot.Item.IsEmpty ||
                 !positions.Add((slot.Candidate, slot.Index)) || !identities.Add(slot.Item)) return Selection.Unknown;
-            if (slot.Candidate >= 1 && slot.Candidate <= 3) allowed.Add(slot);
+            if (slot.Candidate >= 0 && slot.Candidate <= 4) allowed.Add(slot);
         }
         allowed.Sort((a, b) => a.Candidate != b.Candidate ? a.Candidate.CompareTo(b.Candidate) : a.Index.CompareTo(b.Index));
         for (int i = 0; i < Math.Min(BatchLimit, allowed.Count); i++) batch.Add(allowed[i]);
@@ -66,7 +68,7 @@ internal static class WowBMailBatchPolicy
         var batchPositions = new HashSet<(int, int)>();
         foreach (Slot slot in batch)
         {
-            if (slot.Candidate < 1 || slot.Candidate > 3 || slot.Index < 0 || slot.Index >= 64 || slot.Item.IsEmpty ||
+            if (slot.Candidate < 0 || slot.Candidate > 4 || slot.Index < 0 || slot.Index >= 64 || slot.Item.IsEmpty ||
                 !seen.Add(slot.Item) || !batchPositions.Add((slot.Candidate, slot.Index)))
                 return Decision.Hold;
             bool present = itemPositions.TryGetValue(slot.Item, out var position);

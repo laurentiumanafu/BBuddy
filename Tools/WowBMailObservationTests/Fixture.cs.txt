@@ -44,17 +44,22 @@ namespace Styx.Logic.Pathing
         {
             var m=new Memory(); var r=new WowBReader(); var p=new WowBObservedUnit { Guid=new WowBGuid(50,9),UnitAddress=12,RecordAddress=13 }; r.Player=p;
             ulong table=100; var ids=new byte[80]; var bags=new Candidate?[5];
-            for(int i=1;i<=3;i++)
+            void SetBag(int i)
             {
-                SetGuid(ids,i*16,(ulong)i,9); ulong data=(ulong)(10000*i), record=(ulong)(100000*i); var slots=new byte[32]; SetGuid(slots,0,(ulong)(100+i),9);
+                SetGuid(ids,i*16,(ulong)(i+1),9); ulong data=(ulong)(10000*(i+1)), record=(ulong)(100000*(i+1)); var slots=new byte[32]; SetGuid(slots,0,(ulong)(100+i),9);
                 var head=new byte[32]; var pointer=BitConverter.GetBytes(data);
-                bags[i]=new Candidate { Guid=new WowBGuid((ulong)i,9), Data=data, Count=2, Slots=slots, Header=head, PointerBytes=pointer, SourceOffset=0x28,Record=new WowBReader.WowBPoolObject { RecordPtr=record } };
-                var recordGuid=new byte[16]; SetGuid(recordGuid,0,(ulong)i,9);
+                bags[i]=new Candidate { Guid=new WowBGuid((ulong)(i+1),9), Data=data, Count=2, Slots=slots, Header=head, PointerBytes=pointer, SourceOffset=0x28,Record=new WowBReader.WowBPoolObject { RecordPtr=record } };
+                var recordGuid=new byte[16]; SetGuid(recordGuid,0,(ulong)(i+1),9);
                 m.Bytes[data+SlotsOffset]=(byte[])slots.Clone(); m.Bytes[data+CapacityOffset]=BitConverter.GetBytes(2); m.Bytes[data]=(byte[])head.Clone(); m.Bytes[record+0x28]=pointer; m.Bytes[record+0x18]=recordGuid;
             }
+            for(int i=0;i<=3;i++) SetBag(i);
             m.Bytes[table]=(byte[])ids.Clone();
-            Check(TryBuildMailObservation(m,r,p,table,ids,bags,out var result) && result!.Count==3 && result[0].CandidateIndex==1 && result[2].CandidateIndex==3,"reads only candidates 1..3");
-            Check(result![0].Slots[0]==new WowBGuid(101,9) && result[0].Slots[1].IsEmpty,"full item identities and zero retained");
+            Check(TryBuildMailObservation(m,r,p,table,ids,bags,out var result) && result!.Count==5 && result[0].CandidateIndex==0 && result[3].CandidateIndex==3 && result[4].Unknown,"includes candidate 0 and flags candidate 4 unknown");
+            Check(result![0].Slots[0]==new WowBGuid(100,9) && result[0].Slots[1].IsEmpty,"full item identities and zero retained");
+            SetBag(4); m.Bytes[table]=(byte[])ids.Clone();
+            Check(TryBuildMailObservation(m,r,p,table,ids,bags,out result) && !result![4].Unknown && result[4].Slots[0]==new WowBGuid(104,9),"nonzero candidate 4 is included if resolved");
+            bags[4]=null; Check(!TryBuildMailObservation(m,r,p,table,ids,bags,out _),"unresolved nonzero extra bag fails closed");
+            Array.Clear(ids,4*16,16); m.Bytes[table]=(byte[])ids.Clone();
             m.Bytes[bags[2]!.Data+SlotsOffset][0]++; Check(!TryBuildMailObservation(m,r,p,table,ids,bags,out _),"changed bag rejected"); m.Bytes[bags[2]!.Data+SlotsOffset][0]--;
             var saved=bags[2]; bags[2]=null; Check(!TryBuildMailObservation(m,r,p,table,ids,bags,out _),"unresolved candidate rejected"); bags[2]=saved;
             m.Bytes[table][16]++; Check(!TryBuildMailObservation(m,r,p,table,ids,bags,out _),"changed identity table rejected"); m.Bytes[table][16]--;

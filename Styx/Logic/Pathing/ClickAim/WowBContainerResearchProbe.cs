@@ -64,6 +64,7 @@ internal static class WowBContainerResearchProbe
     internal sealed class MailBagObservation
     {
         internal int CandidateIndex;
+        internal bool Unknown; // zero identity is not proof the bag is absent
         internal WowBGuid Bag;
         internal WowBGuid[] Slots = Array.Empty<WowBGuid>();
     }
@@ -312,8 +313,9 @@ internal static class WowBContainerResearchProbe
         => CaptureCore(memory, reader, player, out subtotal, out _, active, false);
 
     // Caller holds the inventory probe gate and disabled the memory cache.
-    // This returns only observed 1..3 entries, never backpack/0/4 or mail
-    // authorization; missing bags or a changed value fail closed.
+    // Returns observations for container candidates 0..4, never the separate
+    // backpack or mail authorization. Zero identities are explicit Unknown;
+    // unresolved nonzero bags or changed values fail closed.
     internal static bool TryCaptureMailBags(Memory memory, WowBReader reader, WowBObservedUnit player,
         out List<MailBagObservation>? bags)
     {
@@ -482,11 +484,17 @@ internal static class WowBContainerResearchProbe
         var observed = new List<MailBagObservation>();
         var seenItems = new HashSet<WowBGuid>();
         var seenAddresses = new HashSet<ulong>();
-        for (int i = 1; i <= 3; i++)
+        for (int i = 0; i < CandidateIdentities; i++)
         {
+            WowBGuid identity = GuidAt(identities, i * SlotStride);
+            if (identity.IsEmpty)
+            {
+                observed.Add(new MailBagObservation { CandidateIndex = i, Unknown = true });
+                continue;
+            }
             Candidate? bag = candidates[i];
             if (bag == null || bag.Guid.IsEmpty || bag.Count == 0 || bag.Count > MaxSlots || !seenAddresses.Add(bag.Data) ||
-                bag.Guid != GuidAt(identities, i * SlotStride) || bag.Slots.Length != bag.Count * SlotStride) return false;
+                bag.Guid != identity || bag.Slots.Length != bag.Count * SlotStride) return false;
             var slots = new WowBGuid[bag.Count];
             for (int j = 0; j < slots.Length; j++)
             {
@@ -500,6 +508,7 @@ internal static class WowBContainerResearchProbe
         // after the whole scan; changed, ambiguous or unreadable means unknown.
         foreach (MailBagObservation observation in observed)
         {
+            if (observation.Unknown) continue;
             Candidate bag = candidates[observation.CandidateIndex]!;
             byte[]? capacity = memory.ReadBytes64(bag.Data + CapacityOffset, 4);
             byte[]? recordGuid = memory.ReadBytes64(bag.Record.RecordPtr + WowBOffsets.RecordGuidLoOffset, 16);

@@ -13,7 +13,8 @@ static class Fixture
         for(int i=0;i<17;i++) all.Add(Slot(1+i%3,i,(ulong)(10+i)));
         Check(P.Plan(false, all,out _) == P.Selection.Unknown,"unknown inventory cannot plan");
         Check(P.Plan(true, all,out var batch) == P.Selection.Batch && batch.Count==12,"first batch capped at twelve");
-        foreach(var item in batch) Check(item.Candidate>=1 && item.Candidate<=3,"excluded bags never selected");
+        foreach(var item in batch) Check(item.Candidate>=0 && item.Candidate<=4,"backpack never selected");
+        Check(batch[0].Candidate==0,"candidate 0 is eligible");
         var after = new List<P.Slot>(all);
         foreach(var item in batch) after.RemoveAll(s => s.Item == item.Item);
         Check(P.AfterSend(P.SendEvidence.Accepted,true,true,batch,after,0)==P.Decision.Progress,"acknowledged disappearance progresses");
@@ -26,7 +27,11 @@ static class Fixture
         Check(P.AfterSend(P.SendEvidence.Rejected,true,true,batch,after,2)==P.Decision.Hold,"partial or unknown failure does not retry or return blindly");
         after.Add(Slot(-1,5,batch[0].Item.Low));
         Check(P.AfterSend(P.SendEvidence.Accepted,true,true,batch,after,0)==P.Decision.Hold,"moved into backpack range is not gone");
-        Check(P.Plan(true,new List<P.Slot>{Slot(-1,0,3),Slot(0,0,1),Slot(4,0,2)},out _)==P.Selection.Empty,"backpack and excluded bags are never mailed");
+        Check(P.Plan(true,new List<P.Slot>{Slot(-1,0,3),Slot(0,0,1),Slot(4,0,2)},out var otherBags)==P.Selection.Batch && otherBags.Count==2 && otherBags[0].Candidate==0 && otherBags[1].Candidate==4,"known equipped bags 0 and 4 included, backpack excluded");
+        Check(P.AfterSend(P.SendEvidence.Accepted,true,true,otherBags,new List<P.Slot>{Slot(-1,0,3)},0)==P.Decision.Progress,"candidate zero accepted and backpack preserved");
+        Check(P.Plan(false,new List<P.Slot>{Slot(-1,0,3)},out _)==P.Selection.Unknown,"unknown candidate is not an empty inventory");
+        Check(P.Plan(true,new List<P.Slot>{Slot(-1,0,3)},out _)==P.Selection.Empty,"only backpack is never mailed");
+        Check(P.AfterSend(P.SendEvidence.Accepted,true,true,new List<P.Slot>{Slot(-1,0,3)},new List<P.Slot>(),0)==P.Decision.Hold,"backpack batch is invalid");
         Check(P.Plan(true,new List<P.Slot>{Slot(1,0,1),Slot(2,1,1)},out _)==P.Selection.Unknown,"duplicate item identity");
         Check(P.Plan(true,new List<P.Slot>{Slot(1,0,1),Slot(1,0,2)},out _)==P.Selection.Unknown,"duplicate slot");
         Check(P.Plan(true,new List<P.Slot>{Slot(5,0,1)},out _)==P.Selection.Unknown,"unknown candidate");
