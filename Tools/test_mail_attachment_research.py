@@ -17,6 +17,17 @@ class ResearchSourceTests(unittest.TestCase):
         for forbidden in ('WriteBytes', 'PostMessage', 'ClickAimInput.', 'Lua.', 'SendObserved', 'WowBMailSequence'):
             self.assertNotIn(forbidden, source)
 
+    def test_bag_correlations_are_bracketed_and_explicitly_inconclusive(self):
+        source = (ROOT / 'Styx/Logic/Pathing/ClickAim/WowBMailAttachmentResearch.cs').read_text()
+        for required in ('TryReadMailCandidateBags(out WowBGuid firstPlayer',
+                         'TryReadMailCandidateBags(out WowBGuid secondPlayer',
+                         'Equal(first, last)', 'SameBags(firstBags, secondBags)',
+                         'if (bag.Unknown) continue', '!first.IsEmpty', '!second.IsEmpty',
+                         'Backpack not observed', 'Unknown; not evidence of absence'):
+            self.assertIn(required, source)
+        self.assertLess(source.index('TryReadMailCandidateBags(out WowBGuid firstPlayer'), source.index('byte[]? first = memory.ReadBytes64'))
+        self.assertLess(source.index('byte[]? second = memory.ReadBytes64'), source.index('TryReadMailCandidateBags(out WowBGuid secondPlayer'))
+
     def test_button_is_research_only(self):
         ui = (ROOT / 'UI/ClickAimCombatSettingsWindow.xaml').read_text()
         cs = (ROOT / 'UI/ClickAimCombatSettingsWindow.xaml.cs').read_text()

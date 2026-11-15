@@ -101,7 +101,30 @@ input and is not wired into automatic mail. The executable and the resulting
 runtime candidate still require independent verification against controlled
 visual changes, including an empty control and failed sends. The scanner was run
 on the real image and synthetic scanner tests were run; neither is live proof.
-No Windows build or live candidate snapshot was run here.
+No Windows build was run here.
+
+### Stopped snapshot comparison
+
+The user supplied `2026-11-15_2114_3612.log` after the requested empty → one
+manually attached → removed experiment. The log itself has no action labels,
+so the following is a sequence comparison, not independent visual confirmation.
+At 21:15:04 all 16 records were 40 zero bytes. At 21:15:12 only record 1 was
+nonzero; at 21:15:23 all 16 were zero again. The first 16 bytes of that record
+were nonzero; the second 16 bytes matched the full raw identity of candidate
+bag 1 in the earlier bag snapshot for the same character. The dword at +0x20
+was 10. No matching first-16-byte value was found in that older log. This is
+consistent with, but does not prove, a record containing item, bag and slot
+fields. The earlier snapshot is from a different time, and the log does not
+identify the chosen item or its current bag slot. No send or delivery is proven.
+
+The stopped diagnostic now optionally compares its table against two matching
+fresh candidate-bag snapshots, bracketing the table reads and rechecking the
+table afterward. It reports raw +0x00/slot and +0x10/bag equality matches only;
+unknown bags, missing matches, changed reads, and the excluded backpack remain
+unknown. This can guide further manually labelled experiments but cannot prove
+that a given entry is an attachment, that it is mailable or that the UI/send
+state is safe. It remains disconnected from automation; all reads are
+non-atomic. This extension has not been built or run on Windows here.
 
 ## Further evidence and integration
 
