@@ -14,9 +14,15 @@ internal static class ClickAimHealPolicy
         return minimumPercent <= 0 || denominator == 0 || power * 100.0 / denominator >= minimumPercent;
     }
 
-    internal static bool ShouldAttemptHeal(ClickAimAction? heal, bool blocked, uint health, uint maximumHealth,
+    // The heal is never held back by earlier outcomes. A press that shows no
+    // net health gain can be a heal the attackers out-damaged, and a press the
+    // client dropped during the global cooldown looks exactly the same, so a
+    // counter of those presses used to switch healing off mid-fight. Only the
+    // configured health line, the power gate, the retry spacing and the shared
+    // cooldown decide; enough mana is the affordability rule, not a hold.
+    internal static bool ShouldAttemptHeal(ClickAimAction? heal, uint health, uint maximumHealth,
                                           int healPercent, bool cooldownReady, bool powerAllowed)
-        => heal != null && heal.KeyVk != 0 && heal.IsHeal && !blocked && maximumHealth > 0 && health > 0 &&
+        => heal != null && heal.KeyVk != 0 && heal.IsHeal && maximumHealth > 0 && health > 0 &&
            healPercent > 0 && health * 100.0 / maximumHealth <= healPercent && cooldownReady && powerAllowed;
 
     // A net health gain or power drop is only evidence, not proof, that the

@@ -6799,19 +6799,15 @@ internal static class GrindRunner
         var preMeleeRetry = new WowBPreMeleeRetry();
         bool melee = false;                 // set when casting is shown not to work
         bool announced = false;
-        int healFailures = 0;               // presses of the heal key that changed nothing
-        bool healBlocked = false;           // no power for it: fight instead of pressing it again
-        int healBlockedUntil = 0;           // the hold ends on its own; a long fight still heals
         bool healRefusalLogged = false;
         bool healCooldownWaitLogged = false;
         bool powerShortLogged = false;
-        const int HealBlockMs = 15000;      // not "the rest of the fight": see the note below
         // Every key this fight sends shares the client's global cooldown. The
         // 21:27 log shows why it matters: the heal was pressed 0.5 s after an
-        // Earth Shock and 1.0 s after a Stormstrike, the client swallowed both
-        // presses, and two silent presses used to switch healing off for the
-        // rest of the fight - which is what "it heals again once the mob dies"
-        // looked like from the outside.
+        // Earth Shock and 1.0 s after a Stormstrike, and the client silently
+        // dropped both presses - no cast, no power spent, no health gain.
+        // Nothing here ever holds the heal back afterwards: the press is
+        // simply delayed until the cooldown is clear so it is not wasted.
         void NoteCombatKey() { lastCombatKeyMs = Environment.TickCount; }
         bool GlobalCooldownClear() => lastCombatKeyMs == 0 ||
             unchecked(Environment.TickCount - lastCombatKeyMs) >= ClickAimCombat.CastSettleMs;
@@ -7292,7 +7288,7 @@ internal static class GrindRunner
                 _healCostGuess = 0; // never apply another spell or rank's observed cost
             }
             bool healPowerOk = heal != null && HealPowerOk(myMana, myMaxMana);
-            if (heal != null && !healPowerOk && !healBlocked && !healRefusalLogged
+            if (heal != null && !healPowerOk && !healRefusalLogged
                 && ClickAimSettings.HealBelowPercent > 0 && myPercent <= ClickAimSettings.HealBelowPercent)
             {
                 healRefusalLogged = true;
@@ -7304,23 +7300,14 @@ internal static class GrindRunner
                     ClickAimSettings.HealMinManaPercent));
             }
 
-            // The two-press hold is temporary, not a life sentence. Two attackers
-            // out-damaging a real heal shows the same "no net gain" as a press the
-            // client never accepted, so the heal comes back on its own instead of
-            // only returning with the next fight.
-            if (healBlocked && unchecked(Environment.TickCount - healBlockedUntil) >= 0)
-            {
-                healBlocked = false;
-                healCooldownWaitLogged = false;
-                Logging.Write("[Grind] the heal hold ended; the heal key is available again (cast results are always unverified)");
-            }
             bool healRetryReady = lastHealMs == 0 ||
                 unchecked(Environment.TickCount - lastHealMs) >= ClickAimCombat.HealRetryMs;
             bool healCooldownReady = healRetryReady && GlobalCooldownClear();
             // A heal has priority over damage, and the client silently drops a key
             // pressed during the global cooldown. Wait the cooldown out rather than
-            // spending it on a Shock and losing the heal for the whole fight.
-            if (heal != null && !healBlocked && healPowerOk && healRetryReady && !GlobalCooldownClear() &&
+            // spending it on a Shock and losing the heal press entirely. The wait is
+            // bounded by CastSettleMs and the key is sent as soon as it is clear.
+            if (heal != null && healPowerOk && healRetryReady && !GlobalCooldownClear() &&
                 ClickAimSettings.HealBelowPercent > 0 && myMaxHealth > 0 && myHealth > 0 &&
                 myHealth * 100.0 / myMaxHealth <= ClickAimSettings.HealBelowPercent)
             {
@@ -7336,7 +7323,7 @@ internal static class GrindRunner
                 continue;
             }
 
-            if (ClickAimHealPolicy.ShouldAttemptHeal(heal, healBlocked, myHealth, myMaxHealth,
+            if (ClickAimHealPolicy.ShouldAttemptHeal(heal, myHealth, myMaxHealth,
                     ClickAimSettings.HealBelowPercent, healCooldownReady, healPowerOk)
                 && heal != null)
             {
@@ -7367,7 +7354,7 @@ internal static class GrindRunner
                         return reader.IsExperimental70707 ? StopFightForSafety("heal player vitals unreadable; stopping") : "heal player vitals unreadable; heal withheld";
                     if (freshHeal.MaxHealth > 0 && freshHeal.Health == 0)
                         return reader.IsExperimental70707 ? StopFightForSafety("the character died before the heal; stopping") : "the character died before the heal; stopping the fight";
-                    if (!ClickAimHealPolicy.ShouldAttemptHeal(heal, healBlocked, freshHeal.Health, freshHeal.MaxHealth,
+                    if (!ClickAimHealPolicy.ShouldAttemptHeal(heal, freshHeal.Health, freshHeal.MaxHealth,
                         ClickAimSettings.HealBelowPercent, healCooldownReady, HealPowerOk(freshHeal.Power, freshHeal.MaxPower)))
                         continue;
                     if (!FightAttackInputAllowed(reader, fightMemory, defenceTarget, expectedPull, !defenceOnly || defenceFactionFilter, defenceOnly, !defenceOnly))
@@ -7420,7 +7407,6 @@ internal static class GrindRunner
                 {
                     string label = "heal " + heal.Name;
                     if (!worked.Contains(label)) worked.Add(label);
-                    healFailures = 0;
                     LearnHealCost(powerBeforeHeal, powerAfterHeal);
                     Logging.Write(string.Format(CultureInfo.InvariantCulture,
                         "[Grind] health {0:F0}% -> {1}/{2} with {3} (slot {4}){5}. Back to the mob",
@@ -7431,40 +7417,20 @@ internal static class GrindRunner
                 }
                 else
                 {
-                    /* Two presses that neither lifted health nor spent power is a heal that
-                     * cannot be paid for (or a key that cannot cast). Either way pressing it a
-                     * third time costs another global cooldown in the middle of a fight the
-                     * character is losing, so the heal is off for the rest of this fight. */
+                    /* No observable effect this time. It is never held against the heal:
+                     * incoming damage and the heal are not separately observable, so a
+                     * real heal that two attackers out-damaged reads exactly like a press
+                     * the client dropped during the global cooldown. Counting those used
+                     * to switch healing off in the middle of a fight. */
                     LearnHealCost(powerBeforeHeal, powerAfterHeal);
                     bool powerSpent = powerAfterHeal < powerBeforeHeal;
-                    // Net health can fall even when a heal landed: incoming damage
-                    // and the heal are not separately observable. Do not disable an
-                    // apparently paid-for heal as if the key did nothing.
-                    healFailures = powerSpent ? 0 : healFailures + 1;
                     Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                        "[Grind] {0} did not show a net health gain ({1}/{2}, power {3} -> {4}); {5}",
+                        "[Grind] {0} showed no net health gain ({1}/{2}, power {3} -> {4}); {5} "
+                        + "The heal is still attempted whenever health is under the line and power allows it.",
                         heal.Name, afterHealth, myMaxHealth, powerBeforeHeal, powerAfterHeal,
-                        powerSpent ? "power fell, so the heal remains available"
-                                   : "no net power drop, so the press may have been swallowed by the "
-                                     + "global cooldown or out-damaged; failure " + healFailures));
-                    if (healFailures >= 2)
-                    {
-                        /* Two presses with no observable effect. It used to end healing
-                         * for the whole fight, and that is exactly the reported symptom:
-                         * no heals until the mob died and the next fight started. A net
-                         * reading cannot separate a swallowed press from a heal that two
-                         * attackers simply out-damaged, so hold the heal for a while and
-                         * then let it back in. */
-                        healBlocked = true;
-                        healBlockedUntil = Environment.TickCount + HealBlockMs;
-                        healFailures = 0;
-                        healCooldownWaitLogged = false;
-                        Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                            "[Grind] healing held for {0} ms: two presses showed no health gain or power cost "
-                            + "(the client can drop a key pressed during the global cooldown, and a heal "
-                            + "that is out-damaged shows no net gain either); the heal is retried after the hold",
-                            HealBlockMs));
-                    }
+                        powerSpent
+                            ? "power fell, so the press reached the client."
+                            : "no net power drop, so the press may have been dropped by the global cooldown or out-damaged."));
                 }
 
                 if (keyOneMacro)
