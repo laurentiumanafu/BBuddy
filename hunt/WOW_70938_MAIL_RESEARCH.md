@@ -14,20 +14,29 @@ UI layout changes can cause the wrong screen control to receive input.
 
 It attempts to attach observed candidate 0–3 items (not the backpack or
 candidate 4), skipping an item if a mouse move or click could not be posted,
-and never clicking it twice on the trip. It posts at most 12 item clicks and
-at most **one Send click per selling trip**. A posted click does not establish
-attachment; the experimental attachment table is no longer a gate. After Send,
-it waits at least one second and checks stable bag observations. If none of the
-clicked candidates disappear, the attempt is treated as a failure; unreadable
-observations produce an unknown/failed outcome. At least one candidate
-disappearing is partial observed progress, not proof of complete inventory,
-mailbox delivery, correct recipient or successful sale. The separate backpack
-and unknown candidate 4 are not fully observed. The next sell trip may try again
-regardless of the outcome; there is no persistent hold, including for old hold
-files. A later retry can duplicate or misdirect mail, and stale attachments could
-be sent. Use a disposable-item test and inspect mail if possible. Bag/grid
-inconsistencies or uncertain button release still stop the current trip. No Lua
-is used.
+and never clicking it twice on the trip. Each batch has at most 12 item clicks
+and one Send click. A posted click does not establish attachment; the
+experimental attachment table is no longer a gate. After Send, it waits at least
+one second and checks stable bag observations. If no clicked candidates disappear,
+the attempt is treated as a failure and no further send is attempted this trip;
+unreadable observations produce an unknown/failed outcome. With observed
+progress, it scans for more unattempted items and retypes the recipient directly
+for each following batch without clicking the Send Mail tab again. It stops when
+no unattempted observed candidates remain, on failure or at 64 batches. Clicked
+items that remain after partial progress are skipped for the rest of the trip.
+
+At least one candidate disappearing is partial observed progress, not proof of
+complete inventory, mailbox delivery, correct recipient or successful sale. The
+separate backpack and unknown candidate 4 are not fully observed. There is no
+persistent hold, including for old hold files; later batches or trips can
+duplicate or misdirect mail, and stale attachments could be sent. Focus and
+recipient clearing between batches are not independently verified. Use a
+disposable-item test and inspect mail if possible. Bag/grid inconsistencies or
+uncertain button release still stop the current trip. No Lua is used.
+
+In `2026-11-16_1151_3352.log`, the previous one-send policy returned to the
+hotspot after one batch: 12 of 12 clicked candidates were no longer observed in
+the monitored bags. Those observations do not prove correct recipient or delivery.
 
 Foreground and non-minimized background modes use game-window messages; focus,
 frame and message acceptance are unverified. During the one-second tab wait, a

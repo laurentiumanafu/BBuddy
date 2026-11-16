@@ -13,12 +13,19 @@ class Flow(unittest.TestCase):
   self.assertIn('ExperimentalAutoMail = false;',s)
   self.assertIn('"ExperimentalAutoMail"',s)
   self.assertIn('chkExperimentalAutoMail.IsChecked == true',u)
- def test_one_send_and_observation(self):
+ def test_send_per_batch_and_observation(self):
   for v in ('WowBMailGridLookup.TryPreview', 'unknownPrimary', 'expected.Count >= 12',
             'WowBMailGridLookup.Same(bags, beforeSend)', 'Wait(1000, safe)',
             'DiagnosticRecipientChar', 'No retry this trip', 'backpack contents, recipient and delivery remain unverified'):
    self.assertIn(v,r)
   self.assertEqual(r.count('Left(hwnd, ui.SendX, ui.SendY'),1)
+  loop = r[r.index('for (int batch = 0; batch < 64 && safe(); batch++)'):]
+  self.assertIn('foreach (char c in recipient)', loop)
+  self.assertIn('if (!progressed)', loop)
+  self.assertLess(loop.index('foreach (char c in recipient)'), loop.index('Left(hwnd, ui.SendX'))
+  self.assertLess(loop.index('Left(hwnd, ui.SendX'), loop.index('Wait(1000, safe)'))
+  self.assertLess(loop.index('Wait(1000, safe)'), loop.index('if (!progressed)'))
+  self.assertNotIn('Left(hwnd, ui.TabX', loop)
   for v in ('expected.Count > 12', 'bag.Candidate < 4', '!seenItems.Add(item)',
             '!seenItems.Contains(item)', 'return -1'):
    self.assertIn(v,obs)

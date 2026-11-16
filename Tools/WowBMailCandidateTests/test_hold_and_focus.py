@@ -15,7 +15,7 @@ class Wiring(unittest.TestCase):
   self.assertNotIn('TryReadMouseoverGuidCandidate', m)
   self.assertNotIn('Clear mail safety hold', x)
   self.assertIn('no hover identity check', m)
- def test_one_send_and_requested_sequence(self):
+ def test_batch_sequence_and_retyped_recipient(self):
   start = m.index('ConfirmedRightClick(hwnd, ui.MailboxX')
   tab = m.index('Left(hwnd, ui.TabX', start)
   wait = m.index('WowBMailTabWait.Wait(TabWaitCheck', tab)
@@ -32,6 +32,14 @@ class Wiring(unittest.TestCase):
   self.assertIn('outcome unknown and treated as a failed trip', m[send:])
   self.assertIn('WowBMailSendObservation.CountMissing', m[send:])
   self.assertNotIn('WowBMailCandidateReader.TryRead', m)
+  batch = m.index('for (int batch = 0; batch < 64 && safe(); batch++)', wait)
+  self.assertLess(wait, batch); self.assertLess(batch, recipient); self.assertLess(send, m.index('if (!progressed)', send))
+  self.assertIn('if (batch > 0)', m[batch:recipient])
+  self.assertIn('without clicking the tab again', m[batch:recipient])
+  self.assertIn('if (count == 0)', m[batch:recipient])
+  self.assertIn('return false;', m[m.index('if (!progressed)', send):])
+  self.assertLess(m.index('Wait(1000, safe)', send), m.index('if (!progressed)', send))
+  self.assertEqual(m.count('foreach (char c in recipient)'), 1)
  def test_tab_wait_focus_switch_and_diagnostic(self):
   tab = m[m.index('string? TabWaitCheck()'):m.index('        try\n        {')]
   for text in ('safetyFailure()', 'TryClientOrigin', 'GameForeground(hwnd)',

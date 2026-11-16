@@ -4074,7 +4074,7 @@ internal static class GrindRunner
         bool ReturnWithoutMail(string reason)
         {
             _vendorMailboxPending = null; _vendorMailboxReader = null; _vendorMailboxMemory = null; _vendorMailboxPlayer = default;
-            Logging.Write("[Mail] " + reason + "; leaving mail for this trip and returning to grind when safe. No second mail attempt this trip; prior mail state remains unverified.");
+            Logging.Write("[Mail] " + reason + "; leaving mail for this trip and returning to grind when safe. Mail state and delivery remain unverified.");
             if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested) return false;
             return WalkBackToProfile(mover);
         }

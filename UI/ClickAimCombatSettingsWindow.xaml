@@ -1,4 +1,4 @@
-﻿<mah:MetroWindow x:Class="CopilotBuddy.UI.ClickAimCombatSettingsWindow"
+<mah:MetroWindow x:Class="CopilotBuddy.UI.ClickAimCombatSettingsWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:mah="http://metro.mahapps.com/winfx/xaml/controls"
@@ -237,7 +237,7 @@
                         <TextBlock Text="Mail recipient:" VerticalAlignment="Center" Margin="0,0,8,0"/>
                         <TextBox x:Name="txtMailRecipient" Width="180" MaxLength="64" ToolTip="Saved recipient for experimental mailing; sending requires the separate opt-in."/>
                     </StackPanel>
-                    <TextBlock Margin="0,0,0,8" TextWrapping="Wrap" FontSize="11" Text="Experimental: enable the checkbox, save a recipient, and record the mailbox on the vendor plan the bot will select. Foreground and non-minimized background mail use game-window messages; background interaction is unverified. The recipient field, UI layout, item eligibility and server delivery cannot be independently verified. Wrong settings can mail the wrong items or recipient. Calibrate grid and controls; test with disposable items. One send per trip; later trips may retry uncertain outcomes."/>
+                    <TextBlock Margin="0,0,0,8" TextWrapping="Wrap" FontSize="11" Text="Experimental: enable the checkbox, save a recipient, and record the mailbox on the vendor plan the bot will select. Foreground and non-minimized background mail use game-window messages; background interaction is unverified. The recipient field, UI layout, item eligibility and server delivery cannot be independently verified. Wrong settings can mail the wrong items or recipient. Calibrate grid and controls; test with disposable items. Additional batches require observed bag progress; later trips may retry uncertain outcomes."/>
                 </StackPanel>
 
                 <TextBlock Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2" VerticalAlignment="Center" Margin="0,0,8,8"
@@ -276,7 +276,7 @@
                         <Button Content="Save mail controls" Click="btnSaveMailControls_Click" Height="24" Padding="8,0" Margin="0,0,5,4"/>
                     </WrapPanel>
                     <TextBlock x:Name="lblMailControlsStatus" TextWrapping="Wrap" FontSize="11" Text="Mail controls not recorded in this window."/>
-                    <TextBlock TextWrapping="Wrap" FontSize="11" Text="One send attempt per selling trip; no persistent mail hold or mailbox hover check. The recorded coordinates and recipient focus are not verified. A failed or uncertain send is retried only on a later trip; it may duplicate or misdirect mail."/>
+                    <TextBlock TextWrapping="Wrap" FontSize="11" Text="Each batch has up to 12 item clicks; after observed bag progress the recipient is retyped for the next batch. No persistent mail hold or mailbox hover check. The recorded coordinates, recipient focus and delivery are not verified. Failed or uncertain sends are retried only on a later trip and may duplicate or misdirect mail."/>
                     <Button x:Name="btnMailAttachmentResearch" Content="Mail attachment candidate snapshot" Height="24" Padding="10,0" HorizontalAlignment="Left" Click="btnMailAttachmentResearch_Click"/>
                     <TextBlock TextWrapping="Wrap" Margin="0,4,0,4" Text="70938 only, bot stopped: logs a static mail-code candidate as raw bytes. No clicks or text are sent; it does not verify attachments, recipient, mail state or delivery. Logs may contain sensitive item identifiers."/>
                     <TextBlock Text="Combined bag grid calibration (research only)" FontWeight="SemiBold"/>

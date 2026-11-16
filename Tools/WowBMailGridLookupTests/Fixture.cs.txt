@@ -42,6 +42,20 @@ static class Fixture
             total==3 && preview.Count==3 && preview[0].Candidate==1,"skip a whole group and reach later bags");
         foreach (var slot in preview) excluded.Add(slot.Item);
         Check(L.TryPreviewExcluding(g,"player",600,600,b,excluded,out preview,out total,out _,out _) && total==0 && preview.Count==0,"all remaining excluded");
+        var (multiGrid, multiBags) = Sample();
+        for (int i=0;i<12;i++) multiBags[0].Slots[i] = new WowBGuid((ulong)(100+i), 3);
+        var attempted = new HashSet<WowBGuid>();
+        Check(L.TryPreviewExcluding(multiGrid,"player",600,600,multiBags,attempted,out var first,out total,out _,out _) &&
+            first.Count == 12 && total == 15, "first batch capped at twelve");
+        foreach (var slot in first) attempted.Add(slot.Item);
+        // Simulate partial disappearance: one clicked item remains visible but
+        // is not clicked a second time in the same trip.
+        for (int i=0;i<11;i++) multiBags[0].Slots[i] = default;
+        Check(L.TryPreviewExcluding(multiGrid,"player",600,600,multiBags,attempted,out var next,out total,out _,out _) &&
+            next.Count == 3 && total == 3 && next[0].Candidate == 1, "next batch excludes already clicked item and includes later bags");
+        foreach (var slot in next) { attempted.Add(slot.Item); multiBags[slot.Candidate].Slots[slot.Slot] = default; }
+        Check(L.TryPreviewExcluding(multiGrid,"player",600,600,multiBags,attempted,out next,out total,out _,out _) &&
+            total == 0 && next.Count == 0, "no additional unattempted items");
         b[1].Slots[0]=b[0].Slots[0];
         Check(!L.TryPreview(g,"player",600,600,b,out _,out _,out _,out _),"duplicate item identity rejected");
         (g,b)=Sample();
