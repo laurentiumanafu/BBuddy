@@ -273,6 +273,8 @@ internal static class WowBCombatResearch
                     : "Target-tracked mode: selection changes end the capture.");
                 output.WriteLine("Player and optional selected NPC: unit+0x0000..0x27FF; 256-byte chunks; baseline hex bytes or 32-bit LE changes; unreadable != zero.");
                 output.WriteLine("Reads are non-atomic; game events, effects and other causes can change fields. No keyboard, mouse, Lua or game writes were used.");
+                if (reader.IsExperimental70938)
+                    output.WriteLine("70938 supplied-offset candidates are read from the pool-derived player unit, not the supplied getter; their base equivalence, build and semantics are unverified. Health sanity/reread is not proof of getter equivalence. Qwords are not full GUID128 values. No gameplay decisions use these observations.");
                 if (includeExternalArray)
                     output.WriteLine("External candidate enabled: bounded read-only pointer at player+0x5F0; length, capacity and stride are unverified. Raw data may be sensitive.");
                 if (includeCooldownCandidate)
@@ -290,6 +292,8 @@ internal static class WowBCombatResearch
                     { reason = "state changed before read (" + why + "); last sample discarded"; break; }
                     long started = watch.ElapsedMilliseconds;
                     byte[]?[] playerBytes = ReadWindow(memory, player.UnitAddress);
+                    byte[]? healthCheck = reader.IsExperimental70938
+                        ? memory.ReadBytes64(player.UnitAddress + Styx.Offsets.Wow70707Offsets.HealthCandidateOffset, 16) : null;
                     byte[]?[]? targetBytes = target.HasValue ? ReadWindow(memory, target.Value.UnitAddress) : null;
                     string externalReason = "";
                     ExternalCandidateSample? external = includeExternalArray && !cancel.IsCancellationRequested
@@ -302,6 +306,7 @@ internal static class WowBCombatResearch
                     output.WriteLine("sample=" + i.ToString(CultureInfo.InvariantCulture) + " startMs=" + started.ToString(CultureInfo.InvariantCulture) +
                         " endMs=" + watch.ElapsedMilliseconds.ToString(CultureInfo.InvariantCulture) + " utc=" + DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
                     output.Write(Diff(priorPlayer, playerBytes, "player"));
+                    if (reader.IsExperimental70938) output.WriteLine(WowBPlayerState70938.Format(playerBytes, healthCheck));
                     if (targetBytes != null) output.Write(Diff(priorTarget, targetBytes, "target"));
                     if (cooldown != null) output.WriteLine(cooldown);
                     if (includeExternalArray)

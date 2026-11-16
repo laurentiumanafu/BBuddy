@@ -21,5 +21,19 @@ namespace Styx.Offsets
         internal const ulong ContainerIdentityTableCandidate = 0x6D6A500;
         internal const ulong InventoryLookup = 0x21796E0;
         internal const ulong InventoryHandler = 0x26E1230;
+
+        // User-supplied static leads; getter identity and runtime semantics have
+        // not been independently validated against the pool-derived unit pointer.
+        // Diagnostic use only. The target values are qwords, NOT WowBGuid128.
+        internal const ulong PlayerGetterCandidateRva = 0x1F6EC10;
+        internal const int AutoAttackCandidate = 0x2C9;
+        internal const int CurrentTargetCandidate = 0x2C0;
+        internal const int ShapeshiftFlagsCandidate = 0x2D0;
+        internal const uint ShapeshiftFlagCandidate = 0x10000000;
+        internal const int AttackTargetCandidate = 0x1D40;
+        internal const int ComboPointsCandidate = 0x1E1D;
+        internal const int ShapeshiftCandidate = 0x1EEF;
+        internal const int AttackStateFlagsCandidate = 0x250C;
+        internal const int AttackEffectCandidate = 0x25C8;
     }
 }
