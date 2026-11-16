@@ -11,10 +11,18 @@ namespace Styx.Logic.Pathing;
 internal sealed class WowBTotemAuraCandidate
 {
     private const int ActiveCountOffset = 0x1A60, IdWithinSlot = 0xE8;
+    // Windfury Totem aura ranks on the player. Only 10609 (rank 2) appeared in
+    // a captured 70938 trace labelled "windfury totem effect" (33-slot external
+    // candidate, pointer 0x176927C5F50); 8515 and 10610 are the other published
+    // WoW Forever aura ranks and are inferred, not observed.
+    private const uint WindfuryRank1 = 8515, WindfuryRank2 = 10609, WindfuryRank3 = 10610;
     private readonly HashSet<uint> _ids;
     private WowBTotemAuraCandidate(HashSet<uint> ids) { _ids = ids; }
 
-    internal static int EffectForCast(int castId) => castId == 8160 ? 8162 : castId == 5394 ? 5672 : castId == 5675 ? 5677 : 0;
+    // Windfury Totem cast ranks (Summon), separate from the aura they leave.
+    internal static bool IsWindfuryCast(int castId) => castId == 8512 || castId == 10613 || castId == 10614;
+    internal static int EffectForCast(int castId) => castId == 8160 ? 8162 : castId == 5394 ? 5672 :
+        castId == 5675 ? 5677 : IsWindfuryCast(castId) ? (int)WindfuryRank2 : 0;
     // Rank 3 was observed here; other rank IDs are inferred from spell tables.
     // Presence is experimental, not proof of charges or cast success.
     internal bool LightningShieldActive()
@@ -26,7 +34,10 @@ internal sealed class WowBTotemAuraCandidate
     internal bool? Active(int castId)
     {
         int effect = EffectForCast(castId);
-        return effect == 0 ? (bool?)null : _ids.Contains((uint)effect);
+        if (effect == 0) return (bool?)null;
+        // Any known Windfury aura rank counts as present, so an unknown macro
+        // rank or a later rank-up is not treated as a missing effect.
+        return IsWindfuryCast(castId) ? WindfuryActive() : _ids.Contains((uint)effect);
     }
 
     // The validated slot IDs, for checks this class does not map itself. The
@@ -43,6 +54,11 @@ internal sealed class WowBTotemAuraCandidate
 
     internal bool ManaSpringActive() => _ids.Contains(5677) || _ids.Contains(10491) ||
         _ids.Contains(10493) || _ids.Contains(10494);
+
+    // The macro's Windfury rank is opaque, so treat every mapped aura rank as
+    // the effect being present rather than repeatedly replacing a higher rank.
+    internal bool WindfuryActive() => _ids.Contains(WindfuryRank1) || _ids.Contains(WindfuryRank2) ||
+        _ids.Contains(WindfuryRank3);
 
     // Validate completeness using the separately observed player count. A bad
     // count, duplicate, changed buffer or unsupported header is unknown, not absent.

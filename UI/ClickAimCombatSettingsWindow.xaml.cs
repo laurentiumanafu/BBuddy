@@ -1017,7 +1017,8 @@ namespace CopilotBuddy.UI
                  _shamanTotemOptions.Presses != ClickAimSettings.ShamanTotemMacroPresses ||
                  _shamanTotemOptions.Earth != ClickAimSettings.ShamanTotemEarth ||
                  _shamanTotemOptions.Healing != ClickAimSettings.ShamanTotemHealing ||
-                 _shamanTotemOptions.Mana != ClickAimSettings.ShamanTotemMana))
+                 _shamanTotemOptions.Mana != ClickAimSettings.ShamanTotemMana ||
+                 _shamanTotemOptions.Windfury != ClickAimSettings.ShamanTotemWindfury))
             {
                 System.Windows.MessageBox.Show("Stop the bot before changing the Shaman totem macro.", "Combat settings", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return false;

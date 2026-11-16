@@ -42,6 +42,11 @@ assert quiet_method.count('WowBSealOfTheCrusader.Rank(action.Id) != 0) continue'
 assert 'if (action.Id != preferredSeal) continue;' in combat_method
 assert 'SealReplacementSafe(bar, sealIds)' in combat_method and 'ActiveAuraIds(memory, reader, expectedPlayer' in combat_method
 assert 'PreferredSeal(ClickAimCombat.ReadBar(reader)) != buff.Id' in combat_method
+# Windfury Totem: highest eligible rank only, combat-only like the other totems.
+assert 'WowBWindfuryTotem.ManaEstimate(spellId)' in controller and '10614 => 3' in controller
+assert 'if (WowBWindfuryTotem.Rank(action.Id) != 0 && action.Id != preferredWindfury) continue;' in combat_method
+assert 'PreferredWindfury(ClickAimCombat.ReadBar(reader)) != buff.Id' in combat_method
+assert quiet_method.count('WowBTotemAuraCandidate.EffectForCast(action.Id) != 0) continue') == 2
 inline = controller[controller.index('internal sealed class WowBInlineAuraCandidate'):]
 assert 'length > InlineMaxSlots' in inline and 'WowBSealOfTheCrusader.Rank((int)_id[i]) != 0' in inline
 project = '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><Nullable>enable</Nullable></PropertyGroup></Project>'

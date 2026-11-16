@@ -269,6 +269,8 @@ internal static class ClickAimCombat
         { 8017, "Rockbiter Weapon" }, { 8018, "Rockbiter Weapon" }, { 8019, "Rockbiter Weapon" },
         // Only the ranks whose player effects were observed on 70862.
         { 8160, "Strength of Earth Totem" }, { 5394, "Healing Stream Totem" }, { 5675, "Mana Spring Totem" },
+        // Windfury Totem cast ranks; only the rank 2 effect was observed.
+        { 8512, "Windfury Totem" }, { 10613, "Windfury Totem" }, { 10614, "Windfury Totem" },
         { 5730, "Stoneclaw Totem" }, { 6390, "Stoneclaw Totem" }, { 6391, "Stoneclaw Totem" },
         { 6392, "Stoneclaw Totem" }, { 10427, "Stoneclaw Totem" }, { 10428, "Stoneclaw Totem" },
         { 17364, "Stormstrike" },
@@ -394,6 +396,7 @@ internal static class ClickAimCombat
         { "Demon Skin", ClickAimSpellRole.Buff }, { "Lightning Shield", ClickAimSpellRole.Buff },
         { "Rockbiter Weapon", ClickAimSpellRole.Buff }, { "Battle Shout", ClickAimSpellRole.Buff },
         { "Strength of Earth Totem", ClickAimSpellRole.Buff }, { "Healing Stream Totem", ClickAimSpellRole.Buff }, { "Mana Spring Totem", ClickAimSpellRole.Buff },
+        { "Windfury Totem", ClickAimSpellRole.Buff },
         { "Devotion Aura", ClickAimSpellRole.Buff }, { "Seal of Righteousness", ClickAimSpellRole.Buff },
         { "Seal of the Crusader", ClickAimSpellRole.Buff },
         { "Aspect of the Hawk", ClickAimSpellRole.Buff }, { "Endurance", ClickAimSpellRole.Buff },

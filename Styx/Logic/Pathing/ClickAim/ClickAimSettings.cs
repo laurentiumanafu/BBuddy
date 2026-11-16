@@ -72,11 +72,11 @@ internal static class ClickAimSettings
     // 70862 only. The user supplies an opaque, tested cast-sequence macro.
     public static bool UseShamanTotemMacro;
     public static int ShamanTotemMacroKey = 2, ShamanTotemMacroPresses = 2;
-    public static bool ShamanTotemEarth, ShamanTotemHealing, ShamanTotemMana;
+    public static bool ShamanTotemEarth, ShamanTotemHealing, ShamanTotemMana, ShamanTotemWindfury;
     internal static bool ShamanTotemMacroValid()
         => UseShamanTotemMacro && ShamanTotemMacroKey >= 1 && ShamanTotemMacroKey <= 9 &&
            ShamanTotemMacroPresses >= 1 && ShamanTotemMacroPresses <= 9 &&
-           (ShamanTotemEarth || ShamanTotemHealing || ShamanTotemMana) &&
+           (ShamanTotemEarth || ShamanTotemHealing || ShamanTotemMana || ShamanTotemWindfury) &&
            !(ShamanTotemHealing && ShamanTotemMana) &&
            !(UseKeyOneStartAttackMacro && ShamanTotemMacroKey == 1);
 
@@ -187,7 +187,7 @@ internal static class ClickAimSettings
         UseDamageOverTime = true;
         UseBuffs = true;
         UseBuffsInCombat = false;
-        UseShamanTotemMacro = ShamanTotemEarth = ShamanTotemHealing = ShamanTotemMana = false;
+        UseShamanTotemMacro = ShamanTotemEarth = ShamanTotemHealing = ShamanTotemMana = ShamanTotemWindfury = false;
         ShamanTotemMacroKey = 2; ShamanTotemMacroPresses = 2;
         FoodSlot = 0;
         DrinkSlot = 0;
@@ -215,7 +215,7 @@ internal static class ClickAimSettings
         UseTownReturn = false;
         ExperimentalAutoMail = false;
         MailRecipient = "";
-        UseShamanTotemMacro = ShamanTotemEarth = ShamanTotemHealing = ShamanTotemMana = false;
+        UseShamanTotemMacro = ShamanTotemEarth = ShamanTotemHealing = ShamanTotemMana = ShamanTotemWindfury = false;
         ShamanTotemMacroKey = 2; ShamanTotemMacroPresses = 2;
         string path;
         try { path = Path; }
@@ -331,6 +331,7 @@ internal static class ClickAimSettings
         if (string.Equals(key, "ShamanTotemEarth", StringComparison.OrdinalIgnoreCase)) { ShamanTotemEarth = flag; return true; }
         if (string.Equals(key, "ShamanTotemHealing", StringComparison.OrdinalIgnoreCase)) { ShamanTotemHealing = flag; return true; }
         if (string.Equals(key, "ShamanTotemMana", StringComparison.OrdinalIgnoreCase)) { ShamanTotemMana = flag; return true; }
+        if (string.Equals(key, "ShamanTotemWindfury", StringComparison.OrdinalIgnoreCase)) { ShamanTotemWindfury = flag; return true; }
         if (string.Equals(key, "FoodSlot", StringComparison.OrdinalIgnoreCase))
         {
             if (hasNumber) FoodSlot = number;
@@ -455,6 +456,7 @@ internal static class ClickAimSettings
         text.AppendLine("ShamanTotemEarth = " + (ShamanTotemEarth ? "true" : "false"));
         text.AppendLine("ShamanTotemHealing = " + (ShamanTotemHealing ? "true" : "false"));
         text.AppendLine("ShamanTotemMana = " + (ShamanTotemMana ? "true" : "false"));
+        text.AppendLine("ShamanTotemWindfury = " + (ShamanTotemWindfury ? "true" : "false"));
         text.AppendLine("FoodSlot = " + FoodSlot.ToString(CultureInfo.InvariantCulture));
         text.AppendLine("DrinkSlot = " + DrinkSlot.ToString(CultureInfo.InvariantCulture));
         text.AppendLine("DotRefreshSeconds = " + DotRefreshSeconds.ToString(CultureInfo.InvariantCulture));

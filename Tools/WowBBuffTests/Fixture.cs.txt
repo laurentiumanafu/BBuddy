@@ -76,11 +76,11 @@ namespace Styx.Logic.Pathing
     }
     static class ClickAimSettings {
         public static bool UseBuffs = true, UseBuffsInCombat, UseShamanTotemMacro, UseKeyOneStartAttackMacro;
-        public static bool ShamanTotemEarth, ShamanTotemHealing, ShamanTotemMana;
+        public static bool ShamanTotemEarth, ShamanTotemHealing, ShamanTotemMana, ShamanTotemWindfury;
         public static int ShamanTotemMacroKey=2, ShamanTotemMacroPresses=2;
         public static ClickAimRotationClass RotationClass = ClickAimRotationClass.Auto;
         public static bool ShamanTotemMacroValid() => UseShamanTotemMacro && ShamanTotemMacroKey >= 1 && ShamanTotemMacroKey <= 9 &&
-            ShamanTotemMacroPresses >= 1 && ShamanTotemMacroPresses <= 9 && (ShamanTotemEarth || ShamanTotemHealing || ShamanTotemMana) &&
+            ShamanTotemMacroPresses >= 1 && ShamanTotemMacroPresses <= 9 && (ShamanTotemEarth || ShamanTotemHealing || ShamanTotemMana || ShamanTotemWindfury) &&
             !(ShamanTotemHealing && ShamanTotemMana) && !(UseKeyOneStartAttackMacro && ShamanTotemMacroKey==1);
     }
     static class ClickAimClassRotation { public static ClickAimRotationClass Resolve(ClickAimRotationClass type, List<ClickAimAction> bar) => type; }
@@ -192,7 +192,7 @@ namespace Styx.Logic.Pathing
             WowBCombatResearch.Data = null; WowBCombatResearch.OnRead = null; WowBCombatResearch.StopDuringRead = WowBCombatResearch.CombatEndsDuringRead = false;
             ClickAimSettings.UseBuffs = true; ClickAimSettings.UseBuffsInCombat = false; ClickAimSettings.RotationClass = ClickAimRotationClass.Auto;
             ClickAimSettings.UseShamanTotemMacro = ClickAimSettings.UseKeyOneStartAttackMacro = false;
-            ClickAimSettings.ShamanTotemEarth = ClickAimSettings.ShamanTotemHealing = ClickAimSettings.ShamanTotemMana = false;
+            ClickAimSettings.ShamanTotemEarth = ClickAimSettings.ShamanTotemHealing = ClickAimSettings.ShamanTotemMana = ClickAimSettings.ShamanTotemWindfury = false;
             ClickAimSettings.ShamanTotemMacroKey = 2; ClickAimSettings.ShamanTotemMacroPresses = 2;
             GrindRunner.Combat = ClickAimAbort.Requested = RouteRunner.StopRequested = false;
             GrindRunner.CombatReadable = WowBGrindFactions.BarSafe = WowBGrindFactions.GhostReadable = ClickAimInput.F1Works = true;
@@ -587,6 +587,32 @@ namespace Styx.Logic.Pathing
             TotemBytes(777, 5677); now = 10000; Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "Mana Spring present");
             TotemBytes(777); now = 20000; ClickAimCombat.Bar.Add(Action(5394, 3));
             Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "conflicting Water totems withheld");
+            // Windfury Totem: three cast ranks and one observed player
+            // effect. Only the highest eligible rank is attempted, and any
+            // mapped aura rank counts as present. Synthetic contents only.
+            Reset(); controller.Reset(); now = 0; ObjectManager.WowB!.IsExperimental70862 = true;
+            ClickAimCombat.Bar = new List<ClickAimAction> { Action(8512, 2), Action(10613, 3), Action(10614, 4) };
+            TotemBytes(777); GrindRunner.Combat = true; ObjectManager.WowB.Power = 250;
+            combatPlayer = ObjectManager.WowB.Player; ClickAimSettings.UseBuffsInCombat = true;
+            Check(controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe) && ClickAimInput.Keys.Count == 1 &&
+                  ClickAimInput.Keys[0] == 0x34, "highest Windfury rank is attempted first");
+            now = 9999; Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "Windfury retry wait");
+            ObjectManager.WowB.Power = 249; now = 10000;
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "Windfury rank 3 uses its own cost estimate");
+            ObjectManager.WowB.Power = 250;
+            Check(controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe) && ClickAimInput.Keys.Count == 2,
+                "absent Windfury retries after ten seconds");
+            foreach (uint rankEffect in new uint[] { 8515, 10609, 10610 })
+            {
+                TotemBytes(777, rankEffect); now += 20000;
+                Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "mapped Windfury aura rank suppresses the cast");
+            }
+            TotemBytes(777); now += 20000; ClickAimCombat.Bar.RemoveAt(2); ClickAimCombat.Bar.RemoveAt(1);
+            ObjectManager.WowB.Power = 114;
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "Windfury rank 1 uses its own cost estimate");
+            ObjectManager.WowB.Power = 115;
+            Check(controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe) && ClickAimInput.Keys.Count == 3,
+                "remaining Windfury rank is attempted");
             // User-controlled macro: two individually guarded presses, then 10s from last key.
             Reset(); controller.Reset(); now = 0; ObjectManager.WowB!.IsExperimental70862 = true; GrindRunner.Combat = true;
             combatPlayer = ObjectManager.WowB.Player; ClickAimSettings.UseBuffsInCombat = true;
@@ -619,6 +645,24 @@ namespace Styx.Logic.Pathing
             Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "unknown macro rank uses highest Mana Spring estimate");
             ObjectManager.WowB.Power = 100;
             Check(controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "missing known Mana Spring ranks allows guarded macro");
+            // Windfury Totem effect: 10609 observed once in a 70938 capture;
+            // 8515 and 10610 are published ranks, not seen in any trace.
+            Reset(); controller.Reset(); now = 0; ObjectManager.WowB!.IsExperimental70938 = true; GrindRunner.Combat = true;
+            combatPlayer = ObjectManager.WowB.Player; ClickAimSettings.UseBuffsInCombat = ClickAimSettings.UseShamanTotemMacro = true;
+            ClickAimSettings.ShamanTotemWindfury = true; ObjectManager.WowB.RawBar[1] = 123; ClickAimCombat.Bar.Clear();
+            ObjectManager.WowB.Power = 300; TotemBytes(777);
+            Check(controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe) && ClickAimInput.Keys.Count == 1,
+                "missing Windfury effect permits guarded macro");
+            foreach (uint rankEffect in new uint[] { 8515, 10609, 10610 })
+            {
+                TotemBytes(777, rankEffect); now += 12000;
+                Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "mapped Windfury rank suppresses macro");
+            }
+            TotemBytes(777); now += 12000; ObjectManager.WowB.Power = 249;
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "Windfury uses the highest published rank cost");
+            ObjectManager.WowB.Power = 250;
+            Check(controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe) && ClickAimInput.Keys.Count == 2,
+                "guarded macro at estimated Windfury mana");
             Reset(); controller.Reset(); now = 0; ObjectManager.WowB!.IsExperimental70862 = true; GrindRunner.Combat = true;
             combatPlayer = ObjectManager.WowB.Player; ClickAimSettings.UseBuffsInCombat = true; ClickAimSettings.UseShamanTotemMacro = true;
             ClickAimSettings.ShamanTotemHealing = ClickAimSettings.ShamanTotemMana = true; ObjectManager.WowB.RawBar[1] = 123;

@@ -226,6 +226,8 @@ internal static class RotationTests
             ClickAimSettings.Apply("ShamanTotemMacroKey", "3"); ClickAimSettings.Apply("ShamanTotemMacroPresses", "2");
             ClickAimSettings.Apply("ShamanTotemEarth", "true"); ClickAimSettings.Apply("ShamanTotemMana", "true");
             Check(ClickAimSettings.ShamanTotemMacroValid(), "valid Earth and Mana Spring macro");
+            ClickAimSettings.Apply("ShamanTotemWindfury", "true");
+            Check(ClickAimSettings.ShamanTotemMacroValid(), "Windfury uses the Air slot and adds no conflict");
             ClickAimSettings.Apply("ShamanTotemHealing", "true");
             Check(!ClickAimSettings.ShamanTotemMacroValid(), "two Water effects are rejected");
             ClickAimSettings.Apply("ShamanTotemHealing", "false");
@@ -243,7 +245,8 @@ internal static class RotationTests
                 Check(ClickAimSettings.RotationClass == ClickAimRotationClass.Shaman, "persisted setting round-trip");
                 Check(ClickAimSettings.ShamanTotemMacroValid() && ClickAimSettings.ShamanTotemMacroKey == 3 &&
                       ClickAimSettings.ShamanTotemMacroPresses == 2 && ClickAimSettings.ShamanTotemEarth &&
-                      ClickAimSettings.ShamanTotemMana && !ClickAimSettings.ShamanTotemHealing, "totem macro settings round-trip");
+                      ClickAimSettings.ShamanTotemMana && ClickAimSettings.ShamanTotemWindfury &&
+                      !ClickAimSettings.ShamanTotemHealing, "totem macro settings round-trip");
             }
             finally
             {

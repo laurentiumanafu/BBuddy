@@ -15,10 +15,10 @@ class Macro(unittest.TestCase):
  def test_dialog_and_validation(self):
   ET.fromstring(U); ET.fromstring(D)
   for t in ('btnShamanTotemMacro_Click','Shaman totem macro…'):self.assertIn(t,U)
-  for t in ('chkEnabled','cmbKey','cmbPresses','chkEarth','chkHealing','chkMana','Click="Ok_Click"'):self.assertIn(t,D)
+  for t in ('chkEnabled','cmbKey','cmbPresses','chkEarth','chkHealing','chkMana','chkWindfury','Click="Ok_Click"'):self.assertIn(t,D)
   self.assertIn('healing && mana',DC);self.assertIn('key == 1 && _keyOneAttack',DC)
   self.assertIn('ClickAimUi.Running || ClickAimUi.Paused',P);self.assertIn('_shamanTotemOptions.Apply()',P)
-  for key in ('UseShamanTotemMacro','ShamanTotemMacroKey','ShamanTotemMacroPresses','ShamanTotemEarth','ShamanTotemHealing','ShamanTotemMana'):
+  for key in ('UseShamanTotemMacro','ShamanTotemMacroKey','ShamanTotemMacroPresses','ShamanTotemEarth','ShamanTotemHealing','ShamanTotemMana','ShamanTotemWindfury'):
    self.assertGreaterEqual(S.count('"'+key+'"'),1);self.assertIn('"'+key+' = "',S)
   self.assertIn('!(ShamanTotemHealing && ShamanTotemMana)',S);self.assertIn('UseKeyOneStartAttackMacro && ShamanTotemMacroKey == 1',S)
  def test_opaque_macro_reserved_and_safety(self):
@@ -47,10 +47,15 @@ class Macro(unittest.TestCase):
   self.assertIn('optional buffs deferred while closing',G)
  def test_only_selected_effects(self):
   for t in ('(mask & 1) != 0 && aura.Active(8160) == false','(mask & 2) != 0 && aura.Active(5394) == false',
-            '(mask & 4) != 0 && !aura.ManaSpringActive()'):
+            '(mask & 4) != 0 && !aura.ManaSpringActive()','(mask & 8) != 0 && !aura.WindfuryActive()'):
    self.assertIn(t,B)
+  self.assertIn('(ClickAimSettings.ShamanTotemWindfury ? 8 : 0)',B)
+  self.assertIn('(mask & 8) != 0 ? 250U',B)
+  self.assertIn('WowBWindfuryTotem.Rank(id) != 0 && (mask & 8) != 0',B)
   T=get('Styx/Logic/Pathing/ClickAim/WowBTotemAuraCandidate.cs')
   for effect in ('5677','10491','10493','10494'): self.assertIn('_ids.Contains('+effect+')',T)
+  for effect in ('WindfuryRank1','WindfuryRank2','WindfuryRank3'): self.assertIn('_ids.Contains('+effect+')',T)
+  self.assertIn('WindfuryRank1 = 8515, WindfuryRank2 = 10609, WindfuryRank3 = 10610',T)
   self.assertIn('(mask & 4) != 0 ? 100U',B)
   self.assertIn('inline header rejected (pointer=',B)
   doc=get('TOTEM_BUFFS_70862.md')

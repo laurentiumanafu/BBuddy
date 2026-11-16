@@ -19,6 +19,7 @@ internal sealed class ClickAimBuffController
     private static uint CombatManaEstimate(int spellId) => spellId == 168 ? 80U :
         spellId == 8160 ? 65U : spellId == 5394 ? 40U : spellId == 5675 ? 40U :
         WowBSealOfTheCrusader.ManaEstimate(spellId) != 0 ? WowBSealOfTheCrusader.ManaEstimate(spellId) :
+        WowBWindfuryTotem.ManaEstimate(spellId) != 0 ? WowBWindfuryTotem.ManaEstimate(spellId) :
         WowBLightningShield.ManaEstimate(spellId);
     private readonly ClickAimBuffSchedule _schedule = new ClickAimBuffSchedule();
     private readonly Func<long> _clock;
@@ -40,7 +41,8 @@ internal sealed class ClickAimBuffController
             "; buffs=" + ClickAimSettings.UseBuffs + "; combat buffs=" + ClickAimSettings.UseBuffsInCombat +
             "; key=" + ClickAimSettings.ShamanTotemMacroKey + "; presses=" + ClickAimSettings.ShamanTotemMacroPresses +
             "; Earth=" + ClickAimSettings.ShamanTotemEarth + "; Healing Stream=" + ClickAimSettings.ShamanTotemHealing +
-            "; Mana Spring=" + ClickAimSettings.ShamanTotemMana + "; key 1 attack=" + ClickAimSettings.UseKeyOneStartAttackMacro +
+            "; Mana Spring=" + ClickAimSettings.ShamanTotemMana + "; Windfury=" + ClickAimSettings.ShamanTotemWindfury +
+            "; key 1 attack=" + ClickAimSettings.UseKeyOneStartAttackMacro +
             "; valid=" + ClickAimSettings.ShamanTotemMacroValid() + " (binding and macro contents unverified)");
     }
 
@@ -140,6 +142,16 @@ internal sealed class ClickAimBuffController
         int best = 0;
         foreach (ClickAimAction action in bar)
             if (Eligible(action) && WowBSealOfTheCrusader.Rank(action.Id) > WowBSealOfTheCrusader.Rank(best)) best = action.Id;
+        return best;
+    }
+
+    // Three Windfury Totem ranks are mapped. Choose the highest eligible one
+    // so a lower rank on the bar cannot replace a higher-rank effect.
+    private static int PreferredWindfury(List<ClickAimAction> bar)
+    {
+        int best = 0;
+        foreach (ClickAimAction action in bar)
+            if (Eligible(action) && WowBWindfuryTotem.Rank(action.Id) > WowBWindfuryTotem.Rank(best)) best = action.Id;
         return best;
     }
 
@@ -305,15 +317,18 @@ internal sealed class ClickAimBuffController
         if (!ClickAimSettings.ShamanTotemMacroValid()) return 0;
         return (ClickAimSettings.ShamanTotemEarth ? 1 : 0) |
                (ClickAimSettings.ShamanTotemHealing ? 2 : 0) |
-               (ClickAimSettings.ShamanTotemMana ? 4 : 0);
+               (ClickAimSettings.ShamanTotemMana ? 4 : 0) |
+               (ClickAimSettings.ShamanTotemWindfury ? 8 : 0);
     }
     private static bool MacroMissing(WowBTotemAuraCandidate aura, int mask)
         => ((mask & 1) != 0 && aura.Active(8160) == false) ||
            ((mask & 2) != 0 && aura.Active(5394) == false) ||
-           ((mask & 4) != 0 && !aura.ManaSpringActive());
+           ((mask & 4) != 0 && !aura.ManaSpringActive()) ||
+           ((mask & 8) != 0 && !aura.WindfuryActive());
     private static bool MacroHandles(int mask, int id)
         => (id == 8160 && (mask & 1) != 0) ||
-           ((id == 5394 || id == 5675) && (mask & 6) != 0);
+           ((id == 5394 || id == 5675) && (mask & 6) != 0) ||
+           (WowBWindfuryTotem.Rank(id) != 0 && (mask & 8) != 0);
     private static bool ConflictingWater(List<ClickAimAction> bar)
         => bar.Exists(action => action.Id == 5394 && Eligible(action)) && bar.Exists(action => action.Id == 5675 && Eligible(action));
 
@@ -335,8 +350,9 @@ internal sealed class ClickAimBuffController
         if (starting ? now < _macroRetryAt : now < _macroNextPressAt)
         { ReportMacroState(starting ? "10-second retry delay" : "burst spacing"); return false; }
         // The macro's rank and next step are opaque. Mana Spring's known
-        // Forever ranks cost up to 100; use that conservative estimate if selected.
-        uint minimumMana = (mask & 4) != 0 ? 100U : (mask & 1) != 0 ? 65U : 40U;
+        // Forever ranks cost up to 100 and Windfury's up to 250; use the
+        // highest published cost of the selected group, as before.
+        uint minimumMana = (mask & 8) != 0 ? 250U : (mask & 4) != 0 ? 100U : (mask & 1) != 0 ? 65U : 40U;
         if (!CombatPlayerSafe(memory, reader, hwnd, stopped, player, out uint map, out uint mana))
         { ReportMacroState("player/combat/health/ghost/map or session guard not confirmed"); return false; }
         if (mana < minimumMana)
@@ -397,6 +413,7 @@ internal sealed class ClickAimBuffController
             bool conflictWater = reader.Uses70862Features && ConflictingWater(bar) && (macroMask & 6) == 0;
             int preferredShield = reader.Uses70862Features ? PreferredShield(bar) : 0;
             int preferredSeal = PreferredSeal(bar);
+            int preferredWindfury = reader.Uses70862Features ? PreferredWindfury(bar) : 0;
             if (!bar.Exists(action => CombatManaEstimate(action.Id) > 0 && Eligible(action) &&
                 (WowBTotemAuraCandidate.EffectForCast(action.Id) == 0 || TotemSupported(reader, action)))) return false;
             if (!CombatPlayerSafe(memory, reader, hwnd, stopped, expectedPlayer, out uint map, out uint mana) || !targetSafe()) return false;
@@ -422,6 +439,9 @@ internal sealed class ClickAimBuffController
                     MacroHandles(macroMask, action.Id) || (conflictWater && (action.Id == 5394 || action.Id == 5675))) continue;
                 if (TotemSupported(reader, action))
                 {
+                    // Only the highest mapped Windfury rank is attempted, so a
+                    // lower rank on the bar cannot replace a stronger effect.
+                    if (WowBWindfuryTotem.Rank(action.Id) != 0 && action.Id != preferredWindfury) continue;
                     ReportTotem(action, totemAura);
                     if (TotemManaEnough(reader, expectedPlayer, action) && TotemDue(action, totemAura, _clock())) { buff = action; break; }
                     continue;
@@ -479,6 +499,8 @@ internal sealed class ClickAimBuffController
                 !SameSlot(buff, ClickAimCombat.ReadBar(reader)) || (shieldAction && PreferredShield(ClickAimCombat.ReadBar(reader)) != buff.Id) ||
                 (sealAction && (PreferredSeal(ClickAimCombat.ReadBar(reader)) != buff.Id ||
                     !SealReplacementSafe(ClickAimCombat.ReadBar(reader), sealIdsNow))) ||
+                (totem && WowBWindfuryTotem.Rank(buff.Id) != 0 &&
+                    PreferredWindfury(ClickAimCombat.ReadBar(reader)) != buff.Id) ||
                 ((totem || shieldAction) && !TotemManaEnough(reader, expectedPlayer, buff)) || !targetSafe() || !ClickAimSettings.UseBuffsInCombat ||
                 !Allowed(memory, reader, hwnd, stopped) || !_schedule.PastAttemptBackoff(buff.Id, _clock(), CombatRetryMs)) return false;
             ClickAimInput.TapKey(hwnd, buff.KeyVk, 40);
@@ -736,4 +758,13 @@ internal static class WowBLightningShield
     {
         324 => 60U, 325 => 80U, 905 => 125U, 945 => 180U, 8134 => 240U, 10431 => 305U, 10432 => 370U, _ => 0U
     };
+}
+
+// Windfury Totem cast ranks from the published WoW Forever tables. Only the
+// rank 2 player effect (10609) was observed, in a single 70938 trace; the
+// other cast ranks, their costs and their effect IDs are unverified here.
+internal static class WowBWindfuryTotem
+{
+    internal static int Rank(int id) => id switch { 8512 => 1, 10613 => 2, 10614 => 3, _ => 0 };
+    internal static uint ManaEstimate(int id) => Rank(id) switch { 1 => 115U, 2 => 175U, 3 => 250U, _ => 0U };
 }

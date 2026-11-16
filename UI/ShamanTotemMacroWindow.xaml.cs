@@ -6,18 +6,20 @@ namespace CopilotBuddy.UI
 {
     internal sealed class ShamanTotemMacroOptions
     {
-        internal bool Enabled, Earth, Healing, Mana;
+        internal bool Enabled, Earth, Healing, Mana, Windfury;
         internal int Key, Presses;
         internal static ShamanTotemMacroOptions Current() => new ShamanTotemMacroOptions {
             Enabled = ClickAimSettings.UseShamanTotemMacro, Key = ClickAimSettings.ShamanTotemMacroKey,
             Presses = ClickAimSettings.ShamanTotemMacroPresses, Earth = ClickAimSettings.ShamanTotemEarth,
-            Healing = ClickAimSettings.ShamanTotemHealing, Mana = ClickAimSettings.ShamanTotemMana
+            Healing = ClickAimSettings.ShamanTotemHealing, Mana = ClickAimSettings.ShamanTotemMana,
+            Windfury = ClickAimSettings.ShamanTotemWindfury
         };
         internal void Apply()
         {
             ClickAimSettings.UseShamanTotemMacro = Enabled; ClickAimSettings.ShamanTotemMacroKey = Key;
             ClickAimSettings.ShamanTotemMacroPresses = Presses; ClickAimSettings.ShamanTotemEarth = Earth;
             ClickAimSettings.ShamanTotemHealing = Healing; ClickAimSettings.ShamanTotemMana = Mana;
+            ClickAimSettings.ShamanTotemWindfury = Windfury;
         }
     }
 
@@ -33,6 +35,7 @@ namespace CopilotBuddy.UI
             cmbPresses.SelectedItem = options.Presses >= 1 && options.Presses <= 9 ? options.Presses : 2;
             chkEnabled.IsChecked = options.Enabled; chkEarth.IsChecked = options.Earth;
             chkHealing.IsChecked = options.Healing; chkMana.IsChecked = options.Mana;
+            chkWindfury.IsChecked = options.Windfury;
         }
         private void Ok_Click(object sender, RoutedEventArgs e)
         {
@@ -40,14 +43,15 @@ namespace CopilotBuddy.UI
             int presses = cmbPresses.SelectedItem is int n ? n : 0;
             bool enabled = chkEnabled.IsChecked == true, earth = chkEarth.IsChecked == true;
             bool healing = chkHealing.IsChecked == true, mana = chkMana.IsChecked == true;
+            bool windfury = chkWindfury.IsChecked == true;
             string error = healing && mana ? "Healing Stream and Mana Spring both use the Water slot. Choose only one." :
-                enabled && !earth && !healing && !mana ? "Select at least one totem effect." :
+                enabled && !earth && !healing && !mana && !windfury ? "Select at least one totem effect." :
                 enabled && (key == 0 || presses == 0) ? "Choose a key and a number of presses." :
                 enabled && key == 1 && _keyOneAttack ? "Key 1 is already reserved for Start Attack. Choose another key." : "";
             if (error.Length != 0)
             { System.Windows.MessageBox.Show(error, "Shaman totem macro", MessageBoxButton.OK, MessageBoxImage.Warning); return; }
             Result = new ShamanTotemMacroOptions { Enabled = enabled, Key = key, Presses = presses,
-                Earth = earth, Healing = healing, Mana = mana };
+                Earth = earth, Healing = healing, Mana = mana, Windfury = windfury };
             DialogResult = true;
         }
     }
