@@ -36,6 +36,14 @@ combat_method = controller[controller.index('    internal bool TryApplyInCombat(
 assert '0x70' not in combat_method and 'TabVk' not in combat_method
 assert 'CombatManaEstimate(action.Id)' in combat_method and 'reader.IsExperimental70707' in combat_method
 assert '324 => 60U' in controller and 'spellId == 168' in controller
+# Seal of the Crusader: combat-only, rank-aware, never replacing a managed seal.
+assert 'WowBSealOfTheCrusader.ManaEstimate(spellId)' in controller and '21082 => 1' in controller and '20308 => 6' in controller
+assert quiet_method.count('WowBSealOfTheCrusader.Rank(action.Id) != 0) continue') == 1
+assert 'if (action.Id != preferredSeal) continue;' in combat_method
+assert 'SealReplacementSafe(bar, aura)' in combat_method
+assert 'PreferredSeal(ClickAimCombat.ReadBar(reader)) != buff.Id' in combat_method
+inline = controller[controller.index('internal sealed class WowBInlineAuraCandidate'):]
+assert 'length > InlineMaxSlots' in inline and 'WowBSealOfTheCrusader.Rank((int)_id[i]) != 0' in inline
 project = '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><Nullable>enable</Nullable></PropertyGroup></Project>'
 with tempfile.TemporaryDirectory(prefix='wowb-buff-tests-') as directory:
     directory = Path(directory)

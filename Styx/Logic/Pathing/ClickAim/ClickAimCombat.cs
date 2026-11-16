@@ -280,6 +280,11 @@ internal static class ClickAimCombat
         { 19750, "Flash of Light" }, { 19939, "Flash of Light" }, { 19940, "Flash of Light" },
         { 19941, "Flash of Light" }, { 19942, "Flash of Light" }, { 19943, "Flash of Light" },
         { 20165, "Seal of Righteousness" }, { 20166, "Seal of Righteousness" },
+        // WoW Forever Paladin ranks; the combat-only aura-checking buff path
+        // reads these by ID, not by name.
+        { 21082, "Seal of the Crusader" }, { 20162, "Seal of the Crusader" },
+        { 20305, "Seal of the Crusader" }, { 20306, "Seal of the Crusader" },
+        { 20307, "Seal of the Crusader" }, { 20308, "Seal of the Crusader" },
         { 20271, "Judgement" }, { 853, "Hammer of Justice" }, { 465, "Devotion Aura" },
         { 35395, "Crusader Strike" },
 
@@ -390,6 +395,7 @@ internal static class ClickAimCombat
         { "Rockbiter Weapon", ClickAimSpellRole.Buff }, { "Battle Shout", ClickAimSpellRole.Buff },
         { "Strength of Earth Totem", ClickAimSpellRole.Buff }, { "Healing Stream Totem", ClickAimSpellRole.Buff }, { "Mana Spring Totem", ClickAimSpellRole.Buff },
         { "Devotion Aura", ClickAimSpellRole.Buff }, { "Seal of Righteousness", ClickAimSpellRole.Buff },
+        { "Seal of the Crusader", ClickAimSpellRole.Buff },
         { "Aspect of the Hawk", ClickAimSpellRole.Buff }, { "Endurance", ClickAimSpellRole.Buff },
         { "Nature Resistance", ClickAimSpellRole.Buff },
 

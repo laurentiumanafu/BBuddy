@@ -166,6 +166,24 @@ namespace Styx.Logic.Pathing
             Write32(data, 0x94C, 600000); Write32(data, 0x950, 0x01091C62);
             return data;
         }
+        // Observed 70938 Paladin inline layout: nine slots, six occupied, and
+        // the traced Seal of the Crusader appearing in slot 6 with a 30000 ms
+        // duration word. Synthetic only; it validates the reader, not a cast.
+        private static byte[] PaladinCandidate(uint clock = 12839654, bool seal = false)
+        {
+            byte[] data = new byte[0x1624];
+            Write64(data, 0x5F0, 0x20608); Write64(data, 0x5F8, 9); Write64(data, 0x600, 0x8000000000000010UL);
+            Write32(data, 0x1C10, clock);
+            uint[] ids = { 20598, 20597, 460939, 19740, 1304678, 465 };
+            for (int i = 0; i < ids.Length; i++) Write32(data, 0x6F0 + i * 0x128, ids[i]);
+            Write32(data, 0x1A60, 6);
+            if (!seal) return data;
+            Write32(data, 0x6F0 + 6 * 0x128, 21082);
+            Write32(data, 0x6F0 + 6 * 0x128 + 12, 30000);
+            Write32(data, 0x6F0 + 6 * 0x128 + 16, unchecked(clock + 24519));
+            Write32(data, 0x1A60, 7);
+            return data;
+        }
         private static void Reset()
         {
             ObjectManager.Wow = new Memory(); ObjectManager.WowB = new WowBReader { Selected = new WowBGuid(8) };
@@ -281,7 +299,7 @@ namespace Styx.Logic.Pathing
             Check(controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 1 && ClickAimInput.Keys[0] == 0x33,
                   "Rockbiter retains thirty-minute fallback, independent of active Shield");
             Write64(ObjectManager.Wow.AuraBytes!, 0x5F8, 10);
-            Check(WowBInlineAuraCandidate.Capture(ObjectManager.Wow, ObjectManager.WowB.Player) == null, "unobserved container length is unknown");
+            Check(WowBInlineAuraCandidate.Capture(ObjectManager.Wow, ObjectManager.WowB.Player) == null, "container length that breaks occupancy agreement is unknown");
             Write64(ObjectManager.Wow.AuraBytes!, 0x5F8, 11); Write32(ObjectManager.Wow.AuraBytes!, 0x1A60, 11);
             Check(WowBInlineAuraCandidate.Capture(ObjectManager.Wow, ObjectManager.WowB.Player) == null, "out-of-bounds active count is unknown");
             Reset(); controller.Reset(); now = 0;
@@ -743,6 +761,53 @@ namespace Styx.Logic.Pathing
             Check(Styx.Helpers.Logging.Lines.Count == lines, "repeated guard reason is rate limited");
             now = 15000; controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe);
             Check(Styx.Helpers.Logging.Lines.Count == lines + 1, "persistent guard reason eventually repeats");
+            // Paladin Seal of the Crusader: the 70938 trace showed a nine-slot
+            // inline layout with six or seven occupied, not the earlier 11/12.
+            Reset(); controller.Reset(); now = 0; ObjectManager.WowB!.IsExperimental70938 = true;
+            ObjectManager.Wow!.AuraBytes = PaladinCandidate(seal: true);
+            var sealAura = WowBInlineAuraCandidate.Capture(ObjectManager.Wow, ObjectManager.WowB.Player);
+            Check(sealAura != null && sealAura.Remaining(21082) == 24519 && sealAura.Remaining(20308) == 24519,
+                  "nine-slot Paladin layout decodes any active Crusader rank");
+            Check(sealAura != null && sealAura.Remaining(19740) == null, "untracked Paladin auras stay unknown");
+            ObjectManager.Wow.AuraBytes = PaladinCandidate();
+            sealAura = WowBInlineAuraCandidate.Capture(ObjectManager.Wow, ObjectManager.WowB.Player);
+            Check(sealAura != null && sealAura.Remaining(21082) == -1, "absent Crusader seal is missing, not unknown");
+            ClickAimCombat.Bar = new List<ClickAimAction> { Action(21082, 1) };
+            Check(!controller.TryApply(new IntPtr(7), stopped, stopMovement) && ClickAimInput.Keys.Count == 0,
+                  "Seal of the Crusader is never pressed outside combat");
+            GrindRunner.Combat = true; ClickAimSettings.UseBuffsInCombat = true;
+            combatPlayer = ObjectManager.WowB.Player; ObjectManager.WowB.Power = 24;
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "seal below estimated mana withheld");
+            ObjectManager.WowB.Power = 25;
+            Check(controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe) && ClickAimInput.Keys.Count == 1 &&
+                  ClickAimInput.Keys[0] == 0x31 && ObjectManager.WowB.Selected == new WowBGuid(8),
+                  "absent seal is pressed in combat without changing selection");
+            ClickAimInput.Keys.Clear(); now = 9999;
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "seal retry waits 10 seconds");
+            now = 10000; ObjectManager.Wow.AuraBytes = PaladinCandidate(seal: true);
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "active seal is not recast");
+            // One Seal only: any Crusader rank holds the whole family, and the
+            // highest eligible rank on the bar is the one that is pressed.
+            Reset(); controller.Reset(); now = 0; ObjectManager.WowB!.IsExperimental70938 = true;
+            ObjectManager.Wow!.AuraBytes = PaladinCandidate(seal: true); GrindRunner.Combat = true;
+            ClickAimSettings.UseBuffsInCombat = true; ObjectManager.WowB.Power = 160; combatPlayer = ObjectManager.WowB.Player;
+            ClickAimCombat.Bar = new List<ClickAimAction> { Action(21082, 1), Action(20308, 2) };
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "active rank 1 suppresses every Crusader rank");
+            ObjectManager.Wow.AuraBytes = PaladinCandidate();
+            Check(controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe) && ClickAimInput.Keys.Count == 1 &&
+                  ClickAimInput.Keys[0] == 0x32, "highest eligible rank is pressed, not the first slot");
+            // Casting a Crusader seal cancels another Seal; only replace a seal
+            // the controller does not manage itself.
+            Reset(); controller.Reset(); now = 0; ObjectManager.WowB!.IsExperimental70938 = true;
+            ObjectManager.Wow!.AuraBytes = PaladinCandidate(); GrindRunner.Combat = true;
+            ClickAimSettings.UseBuffsInCombat = true; ObjectManager.WowB.Power = 100; combatPlayer = ObjectManager.WowB.Player;
+            Write32(ObjectManager.Wow.AuraBytes, 0x6F0 + 6 * 0x128, 20154); Write32(ObjectManager.Wow.AuraBytes, 0x1A60, 7);
+            ClickAimCombat.Bar = new List<ClickAimAction> { Action(21082, 1), Action(20154, 2) };
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe) && ClickAimInput.Keys.Count == 0,
+                  "an active managed Seal of Righteousness is not replaced");
+            ClickAimCombat.Overrides[20154] = ClickAimSpellRole.Ignore;
+            Check(controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe) && ClickAimInput.Keys.Count == 1 &&
+                  ClickAimInput.Keys[0] == 0x31, "an unmanaged seal is replaced by the Crusader seal");
             Console.WriteLine("Buff scheduling and safety fixtures passed (synthetic only; no real cast or aura validation).");
         }
     }

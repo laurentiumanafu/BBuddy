@@ -17,7 +17,9 @@ internal sealed class ClickAimBuffController
     // Observed net mana drops were 45 (Shield) and 60 (Armor). Actual costs
     // and modifiers are unreadable; thresholds are not proof of affordability.
     private static uint CombatManaEstimate(int spellId) => spellId == 168 ? 80U :
-        spellId == 8160 ? 65U : spellId == 5394 ? 40U : spellId == 5675 ? 40U : WowBLightningShield.ManaEstimate(spellId);
+        spellId == 8160 ? 65U : spellId == 5394 ? 40U : spellId == 5675 ? 40U :
+        WowBSealOfTheCrusader.ManaEstimate(spellId) != 0 ? WowBSealOfTheCrusader.ManaEstimate(spellId) :
+        WowBLightningShield.ManaEstimate(spellId);
     private readonly ClickAimBuffSchedule _schedule = new ClickAimBuffSchedule();
     private readonly Func<long> _clock;
     private readonly Dictionary<int, string> _reportedAuraState = new Dictionary<int, string>();
@@ -129,6 +131,44 @@ internal sealed class ClickAimBuffController
         foreach (ClickAimAction action in bar)
             if (Eligible(action) && WowBLightningShield.Rank(action.Id) > WowBLightningShield.Rank(best)) best = action.Id;
         return best;
+    }
+
+    // Several Seal of the Crusader ranks on the bar would otherwise be cast in
+    // bar order, so a lower rank could replace a higher one already active.
+    private static int PreferredSeal(List<ClickAimAction> bar)
+    {
+        int best = 0;
+        foreach (ClickAimAction action in bar)
+            if (Eligible(action) && WowBSealOfTheCrusader.Rank(action.Id) > WowBSealOfTheCrusader.Rank(best)) best = action.Id;
+        return best;
+    }
+
+    // The client keeps only one Seal on a Paladin. Casting a Crusader seal
+    // silently cancels any other Seal, which would fight a second managed
+    // seal on the bar, so only replace a seal this controller does not manage.
+    private static bool SealReplacementSafe(List<ClickAimAction> bar, WowBInlineAuraCandidate? aura)
+    {
+        if (aura == null) return true;
+        foreach (uint id in aura.CopyIds())
+        {
+            if (id == 0 || id > int.MaxValue) continue;
+            int other = (int)id;
+            if (WowBSealOfTheCrusader.Rank(other) != 0 || !WowBSealOfTheCrusader.OtherSeal(other)) continue;
+            if (bar.Exists(action => Eligible(action) && action.Id == other)) return false;
+        }
+        return true;
+    }
+
+    private void ReportSeal(ClickAimAction action, int? remaining, bool blocked)
+    {
+        string state = !remaining.HasValue ? "unavailable; combat cast withheld" :
+            remaining.Value < 0 ? "absent" : "active";
+        if (blocked) state += "; another managed seal is active, replacement withheld";
+        if (_reportedAuraState.TryGetValue(action.Id, out string? old) && old == state) return;
+        _reportedAuraState[action.Id] = state;
+        string timing = remaining.HasValue && remaining.Value >= 0 ? "; approximately " + (remaining.Value / 1000) + " seconds remain" : "";
+        Logging.Write("[Buff] 70707 experimental Seal of the Crusader candidate: " + state + timing +
+            " (rank " + WowBSealOfTheCrusader.Rank(action.Id) + "; not verified)");
     }
 
     // Presence only; no claim about remaining charges or duration. Unknown
@@ -311,6 +351,7 @@ internal sealed class ClickAimBuffController
             int macroMask = reader.Uses70862Features ? MacroMask() : 0;
             bool conflictWater = reader.Uses70862Features && ConflictingWater(bar) && (macroMask & 6) == 0;
             int preferredShield = reader.Uses70862Features ? PreferredShield(bar) : 0;
+            int preferredSeal = PreferredSeal(bar);
             if (!bar.Exists(action => CombatManaEstimate(action.Id) > 0 && Eligible(action) &&
                 (WowBTotemAuraCandidate.EffectForCast(action.Id) == 0 || TotemSupported(reader, action)))) return false;
             if (!CombatPlayerSafe(memory, reader, hwnd, stopped, expectedPlayer, out uint map, out uint mana) || !targetSafe()) return false;
@@ -339,6 +380,19 @@ internal sealed class ClickAimBuffController
                         _schedule.PastAttemptBackoff(action.Id, _clock(), CombatRetryMs)) { buff = action; break; }
                     continue;
                 }
+                if (WowBSealOfTheCrusader.Rank(action.Id) != 0)
+                {
+                    if (action.Id != preferredSeal) continue;
+                    // A Seal is combat-only: it lasts 30 seconds and any other
+                    // Seal cancels it, so it never uses the quiet 30-minute timer.
+                    bool replace = SealReplacementSafe(bar, aura);
+                    int? sealRemaining = aura?.Remaining(action.Id);
+                    ReportSeal(action, sealRemaining, !replace);
+                    if (replace && sealRemaining.HasValue && sealRemaining.Value <= 0 &&
+                        TotemManaEnough(reader, expectedPlayer, action) &&
+                        _schedule.PastAttemptBackoff(action.Id, _clock(), CombatRetryMs)) { buff = action; break; }
+                    continue;
+                }
                 int? remainingCandidate = aura?.Remaining(action.Id);
                 if (WowBTotemAuraCandidate.EffectForCast(action.Id) == 0 && remainingCandidate.HasValue && remainingCandidate.Value <= 0 &&
                     _schedule.PastAttemptBackoff(action.Id, _clock(), CombatRetryMs)) { buff = action; break; }
@@ -359,6 +413,8 @@ internal sealed class ClickAimBuffController
             if (!stillDue || EarthReserved(buff) ||
                 !CombatPlayerSafe(memory, reader, hwnd, stopped, expectedPlayer, out afterMap, out mana) || map != afterMap || mana < minimumMana ||
                 !SameSlot(buff, ClickAimCombat.ReadBar(reader)) || (shieldAction && PreferredShield(ClickAimCombat.ReadBar(reader)) != buff.Id) ||
+                (WowBSealOfTheCrusader.Rank(buff.Id) != 0 && (PreferredSeal(ClickAimCombat.ReadBar(reader)) != buff.Id ||
+                    !SealReplacementSafe(ClickAimCombat.ReadBar(reader), WowBInlineAuraCandidate.Capture(memory, expectedPlayer)))) ||
                 ((totem || shieldAction) && !TotemManaEnough(reader, expectedPlayer, buff)) || !targetSafe() || !ClickAimSettings.UseBuffsInCombat ||
                 !Allowed(memory, reader, hwnd, stopped) || !_schedule.PastAttemptBackoff(buff.Id, _clock(), CombatRetryMs)) return false;
             ClickAimInput.TapKey(hwnd, buff.KeyVk, 40);
@@ -390,6 +446,10 @@ internal sealed class ClickAimBuffController
         foreach (ClickAimAction action in bar)
         {
             if (!Eligible(action) || !seen.Add(action.Id)) continue;
+            // Seals are combat-only, like the observed ground totems: a
+            // 30-second buff refreshed by melee strikes has no meaning on the
+            // quiet 30-minute timer outside a fight.
+            if (WowBSealOfTheCrusader.Rank(action.Id) != 0) continue;
             // On 70938 this toggle-like form belongs exclusively to the
             // movement checkbox, never the unrelated 30-minute buff timer.
             if (reader.IsExperimental70938 && (action.Id == 2645 || action.Id == 1238640)) continue;
@@ -453,12 +513,13 @@ internal sealed class ClickAimBuffController
 }
 
 // 70707 research candidate, bounded to inline layouts observed for one
-// Mage and one Shaman. No dynamic pointer dereference, Lua, calls into the client or writes.
-// Unknown layouts, unstable fields and unsupported IDs retain the old timer.
+// Mage, one Shaman and one Paladin. No dynamic pointer dereference, Lua,
+// calls into the client or writes. Unknown layouts, unstable fields and
+// unsupported IDs retain the old timer.
 internal sealed class WowBInlineAuraCandidate
 {
     private const int Header = 0x5F0, DataSize = 0x1624; // ends after player+0x1C10
-    private const int DataPointer = 0x608, FirstId = 0x6F0, Stride = 0x128, Slots = 12;
+    private const int DataPointer = 0x608, FirstId = 0x6F0, Stride = 0x128, InlineMaxSlots = 16;
     private const int ActiveCount = 0x1A60, ClientClock = 0x1C10;
     private readonly uint _clock;
     private readonly uint[] _id, _duration, _expiry;
@@ -471,7 +532,7 @@ internal sealed class WowBInlineAuraCandidate
 
     // Only the exact action/aura IDs observed in the traces. Other ranks and
     // weapon enchants use the timer, not an assumed matching player aura ID.
-    internal static bool Supported(int id) => id == 168 || id == 1459 || id == 324;
+    internal static bool Supported(int id) => id == 168 || id == 1459 || id == 324 || WowBSealOfTheCrusader.Rank(id) != 0;
 
     internal static WowBInlineAuraCandidate? Capture(Memory memory, WowBObservedUnit player)
         => Capture(memory, player, out _);
@@ -489,14 +550,17 @@ internal sealed class WowBInlineAuraCandidate
             reason = "inline window unreadable";
             if (first == null || second == null || first.Length != DataSize || second.Length != DataSize) return null;
             // The inline pointer, 16-tagged capacity word and lengths 11/12
-            // were observed in two sessions. The length's meaning is not
-            // proven. Scan only that bounded range and require active-count
-            // agreement. External/grown arrays are never chased.
+            // were observed for a Mage and a Shaman; a Paladin trace showed
+            // 9, 14 and 15 with the same pointer, capacity word and
+            // active-count agreement. The length's meaning is still not
+            // proven, so the scan stays inside the tagged capacity and keeps
+            // requiring active-count agreement. External/grown arrays are
+            // never chased.
             ulong inline = player.UnitAddress + DataPointer;
             ulong length = Qword(first, 0x5F8), capacity = Qword(first, 0x600);
             if (Qword(first, 0x5F0) != Qword(second, 0x5F0) || Qword(second, 0x5F8) != length || Qword(second, 0x600) != capacity)
             { reason = "inline header changed during read"; return null; }
-            if (Qword(first, 0x5F0) != inline || (length != 11 && length != Slots) || capacity != 0x8000000000000010UL)
+            if (Qword(first, 0x5F0) != inline || length < 1 || length > InlineMaxSlots || capacity != 0x8000000000000010UL)
             {
                 // No raw pointer is logged; these words help distinguish an
                 // unsupported inline shape from a grown-array header.
@@ -542,17 +606,58 @@ internal sealed class WowBInlineAuraCandidate
     // indefinite timing word is unknown, not expired.
     internal int? Remaining(int spellId)
     {
+        // Only one Seal can be active on a Paladin, so any Crusader rank
+        // counts as present and a different rank on the bar does not fight
+        // the active one.
+        if (WowBSealOfTheCrusader.Rank(spellId) != 0)
+        {
+            for (int i = 0; i < _id.Length; i++)
+                if (_id[i] != 0 && _id[i] <= int.MaxValue && WowBSealOfTheCrusader.Rank((int)_id[i]) != 0) return Timing(i);
+            return -1;
+        }
         if (!Supported(spellId)) return null;
         for (int i = 0; i < _id.Length; i++)
         {
             if (_id[i] != (uint)spellId) continue;
-            if (_duration[i] == 0 || _duration[i] > 24U * 60 * 60 * 1000) return null;
-            int remaining = unchecked((int)(_expiry[i] - _clock));
-            if (remaining < -5000 || (long)remaining > (long)_duration[i] + 5000) return null;
-            return remaining;
+            return Timing(i);
         }
         return -1;
     }
+
+    private int? Timing(int slot)
+    {
+        if (_duration[slot] == 0 || _duration[slot] > 24U * 60 * 60 * 1000) return null;
+        int remaining = unchecked((int)(_expiry[slot] - _clock));
+        if (remaining < -5000 || (long)remaining > (long)_duration[slot] + 5000) return null;
+        return remaining;
+    }
+}
+
+// WoW Forever Paladin Seals. Only Seal of the Crusader ranks are managed; the
+// 30-second self buff was observed in a 70938 trace as aura ID 21082 at
+// player+0x6F0 + slot * 0x128. Ranks and costs come from published Forever
+// trainer data, not from the client, so costs stay an estimate. The other
+// Seal IDs are only a guard: their presence is never read as a duration.
+internal static class WowBSealOfTheCrusader
+{
+    internal static int Rank(int id) => id switch
+    {
+        21082 => 1, 20162 => 2, 20305 => 3, 20306 => 4, 20307 => 5, 20308 => 6, _ => 0
+    };
+    internal static uint ManaEstimate(int id) => Rank(id) switch
+    {
+        1 => 25U, 2 => 40U, 3 => 65U, 4 => 90U, 5 => 125U, 6 => 160U, _ => 0U
+    };
+    internal static bool OtherSeal(int id) => Rank(id) == 0 && id switch
+    {
+        // Seal of Righteousness
+        20154 or 20287 or 20288 or 20289 or 20290 or 20291 or 20292 or 20293 or 21084 => true,
+        // Seal of Justice, Seal of Light and Seal of Wisdom
+        20164 or 20165 or 20347 or 20348 or 20349 or 20166 or 20356 or 20357 => true,
+        // Seal of Command and Seal of Martyrdom
+        20375 or 20915 or 20918 or 20919 or 20920 or 407798 => true,
+        _ => false
+    };
 }
 
 // Known 1.60 shield ranks. The user's traces observed IDs 324 and 905;
