@@ -3761,7 +3761,7 @@ internal static class GrindRunner
             {
                 if (WowBMailSafetyHold.IsHeld())
                 {
-                    Logging.Write("[Mail] prior composition or send requires inspection; skipping mailbox this trip and returning to grind.");
+                    Logging.Write("[Mail] prior composition or send is uncertain; skipping mailbox this trip. The hold will clear only after a confirmed safe return, allowing a later sell trip to try again; delivery and leftover composition are unverified.");
                     return WalkBackToProfile(mover);
                 }
                 VendorFile.MailboxPoint? mailbox = point.Mailbox;
@@ -4036,6 +4036,17 @@ internal static class GrindRunner
             ClickAimMath.Len(finalPlayer.Location.X - hotspot.X, finalPlayer.Location.Y - hotspot.Y) > 3.0 ||
             Math.Abs(finalPlayer.Location.Z - hotspot.Z) > 5.0 || !Safe())
         { Logging.Write("[Grind] no complete mesh route or confirmed arrival at the profile hotspot; stopping without repeating the sale."); Stop(); return false; }
+        // User-requested recovery: never replay an uncertain composition on
+        // this trip, but permit a later sell trip after a confirmed safe return.
+        // Clearing the file does not clear the game UI or establish delivery.
+        if (reader.IsExperimental70938 && ClickAimSettings.ExperimentalAutoMail &&
+            !_stop && !ClickAimAbort.Requested && !RouteRunner.StopRequested && WowBMailSafetyHold.IsHeld())
+        {
+            if (WowBMailSafetyHold.TryClear(out string holdReason))
+                Logging.Write("[Mail] hold cleared after confirmed return; later sell trips may retry. Prior delivery and leftover recipient or attachments remain unverified.");
+            else
+                Logging.Write("[Mail] could not clear hold after confirmed return: " + holdReason + "; later mail remains blocked.");
+        }
         _vendorReturnHotspot = null; _vendorReturnReader = null; _vendorReturnMemory = null; _vendorReturnPlayer = default;
         ClearRoamMailReturn();
         _townTransit = false; _townReader = null; _townMemory = null; _townPlayer = default;
@@ -4079,7 +4090,7 @@ internal static class GrindRunner
         bool ReturnWithoutMail(string reason)
         {
             _vendorMailboxPending = null; _vendorMailboxReader = null; _vendorMailboxMemory = null; _vendorMailboxPlayer = default;
-            Logging.Write("[Mail] " + reason + "; leaving mail for this trip and returning to grind when safe. An inspection hold, if present, blocks later mail.");
+            Logging.Write("[Mail] " + reason + "; leaving mail for this trip and returning to grind when safe. A hold, if present, clears only after confirmed safe return; prior mail state remains unverified.");
             if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested) return false;
             return WalkBackToProfile(mover);
         }

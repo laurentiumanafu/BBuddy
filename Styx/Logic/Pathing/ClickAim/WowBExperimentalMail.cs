@@ -55,7 +55,7 @@ internal static class WowBExperimentalMail
         try
         {
             if (WowBMailSafetyHold.IsHeld())
-            { Logging.Write("[Mail] previous composition or send requires inspection; mail held while grinding continues. Clear the hold only after inspecting and clearing the mailbox."); return false; }
+            { Logging.Write("[Mail] previous composition or send is uncertain; this trip is held until a confirmed safe return. Prior delivery and leftover mailbox state are unverified."); return false; }
             if (!WowBMailUiCalibration.Valid(ui) || ui.Player != player.ToString())
             { Logging.Write("[Mail] preflight: controls invalid or for another character; no input sent."); return false; }
             if (!WowBMailRecipientText.ValidForTest(recipient))
@@ -146,7 +146,9 @@ internal static class WowBExperimentalMail
                 { Logging.Write("[Mail] cannot start composition: " + holdReason + "; mail is held, no tab or send input in this batch."); return false; }
                 if (batches == 0)
                 {
-                    Logging.Write("[Mail] bag/grid and empty-like table prechecks passed; attempting recorded Send Mail tab (UI state unverified).");
+                    Logging.Write("[Mail] bag/grid and empty-like table prechecks passed; attempting recorded Send Mail tab at client pixel (" +
+                        ui.TabX + "," + ui.TabY + ") in " + w + "x" + h + " " + (background ? "background" : "foreground") +
+                        " mode. Tab and mailbox UI state are unverified.");
                     if (!Left(hwnd, ui.TabX, ui.TabY, w, h, background, safe, out string tabReason))
                     { Logging.Write("[Mail] tab click withheld or uncertain: " + tabReason + "; safety: " + (safetyFailure() ?? "client geometry or button-release check") + ". No send input in this batch."); return false; }
                     Logging.Write("[Mail] Send Mail tab click messages posted; tab opening and field focus are not verified.");
@@ -227,7 +229,7 @@ internal static class WowBExperimentalMail
                     if (count == 0)
                     {
                         Logging.Write("[Mail] no further unskipped candidates; skipped=" + skipped.Count +
-                            ". No send input for the empty composition. Recipient text may remain, so the mail safety hold stays set until manual inspection; skipped items may remain. Candidate 4 and delivery are unverified.");
+                            ". No send input for the empty composition. Recipient text may remain; the hold stays set until confirmed safe return or manual inspection. Skipped items may remain. Candidate 4 and delivery are unverified.");
                         return true;
                     }
                 }
@@ -237,7 +239,7 @@ internal static class WowBExperimentalMail
                 { Logging.Write("[Mail] final pre-send observations or safety changed; no send input in this batch. Inspect manually."); return false; }
                 if (!Left(hwnd, ui.SendX, ui.SendY, w, h, background, safe, out string sendReason))
                 { Logging.Write("[Mail] send input withheld or uncertain: " + sendReason + "; no retry. Inspect manually."); return false; }
-                Logging.Write("[Mail] Send button messages posted once; recipient and server acceptance not verified. Never retry an uncertain send.");
+                Logging.Write("[Mail] Send button messages posted once; recipient and server acceptance not verified. An uncertain send is not retried on this trip.");
                 // At least one second after Send before any later recipient
                 // text. First establish observable progress; never start the
                 // next composition after an uncertain send.
@@ -256,7 +258,7 @@ internal static class WowBExperimentalMail
                         foreach (var sent in expected) if (id == sent.Item) found = true;
                     if (!found) { progressed = true; break; }
                 }
-                if (!progressed) { Logging.Write("[Mail] send outcome uncertain; no retry. Inspect before resuming mail."); return false; }
+                if (!progressed) { Logging.Write("[Mail] send outcome uncertain; no retry on this trip. A later retry after return can duplicate or misdirect mail; inspect if possible."); return false; }
                 Logging.Write("[Mail] batch items no longer observed in candidates 0–4 and mail table is zero-like; server delivery and backpack contents remain unverified.");
                 if (!safe()) { Logging.Write("[Mail] safety changed after observed progress; inspection hold retained."); return false; }
                 if (!WowBMailSafetyHold.TryClear(out string clearReason))

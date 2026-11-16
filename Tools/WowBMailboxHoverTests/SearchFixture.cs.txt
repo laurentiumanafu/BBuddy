@@ -24,6 +24,10 @@ static class Fixture
             (a,b) => { moves++; return true; }, () => (true, empty), () => true, ms => false, out _, out _, out reason);
         Check(!found && moves == 90 && reason.Contains("89 hover-only probes") && reason.Contains("89 empty"), "bounded missing hover");
         found = WowBMailboxHoverSearch.Find(1920, 1080, 960, 540, box.ToString(),
+            (a,b) => { x = a; y = b; return true; }, () => (true, x == 960 && y == 540 ? other : empty),
+            () => true, ms => false, out _, out _, out reason);
+        Check(!found && reason.Contains("recorded point different") && reason.Contains(other.ToString()) && reason.Contains(box.ToString()), "different candidate diagnosed without accepting it");
+        found = WowBMailboxHoverSearch.Find(1920, 1080, 960, 540, box.ToString(),
             (a,b) => true, () => (true, box), () => true, ms => false, out _, out _, out reason);
         Check(!found && reason.Contains("no fresh transition"), "stale candidate denied");
         int reads = 0;

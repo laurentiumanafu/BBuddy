@@ -24,8 +24,14 @@ failed the single recorded-pixel hover check; no mailbox or send click was
 posted on those trips. The old log did not distinguish an empty, different,
 unstable or unreadable hover and cannot establish whether camera, position,
 GUID or background input caused the mismatch. The search now logs which stage
-failed and counts empty and other candidates on an exhausted search. A matching
-candidate does not prove the mailbox opened, and no actual delivery is proved.
+failed and counts empty and other candidates on an exhausted search. In
+`2026-11-16_1124_8740.log`, 89 probes also missed the saved candidate; no
+mailbox, tab or attachment click was logged, despite the user's report that the
+mailbox opened and attachment attempts followed. That discrepancy cannot be
+resolved from this log. Search failures now log the recorded-point candidate and
+saved GUID; tab attempts log the calibrated pixel, client size and input mode.
+These logs may contain sensitive GUIDs. A matching candidate or posted tab
+click does not prove the mailbox or tab opened, and no delivery is proved.
 
 Before interaction, preflight reports the specific failed safety/geometry check.
 Foreground and non-minimized background modes are supported experimentally;
@@ -75,14 +81,18 @@ identity, and unreachable routes still take priority. Failures before beginning
 composition may be attempted on the next sell trip. Before clicking the tab a
 durable `Settings/clickaim-mail-hold.txt` is created. It remains on partial
 recipient input, uncertain attachments, failed/uncertain sends, crashes and an
-empty unsent composition. On later trips it blocks automatic mail (not grind),
-including across restarts, so an uncertain send is never blindly retried. Stop
-the bot, inspect the mailbox and sent mail, resolve any uncertainty, clear
-recipient text and attachments, and use **Clear mail safety hold after
-inspection** before attempting mail again. The hold is removed automatically
-only after a sent batch has a zero-like table and its observed IDs have vanished;
-these observations are not proof of acceptance or delivery. The recipient
-clearing/reset and UI state remain unverified. Confirmed rejection is not
+empty unsent composition for the rest of the trip. As requested, after a
+confirmed safe return to the profile hotspot (or profile-free return point),
+the hold is automatically cleared so the next sell trip may attempt mail again.
+An interrupted or unconfirmed return leaves it set; a pre-existing hold skips
+mail on that trip and clears only after a confirmed return. Manual inspection
+and clearing while stopped remains optional. This policy can retry an uncertain
+send later: the game UI is not cleared by deleting the hold and prior delivery,
+recipient text and attachments are not verified, so retries may duplicate or
+misdirect mail. Use disposable items and check the mailbox where possible.
+The hold is also removed after a sent batch has a zero-like table and its observed
+IDs have vanished; these observations are not proof of acceptance or delivery.
+The recipient clearing/reset and UI state remain unverified. Confirmed rejection is not
 independently observed, so three-confirmed-failure retry/continue behavior is
 **not yet implemented**. Cross-map return remains unsupported; the experiment is
 limited to 64 batches. No Lua is used.

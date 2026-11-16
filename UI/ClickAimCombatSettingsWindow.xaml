@@ -277,7 +277,7 @@
                     </WrapPanel>
                     <TextBlock x:Name="lblMailControlsStatus" TextWrapping="Wrap" FontSize="11" Text="Mail controls not recorded in this window."/>
                     <Button Content="Clear mail safety hold after inspection" Click="btnClearMailHold_Click" Height="24" Padding="8,0" HorizontalAlignment="Left" Margin="0,4,0,4"/>
-                    <TextBlock TextWrapping="Wrap" FontSize="11" Text="An uncertain composition or send blocks future automatic mail, even after restarting. Stop the bot, inspect the mailbox and any sent mail, clear leftover recipient/attachments, then clear the hold. Grinding can continue while mail is held."/>
+                    <TextBlock TextWrapping="Wrap" FontSize="11" Text="Uncertain mail is not retried on the same trip. The hold clears after a confirmed safe return to the hotspot, allowing another attempt next sell trip. Clearing does not verify delivery or clear leftover recipient text/attachments; later attempts may duplicate or misdirect mail. If return is interrupted, the hold remains until a later safe return or manual inspection."/>
                     <Button x:Name="btnMailAttachmentResearch" Content="Mail attachment candidate snapshot" Height="24" Padding="10,0" HorizontalAlignment="Left" Click="btnMailAttachmentResearch_Click"/>
                     <TextBlock TextWrapping="Wrap" Margin="0,4,0,4" Text="70938 only, bot stopped: logs a static mail-code candidate as raw bytes. No clicks or text are sent; it does not verify attachments, recipient, mail state or delivery. Logs may contain sensitive item identifiers."/>
                     <TextBlock Text="Combined bag grid calibration (research only)" FontWeight="SemiBold"/>

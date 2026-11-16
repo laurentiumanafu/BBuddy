@@ -41,7 +41,7 @@ internal static class WowBMailboxHoverSearch
             for (int col = 0; col < 8; col++)
                 points.Add(((int)Math.Round((col + 0.5) * width / 8.0), (int)Math.Round((row + 0.5) * height / 6.0)));
         int probes = 0, empty = 0, different = 0;
-        string recordedPoint = "not sampled";
+        string recordedPoint = "not sampled", recordedGuid = "unavailable";
         foreach (var point in points)
         {
             if (point.X <= 0 || point.Y <= 0 || point.X >= width - 1 || point.Y >= height - 1) continue;
@@ -50,7 +50,11 @@ internal static class WowBMailboxHoverSearch
             probes++;
             var current = read();
             if (!current.Readable) { reason = "hover candidate unreadable after probe " + probes; return false; }
-            if (probes == 1) recordedPoint = current.Guid.IsEmpty ? "empty" : current.Guid.ToString() == expected ? "matched" : "different";
+            if (probes == 1)
+            {
+                recordedGuid = current.Guid.ToString();
+                recordedPoint = current.Guid.IsEmpty ? "empty" : recordedGuid == expected ? "matched" : "different";
+            }
             if (current.Guid.IsEmpty) { empty++; continue; }
             if (current.Guid.ToString() != expected) { different++; continue; }
             if (wait(50) || !safe()) { reason = "hover confirmation interrupted"; return false; }
@@ -61,7 +65,8 @@ internal static class WowBMailboxHoverSearch
             reason = "recorded candidate matched twice after hover-away on probe " + probes + "; mailbox identity and UI remain unverified";
             return true;
         }
-        reason = probes + " hover-only probes: recorded point " + recordedPoint + ", " + empty + " empty, " + different + " other candidates; recorded candidate not found";
+        reason = probes + " hover-only probes: recorded point " + recordedPoint + " (observed " + recordedGuid +
+            ", expected " + expected + "), " + empty + " empty, " + different + " other candidates; recorded candidate not found";
         return false;
     }
 }

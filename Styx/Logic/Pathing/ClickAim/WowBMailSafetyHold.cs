@@ -4,9 +4,10 @@ using System.Text;
 
 namespace Styx.Logic.Pathing;
 
-// Durable interlock: created BEFORE the compose tab/text/input, removed only
-// after observed send progress or explicit stopped-bot human inspection. A
-// crash, partial text, uncertain attachment or uncertain send leaves it set.
+// Durable interlock: created BEFORE the compose tab/text/input. An uncertain
+// attempt remains held for the rest of the trip and through interruptions;
+// observed send progress, confirmed safe hotspot return or stopped manual
+// inspection can clear it. Clearing does not verify or reset the game's UI.
 internal static class WowBMailSafetyHold
 {
     internal static string Path => System.IO.Path.Combine(
@@ -26,7 +27,7 @@ internal static class WowBMailSafetyHold
             string path = Path; string? dir = System.IO.Path.GetDirectoryName(path);
             if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
             using var f = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.Read);
-            byte[] bytes = Encoding.UTF8.GetBytes("Experimental mail may have partial or uncertain state. Inspect the game and use Clear mail safety hold while stopped.\n");
+            byte[] bytes = Encoding.UTF8.GetBytes("Experimental mail may have partial or uncertain state. Hold clears after confirmed safe return or stopped manual inspection; delivery and game UI are unverified.\n");
             f.Write(bytes, 0, bytes.Length); f.Flush(true);
             reason = "hold recorded"; return true;
         }

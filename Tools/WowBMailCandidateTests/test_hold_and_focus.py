@@ -20,6 +20,22 @@ class Wiring(unittest.TestCase):
   self.assertIn('recipient text may remain',m.lower())
   self.assertIn('WowBMailSafetyHold.IsHeld()',g)
   self.assertIn('ClickAimUi.Running || ClickAimUi.Paused',u[u.index('private void btnClearMailHold_Click'):u.index('private async void btnMailAttachmentResearch_Click')])
+ def test_hold_clears_only_after_confirmed_return(self):
+  ret=g[g.index('private static bool WalkBackToProfile('):g.index('private static bool WalkToRecordedMailbox(')]
+  clear=ret.index('WowBMailSafetyHold.TryClear')
+  for guard in ('if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested) return false;',
+                'if (RouteRunner.LastRunInterrupted || !Safe())',
+                'if (!arrived || !reader.TryRead70888RecoveryPlayer',
+                'ClickAimMath.Len(finalPlayer.Location.X - hotspot.X',
+                'Math.Abs(finalPlayer.Location.Z - hotspot.Z) > 5.0 || !Safe()',
+                'ClickAimSettings.ExperimentalAutoMail',
+                '!_stop && !ClickAimAbort.Requested && !RouteRunner.StopRequested && WowBMailSafetyHold.IsHeld()'):
+   self.assertIn(guard,ret[:clear])
+  self.assertLess(clear,ret.index('_vendorReturnHotspot = null'))
+  self.assertIn('prior composition or send is uncertain; skipping mailbox this trip',g)
+  self.assertIn('leftover recipient or attachments remain unverified',ret)
+  self.assertIn('if (!progressed)',m)
+  self.assertIn('no retry on this trip',m)
  def test_focus_modes_target_game_and_stay_fixed(self):
   for v in ('ClickAimInput.GameForeground(hwnd)', 'GatherBackgroundFocus.State.OtherApplication',
             'GatherBackgroundFocus.TryClientOrigin', 'bool background = false, focusSelected = false',

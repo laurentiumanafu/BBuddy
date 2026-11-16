@@ -24,7 +24,7 @@ class MailPreflight(unittest.TestCase):
   self.assertIn('unchecked(Environment.TickCount - start) < 3000',run)
   self.assertLess(run.index('unchecked(Environment.TickCount - start) < 3000'),run.index('WowBMailboxHoverSearch.Find'))
   self.assertEqual(run.count('Left(hwnd, ui.SendX'),1)
-  self.assertIn('send outcome uncertain; no retry',run)
+  self.assertIn('send outcome uncertain; no retry on this trip',run)
  def test_route_diagnostics_preserve_guards(self):
   route=g[g.index('private static bool WalkToRecordedMailbox('):g.index('private static bool WaitVendorSafe(')]
   for v in ('AutoVendorIdentityMatches', 'ExperimentalGrindActive', 'Experimental70707BarSafe',
@@ -36,7 +36,8 @@ class MailPreflight(unittest.TestCase):
   for v in ('mailbox interaction posted', 'active bag observations unavailable',
             'saved bag grid missing or incompatible', 'attachment candidate table unreadable',
             'attempting recorded Send Mail tab', 'Send Mail tab click messages posted',
-            'field focus are not verified'):
+            'field focus are not verified', 'ui.TabX + "," + ui.TabY',
+            'Tab and mailbox UI state are unverified'):
    self.assertIn(v,m)
 
 if __name__ == '__main__': unittest.main()
