@@ -90,14 +90,30 @@ internal static class WowBExperimentalMail
             if (!safe())
             { Logging.Write("[Mail] preflight state or client size changed before mailbox input; no input sent."); return false; }
             Logging.Write("[Mail] preflight passed; checking recorded mailbox hover. UI state is not verified.");
-            if (!Move(hwnd, ui.MailboxX, ui.MailboxY, w, h, safe))
-            { Logging.Write("[Mail] mailbox hover move withheld or interrupted; no mailbox click sent. Safety: " + (safetyFailure() ?? "move or size check failed")); return false; }
-            if (!reader.TryReadMouseoverGuidCandidate(out WowBGuid hover) || hover.IsEmpty || hover.ToString() != ui.MailboxHover ||
-                !reader.TryReadMouseoverGuidCandidate(out WowBGuid hover2) || hover2 != hover)
-            { Logging.Write("[Mail] recorded mailbox hover did not match a stable live candidate; no mailbox click sent. Check camera, position and calibration."); return false; }
-            if (!ClickAimInput.ConfirmedRightClick(hwnd, ui.MailboxX, ui.MailboxY, w, h,
-                    () => safe() && reader.TryReadMouseoverGuidCandidate(out WowBGuid final) && final == hover, out string openReason))
-            { Logging.Write("[Mail] mailbox click withheld: " + openReason + "; no mail send input sent."); return false; }
+            if (!GatherBackgroundFocus.TryClientOrigin(hwnd, out int originX, out int originY))
+            { Logging.Write("[Mail] mailbox search: client origin unavailable; no mailbox click sent."); return false; }
+            int mouseX = 0, mouseY = 0;
+            if (!background && !ClickAimInput.TryCursorScreen(out mouseX, out mouseY))
+            { Logging.Write("[Mail] mailbox search: foreground cursor unavailable; no mailbox click sent."); return false; }
+            bool hoverSafe() => safe() && GatherBackgroundFocus.TryClientOrigin(hwnd, out int ox, out int oy) &&
+                ox == originX && oy == originY && (background ||
+                (ClickAimInput.TryCursorScreen(out int mx, out int my) &&
+                 Math.Abs((long)mx - mouseX) <= 3 && Math.Abs((long)my - mouseY) <= 3));
+            string openReason;
+            using (memory.TemporaryCacheState(false))
+            {
+                bool found = WowBMailboxHoverSearch.Find(w, h, ui.MailboxX, ui.MailboxY, ui.MailboxHover,
+                    (x, y) => ClickAimInput.PostMouseMoveFraction(hwnd, x / (double)(w - 1), y / (double)(h - 1)),
+                    () => (reader.TryReadMouseoverGuidCandidate(out WowBGuid current), current), hoverSafe, ClickAimAbort.Wait,
+                    out int mailboxX, out int mailboxY, out string hoverReason);
+                if (!found)
+                { Logging.Write("[Mail] mailbox hover search: " + hoverReason + "; no mailbox click sent. Check camera, position and calibration."); return false; }
+                Logging.Write("[Mail] mailbox hover search: " + hoverReason + ".");
+                if (!ClickAimInput.ConfirmedRightClick(hwnd, mailboxX, mailboxY, w, h,
+                        () => hoverSafe() && reader.TryReadMouseoverGuidCandidate(out WowBGuid final) &&
+                            !final.IsEmpty && final.ToString() == ui.MailboxHover, out openReason))
+                { Logging.Write("[Mail] mailbox click withheld: " + openReason + "; no mail send input sent."); return false; }
+            }
             Logging.Write("[Mail] mailbox interaction posted; frame is not verified: " + openReason);
             if (openReason != "right-button messages posted")
             { Logging.Write("[Mail] mailbox button release uncertain; no tab or send input. Inspect manually."); return false; }

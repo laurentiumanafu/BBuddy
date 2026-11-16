@@ -1,0 +1,46 @@
+using System;
+using Styx.Logic.Pathing;
+using Styx.WoWInternals;
+
+static class Fixture
+{
+    static void Check(bool ok, string label) { if (!ok) throw new Exception(label); }
+    static void Main()
+    {
+        var box = new WowBGuid(123, 456); var other = new WowBGuid(111, 222); var empty = default(WowBGuid);
+        int x = 0, y = 0, moves = 0;
+        bool found = WowBMailboxHoverSearch.Find(1920, 1080, 960, 540, box.ToString(),
+            (a,b) => { x = a; y = b; moves++; return true; },
+            () => (true, x == 1000 && y == 540 ? box : empty), () => true, ms => false,
+            out int px, out int py, out string reason);
+        Check(found && px == 1000 && py == 540 && moves == 3, "shifted mailbox found after away and recorded point");
+        Check(reason.Contains("matched twice"), "successful search diagnostic");
+        found = WowBMailboxHoverSearch.Find(1920, 1080, 960, 540, box.ToString(),
+            (a,b) => { x = a; y = b; return true; }, () => (true, x == 120 && y == 90 ? box : other),
+            () => true, ms => false, out px, out py, out _);
+        Check(found && px == 120 && py == 90, "full-client fallback locates same GUID");
+        moves = 0;
+        found = WowBMailboxHoverSearch.Find(1920, 1080, 960, 540, box.ToString(),
+            (a,b) => { moves++; return true; }, () => (true, empty), () => true, ms => false, out _, out _, out reason);
+        Check(!found && moves == 90 && reason.Contains("89 hover-only probes") && reason.Contains("89 empty"), "bounded missing hover");
+        found = WowBMailboxHoverSearch.Find(1920, 1080, 960, 540, box.ToString(),
+            (a,b) => true, () => (true, box), () => true, ms => false, out _, out _, out reason);
+        Check(!found && reason.Contains("no fresh transition"), "stale candidate denied");
+        int reads = 0;
+        found = WowBMailboxHoverSearch.Find(1920, 1080, 960, 540, box.ToString(),
+            (a,b) => true, () => (true, ++reads <= 2 ? empty : reads == 3 ? box : other),
+            () => true, ms => false, out _, out _, out reason);
+        Check(!found && reason.Contains("changed"), "unstable matched candidate denied");
+        found = WowBMailboxHoverSearch.Find(1920, 1080, 960, 540, box.ToString(),
+            (a,b) => true, () => (false, empty), () => true, ms => false, out _, out _, out reason);
+        Check(!found && reason.Contains("unreadable"), "unreadable denied");
+        moves = 0;
+        found = WowBMailboxHoverSearch.Find(1920, 1080, 960, 540, box.ToString(),
+            (a,b) => { moves++; return true; }, () => (true, empty), () => false, ms => false, out _, out _, out _);
+        Check(!found && moves == 0, "unsafe state sends no move");
+        found = WowBMailboxHoverSearch.Find(1920, 1080, 960, 540, box.ToString(),
+            (a,b) => true, () => (true, empty), () => true, ms => true, out _, out _, out _);
+        Check(!found, "stop interrupts search");
+        Console.WriteLine("Synthetic mailbox hover search checks passed; no game interaction tested.");
+    }
+}

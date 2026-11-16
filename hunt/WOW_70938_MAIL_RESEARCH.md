@@ -8,11 +8,24 @@ with a same-map return hotspot or a profile-free pre-vendor return position, a
 saved recipient containing only letters/hyphens, the prior combined-bag grid,
 and separately recorded mailbox, Send Mail tab and
 Send button coordinates. At the recorded standing point, the mailbox hover
-candidate must match the saved full GUID. Client size, focus mode, map, player,
+candidate must match the saved full GUID. If the recorded pixel misses, a
+bounded hover-only search checks surrounding pixels and a coarse client grid;
+it needs a stable away transition, two matching reads and a final exact-GUID
+check before the single right-click. It may miss a small or occluded mailbox,
+and a changed saved GUID is not substituted. Client size, focus mode, map, player,
 health, ghost, combat and STOP guards are checked. Changes to camera, UI scale,
-window layout, bag configuration or client size require recalibration; the
+window layout, bag configuration or client size may require recalibration; the
 controls are user-labelled, not independently detected. The merchant plan must
 leave the calibrated combined bag open.
+
+In `2026-11-16_0731_3368.log`, two trips skipped the mailbox due to the durable
+inspection hold. Two later trips reached the mailbox and passed preflight but
+failed the single recorded-pixel hover check; no mailbox or send click was
+posted on those trips. The old log did not distinguish an empty, different,
+unstable or unreadable hover and cannot establish whether camera, position,
+GUID or background input caused the mismatch. The search now logs which stage
+failed and counts empty and other candidates on an exhausted search. A matching
+candidate does not prove the mailbox opened, and no actual delivery is proved.
 
 Before interaction, preflight reports the specific failed safety/geometry check.
 Foreground and non-minimized background modes are supported experimentally;

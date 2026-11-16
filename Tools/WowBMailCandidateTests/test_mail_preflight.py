@@ -12,9 +12,9 @@ class MailPreflight(unittest.TestCase):
                  'game client size unavailable', 'differs from controls', 'preflight withheld:',
                  'no mailbox, tab, recipient, attachment or send input sent'):
    self.assertIn(reason,run)
-  self.assertLess(run.index('preflight withheld:'),run.index('if (!Move(hwnd, ui.MailboxX'))
-  self.assertLess(run.index('if (!Move(hwnd, ui.MailboxX'),run.index('ConfirmedRightClick(hwnd, ui.MailboxX'))
-  self.assertLess(run.index('ConfirmedRightClick(hwnd, ui.MailboxX'),run.index('Left(hwnd, ui.TabX'))
+  self.assertLess(run.index('preflight withheld:'),run.index('WowBMailboxHoverSearch.Find'))
+  self.assertLess(run.index('WowBMailboxHoverSearch.Find'),run.index('ConfirmedRightClick(hwnd, mailboxX'))
+  self.assertLess(run.index('ConfirmedRightClick(hwnd, mailboxX'),run.index('Left(hwnd, ui.TabX'))
  def test_grace_only_for_focus_or_button_before_first_action(self):
   run=m[m.index('internal static bool Run('):]
   self.assertIn('issue == "a physical mouse button is held"',run)
@@ -22,7 +22,7 @@ class MailPreflight(unittest.TestCase):
   self.assertIn('ClickAimInput.GameForeground(hwnd)',run)
   self.assertIn('GatherBackgroundFocus.TryClientOrigin',run)
   self.assertIn('unchecked(Environment.TickCount - start) < 3000',run)
-  self.assertLess(run.index('unchecked(Environment.TickCount - start) < 3000'),run.index('if (!Move(hwnd, ui.MailboxX'))
+  self.assertLess(run.index('unchecked(Environment.TickCount - start) < 3000'),run.index('WowBMailboxHoverSearch.Find'))
   self.assertEqual(run.count('Left(hwnd, ui.SendX'),1)
   self.assertIn('send outcome uncertain; no retry',run)
  def test_route_diagnostics_preserve_guards(self):
