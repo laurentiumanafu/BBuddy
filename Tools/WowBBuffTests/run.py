@@ -40,7 +40,7 @@ assert '324 => 60U' in controller and 'spellId == 168' in controller
 assert 'WowBSealOfTheCrusader.ManaEstimate(spellId)' in controller and '21082 => 1' in controller and '20308 => 6' in controller
 assert quiet_method.count('WowBSealOfTheCrusader.Rank(action.Id) != 0) continue') == 1
 assert 'if (action.Id != preferredSeal) continue;' in combat_method
-assert 'SealReplacementSafe(bar, aura)' in combat_method
+assert 'SealReplacementSafe(bar, sealIds)' in combat_method and 'ActiveAuraIds(memory, reader, expectedPlayer' in combat_method
 assert 'PreferredSeal(ClickAimCombat.ReadBar(reader)) != buff.Id' in combat_method
 inline = controller[controller.index('internal sealed class WowBInlineAuraCandidate'):]
 assert 'length > InlineMaxSlots' in inline and 'WowBSealOfTheCrusader.Rank((int)_id[i]) != 0' in inline

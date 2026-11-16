@@ -808,6 +808,21 @@ namespace Styx.Logic.Pathing
             ClickAimCombat.Overrides[20154] = ClickAimSpellRole.Ignore;
             Check(controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe) && ClickAimInput.Keys.Count == 1 &&
                   ClickAimInput.Keys[0] == 0x31, "an unmanaged seal is replaced by the Crusader seal");
+            // The grown array keeps the same ID position inside a slot, so the
+            // seal is still found when the inline layout is not readable.
+            Reset(); controller.Reset(); now = 0; ObjectManager.WowB!.IsExperimental70938 = true;
+            GrindRunner.Combat = true; ClickAimSettings.UseBuffsInCombat = true;
+            ObjectManager.WowB.Power = 100; combatPlayer = ObjectManager.WowB.Player;
+            ClickAimCombat.Bar = new List<ClickAimAction> { Action(21082, 1) };
+            TotemBytes(777, 21082);
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "grown-array seal is not recast");
+            TotemBytes(777);
+            Check(controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe) && ClickAimInput.Keys.Count == 1 &&
+                  ClickAimInput.Keys[0] == 0x31, "grown-array absence permits the seal key");
+            TotemBytes(777, 21082, 20154);
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "grown-array seal suppresses the key");
+            WowBCombatResearch.Data = null;
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "unreadable grown array withholds the seal");
             Console.WriteLine("Buff scheduling and safety fixtures passed (synthetic only; no real cast or aura validation).");
         }
     }

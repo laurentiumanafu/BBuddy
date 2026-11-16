@@ -53,6 +53,14 @@ a read-only bounded read at `player+0x5F0` requiring the inline pointer (`player
 active-count word. IDs are read at `player+0x6F0 + slot * 0x128` with the duration and expiry
 words at `+12` and `+16`.
 
+Aura slots can change between the two reads that validate a snapshot, especially while effects
+are applied or expire during a fight, so the seal check retries the strict snapshot up to three
+times. If the inline layout is still not readable, it falls back to the grown array that the
+totem reader validates (same stride and ID position, count checked against the same player
+word). The layout actually used, and the reason when neither is readable, are written to the log
+as part of the `[Buff] … Seal of the Crusader candidate:` line. A seal that is only visible in
+the grown array is presence-only; no remaining time is reported for it.
+
 One 70938 Paladin trace supplied by the user showed a nine-slot layout with six occupied, and
 the seal appearing at slot 6 about five seconds into the recording with a 30000 ms duration
 word, while a second trace without the seal never contained the ID. Observed container lengths

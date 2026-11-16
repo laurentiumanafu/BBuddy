@@ -146,10 +146,10 @@ internal sealed class ClickAimBuffController
     // The client keeps only one Seal on a Paladin. Casting a Crusader seal
     // silently cancels any other Seal, which would fight a second managed
     // seal on the bar, so only replace a seal this controller does not manage.
-    private static bool SealReplacementSafe(List<ClickAimAction> bar, WowBInlineAuraCandidate? aura)
+    private static bool SealReplacementSafe(List<ClickAimAction> bar, HashSet<uint>? activeIds)
     {
-        if (aura == null) return true;
-        foreach (uint id in aura.CopyIds())
+        if (activeIds == null) return true;
+        foreach (uint id in activeIds)
         {
             if (id == 0 || id > int.MaxValue) continue;
             int other = (int)id;
@@ -159,10 +159,55 @@ internal sealed class ClickAimBuffController
         return true;
     }
 
-    private void ReportSeal(ClickAimAction action, int? remaining, bool blocked)
+    private static HashSet<uint> IdsOf(WowBInlineAuraCandidate inline)
     {
-        string state = !remaining.HasValue ? "unavailable; combat cast withheld" :
-            remaining.Value < 0 ? "absent" : "active";
+        var ids = new HashSet<uint>();
+        foreach (uint id in inline.CopyIds()) if (id != 0) ids.Add(id);
+        return ids;
+    }
+
+    // Aura slots change while effects are applied or expire, and in combat a
+    // single strict snapshot can be rejected as unstable. Retry a bounded
+    // number of times before falling back to the grown array; the same header,
+    // count, uniqueness and stability checks apply to every attempt.
+    private const int AuraCaptureAttempts = 3;
+
+    // Seals can sit in the inline layout or in the grown array the totem
+    // reader validates; both keep the ID at the same place inside a slot. A
+    // null result means unknown, which never authorizes a cast.
+    private static HashSet<uint>? ActiveAuraIds(Memory memory, WowBReader reader, WowBObservedUnit player,
+        out string reason, out WowBInlineAuraCandidate? inline)
+    {
+        inline = null;
+        string inlineReason = "inline candidate unreadable";
+        for (int attempt = 0; attempt < AuraCaptureAttempts; attempt++)
+        {
+            inline = WowBInlineAuraCandidate.Capture(memory, player, out inlineReason);
+            if (inline != null) { reason = inlineReason; return IdsOf(inline); }
+        }
+        reason = inlineReason;
+        if (!reader.Uses70862Features) return null;
+        WowBTotemAuraCandidate? external = WowBTotemAuraCandidate.Capture(memory, reader, player, out string externalReason);
+        reason = inlineReason + "; " + externalReason;
+        return external?.CopyIds();
+    }
+
+    // The inline slot carries a duration/expiry word; the grown array only
+    // gives presence, so a present seal reports an unknown-but-active time.
+    private static int? SealRemaining(WowBInlineAuraCandidate? inline, HashSet<uint>? activeIds, int spellId)
+    {
+        if (inline != null) return inline.Remaining(spellId);
+        if (activeIds == null) return null;
+        foreach (uint id in activeIds)
+            if (id != 0 && id <= int.MaxValue && WowBSealOfTheCrusader.Rank((int)id) != 0)
+                return ClickAimBuffSchedule.RefreshBeforeMs + 1;
+        return -1;
+    }
+
+    private void ReportSeal(ClickAimAction action, int? remaining, bool blocked, string reason)
+    {
+        string state = !remaining.HasValue ? "unavailable; combat cast withheld (" + reason + ")" :
+            (remaining.Value < 0 ? "absent" : "active") + " (" + reason + ")";
         if (blocked) state += "; another managed seal is active, replacement withheld";
         if (_reportedAuraState.TryGetValue(action.Id, out string? old) && old == state) return;
         _reportedAuraState[action.Id] = state;
@@ -356,6 +401,16 @@ internal sealed class ClickAimBuffController
                 (WowBTotemAuraCandidate.EffectForCast(action.Id) == 0 || TotemSupported(reader, action)))) return false;
             if (!CombatPlayerSafe(memory, reader, hwnd, stopped, expectedPlayer, out uint map, out uint mana) || !targetSafe()) return false;
             WowBInlineAuraCandidate? aura = WowBInlineAuraCandidate.Capture(memory, expectedPlayer);
+            // A Seal is watched through whichever validated layout is readable;
+            // the inline snapshot keeps its timing when it is available.
+            HashSet<uint>? sealIds = null;
+            WowBInlineAuraCandidate? sealInline = aura;
+            string sealReason = "";
+            if (bar.Exists(action => Eligible(action) && WowBSealOfTheCrusader.Rank(action.Id) != 0))
+            {
+                if (aura != null) { sealIds = IdsOf(aura); sealReason = "inline candidate"; }
+                else sealIds = ActiveAuraIds(memory, reader, expectedPlayer, out sealReason, out sealInline);
+            }
             WowBTotemAuraCandidate? totemAura = reader.Uses70862Features && bar.Exists(action => Eligible(action) &&
                 (TotemSupported(reader, action) || ShieldSupported(reader, action.Id)))
                 ? WowBTotemAuraCandidate.Capture(memory, reader, expectedPlayer) : null;
@@ -385,9 +440,9 @@ internal sealed class ClickAimBuffController
                     if (action.Id != preferredSeal) continue;
                     // A Seal is combat-only: it lasts 30 seconds and any other
                     // Seal cancels it, so it never uses the quiet 30-minute timer.
-                    bool replace = SealReplacementSafe(bar, aura);
-                    int? sealRemaining = aura?.Remaining(action.Id);
-                    ReportSeal(action, sealRemaining, !replace);
+                    bool replace = SealReplacementSafe(bar, sealIds);
+                    int? sealRemaining = SealRemaining(sealInline, sealIds, action.Id);
+                    ReportSeal(action, sealRemaining, !replace, sealReason);
                     if (replace && sealRemaining.HasValue && sealRemaining.Value <= 0 &&
                         TotemManaEnough(reader, expectedPlayer, action) &&
                         _schedule.PastAttemptBackoff(action.Id, _clock(), CombatRetryMs)) { buff = action; break; }
@@ -406,15 +461,24 @@ internal sealed class ClickAimBuffController
                 !SameSlot(buff, ClickAimCombat.ReadBar(reader)) || !targetSafe()) return false;
             bool totem = TotemSupported(reader, buff);
             bool shieldAction = ShieldSupported(reader, buff.Id);
+            bool sealAction = WowBSealOfTheCrusader.Rank(buff.Id) != 0;
+            WowBInlineAuraCandidate? inlineNow = sealAction || (!totem && !shieldAction)
+                ? WowBInlineAuraCandidate.Capture(memory, expectedPlayer) : null;
+            HashSet<uint>? sealIdsNow = null;
+            if (sealAction)
+            {
+                if (inlineNow != null) sealIdsNow = IdsOf(inlineNow);
+                else sealIdsNow = ActiveAuraIds(memory, reader, expectedPlayer, out _, out inlineNow);
+            }
             int? remaining = totem ? null : shieldAction ? ReadShield(memory, reader, expectedPlayer) :
-                WowBInlineAuraCandidate.Capture(memory, expectedPlayer)?.Remaining(buff.Id);
+                sealAction ? SealRemaining(inlineNow, sealIdsNow, buff.Id) : inlineNow?.Remaining(buff.Id);
             bool stillDue = totem ? TotemManaEnough(reader, expectedPlayer, buff) && TotemDue(buff, WowBTotemAuraCandidate.Capture(memory, reader, expectedPlayer), _clock())
                                   : remaining.HasValue && remaining.Value <= 0;
             if (!stillDue || EarthReserved(buff) ||
                 !CombatPlayerSafe(memory, reader, hwnd, stopped, expectedPlayer, out afterMap, out mana) || map != afterMap || mana < minimumMana ||
                 !SameSlot(buff, ClickAimCombat.ReadBar(reader)) || (shieldAction && PreferredShield(ClickAimCombat.ReadBar(reader)) != buff.Id) ||
-                (WowBSealOfTheCrusader.Rank(buff.Id) != 0 && (PreferredSeal(ClickAimCombat.ReadBar(reader)) != buff.Id ||
-                    !SealReplacementSafe(ClickAimCombat.ReadBar(reader), WowBInlineAuraCandidate.Capture(memory, expectedPlayer)))) ||
+                (sealAction && (PreferredSeal(ClickAimCombat.ReadBar(reader)) != buff.Id ||
+                    !SealReplacementSafe(ClickAimCombat.ReadBar(reader), sealIdsNow))) ||
                 ((totem || shieldAction) && !TotemManaEnough(reader, expectedPlayer, buff)) || !targetSafe() || !ClickAimSettings.UseBuffsInCombat ||
                 !Allowed(memory, reader, hwnd, stopped) || !_schedule.PastAttemptBackoff(buff.Id, _clock(), CombatRetryMs)) return false;
             ClickAimInput.TapKey(hwnd, buff.KeyVk, 40);

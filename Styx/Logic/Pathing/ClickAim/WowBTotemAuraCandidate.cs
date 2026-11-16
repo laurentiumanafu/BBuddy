@@ -29,6 +29,10 @@ internal sealed class WowBTotemAuraCandidate
         return effect == 0 ? (bool?)null : _ids.Contains((uint)effect);
     }
 
+    // The validated slot IDs, for checks this class does not map itself. The
+    // inline and grown layouts share the same ID position inside a slot.
+    internal HashSet<uint> CopyIds() => new HashSet<uint>(_ids);
+
     // Macro contents/rank are opaque. Treat any known Mana Spring candidate
     // as present, rather than repeatedly replacing a higher rank. Only 5677
     // has been observed in the user's traces; the others are Classic IDs and
