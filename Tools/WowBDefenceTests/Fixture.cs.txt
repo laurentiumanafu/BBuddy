@@ -152,13 +152,37 @@ namespace Styx.Logic.Pathing
     }
     static class WowBKnownMerchants
     {
-        public static bool IsRecordedLive(VendorFile.VendorPoint point, WowBObservedUnit unit, GreenMagic.Memory? memory, WowBReader? reader)
-            => memory != null && reader != null && point.MerchantGuids.Contains(unit.Guid.ToString()) && reader.TryGetUnitFields(unit.UnitAddress, out var fields) && fields.Health > 0;
+        public static bool Same70938HighCandidate(VendorFile.VendorPoint point, WowBGuid guid) => false;
+        public static bool IsRecordedLive(VendorFile.VendorPoint point, WowBObservedUnit unit, GreenMagic.Memory? memory, WowBReader? reader, bool allow70938Candidate = false)
+            => memory != null && reader != null && point.MerchantGuids.Contains(unit.Guid.ToString()) && IsLivingObservedNpc(unit, memory, reader);
+        public static bool IsLivingObservedNpc(WowBObservedUnit unit, GreenMagic.Memory? memory, WowBReader? reader)
+            => memory != null && reader != null && !unit.Guid.IsEmpty && !unit.IsLocalPlayer && !unit.HasPlayerVtable &&
+               reader.TryGetUnitFields(unit.UnitAddress, out var fields) && fields.Health > 0;
+        // Mirrors production: the closest living non-player unit to the player,
+        // within the vendor search radius. Proximity is not merchant type.
+        public static bool TryFindNearestNpc(WowBWorldSnapshot snap, double maxYards, out WowBObservedUnit npc, out double yards, Func<WowBObservedUnit, bool>? accept = null)
+        {
+            npc = default; yards = double.MaxValue;
+            if (!snap.TryGetLocalPlayer(out var me)) return false;
+            WowBReader? reader = ObjectManager.WowB;
+            if (reader == null) return false;
+            foreach (var candidate in snap.Units)
+            {
+                if (candidate.IsLocalPlayer || candidate.HasPlayerVtable || candidate.Guid.IsEmpty) continue;
+                if (accept != null && !accept(candidate)) continue;
+                double d = ClickAimMath.Len(candidate.Location.X - me.Location.X, candidate.Location.Y - me.Location.Y);
+                if (d <= 0.4 || d > maxYards || d >= yards) continue;
+                if (!IsLivingObservedNpc(candidate, ObjectManager.Wow, reader)) continue;
+                yards = d; npc = candidate;
+            }
+            return !npc.Guid.IsEmpty;
+        }
     }
     static class Harness
     {
         // __PRODUCTION_LEVEL_CONSTANTS__
         private static bool _stop, _vendorDue, _combatHold, _running, _clickBiasKnown, _vendorImpossible, _vendorManualPending;
+        private static WowBGuid _vendorNearestGuid;
         private static WowBGuid _defenceHandoffGuid, _focusedFightGuid;
         private static bool _focusedDamageObserved;
         private static bool CheckDeathCheckpoint(bool trackerOnly = false) => false;
@@ -322,8 +346,16 @@ namespace Styx.Logic.Pathing
             Require(TryClickRecordedMerchant(new IntPtr(1), town, selectedMerchant, out _) && ClickAimInput.Clicks == 1, "verified merchant selection right-clicked");
             Setup(5, distance: 4); Combat = true;
             Require(!TryFindVendorNpc(town, out _, out _) && !TryClickRecordedMerchant(new IntPtr(1), town, snapshot.Units[1], out _), "combat blocks merchant search and click");
-            Setup(5, distance: 4); Combat = false; town.MerchantGuids.Clear();
-            Require(!TryFindVendorNpc(town, out _, out _) && !TryClickRecordedMerchant(new IntPtr(1), town, snapshot.Units[1], out _), "unrecorded NPC not used");
+            Setup(5, distance: 4); Combat = false; town.MerchantGuids.Clear(); _vendorNearestGuid = default;
+            // No saved GUID at the saved location: the nearest living NPC is used, and
+            // it is still strictly the nearest one - not whichever unrecorded unit came first.
+            var closerUnknown = new WowBObservedUnit { Guid = new WowBGuid(7), UnitAddress = 7, RecordAddress = 70, Location = new Location { X = 2 } };
+            ObjectManager.WowB!.Fields[7] = new WowBReader.WowBUnitFields { Health = 100, Level = 5 };
+            snapshot.Units.Add(closerUnknown);
+            Require(TryFindVendorNpc(town, out var nearestMerchant, out var nearestDistance) && nearestMerchant.Guid == new WowBGuid(7) && nearestDistance == 2, "nearest living NPC used when no saved merchant GUID is observed");
+            ObjectManager.WowB!.Fields[7] = new WowBReader.WowBUnitFields { Health = 0, Level = 5 }; _vendorNearestGuid = default;
+            Require(TryFindVendorNpc(town, out nearestMerchant, out nearestDistance) && nearestMerchant.Guid == TargetGuid && nearestDistance == 4, "dead nearest NPC skipped");
+            Require(!TryClickRecordedMerchant(new IntPtr(1), town, snapshot.Units[3], out _), "a dead unrecorded NPC is never clickable");
             town.MerchantGuids.Add(TargetGuid.ToString()); town.TownMap = 2;
             Require(!TryFindVendorNpc(town, out _, out _), "wrong map blocks search");
             town.TownMap = 1; ObjectManager.WowB!.Selected = TargetGuid; ClickAimInput.F1Works = false;

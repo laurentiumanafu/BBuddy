@@ -165,7 +165,15 @@ high 64 GUID bits match a saved GUID, within the configured search radius of
 both the recorded town and player, and within 5 yd vertically of town. It
 counts even unreadable or dead matching candidates as ambiguous. The live GUID,
 object/record, map, combat and uniqueness are rechecked on approach and replay.
-Other client builds remain exact-only. The high-half correlation and merchant
+Last, whenever a trip has reached the saved merchant location and nothing above
+matched, the nearest living NPC to the player inside the search radius is used:
+the 2026-11-16 diagnostic shows saved GUIDs beginning `0x206EB0…`/`0x206B5…`
+while every loaded NPC began `0x206EC4…`, so neither the exact nor the same-high
+path could ever succeed there even though the merchant stood 3.1 yd away. The
+choice is logged as unverified (proximity is the only evidence), is sticky for
+that trip only, and every later step still re-reads the same object identity.
+This fallback is not 70938-specific; the same rule applies to other builds.
+Other client builds remain exact-only for the same-high path. The high-half correlation and merchant
 identity are unverified; a different NPC could share the high bits, so supervise
 and verify the first interaction and sale. The recorded plan still replays
 screen clicks, and the merchant window and item sale are not verified. The

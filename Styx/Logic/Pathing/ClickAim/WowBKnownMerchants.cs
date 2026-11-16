@@ -93,9 +93,20 @@ internal static class WowBKnownMerchants
     public static bool IsRecordedLive(VendorFile.VendorPoint point, WowBObservedUnit unit, Memory? memory, WowBReader? reader,
                                       bool allow70938Candidate = false)
     {
-        if (memory == null || reader == null || unit.Guid.IsEmpty || unit.IsLocalPlayer || unit.HasPlayerVtable ||
+        if (memory == null || reader == null ||
             (!point.MerchantGuids.Contains(unit.Guid.ToString()) &&
              !(allow70938Candidate && reader.IsExperimental70938 && Same70938HighCandidate(point, unit.Guid)))) return false;
+        return IsLivingObservedNpc(memory, reader, unit);
+    }
+
+    /// <summary>
+    /// The liveness half of IsRecordedLive, with no identity requirement: the unit record is
+    /// structurally readable and its health is above zero. Health is not hostility, faction or
+    /// merchant type - those stay unknown, so this never authorizes a click on its own.
+    /// </summary>
+    public static bool IsLivingObservedNpc(Memory? memory, WowBReader? reader, WowBObservedUnit unit)
+    {
+        if (memory == null || reader == null || unit.Guid.IsEmpty || unit.IsLocalPlayer || unit.HasPlayerVtable) return false;
         try
         {
             return WowBGrindFactions.ValidateDiagnosticUnit(memory, reader, unit) &&
@@ -103,5 +114,32 @@ internal static class WowBKnownMerchants
                 WowBGrindFactions.ValidateDiagnosticUnit(memory, reader, unit);
         }
         catch { return false; }
+    }
+
+    /// <summary>
+    /// Nearest-NPC fallback: the closest living non-player unit to the local player, within the
+    /// vendor search radius. Only used after a trip reached the saved merchant location and no
+    /// saved GUID was observed there. Proximity is not merchant type - the caller logs the
+    /// choice as unverified and every later step still re-reads the same object identity.
+    /// </summary>
+    public static bool TryFindNearestNpc(WowBWorldSnapshot snap, double maxYards, out WowBObservedUnit npc, out double yards,
+                                         Func<WowBObservedUnit, bool>? accept = null)
+    {
+        npc = default; yards = double.MaxValue;
+        if (!double.IsFinite(maxYards) || maxYards <= 0 || !snap.TryGetLocalPlayer(out WowBObservedUnit me)) return false;
+        Memory? memory = ObjectManager.Wow; WowBReader? reader = ObjectManager.WowB;
+        if (memory == null || reader == null) return false;
+        foreach (WowBObservedUnit candidate in snap.Units)
+        {
+            if (candidate.IsLocalPlayer || candidate.HasPlayerVtable || candidate.Guid.IsEmpty) continue;
+            if (accept != null && !accept(candidate)) continue;
+            if (!double.IsFinite(candidate.Location.X) || !double.IsFinite(candidate.Location.Y) ||
+                !double.IsFinite(candidate.Location.Z)) continue;
+            double d = ClickAimMath.Len(candidate.Location.X - me.Location.X, candidate.Location.Y - me.Location.Y);
+            if (!double.IsFinite(d) || d <= 0.4 || d > maxYards || d >= yards) continue;
+            if (!IsLivingObservedNpc(memory, reader, candidate)) continue;      // no corpses or unreadable records
+            yards = d; npc = candidate;
+        }
+        return !npc.Guid.IsEmpty;
     }
 }

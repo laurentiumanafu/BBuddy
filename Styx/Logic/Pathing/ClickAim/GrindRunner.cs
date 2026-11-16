@@ -545,6 +545,10 @@ internal static class GrindRunner
     private static WowBGuid _townPlayer;
     private static WowBReader? _townReader;
     private static GreenMagic.Memory? _townMemory;
+    // Nearest-NPC fallback, chosen only when a trip has reached the saved merchant location and
+    // no saved GUID was observed there. Sticky for the rest of that trip so a second NPC drifting
+    // closer cannot swap the identity mid-interaction, and reset at the start of every trip.
+    private static WowBGuid _vendorNearestGuid;
 
     private static bool AutoVendorPending() => _townTransit || _vendorReturnHotspot != null || _vendorMailboxPending != null || (_vendorAutoPending && ClickAimSettings.AutoSell && !_vendorImpossible);
     private static void ClearAutoVendorPending()
@@ -3645,6 +3649,7 @@ internal static class GrindRunner
         WowBObservedUnit npc = default(WowBObservedUnit);
         double npcYd = 0.0;
         bool found = false;
+        _vendorNearestGuid = default;          // a new trip re-chooses the fallback identity from scratch
         for (int attempt = 0; attempt < VendorNpcAttempts && !_stop && !found; attempt++)
         {
             if (TryFindVendorNpc(point, out npc, out npcYd)) { found = true; break; }
@@ -3655,13 +3660,17 @@ internal static class GrindRunner
         {
             _vendorRetryAt = Environment.TickCount + VendorRetryMs;
             Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                "[Grind] no confirmed GUID or unique 70938 same-high merchant candidate was found within {1} yd at town point {0}. The point was {2:F0} yd away at departure; {3} confirmation(s) loaded. Identity, streaming or candidate reads may differ.",
+                "[Grind] no confirmed GUID, unique 70938 same-high candidate or any other living NPC was found within {1} yd at town point {0}. The point was {2:F0} yd away at departure; {3} confirmation(s) loaded. Identity, streaming or candidate reads may differ.",
                 point, ClickAimSettings.VendorSearchYd, ClickAimMath.Len(point.X - px, point.Y - py), point.MerchantGuids.Count));
             ReportVendorIdentityCandidates(point);
             return false;
         }
 
-        if (!point.MerchantGuids.Contains(npc.Guid.ToString()))
+        if (!point.MerchantGuids.Contains(npc.Guid.ToString()) && !WowBKnownMerchants.Same70938HighCandidate(point, npc.Guid))
+            Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                "[Grind] no saved merchant GUID was observed at town point {0}; using the nearest living NPC {1} at {2:F1} yd (merchant identity is not verified - proximity is the only evidence)",
+                point, npc.Guid, npcYd));
+        else if (!point.MerchantGuids.Contains(npc.Guid.ToString()))
             Logging.Write("[Grind] 70938 merchant GUID differs from saved confirmation; using unique same-high candidate " + npc.Guid +
                 " near the saved town (merchant identity is not independently verified)");
 
@@ -4234,6 +4243,10 @@ internal static class GrindRunner
     // Exact user-confirmed GUIDs take priority. For 70938 only, a unique
     // same-high GUID near the recorded town is an experimental respawn
     // candidate, not proof of merchant identity. Never use an ambiguous match.
+    // Last, after the trip has reached the saved merchant location: the nearest
+    // living NPC to the player, because the merchant that stands where the
+    // merchant is recorded to stand is the merchant to sell to even when its
+    // GUID changed. Proximity is the only evidence and it is logged as such.
     private static bool TryFindVendorNpc(VendorFile.VendorPoint point, out WowBObservedUnit npc, out double yards)
     {
         npc = default; yards = double.MaxValue;
@@ -4267,10 +4280,34 @@ internal static class GrindRunner
             fallback = candidate; fallbackYd = d;
         }
         if (!npc.Guid.IsEmpty) return true;
-        if (exactObserved || fallbackCount != 1 || !double.IsFinite(fallbackYd) || fallbackYd <= 0.4 ||
-            fallbackYd > ClickAimSettings.VendorSearchYd ||
-            !WowBKnownMerchants.IsRecordedLive(point, fallback, memory, reader, true)) return false;
-        npc = fallback; yards = fallbackYd; return true;
+        if (!exactObserved && fallbackCount == 1 && double.IsFinite(fallbackYd) && fallbackYd > 0.4 &&
+            fallbackYd <= ClickAimSettings.VendorSearchYd &&
+            WowBKnownMerchants.IsRecordedLive(point, fallback, memory, reader, true))
+        { npc = fallback; yards = fallbackYd; return true; }
+
+        /* No saved GUID in reach and no unique same-high candidate: the character is
+         * standing at the saved merchant location, so the closest living NPC there is the
+         * merchant to use. Distance is not merchant type, so the choice is logged as
+         * unverified and every later step re-reads the same object. A saved merchant that
+         * is loaded but out of reach is not substituted - only a merchant that is absent. */
+        if (exactObserved) return false;
+        bool NearestAcceptable(WowBObservedUnit candidate)
+        {
+            double townDistance = ClickAimMath.Len(candidate.Location.X - point.X, candidate.Location.Y - point.Y);
+            return double.IsFinite(townDistance) && townDistance <= ClickAimSettings.VendorSearchYd &&
+                   double.IsFinite(candidate.Location.Z) && Math.Abs(candidate.Location.Z - point.Z) <= 5.0;
+        }
+        if (!_vendorNearestGuid.IsEmpty && snap.TryGetUnit(_vendorNearestGuid, out WowBObservedUnit sticky) &&
+            NearestAcceptable(sticky) && WowBKnownMerchants.IsLivingObservedNpc(memory, reader, sticky))
+        {
+            double stickyYd = ClickAimMath.Len(sticky.Location.X - me.Location.X, sticky.Location.Y - me.Location.Y);
+            if (double.IsFinite(stickyYd) && stickyYd > 0.4 && stickyYd <= ClickAimSettings.VendorSearchYd)
+            { npc = sticky; yards = stickyYd; return true; }
+        }
+        if (!WowBKnownMerchants.TryFindNearestNpc(snap, ClickAimSettings.VendorSearchYd, out WowBObservedUnit nearest, out double nearestYd, NearestAcceptable))
+            return false;
+        _vendorNearestGuid = nearest.Guid;
+        npc = nearest; yards = nearestYd; return true;
     }
 
     private static bool VendorCandidateStillValid(VendorFile.VendorPoint point, WowBObservedUnit original,
@@ -4285,8 +4322,13 @@ internal static class GrindRunner
             !Capture(out WowBWorldSnapshot? snap) || snap == null || !snap.TryGetLocalPlayer(out player) ||
             !snap.TryGetUnit(original.Guid, out npc) || npc.RecordAddress != original.RecordAddress || npc.UnitAddress != original.UnitAddress) return false;
         bool exact = point.MerchantGuids.Contains(npc.Guid.ToString());
-        if (!WowBKnownMerchants.IsRecordedLive(point, npc, memory, reader, !exact)) return false;
-        if (!exact && (!TryFindVendorNpc(point, out WowBObservedUnit unique, out _) ||
+        // The nearest-NPC fallback has no recorded identity to compare against, so the
+        // object itself is the identity: the same GUID, record and unit address that the
+        // trip chose, still structurally readable and still alive.
+        bool nearest = !_vendorNearestGuid.IsEmpty && npc.Guid == _vendorNearestGuid;
+        if (!WowBKnownMerchants.IsRecordedLive(point, npc, memory, reader, !exact) &&
+            !(nearest && WowBKnownMerchants.IsLivingObservedNpc(memory, reader, npc))) return false;
+        if (!exact && !nearest && (!TryFindVendorNpc(point, out WowBObservedUnit unique, out _) ||
             unique.Guid != original.Guid || unique.RecordAddress != original.RecordAddress || unique.UnitAddress != original.UnitAddress)) return false;
         // An automatic trip cannot interact after the character/attachment or
         // auto-sell setting changes, including after reaching the town point.

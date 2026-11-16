@@ -2446,6 +2446,23 @@ GUID is saved; if it changes or the NPC is unloaded, it must be selected and
 remembered again. A recorded GUID is not proof that the unit is a merchant.
 Existing plans without a recorded map and confirmed merchant are not used.
 
+**Nearest NPC when the saved merchant is not found.** Standing at the saved town
+point is the strongest evidence available that the character is where a merchant
+is, so if no saved GUID (and, on 70938, no unique same-high candidate) is
+observed there, the trip now uses the **nearest living NPC to the player inside
+the search radius** instead of giving up. This is exactly the 21:21 diagnostic:
+the saved GUIDs began `0x206EB0…` and `0x206B5…` while every loaded NPC began
+`0x206EC4…`, so an exact match could never succeed even though the merchant was
+3.1 yd away.
+
+Proximity is not merchant type — no field this build reads identifies a vendor —
+so the choice is logged with its GUID and distance, it is sticky for the rest of
+the trip (a second NPC drifting closer cannot take over mid-interaction) and is
+re-chosen from scratch on the next trip, and every later step still re-reads the
+same GUID, record and unit address, map, combat state and ~5 yd range before any
+click. Corpses and unreadable records are never chosen. The plan itself is still
+only replayed screen clicks: the merchant window and the sale stay unverified.
+
 Enable automatic selling and set the threshold to **40** (40 is the new default;
 existing saved settings are preserved), or press **Sell now** during a Grind
 run. The count represents corpse loot interactions, not independently verified
