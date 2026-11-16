@@ -100,7 +100,7 @@ namespace Styx.Logic.Pathing
     }
     static class WowBCombatResearch
     {
-        internal const int ExternalCandidateStride = 0x128, ExternalMaxSlots = 24, External70888MaxSlots = 28, External70938MaxSlots = 32;
+        internal const int ExternalCandidateStride = 0x128, ExternalMaxSlots = 24, External70888MaxSlots = 64, External70938MaxSlots = 64;
         internal static byte[]? Data;
         internal static bool StopDuringRead, CombatEndsDuringRead;
         internal static Action? OnRead;
@@ -823,6 +823,22 @@ namespace Styx.Logic.Pathing
             Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "grown-array seal suppresses the key");
             WowBCombatResearch.Data = null;
             Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "unreadable grown array withholds the seal");
+            // The grown container keeps adding slots as auras accumulate. A
+            // 33-slot array must still be read, or every aura-based combat
+            // buff silently stops because unknown is never treated as absent.
+            Reset(); controller.Reset(); now = 0; ObjectManager.WowB!.IsExperimental70938 = true;
+            GrindRunner.Combat = true; ClickAimSettings.UseBuffsInCombat = true;
+            ObjectManager.WowB.Power = 400; combatPlayer = ObjectManager.WowB.Player;
+            ClickAimCombat.Bar = new List<ClickAimAction> { Action(8134, 1) };
+            var grown = new byte[33 * 0x128];
+            BitConverter.GetBytes(777U).CopyTo(grown, 0xE8);
+            WowBCombatResearch.Data = grown; ObjectManager.Wow!.TotemCount = 1;
+            Check(controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe) && ClickAimInput.Keys.Count == 1 &&
+                  ClickAimInput.Keys[0] == 0x31, "33-slot grown array is read; absent shield is attempted");
+            ClickAimInput.Keys.Clear(); now += 11000;
+            BitConverter.GetBytes(8134U).CopyTo(grown, 32 * 0x128 + 0xE8); ObjectManager.Wow!.TotemCount = 2;
+            Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "33-slot grown array reports the shield present");
+            WowBCombatResearch.Data = null;
             Console.WriteLine("Buff scheduling and safety fixtures passed (synthetic only; no real cast or aura validation).");
         }
     }

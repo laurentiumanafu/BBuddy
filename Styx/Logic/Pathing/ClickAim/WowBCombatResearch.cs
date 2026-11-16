@@ -132,14 +132,17 @@ internal static class WowBCombatResearch
         return text.ToString();
     }
 
-    // 70888 showed length 28/capacity 36. The 70938 five-stack recording
-    // reports a stable 32/36 header, but the old 30-slot limit prevented any
-    // external bytes from being captured. Allow only the newly observed length,
-    // not the full capacity. Its contents and completeness are still unverified;
-    // readable region, stable header/data and consumer count checks remain required.
+    // This container grows as auras accumulate: 70888 showed length 28/capacity
+    // 36, and 70938 showed 31, 32 and then 33/36. The old hard slot limits (30,
+    // then 32) silently rejected the grown array and disabled every aura-based
+    // combat buff, because unknown is never read as absent. Length is therefore
+    // bounded by the container's own capacity word - checked below with
+    // length > capacity - and that capacity is itself capped. Contents and
+    // completeness are still unverified; readable region, stable header/data
+    // and consumer count checks remain required.
     private const int ExternalHeaderOffset = 0x5F0, ExternalHeaderSize = 24;
-    internal const int ExternalCandidateStride = 0x128, ExternalMaxSlots = 24, External70888MaxSlots = 28, External70938MaxSlots = 32;
-    private const ulong ExternalMaxCapacity = 32, External70888MaxCapacity = 36;
+    internal const int ExternalCandidateStride = 0x128, ExternalMaxSlots = 24, External70888MaxSlots = 64, External70938MaxSlots = 64;
+    private const ulong ExternalMaxCapacity = 32, External70888MaxCapacity = 64;
 
     internal sealed class ExternalCandidateSample
     {

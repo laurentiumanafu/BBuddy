@@ -27,7 +27,7 @@ namespace Styx.Logic.Pathing
 {
     static class WowBCombatResearch
     {
-        public const int ExternalCandidateStride = 0x128, External70938MaxSlots = 32;
+        public const int ExternalCandidateStride = 0x128, External70938MaxSlots = 64;
         public static byte[]? Data; public static Action? OnRead;
         public sealed class ExternalCandidateSample { public byte[] Bytes = Array.Empty<byte>(); }
         public static ExternalCandidateSample? ReadExternalCandidate(Memory m, ulong unit, out string reason, bool a, bool b)
