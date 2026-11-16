@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Threading;
 using GreenMagic;
 using Styx.Helpers;
 using Styx.WoWInternals;
@@ -8,7 +7,7 @@ using Styx.WoWInternals;
 namespace Styx.Logic.Pathing;
 
 // Explicitly opted-in 70938 experiment. UI, focus, mailability and delivery are
-// not independently verified. Unknown input/send outcomes hold without replay.
+// not independently verified. Each vendor trip allows at most one send attempt.
 internal static class WowBExperimentalMail
 {
     private static List<WowBMailGridLookup.Bag> Copy(List<WowBContainerResearchProbe.MailBagObservation> bags)
@@ -41,8 +40,8 @@ internal static class WowBExperimentalMail
         return down && reason == "left-button messages posted" && safe();
     }
 
-    // True means no more unskipped 0..3 candidates remain for this trip, not
-    // that every bag is empty, a skipped item is ineligible, or mail arrived.
+    // True means observed bag progress or no eligible observed candidates;
+    // neither establishes that the recipient, UI or server delivery is correct.
     internal static bool Run(IntPtr hwnd, Memory memory, WowBReader reader, WowBGuid player,
         WowBMailUiCalibration.Result ui, string recipient, Func<string?> safetyFailure)
     {
@@ -54,8 +53,6 @@ internal static class WowBExperimentalMail
             ClickAimInput.ClientSize(hwnd, out int width, out int height) && width == ui.Width && height == ui.Height;
         try
         {
-            if (WowBMailSafetyHold.IsHeld())
-            { Logging.Write("[Mail] previous composition or send is uncertain; this trip is held until a confirmed safe return. Prior delivery and leftover mailbox state are unverified."); return false; }
             if (!WowBMailUiCalibration.Valid(ui) || ui.Player != player.ToString())
             { Logging.Write("[Mail] preflight: controls invalid or for another character; no input sent."); return false; }
             if (!WowBMailRecipientText.ValidForTest(recipient))
@@ -89,185 +86,122 @@ internal static class WowBExperimentalMail
             { Logging.Write("[Mail] preflight withheld: " + issue + "; no mailbox, tab, recipient, attachment or send input sent."); return false; }
             if (!safe())
             { Logging.Write("[Mail] preflight state or client size changed before mailbox input; no input sent."); return false; }
-            Logging.Write("[Mail] preflight passed; checking recorded mailbox hover. UI state is not verified.");
-            if (!GatherBackgroundFocus.TryClientOrigin(hwnd, out int originX, out int originY))
-            { Logging.Write("[Mail] mailbox search: client origin unavailable; no mailbox click sent."); return false; }
-            int mouseX = 0, mouseY = 0;
-            if (!background && !ClickAimInput.TryCursorScreen(out mouseX, out mouseY))
-            { Logging.Write("[Mail] mailbox search: foreground cursor unavailable; no mailbox click sent."); return false; }
-            bool hoverSafe() => safe() && GatherBackgroundFocus.TryClientOrigin(hwnd, out int ox, out int oy) &&
-                ox == originX && oy == originY && (background ||
-                (ClickAimInput.TryCursorScreen(out int mx, out int my) &&
-                 Math.Abs((long)mx - mouseX) <= 3 && Math.Abs((long)my - mouseY) <= 3));
-            string openReason;
-            using (memory.TemporaryCacheState(false))
-            {
-                bool found = WowBMailboxHoverSearch.Find(w, h, ui.MailboxX, ui.MailboxY, ui.MailboxHover,
-                    (x, y) => ClickAimInput.PostMouseMoveFraction(hwnd, x / (double)(w - 1), y / (double)(h - 1)),
-                    () => (reader.TryReadMouseoverGuidCandidate(out WowBGuid current), current), hoverSafe, ClickAimAbort.Wait,
-                    out int mailboxX, out int mailboxY, out string hoverReason);
-                if (!found)
-                { Logging.Write("[Mail] mailbox hover search: " + hoverReason + "; no mailbox click sent. Check camera, position and calibration."); return false; }
-                Logging.Write("[Mail] mailbox hover search: " + hoverReason + ".");
-                if (!ClickAimInput.ConfirmedRightClick(hwnd, mailboxX, mailboxY, w, h,
-                        () => hoverSafe() && reader.TryReadMouseoverGuidCandidate(out WowBGuid final) &&
-                            !final.IsEmpty && final.ToString() == ui.MailboxHover, out openReason))
-                { Logging.Write("[Mail] mailbox click withheld: " + openReason + "; no mail send input sent."); return false; }
-            }
+            Logging.Write("[Mail] using recorded mailbox pixel (" + ui.MailboxX + "," + ui.MailboxY +
+                "); no hover identity check. Camera, object and UI state are unverified.");
+            if (!Move(hwnd, ui.MailboxX, ui.MailboxY, w, h, safe) ||
+                !ClickAimInput.ConfirmedRightClick(hwnd, ui.MailboxX, ui.MailboxY, w, h, safe, out string openReason))
+            { Logging.Write("[Mail] recorded mailbox click withheld or interrupted; no mail send input sent."); return false; }
             Logging.Write("[Mail] mailbox interaction posted; frame is not verified: " + openReason);
             if (openReason != "right-button messages posted")
             { Logging.Write("[Mail] mailbox button release uncertain; no tab or send input. Inspect manually."); return false; }
             if (!Wait(1500, safe))
             { Logging.Write("[Mail] stopped or safety changed after mailbox interaction; no tab or send input. Inspect manually."); return false; }
-            int batches = 0;
-            var skipped = new HashSet<WowBGuid>(); // one trip only; never retry the same item in it
-            while (batches < 64 && safe())
+            Logging.Write("[Mail] attempting recorded Send Mail tab at client pixel (" + ui.TabX + "," + ui.TabY +
+                ") in " + w + "x" + h + " " + (background ? "background" : "foreground") +
+                " mode. Tab and mailbox UI state are unverified.");
+            if (!Left(hwnd, ui.TabX, ui.TabY, w, h, background, safe, out string tabReason))
+            { Logging.Write("[Mail] tab click withheld or uncertain: " + tabReason + "; no send input on this trip."); return false; }
+            Logging.Write("[Mail] Send Mail tab click messages posted; tab opening and field focus are not verified.");
+            if (!Wait(1000, safe))
+            { Logging.Write("[Mail] safety changed during the one-second tab wait; no recipient or send input on this trip."); return false; }
+            int generation = ClickAimAbort.Generation;
+            foreach (char c in recipient)
+            {
+                if (!(background ? ClickAimInput.BackgroundMailRecipientChar(hwnd, c, generation, safe)
+                                 : ClickAimInput.DiagnosticRecipientChar(hwnd, c, generation, safe)))
+                { Logging.Write("[Mail] recipient entry interrupted or partial; no send attempted."); return false; }
+                if (ClickAimAbort.Wait(30)) return false;
+            }
+            Logging.Write("[Mail] recipient characters posted once; field focus and text are not verified.");
+            var skipped = new HashSet<WowBGuid>();
+            var attempted = new HashSet<WowBGuid>(); // each item gets at most one click this trip
             {
                 if (!ReadBags(memory, reader, player, out var bags) || bags == null)
-                { Logging.Write("[Mail] active bag observations unavailable; no tab or send input in this batch."); return false; }
+                { Logging.Write("[Mail] active bag observations unavailable; no send input this trip."); return false; }
                 if (!WowBMailGridLookup.TryLoad(WowBMailGridCalibration.DefaultPath, player.ToString(), w, h, bags, out var grid) || grid == null)
-                { Logging.Write("[Mail] saved bag grid missing or incompatible with current player, window or bag identities; no tab or send input in this batch."); return false; }
+                { Logging.Write("[Mail] saved bag grid missing or incompatible; no send input this trip."); return false; }
                 if (!WowBMailGridLookup.TryPreviewExcluding(grid, player.ToString(), w, h, bags, skipped, out var selected, out int count, out bool unknownPrimary, out bool unknownFifth))
-                { Logging.Write("[Mail] bag preview invalid or inconsistent; no tab or send input in this batch."); return false; }
+                { Logging.Write("[Mail] bag preview invalid or inconsistent; no send input this trip."); return false; }
                 if (unknownPrimary)
-                { Logging.Write("[Mail] one or more bag candidates 0–3 are unknown; no tab or send input in this batch."); return false; }
+                { Logging.Write("[Mail] one or more bag candidates 0–3 are unknown; no send input this trip."); return false; }
                 if (count == 0)
                 {
-                    Logging.Write("[Mail] no unskipped nonzero candidates 0–3 remain for this trip; skipped=" + skipped.Count +
-                        "; candidate 4=" + (unknownFifth ? "Unknown" : "unverified") + ". Skipped items may remain; this is not proof of empty bags or mail delivery.");
+                    Logging.Write("[Mail] no nonzero candidates 0–3 observed; candidate 4=" + (unknownFifth ? "Unknown" : "unverified") +
+                        ". No send input this trip; this does not prove bags are empty.");
                     return true;
                 }
+                // Candidate IDs represent item clicks, not proof that the UI
+                // attached them. Do not depend on the experimental mail table.
                 var expected = new List<WowBMailCandidateTable.Expected>();
-                if (!WowBMailCandidateReader.TryRead(memory, reader, player, safe, out byte[]? raw))
-                { Logging.Write("[Mail] attachment candidate table unreadable or safety changed; no tab or send input in this batch."); return false; }
-                if (!WowBMailCandidateTable.Matches(raw, expected))
-                { Logging.Write("[Mail] attachment candidate is not empty-like; no tab or send input in this batch."); return false; }
-                if (!WowBMailSafetyHold.TryBegin(out string holdReason))
-                { Logging.Write("[Mail] cannot start composition: " + holdReason + "; mail is held, no tab or send input in this batch."); return false; }
-                if (batches == 0)
+                while (selected.Count > 0 && expected.Count < 12)
                 {
-                    Logging.Write("[Mail] bag/grid and empty-like table prechecks passed; attempting recorded Send Mail tab at client pixel (" +
-                        ui.TabX + "," + ui.TabY + ") in " + w + "x" + h + " " + (background ? "background" : "foreground") +
-                        " mode. Tab and mailbox UI state are unverified.");
-                    if (!Left(hwnd, ui.TabX, ui.TabY, w, h, background, safe, out string tabReason))
-                    { Logging.Write("[Mail] tab click withheld or uncertain: " + tabReason + "; safety: " + (safetyFailure() ?? "client geometry or button-release check") + ". No send input in this batch."); return false; }
-                    Logging.Write("[Mail] Send Mail tab click messages posted; tab opening and field focus are not verified.");
-                    if (!Wait(1000, safe))
-                    { Logging.Write("[Mail] safety changed during the one-second tab wait; no recipient or send input in this batch."); return false; }
-                }
-                else
-                {
-                    // After an observed send the user reports the recipient is
-                    // cleared and automatically focused; do not click the tab
-                    // again. The one-second post-send wait happens below.
-                    Logging.Write("[Mail] previous send observed and one-second wait complete; posting recipient directly for next batch without clicking the tab. Field focus and contents are unverified.");
-                }
-                int generation = ClickAimAbort.Generation;
-                foreach (char c in recipient)
-                {
-                    if (!(background ? ClickAimInput.BackgroundMailRecipientChar(hwnd, c, generation, safe)
-                                     : ClickAimInput.DiagnosticRecipientChar(hwnd, c, generation, safe)))
-                    { Logging.Write("[Mail] recipient entry interrupted or partial; inspect manually. No send attempted."); return false; }
-                    if (ClickAimAbort.Wait(30)) return false;
-                }
-                Logging.Write("[Mail] recipient characters posted for batch " + (batches + 1) + "; field focus and text are not verified.");
-                // Each scan group contains at most 12 clicks. If every item in
-                // a group is skipped, scan the next group without retyping the
-                // recipient into the still-open, empty composition.
-                while (true)
-                {
-                    if (selected.Count == 0 || selected.Count > 12)
-                    { Logging.Write("[Mail] invalid candidate group; no send input in this batch."); return false; }
                     foreach (var slot in selected)
                     {
-                        if (!ReadBags(memory, reader, player, out var current) || current == null || !WowBMailGridLookup.Same(bags, current) ||
-                            !WowBMailCandidateReader.TryRead(memory, reader, player, safe, out raw) || !WowBMailCandidateTable.Matches(raw, expected))
-                        { Logging.Write("[Mail] bag or attachment observations changed before an attachment; no send input in this batch. Inspect manually."); return false; }
+                        if (expected.Count >= 12) break;
+                        if (!ReadBags(memory, reader, player, out var current) || current == null || !WowBMailGridLookup.Same(bags, current))
+                        { Logging.Write("[Mail] bag observations changed before an item click; no send input this trip."); return false; }
                         var bag = current[slot.Candidate];
-                        if (bag.Candidate != slot.Candidate || bag.Unknown || slot.Slot < 0 || slot.Slot >= bag.Slots.Length || bag.Slots[slot.Slot] != slot.Item || skipped.Contains(slot.Item))
-                        { Logging.Write("[Mail] selected bag slot changed; no send input in this batch. Inspect manually."); return false; }
+                        if (bag.Candidate != slot.Candidate || bag.Unknown || slot.Slot < 0 || slot.Slot >= bag.Slots.Length ||
+                            bag.Slots[slot.Slot] != slot.Item || attempted.Contains(slot.Item))
+                        { Logging.Write("[Mail] selected bag slot changed; no send input this trip."); return false; }
+                        attempted.Add(slot.Item);
                         int x = (int)Math.Round(slot.X), y = (int)Math.Round(slot.Y);
-                        if (!Move(hwnd, x, y, w, h, safe) ||
-                            !ClickAimInput.ConfirmedRightClick(hwnd, x, y, w, h, safe, out string clickReason))
-                        { Logging.Write("[Mail] attachment input withheld or uncertain; inspect manually."); return false; }
-                        if (clickReason != "right-button messages posted" || !safe())
-                        { Logging.Write("[Mail] attachment button release or state uncertain; inspect manually."); return false; }
-                        var withItem = new List<WowBMailCandidateTable.Expected>(expected) { new WowBMailCandidateTable.Expected(slot.Item, bag.Identity) };
-                        var decision = new WowBMailAttachmentPolicy();
-                        bool attached = false, complete = true;
-                        for (int attempt = 0; attempt < 20; attempt++)
+                        if (!Move(hwnd, x, y, w, h, safe))
                         {
-                            if (!safe() || ClickAimAbort.Wait(200)) { complete = false; break; }
-                            bool readable = WowBMailCandidateReader.TryRead(memory, reader, player, safe, out raw);
-                            if (decision.Observe(readable, readable && WowBMailCandidateTable.Matches(raw, expected),
-                                readable && WowBMailCandidateTable.Matches(raw, withItem)) == WowBMailAttachmentPolicy.Decision.Attached)
-                            { attached = true; break; }
-                        }
-                        if (attached)
-                        {
-                            expected.Add(new WowBMailCandidateTable.Expected(slot.Item, bag.Identity));
+                            if (!safe()) return false;
+                            skipped.Add(slot.Item);
+                            Logging.Write("[Mail] item move not posted; skipping this item for the trip.");
                             continue;
                         }
-                        // Stable unchanged table alone is not proof of failure.
-                        // Bracket two unchanged bag observations with table reads;
-                        // any unreadable, changed or unexpected state holds.
-                        bool stable = complete && safe() &&
-                            WowBMailCandidateReader.TryRead(memory, reader, player, safe, out raw) && WowBMailCandidateTable.Matches(raw, expected) &&
-                            ReadBags(memory, reader, player, out var afterClick1) && afterClick1 != null && WowBMailGridLookup.Same(bags, afterClick1) &&
-                            ReadBags(memory, reader, player, out var afterClick2) && afterClick2 != null && WowBMailGridLookup.Same(bags, afterClick2) &&
-                            WowBMailCandidateReader.TryRead(memory, reader, player, safe, out raw) && WowBMailCandidateTable.Matches(raw, expected) && safe();
-                        if (decision.Finish(complete, stable, stable) != WowBMailAttachmentPolicy.Decision.Skip)
-                        { Logging.Write("[Mail] attachment outcome uncertain; no retry or send. Inspect manually."); return false; }
-                        skipped.Add(slot.Item);
-                        Logging.Write("[Mail] candidate " + slot.Candidate + " slot " + (slot.Slot + 1) +
-                            " attachment not observed after stable checks; skipping it for this trip, not retrying. Ineligibility is unverified.");
+                        if (!ClickAimInput.ConfirmedRightClick(hwnd, x, y, w, h, safe, out string clickReason))
+                        {
+                            if (!safe()) return false;
+                            skipped.Add(slot.Item);
+                            Logging.Write("[Mail] item click not posted: " + clickReason + "; skipping this item for the trip.");
+                            continue;
+                        }
+                        if (clickReason != "right-button messages posted" || !safe())
+                        { Logging.Write("[Mail] item button release or state uncertain; no send input this trip."); return false; }
+                        expected.Add(new WowBMailCandidateTable.Expected(slot.Item, bag.Identity));
                     }
-                    if (expected.Count > 0) break;
-                    if (!WowBMailGridLookup.TryPreviewExcluding(grid, player.ToString(), w, h, bags, skipped,
+                    if (expected.Count >= 12) break;
+                    if (!WowBMailGridLookup.TryPreviewExcluding(grid, player.ToString(), w, h, bags, attempted,
                         out selected, out count, out unknownPrimary, out unknownFifth) || unknownPrimary)
-                    { Logging.Write("[Mail] next candidate group unavailable; no send input. Inspect manually."); return false; }
-                    if (count == 0)
-                    {
-                        Logging.Write("[Mail] no further unskipped candidates; skipped=" + skipped.Count +
-                            ". No send input for the empty composition. Recipient text may remain; the hold stays set until confirmed safe return or manual inspection. Skipped items may remain. Candidate 4 and delivery are unverified.");
-                        return true;
-                    }
+                    { Logging.Write("[Mail] next candidate group unavailable; no send input this trip."); return false; }
                 }
-                if (expected.Count == 0 || expected.Count > 12 || !safe() ||
-                    !WowBMailCandidateReader.TryRead(memory, reader, player, safe, out raw) || !WowBMailCandidateTable.Matches(raw, expected) ||
-                    !ReadBags(memory, reader, player, out var beforeSend) || beforeSend == null || !WowBMailGridLookup.Same(bags, beforeSend))
-                { Logging.Write("[Mail] final pre-send observations or safety changed; no send input in this batch. Inspect manually."); return false; }
+                if (expected.Count == 0)
+                { Logging.Write("[Mail] no item click was posted; skipped=" + skipped.Count + "; no send input this trip."); return false; }
+                if (!safe() || !ReadBags(memory, reader, player, out var beforeSend) || beforeSend == null ||
+                    !WowBMailGridLookup.Same(bags, beforeSend))
+                { Logging.Write("[Mail] final bag observations or safety changed; no send input this trip."); return false; }
                 if (!Left(hwnd, ui.SendX, ui.SendY, w, h, background, safe, out string sendReason))
                 { Logging.Write("[Mail] send input withheld or uncertain: " + sendReason + "; no retry. Inspect manually."); return false; }
-                Logging.Write("[Mail] Send button messages posted once; recipient and server acceptance not verified. An uncertain send is not retried on this trip.");
-                // At least one second after Send before any later recipient
-                // text. First establish observable progress; never start the
-                // next composition after an uncertain send.
+                Logging.Write("[Mail] Send button messages posted once; recipient and server acceptance are unverified. No second send this trip.");
                 if (!Wait(1000, safe))
-                { Logging.Write("[Mail] safety changed during the one-second post-send wait; outcome uncertain, inspection hold retained. No retry."); return false; }
-                bool progressed = false;
+                { Logging.Write("[Mail] safety changed during the one-second post-send wait; outcome unknown. No retry this trip."); return false; }
+                bool observed = false;
                 for (int attempt = 0; attempt < 60 && safe(); attempt++)
                 {
                     if (ClickAimAbort.Wait(250)) break;
-                    if (!WowBMailCandidateReader.TryRead(memory, reader, player, safe, out raw) ||
-                        !WowBMailCandidateTable.Matches(raw, new List<WowBMailCandidateTable.Expected>()) ||
-                        !ReadBags(memory, reader, player, out var after) || after == null ||
-                        !WowBMailGridLookup.Validate(grid, player.ToString(), w, h, after)) continue;
-                    bool found = false;
-                    foreach (var b in after) foreach (var id in b.Slots)
-                        foreach (var sent in expected) if (id == sent.Item) found = true;
-                    if (!found) { progressed = true; break; }
+                    if (!ReadBags(memory, reader, player, out var after) || after == null ||
+                        !WowBMailGridLookup.Validate(grid, player.ToString(), w, h, after) ||
+                        !ReadBags(memory, reader, player, out var afterAgain) || afterAgain == null ||
+                        !WowBMailGridLookup.Same(after, afterAgain) || !safe()) continue;
+                    int missing = WowBMailSendObservation.CountMissing(expected, after);
+                    if (missing < 0) continue;
+                    observed = true;
+                    if (missing > 0)
+                    {
+                        Logging.Write("[Mail] " + missing + " of " + expected.Count +
+                            " clicked item candidates no longer observed in candidates 0–4 after Send; backpack contents, recipient and delivery remain unverified. One send per trip.");
+                        return true;
+                    }
                 }
-                if (!progressed) { Logging.Write("[Mail] send outcome uncertain; no retry on this trip. A later retry after return can duplicate or misdirect mail; inspect if possible."); return false; }
-                Logging.Write("[Mail] batch items no longer observed in candidates 0–4 and mail table is zero-like; server delivery and backpack contents remain unverified.");
-                if (!safe()) { Logging.Write("[Mail] safety changed after observed progress; inspection hold retained."); return false; }
-                if (!WowBMailSafetyHold.TryClear(out string clearReason))
-                { Logging.Write("[Mail] could not clear hold after observed progress: " + clearReason + "; no further mail this trip."); return false; }
-                batches++;
-                Logging.Write("[Mail] next nonempty batch will post the recipient again; field contents are not readable.");
+                Logging.Write(observed
+                    ? "[Mail] no clicked item candidates disappeared from observed bags after Send; treating this trip as failed. No retry this trip."
+                    : "[Mail] bag state after Send was unreadable or unstable; outcome unknown and treated as a failed trip. No retry this trip.");
+                return false;
             }
-            Logging.Write("[Mail] safety interruption or 64-batch limit; no automatic resend.");
-            return false;
         }
         catch (Exception ex) { Logging.Write("[Mail] outcome uncertain; no automatic retry: " + ex.Message); return false; }
     }

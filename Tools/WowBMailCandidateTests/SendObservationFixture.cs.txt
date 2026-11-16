@@ -1,0 +1,36 @@
+using System;
+using System.Collections.Generic;
+using Styx.WoWInternals;
+using Styx.Logic.Pathing;
+namespace Styx.Logic.Pathing
+{
+    static class WowBMailCandidateTable
+    {
+        internal readonly struct Expected { internal readonly WowBGuid Item; internal Expected(WowBGuid item) { Item = item; } }
+    }
+    static class WowBMailGridLookup
+    {
+        internal sealed class Bag { internal int Candidate; internal bool Unknown; internal WowBGuid[] Slots = Array.Empty<WowBGuid>(); }
+    }
+}
+static class Fixture
+{
+    static void Check(bool ok, string label) { if (!ok) throw new Exception(label); }
+    static void Main()
+    {
+        var a = new WowBGuid(1, 1); var b = new WowBGuid(2, 1);
+        var wanted = new List<WowBMailCandidateTable.Expected> { new(a), new(b) };
+        var bags = new List<WowBMailGridLookup.Bag>();
+        for (int i = 0; i < 5; i++) bags.Add(new WowBMailGridLookup.Bag { Candidate = i, Unknown = i == 4 });
+        bags[0].Slots = new[] { a, b };
+        Check(WowBMailSendObservation.CountMissing(wanted, bags) == 0, "no items disappeared");
+        bags[0].Slots = new[] { a }; Check(WowBMailSendObservation.CountMissing(wanted, bags) == 1, "partial disappearance");
+        bags[0].Slots = Array.Empty<WowBGuid>(); Check(WowBMailSendObservation.CountMissing(wanted, bags) == 2, "both disappeared");
+        bags[1].Slots = new[] { b }; Check(WowBMailSendObservation.CountMissing(wanted, bags) == 1, "moved item still present");
+        bags[2].Slots = new[] { b }; Check(WowBMailSendObservation.CountMissing(wanted, bags) == -1, "duplicate observation unknown");
+        bags[2].Slots = Array.Empty<WowBGuid>(); bags[1].Unknown = true;
+        Check(WowBMailSendObservation.CountMissing(wanted, bags) == -1, "unknown primary bag");
+        Check(WowBMailSendObservation.CountMissing(null, bags) == -1, "unknown expected set");
+        Console.WriteLine("Synthetic disappearance checks passed; delivery is not verified.");
+    }
+}

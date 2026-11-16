@@ -75,24 +75,14 @@ class MailboxHoverWiring(unittest.TestCase):
         for forbidden in ('WM_KEYDOWN', 'WM_LBUTTONDOWN', 'WM_RBUTTONDOWN', 'ClickAimAbort.Clear'):
             self.assertNotIn(forbidden, helper)
 
-    def test_guarded_automatic_search_is_hover_only(self):
-        search = (root / 'Styx/Logic/Pathing/ClickAim/WowBMailboxHoverSearch.cs').read_text()
+    def test_automatic_mail_does_not_require_hover(self):
         mail = (root / 'Styx/Logic/Pathing/ClickAim/WowBExperimentalMail.cs').read_text()
-        for guard in ('awayAgain.Guid != away.Guid', 'away.Guid.ToString() == expected',
-                      'current.Guid.ToString() != expected', 'again.Guid != current.Guid',
-                      'wait(200)', 'wait(50)', '!safe()', 'row < 6', 'col < 8'):
-            self.assertIn(guard, search)
-        for forbidden in ('ConfirmedRightClick', 'ConfirmedLeftClick', 'TapKey', 'PostMessage', 'Lua.'):
-            self.assertNotIn(forbidden, search)
-        section = mail[mail.index('Logging.Write("[Mail] preflight passed'):mail.index('int batches = 0')]
-        for guard in ('TryClientOrigin', 'ox == originX && oy == originY', 'TryCursorScreen',
-                      'TemporaryCacheState(false)', 'WowBMailboxHoverSearch.Find',
-                      'hoverSafe, ClickAimAbort.Wait', 'if (!found)', 'ConfirmedRightClick',
-                      'hoverSafe() && reader.TryReadMouseoverGuidCandidate', 'final.ToString() == ui.MailboxHover'):
-            self.assertIn(guard, section)
-        self.assertEqual(section.count('ConfirmedRightClick('), 1)
-        self.assertLess(section.index('if (!found)'), section.index('ConfirmedRightClick('))
-        self.assertIn('WowBMailSafetyHold.IsHeld()', mail[:mail.index('WowBMailboxHoverSearch.Find')])
+        controls = ui[ui.index('private async Task RecordMailControl'):ui.index('private void btnSaveMailControls_Click')]
+        self.assertNotIn('TryReadMouseoverGuidCandidate', mail)
+        self.assertNotIn('WowBMailboxHoverSearch', mail)
+        self.assertIn('ConfirmedRightClick(hwnd, ui.MailboxX, ui.MailboxY', mail)
+        self.assertIn('requireHover: false', controls)
+        self.assertNotIn('sample.Hover.IsEmpty', controls)
 
     def test_not_wired_to_gameplay(self):
         for name in ('GrindRunner.cs', 'GatherRunner.cs'):

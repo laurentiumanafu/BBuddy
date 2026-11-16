@@ -12,7 +12,7 @@ static class Fixture
   c.SendX=100; Check(!C.Valid(c),"tab and send cannot overlap");
   c.SendX=300; c.MailboxX=1920; Check(!C.Valid(c),"point out of bounds");
   c.MailboxX=600; c.X=double.NaN; Check(!C.Valid(c),"nonfinite coordinates");
-  c.X=1; c.MailboxHover=""; Check(!C.Valid(c),"missing hover");
+  c.X=1; c.MailboxHover=""; Check(C.Valid(c),"hover not required for recorded point");
   Console.WriteLine("Synthetic mail calibration checks passed; user mapping is not proven.");
  }
 }

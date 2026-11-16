@@ -3759,11 +3759,6 @@ internal static class GrindRunner
             _vendorReturnReader = vendorReader; _vendorReturnMemory = vendorMemory; _vendorReturnPlayer = player;
             if (ClickAimSettings.ExperimentalAutoMail)
             {
-                if (WowBMailSafetyHold.IsHeld())
-                {
-                    Logging.Write("[Mail] prior composition or send is uncertain; skipping mailbox this trip. The hold will clear only after a confirmed safe return, allowing a later sell trip to try again; delivery and leftover composition are unverified.");
-                    return WalkBackToProfile(mover);
-                }
                 VendorFile.MailboxPoint? mailbox = point.Mailbox;
                 if (mailbox != null && mailbox.Map == returnMap && WowBMailRecipientText.ValidForTest(ClickAimSettings.MailRecipient) &&
                     WowBMailUiCalibration.TryLoad(out var controls) && controls != null && controls.Map == mailbox.Map &&
@@ -4036,17 +4031,6 @@ internal static class GrindRunner
             ClickAimMath.Len(finalPlayer.Location.X - hotspot.X, finalPlayer.Location.Y - hotspot.Y) > 3.0 ||
             Math.Abs(finalPlayer.Location.Z - hotspot.Z) > 5.0 || !Safe())
         { Logging.Write("[Grind] no complete mesh route or confirmed arrival at the profile hotspot; stopping without repeating the sale."); Stop(); return false; }
-        // User-requested recovery: never replay an uncertain composition on
-        // this trip, but permit a later sell trip after a confirmed safe return.
-        // Clearing the file does not clear the game UI or establish delivery.
-        if (reader.IsExperimental70938 && ClickAimSettings.ExperimentalAutoMail &&
-            !_stop && !ClickAimAbort.Requested && !RouteRunner.StopRequested && WowBMailSafetyHold.IsHeld())
-        {
-            if (WowBMailSafetyHold.TryClear(out string holdReason))
-                Logging.Write("[Mail] hold cleared after confirmed return; later sell trips may retry. Prior delivery and leftover recipient or attachments remain unverified.");
-            else
-                Logging.Write("[Mail] could not clear hold after confirmed return: " + holdReason + "; later mail remains blocked.");
-        }
         _vendorReturnHotspot = null; _vendorReturnReader = null; _vendorReturnMemory = null; _vendorReturnPlayer = default;
         ClearRoamMailReturn();
         _townTransit = false; _townReader = null; _townMemory = null; _townPlayer = default;
@@ -4090,7 +4074,7 @@ internal static class GrindRunner
         bool ReturnWithoutMail(string reason)
         {
             _vendorMailboxPending = null; _vendorMailboxReader = null; _vendorMailboxMemory = null; _vendorMailboxPlayer = default;
-            Logging.Write("[Mail] " + reason + "; leaving mail for this trip and returning to grind when safe. A hold, if present, clears only after confirmed safe return; prior mail state remains unverified.");
+            Logging.Write("[Mail] " + reason + "; leaving mail for this trip and returning to grind when safe. No second mail attempt this trip; prior mail state remains unverified.");
             if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested) return false;
             return WalkBackToProfile(mover);
         }
@@ -4151,7 +4135,7 @@ internal static class GrindRunner
         bool completed = WowBExperimentalMail.Run(hwnd, memory, reader, playerGuid, controls, ClickAimSettings.MailRecipient, InputSafetyFailure);
         if (!completed)
             return ReturnWithoutMail("experiment interrupted or uncertain; no automatic resend");
-        return ReturnWithoutMail("no further unskipped candidates for this trip; skipped items may remain, and delivery is unverified");
+        return ReturnWithoutMail("mail trip finished; skipped or additional items may remain, and delivery is unverified");
     }
 
     /// <summary>

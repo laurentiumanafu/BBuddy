@@ -2,105 +2,41 @@
 
 ## Current experimental implementation
 
-70938 Grind has a **default-off** experimental mail-after-selling option. It
-requires a saved vendor with a same-map mailbox standing point, either a profile
-with a same-map return hotspot or a profile-free pre-vendor return position, a
-saved recipient containing only letters/hyphens, the prior combined-bag grid,
-and separately recorded mailbox, Send Mail tab and
-Send button coordinates. At the recorded standing point, the mailbox hover
-candidate must match the saved full GUID. If the recorded pixel misses, a
-bounded hover-only search checks surrounding pixels and a coarse client grid;
-it needs a stable away transition, two matching reads and a final exact-GUID
-check before the single right-click. It may miss a small or occluded mailbox,
-and a changed saved GUID is not substituted. Client size, focus mode, map, player,
-health, ghost, combat and STOP guards are checked. Changes to camera, UI scale,
-window layout, bag configuration or client size may require recalibration; the
-controls are user-labelled, not independently detected. The merchant plan must
-leave the calibrated combined bag open.
+The default-off 70938 mail-after-selling option requires a selected vendor's
+same-map mailbox standing point, a return hotspot (or profile-free return
+position), editable recipient, combined bag grid and recorded mailbox, Send Mail
+tab and Send button coordinates. The bot meshes to the mailbox point, then
+right-clicks the recorded screen coordinate once **without a mailbox hover or
+identity check**, as requested. It posts one click on the recorded Send Mail
+tab, waits one second and posts the recipient. Mailbox opening, tab state and
+recipient focus are not independently read back. Camera, standing position or
+UI layout changes can cause the wrong screen control to receive input.
 
-In `2026-11-16_0731_3368.log`, two trips skipped the mailbox due to the durable
-inspection hold. Two later trips reached the mailbox and passed preflight but
-failed the single recorded-pixel hover check; no mailbox or send click was
-posted on those trips. The old log did not distinguish an empty, different,
-unstable or unreadable hover and cannot establish whether camera, position,
-GUID or background input caused the mismatch. The search now logs which stage
-failed and counts empty and other candidates on an exhausted search. In
-`2026-11-16_1124_8740.log`, 89 probes also missed the saved candidate; no
-mailbox, tab or attachment click was logged, despite the user's report that the
-mailbox opened and attachment attempts followed. That discrepancy cannot be
-resolved from this log. Search failures now log the recorded-point candidate and
-saved GUID; tab attempts log the calibrated pixel, client size and input mode.
-These logs may contain sensitive GUIDs. A matching candidate or posted tab
-click does not prove the mailbox or tab opened, and no delivery is proved.
+It attempts to attach observed candidate 0–3 items (not the backpack or
+candidate 4), skipping an item if a mouse move or click could not be posted,
+and never clicking it twice on the trip. It posts at most 12 item clicks and
+at most **one Send click per selling trip**. A posted click does not establish
+attachment; the experimental attachment table is no longer a gate. After Send,
+it waits at least one second and checks stable bag observations. If none of the
+clicked candidates disappear, the attempt is treated as a failure; unreadable
+observations produce an unknown/failed outcome. At least one candidate
+disappearing is partial observed progress, not proof of complete inventory,
+mailbox delivery, correct recipient or successful sale. The separate backpack
+and unknown candidate 4 are not fully observed. The next sell trip may try again
+regardless of the outcome; there is no persistent hold, including for old hold
+files. A later retry can duplicate or misdirect mail, and stale attachments could
+be sent. Use a disposable-item test and inspect mail if possible. Bag/grid
+inconsistencies or uncertain button release still stop the current trip. No Lua
+is used.
 
-Before interaction, preflight reports the specific failed safety/geometry check.
-Foreground and non-minimized background modes are supported experimentally;
-focus mode is fixed for a mail attempt, and switching between game and another
-application interrupts it. In background, mouse and character messages are
-posted directly to the game window, not typed into the foreground application;
-background recipient focus and client behavior are not verified. A held mouse
-button gets a three-second grace period before any input; no input is sent while
-unsafe. After a matching mailbox hover and posted interaction, the log reports
-bag/grid/table checks and whether tab button messages were posted. A posted
-click is not proof of a visible frame or tab. The experiment clicks the Send
-Mail tab only for the first batch, waits one second and posts the recipient.
-After each send it waits at least one second and checks for observed send
-progress. If another batch remains, it posts the recipient again directly,
-without clicking the tab; it cannot read back or clear the recipient field. It
-does not retype after the final batch. It attaches at most 12 candidate 0–3 raw slots and compares the mail record
-candidate after each click. It sends once per batch, then requires a stable
-zero-like candidate table and disappearance of the actually observed attached
-raw IDs from observed bag candidates before attempting another batch. A single
-right-click whose attachment is not observed for the full polling window may
-be skipped for this trip only if all table reads stayed equal to the previous
-expected set and fresh table/bag/table checks agree. Unexpected or unreadable
-state, interruption or uncertain button release still holds. A skip is not
-proof that the item is a quest item, ineligible or that a late attachment is
-impossible; a delayed update can race later checks. The table is checked again
-before subsequent actions and sending, but these checks are not atomic. The
-skipped items are never clicked again during that trip, and can remain in the
-bags. Each candidate scan group contains at most 12 clicks; if all fail, the
-empty composition advances to another group without retyping the recipient.
-This is **not** recipient field readback, a complete inventory, an
-acknowledgement, or proof of server delivery. Attachment field interpretation
-is based on limited traces; an unexpected mismatch holds rather than guessing. Candidate 4 remains Unknown/unverified, is never
-silently treated as absent or selected, and the separate backpack is excluded.
-A zero observed 0–3 count is not proof that all equipped bags are empty. Text
-focus, UI state, mailable items, recipient reset between batches, merchant
-sales and game/server outcomes are unverified. Wrong calibration or focus can
-mail unintended items to a wrong recipient. Use a supervised disposable-item
-test first.
+Foreground and non-minimized background modes use game-window messages; focus,
+frame and message acceptance are unverified. Combat, STOP, death, identity, map,
+client dimensions and saved grid checks remain. Failure or completion returns
+to the profile hotspot or profile-free pre-vendor position when safe; a failed
+return or STOP does not replay the attempt. Cross-map return is unsupported.
+The Windows build and live workflow have not been tested here.
 
-A profile-free run latches the live position and character before starting the
-town trip and meshes back there after mailing, without using the synthetic roam
-placeholder. Cross-map return is not supported. The mailbox must belong to the
-same sell plan the bot selects (the log names that plan); saving it for another
-vendor is insufficient. Missing configuration or a mailbox-stage failure skips
-mail and attempts a guarded mesh return to grind; combat, STOP, unreadable map or
-identity, and unreachable routes still take priority. Failures before beginning
-composition may be attempted on the next sell trip. Before clicking the tab a
-durable `Settings/clickaim-mail-hold.txt` is created. It remains on partial
-recipient input, uncertain attachments, failed/uncertain sends, crashes and an
-empty unsent composition for the rest of the trip. As requested, after a
-confirmed safe return to the profile hotspot (or profile-free return point),
-the hold is automatically cleared so the next sell trip may attempt mail again.
-An interrupted or unconfirmed return leaves it set; a pre-existing hold skips
-mail on that trip and clears only after a confirmed return. Manual inspection
-and clearing while stopped remains optional. This policy can retry an uncertain
-send later: the game UI is not cleared by deleting the hold and prior delivery,
-recipient text and attachments are not verified, so retries may duplicate or
-misdirect mail. Use disposable items and check the mailbox where possible.
-The hold is also removed after a sent batch has a zero-like table and its observed
-IDs have vanished; these observations are not proof of acceptance or delivery.
-The recipient clearing/reset and UI state remain unverified. Confirmed rejection is not
-independently observed, so three-confirmed-failure retry/continue behavior is
-**not yet implemented**. Cross-map return remains unsupported; the experiment is
-limited to 64 batches. No Lua is used.
-The Windows build and live workflow have not been tested here. The historical
-notes below describe the earlier disabled research stages and should not be
-read as the current opt-in status.
-
-Requested behavior: after the recorded sell plan, navigate to the recorded mailbox, open Send Mail, wait one second, type the user-editable recipient, attach at most 12 items per mail from equipped bags, send and verify those items left the bags. The user clarified that **only the separate 20-slot main backpack is excluded**; observed container candidates 0, 1, 2 and 3 must all be included. A future candidate 4 must not be silently excluded if established to be another equipped bag. After all eligible items are gone or three failed attempts, mesh back to the active profile hotspot. STOP, death, combat, player/map identity and no-Lua rules still apply. A saved sell plan can itself click any bag slot; the user must configure it not to sell things intended for mail.
+The historical notes below describe past research, not the current workflow.
 
 ## Historical research notes (before the opt-in workflow)
 

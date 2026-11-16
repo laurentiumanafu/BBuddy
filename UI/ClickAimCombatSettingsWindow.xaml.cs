@@ -215,7 +215,7 @@ namespace CopilotBuddy.UI
         }
 
         private static bool MailHoverSampleNow(GreenMagic.Memory memory, WowBReader reader, IntPtr hwnd,
-            int width, int height, out MailHoverSample? sample)
+            int width, int height, out MailHoverSample? sample, bool requireHover = true)
         {
             sample = null;
             if (ClickAimUi.Running || ClickAimUi.Paused || ObjectManager.Wow != memory || ObjectManager.WowB != reader ||
@@ -233,7 +233,8 @@ namespace CopilotBuddy.UI
                     !WowBGrindFactions.TraceIdentity70707(memory, reader, unit, true) ||
                     !double.IsFinite(unit.Location.X) || !double.IsFinite(unit.Location.Y) || !double.IsFinite(unit.Location.Z)) return false;
                 bool clickSafety = MailClickSafetyCandidate(memory, reader, unit);
-                if (!reader.TryReadMouseoverGuidCandidate(out WowBGuid hover) ||
+                WowBGuid hover = default;
+                if ((requireHover && !reader.TryReadMouseoverGuidCandidate(out hover)) ||
                     !reader.TryReadTraceLocalGuid(out WowBGuid after) || after != player ||
                     !reader.TryReadExperimentalMapCandidate(out uint mapAfter) || mapAfter != map ||
                     ObjectManager.Wow != memory || ObjectManager.WowB != reader || ClickAimUi.Running || ClickAimUi.Paused ||
@@ -847,10 +848,10 @@ namespace CopilotBuddy.UI
                 await Task.Delay(3000);
                 if (!IsLoaded || ClickAimAbort.Generation != generation) return;
                 var pair = await Task.Run(() => {
-                    if (!MailHoverSampleNow(memory, reader, hwnd, width, height, out var a) || a == null || !a.ClickSafetyCandidate)
+                    if (!MailHoverSampleNow(memory, reader, hwnd, width, height, out var a, requireHover: false) || a == null || !a.ClickSafetyCandidate)
                         return (ok: false, sample: (MailHoverSample?)null);
                     Thread.Sleep(150);
-                    if (!MailHoverSampleNow(memory, reader, hwnd, width, height, out var b) || b == null || !b.ClickSafetyCandidate ||
+                    if (!MailHoverSampleNow(memory, reader, hwnd, width, height, out var b, requireHover: false) || b == null || !b.ClickSafetyCandidate ||
                         !MailHoverSameSession(a, b) || Math.Abs(a.CursorX-b.CursorX) > 3 || Math.Abs(a.CursorY-b.CursorY) > 3 ||
                         ClickAimAbort.Generation != generation) return (ok: false, sample: (MailHoverSample?)null);
                     return (ok: true, sample: b);
@@ -861,7 +862,6 @@ namespace CopilotBuddy.UI
                 MailHoverSample sample = pair.sample;
                 if (kind == 0)
                 {
-                    if (sample.Hover.IsEmpty) { lblMailControlsStatus.Text = "Mailbox hover candidate is empty; nothing recorded."; return; }
                     _mailControlObject = sample; _mailControlTab = null; _mailControlSend = null;
                 }
                 else
@@ -891,19 +891,6 @@ namespace CopilotBuddy.UI
                 SendX = (int)Math.Round(s.CursorX), SendY = (int)Math.Round(s.CursorY) };
             try { WowBMailUiCalibration.Save(value); lblMailControlsStatus.Text = "Mail controls saved; screen geometry and UI state are not independently verified."; }
             catch (Exception ex) { lblMailControlsStatus.Text = "Could not save controls: " + ex.Message; }
-        }
-
-        private void btnClearMailHold_Click(object sender, RoutedEventArgs e)
-        {
-            if (ClickAimUi.Running || ClickAimUi.Paused || _mailHoverBusy || _mailGridBusy)
-            { lblMailControlsStatus.Text = "Stop the bot and finish other mail operations before clearing the hold."; return; }
-            if (System.Windows.MessageBox.Show("Have you inspected the mailbox and sent mail, resolved any uncertain send, and cleared all leftover recipient text and attachments? Clearing this hold permits a later trip to send again.",
-                "Clear mail safety hold", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
-            if (ClickAimUi.Running || ClickAimUi.Paused || _mailHoverBusy || _mailGridBusy)
-            { lblMailControlsStatus.Text = "Bot or mail operation started; hold not cleared."; return; }
-            if (!WowBMailSafetyHold.TryClear(out string why))
-            { lblMailControlsStatus.Text = why; return; }
-            lblMailControlsStatus.Text = "Mail safety hold cleared after user confirmation. Mail and recipient state remain unverified.";
         }
 
         private async void btnMailAttachmentResearch_Click(object sender, RoutedEventArgs e)

@@ -4,8 +4,8 @@ using System.Text.Json;
 
 namespace Styx.Logic.Pathing;
 
-// User-recorded coordinates and hover candidate, not proof of UI state. The
-// object point depends on camera; always verify the live hover before clicking.
+// User-recorded coordinates are not proof of UI state. The object point
+// depends on camera and is clicked without live hover verification by request.
 internal static class WowBMailUiCalibration
 {
     internal sealed class Result
@@ -30,7 +30,7 @@ internal static class WowBMailUiCalibration
     internal static bool Valid(Result? c)
     {
         if (c == null || c.Version != 1 || c.Width < 200 || c.Height < 200 || c.Width > 32767 || c.Height > 32767 ||
-            string.IsNullOrWhiteSpace(c.Player) || string.IsNullOrWhiteSpace(c.MailboxHover) ||
+            string.IsNullOrWhiteSpace(c.Player) ||
             !double.IsFinite(c.X) || !double.IsFinite(c.Y) || !double.IsFinite(c.Z)) return false;
         bool inside(int x, int y) => x > 0 && y > 0 && x < c.Width - 1 && y < c.Height - 1;
         if (!inside(c.MailboxX, c.MailboxY) || !inside(c.TabX, c.TabY) || !inside(c.SendX, c.SendY)) return false;
