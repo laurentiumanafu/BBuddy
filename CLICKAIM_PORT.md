@@ -1613,13 +1613,22 @@ global cooldown, and the mob finished it off. Three changes:
   successful heal has produced this session (`_healCostGuess`); after that, `HealPowerOk` also
   requires the current power to cover that cost with 25% spare. No spell-cost API exists on this
   build, so this is the honest version of "can I afford this".
-- **Two dud presses end it for the fight.** If a heal neither lifts health nor spends power, that
-  is counted; at two, the heal is off for the rest of the fight and the log says so. Previously
-  the only exits were the mob dying or the character dying.
+- **Two dud presses hold the heal, they do not end it.** If a heal neither lifts health nor
+  spends power, that is counted; at two, the heal is held for 15 seconds and then allowed back,
+  and the log says so. It used to be "off for the rest of the fight", which produced the reported
+  symptom of no heals until the mob died and the next fight started.
 
 The failure line now distinguishes the two cases — `power 20 -> 20, the press did nothing at all`
 versus `power 139 -> 99, so it cast and the mob out-damaged it` — because they have different
 fixes (more mana / smaller heal) and used to read the same.
+
+**The hold was masking the real cause.** A key pressed while the client's global cooldown is
+still running is silently dropped: no cast, no power spent, no health gain. The 21:27 log shows
+a heal pressed 0.5 s after an Earth Shock and another 1.0 s after a Stormstrike, both swallowed,
+which is two "dud presses" and no more healing until the next fight. The fight loop now records
+when it last sent any rotation key and waits out that shared cooldown before the heal key, so the
+press is not wasted; while health is under the line the wait takes priority over damage. This is
+an estimate of the 1.5 s global cooldown (`CastSettleMs`), not a read of the client's cooldown.
 
 **2. "the bot thinks all skills are ranged."** True: every spell was driven at `CasterRangeYd`
 (28 yd). Claw, Heroic Strike, Sinister Strike, Rend and the rest of the melee kit are 5 yd

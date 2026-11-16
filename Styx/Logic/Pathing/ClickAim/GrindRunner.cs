@@ -6781,6 +6781,7 @@ internal static class GrindRunner
         int castFailures = 0;
         int lastHealMs = 0;
         int lastCastMs = 0;
+        int lastCombatKeyMs = 0;            // when this fight last sent any rotation key
         int lastCombatBuffCheckMs = unchecked(started - 1000);
         int lastStoneclawCheckMs = unchecked(started - 1000);
         int quietRounds = 0;
@@ -6800,8 +6801,20 @@ internal static class GrindRunner
         bool announced = false;
         int healFailures = 0;               // presses of the heal key that changed nothing
         bool healBlocked = false;           // no power for it: fight instead of pressing it again
+        int healBlockedUntil = 0;           // the hold ends on its own; a long fight still heals
         bool healRefusalLogged = false;
+        bool healCooldownWaitLogged = false;
         bool powerShortLogged = false;
+        const int HealBlockMs = 15000;      // not "the rest of the fight": see the note below
+        // Every key this fight sends shares the client's global cooldown. The
+        // 21:27 log shows why it matters: the heal was pressed 0.5 s after an
+        // Earth Shock and 1.0 s after a Stormstrike, the client swallowed both
+        // presses, and two silent presses used to switch healing off for the
+        // rest of the fight - which is what "it heals again once the mob dies"
+        // looked like from the outside.
+        void NoteCombatKey() { lastCombatKeyMs = Environment.TickCount; }
+        bool GlobalCooldownClear() => lastCombatKeyMs == 0 ||
+            unchecked(Environment.TickCount - lastCombatKeyMs) >= ClickAimCombat.CastSettleMs;
 
         /* Melee bookkeeping: whether the client's swing is running, when it last landed, and
          * when a key or click was last sent. See the melee section of the loop. */
@@ -7244,6 +7257,7 @@ internal static class GrindRunner
                 if (!TryFightKeyOneMacro(hwnd, reader, fightMemory, macroPlayer, expectedPull, macroMap,
                     defenceOnly, defenceFactionFilter, defenceOnly ? defenceLimit : GiveUpYd, "at fight start"))
                     return YieldForTargetChange(reader, fightMemory, defenceTarget);
+                NoteCombatKey();
                 keyOneStarted = true;
                 attackPressed = true;
                 if (d <= AttackRangeYd)
@@ -7290,9 +7304,40 @@ internal static class GrindRunner
                     ClickAimSettings.HealMinManaPercent));
             }
 
+            // The two-press hold is temporary, not a life sentence. Two attackers
+            // out-damaging a real heal shows the same "no net gain" as a press the
+            // client never accepted, so the heal comes back on its own instead of
+            // only returning with the next fight.
+            if (healBlocked && unchecked(Environment.TickCount - healBlockedUntil) >= 0)
+            {
+                healBlocked = false;
+                healCooldownWaitLogged = false;
+                Logging.Write("[Grind] the heal hold ended; the heal key is available again (cast results are always unverified)");
+            }
+            bool healRetryReady = lastHealMs == 0 ||
+                unchecked(Environment.TickCount - lastHealMs) >= ClickAimCombat.HealRetryMs;
+            bool healCooldownReady = healRetryReady && GlobalCooldownClear();
+            // A heal has priority over damage, and the client silently drops a key
+            // pressed during the global cooldown. Wait the cooldown out rather than
+            // spending it on a Shock and losing the heal for the whole fight.
+            if (heal != null && !healBlocked && healPowerOk && healRetryReady && !GlobalCooldownClear() &&
+                ClickAimSettings.HealBelowPercent > 0 && myMaxHealth > 0 && myHealth > 0 &&
+                myHealth * 100.0 / myMaxHealth <= ClickAimSettings.HealBelowPercent)
+            {
+                if (!healCooldownWaitLogged)
+                {
+                    healCooldownWaitLogged = true;
+                    Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                        "[Grind] health {0:F0}% is under the heal line; waiting for the shared global cooldown "
+                        + "({1} ms since the last rotation key) before pressing {2} instead of losing the press",
+                        myPercent, unchecked(Environment.TickCount - lastCombatKeyMs), heal.Name));
+                }
+                ClickAimAbort.Wait(120);
+                continue;
+            }
+
             if (ClickAimHealPolicy.ShouldAttemptHeal(heal, healBlocked, myHealth, myMaxHealth,
-                    ClickAimSettings.HealBelowPercent,
-                    unchecked(Environment.TickCount - lastHealMs) >= ClickAimCombat.HealRetryMs, healPowerOk)
+                    ClickAimSettings.HealBelowPercent, healCooldownReady, healPowerOk)
                 && heal != null)
             {
                 StopAndSettle(hwnd);             // the chase may still be holding forward
@@ -7323,7 +7368,7 @@ internal static class GrindRunner
                     if (freshHeal.MaxHealth > 0 && freshHeal.Health == 0)
                         return reader.IsExperimental70707 ? StopFightForSafety("the character died before the heal; stopping") : "the character died before the heal; stopping the fight";
                     if (!ClickAimHealPolicy.ShouldAttemptHeal(heal, healBlocked, freshHeal.Health, freshHeal.MaxHealth,
-                        ClickAimSettings.HealBelowPercent, true, HealPowerOk(freshHeal.Power, freshHeal.MaxPower)))
+                        ClickAimSettings.HealBelowPercent, healCooldownReady, HealPowerOk(freshHeal.Power, freshHeal.MaxPower)))
                         continue;
                     if (!FightAttackInputAllowed(reader, fightMemory, defenceTarget, expectedPull, !defenceOnly || defenceFactionFilter, defenceOnly, !defenceOnly))
                         return YieldForTargetChange(reader, fightMemory, defenceTarget);
@@ -7341,6 +7386,7 @@ internal static class GrindRunner
                     if (attackPressed || lastMeleeClickMs != 0) preserveAttackAfterHeal = true;
                     Logging.Write("[Grind] attempting " + heal.Name + " without changing target (self-cast, auto-attack state and actual mana cost unverified)");
                     ClickAimInput.TapKey(hwnd, heal.KeyVk, 40);
+                    NoteCombatKey();
                 }
 
                 /* Wait for the heal to actually land. Healing Touch takes 1.5 s to cast,
@@ -7398,12 +7444,26 @@ internal static class GrindRunner
                     Logging.Write(string.Format(CultureInfo.InvariantCulture,
                         "[Grind] {0} did not show a net health gain ({1}/{2}, power {3} -> {4}); {5}",
                         heal.Name, afterHealth, myMaxHealth, powerBeforeHeal, powerAfterHeal,
-                        powerSpent ? "power fell, so the heal remains available" : "no power spent; failure " + healFailures));
+                        powerSpent ? "power fell, so the heal remains available"
+                                   : "no net power drop, so the press may have been swallowed by the "
+                                     + "global cooldown or out-damaged; failure " + healFailures));
                     if (healFailures >= 2)
                     {
+                        /* Two presses with no observable effect. It used to end healing
+                         * for the whole fight, and that is exactly the reported symptom:
+                         * no heals until the mob died and the next fight started. A net
+                         * reading cannot separate a swallowed press from a heal that two
+                         * attackers simply out-damaged, so hold the heal for a while and
+                         * then let it back in. */
                         healBlocked = true;
-                        Logging.Write("[Grind] the heal is off for the rest of this fight: two presses "
-                                    + "showed no health gain or power cost");
+                        healBlockedUntil = Environment.TickCount + HealBlockMs;
+                        healFailures = 0;
+                        healCooldownWaitLogged = false;
+                        Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                            "[Grind] healing held for {0} ms: two presses showed no health gain or power cost "
+                            + "(the client can drop a key pressed during the global cooldown, and a heal "
+                            + "that is out-damaged shows no net gain either); the heal is retried after the hold",
+                            HealBlockMs));
                     }
                 }
 
@@ -7415,7 +7475,7 @@ internal static class GrindRunner
                     if (remaining > 0 && (ClickAimAbort.Wait(remaining) || _stop)) return "stopped";
                     if (TryFightKeyOneMacro(hwnd, reader, fightMemory, macroPlayer, expectedPull, macroMap,
                         defenceOnly, defenceFactionFilter, defenceOnly ? defenceLimit : GiveUpYd, "after a heal attempt"))
-                    { presses++; _presses++; }
+                    { presses++; _presses++; NoteCombatKey(); }
                     else
                         Logging.Write("[Grind] key 1 follow-up withheld after a heal attempt; rechecking the fight");
                 }
@@ -7468,6 +7528,7 @@ internal static class GrindRunner
                     ClickAimSettings.PostHealStartAttackVk != postHealStartKey || !ClickAimSettings.ValidStartAttackVk(postHealStartKey))
                     return "stopped or Start Attack binding changed; attack withheld";
                 ClickAimInput.TapKey(hwnd, postHealStartKey, 40);
+                NoteCombatKey();
                 postHealStartPending = false;
                 lastMeleeDamageMs = Environment.TickCount; // a grace period, not evidence of a swing
                 presses++; _presses++;
@@ -7488,6 +7549,7 @@ internal static class GrindRunner
                 {
                     presses++; _presses++;
                     lastCastMs = Environment.TickCount;
+                    NoteCombatKey();
                     if (ClickAimAbort.Wait(ClickAimCombat.CastSettleMs)) return "stopped";
                     continue;
                 }
@@ -7517,6 +7579,7 @@ internal static class GrindRunner
                 {
                     presses++;
                     lastCastMs = Environment.TickCount;
+                    NoteCombatKey();
                     if (ClickAimAbort.Wait(ClickAimCombat.CastSettleMs)) return "stopped";
                     continue;
                 }
@@ -7551,6 +7614,7 @@ internal static class GrindRunner
                     return YieldForTargetChange(reader, fightMemory, defenceTarget);
                 if (auto == null || !auto.IsAutoAttack || !auto.IsAttack || auto.KeyVk == 0) continue;
                 ClickAimInput.TapKey(hwnd, auto.KeyVk, 40);
+                NoteCombatKey();
                 attackPressed = true;
                 MarkFocusedAttack(attackTarget);
                 lastAttackPressMs = Environment.TickCount;
@@ -7589,13 +7653,14 @@ internal static class GrindRunner
                 if (!dot.IsDot || !ClickAimSettings.UseDamageOverTime) return "DoT role or setting changed; attack withheld";
                 if (!ResourceInputStillAllowed(reader)) continue;
                 ClickAimInput.TapKey(hwnd, dot.KeyVk, 40);
+                NoteCombatKey();
                 if (rotation.Class == ClickAimRotationClass.Shaman)
                     ClickAimClassRotation.Defer(_rotationCooldowns, ClickAimClassRotation.DotCooldownGroup(dot), 8000, Environment.TickCount);
                 if (keyOneMacro && ClickAimClassRotation.IsAnyShock(dot))
                 {
                     if (TryFightKeyOneMacro(hwnd, reader, fightMemory, macroPlayer, expectedPull, macroMap,
                         defenceOnly, defenceFactionFilter, defenceOnly ? defenceLimit : GiveUpYd, "after a Shock attempt"))
-                    { presses++; _presses++; }
+                    { presses++; _presses++; NoteCombatKey(); }
                     else
                         Logging.Write("[Grind] key 1 follow-up withheld after a Shock attempt; rechecking the fight");
                 }
@@ -7785,6 +7850,7 @@ internal static class GrindRunner
                     Logging.Write("[Grind] attempting the single guarded pre-melee cast retry; cast result and line of sight remain unverified");
                 }
                 lastCastMs = Environment.TickCount;
+                NoteCombatKey();
                 // Instant Shock or the experimental proc does not prove Attack stopped.
                 if (!shockAutoPlan && !maelstromCast) meleeSwinging = false;
                 if (retryCast && canTrackCost && baselinePower != myMana) canTrackCost = false;
@@ -7798,6 +7864,7 @@ internal static class GrindRunner
                 }
                 if (maelstromCast) _maelstromBoltNextAttempt = Environment.TickCount64 + WowBMaelstromWeapon.AttemptBackoffMs;
                 ClickAimInput.TapKey(hwnd, castDamage!.KeyVk, 40);
+                NoteCombatKey();
                 if (maelstromCast)
                     Logging.Write("[Grind] attempted Lightning Bolt with experimental Maelstrom five-stack candidate; cast and proc consumption unverified");
                 else
@@ -7808,7 +7875,7 @@ internal static class GrindRunner
                 {
                     if (TryFightKeyOneMacro(hwnd, reader, fightMemory, macroPlayer, expectedPull, macroMap,
                         defenceOnly, defenceFactionFilter, defenceOnly ? defenceLimit : GiveUpYd, "after a Shock attempt"))
-                    { presses++; _presses++; }
+                    { presses++; _presses++; NoteCombatKey(); }
                     else
                         Logging.Write("[Grind] key 1 follow-up withheld after a Shock attempt; rechecking the fight");
                 }
@@ -8071,6 +8138,7 @@ internal static class GrindRunner
                     { return YieldForTargetChange(reader, fightMemory, defenceTarget); }
                     if (!auto.IsAttack) return "Attack role changed; attack withheld";
                     ClickAimInput.TapKey(hwnd, auto.KeyVk, 40);
+                    NoteCombatKey();
                     attackPressed = true;
                     MarkFocusedAttack(target);
                     lastAttackPressMs = Environment.TickCount;
@@ -8162,6 +8230,7 @@ internal static class GrindRunner
                     myMana = hitSelf.Power;
                 }
                 ClickAimInput.TapKey(hwnd, meleeHit.KeyVk, 40);
+                NoteCombatKey();
                 if (stormstrike70938) lastCastMs = Environment.TickCount;
                 ClickAimClassRotation.Defer(_rotationCooldowns, rotation.MeleeGroup, rotation.MeleeIntervalMs, Environment.TickCount);
                 if (stormstrike70938)
@@ -8176,7 +8245,7 @@ internal static class GrindRunner
                 {
                     if (TryFightKeyOneMacro(hwnd, reader, fightMemory, macroPlayer, expectedPull, macroMap,
                         defenceOnly, defenceFactionFilter, defenceOnly ? defenceLimit : GiveUpYd, "after a Shock attempt"))
-                    { presses++; _presses++; }
+                    { presses++; _presses++; NoteCombatKey(); }
                     else
                         Logging.Write("[Grind] key 1 follow-up withheld after a Shock attempt; rechecking the fight");
                 }
