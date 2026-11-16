@@ -46,11 +46,50 @@ internal static class WowBExperimentalMail
         WowBMailUiCalibration.Result ui, string recipient, Func<string?> safetyFailure)
     {
         bool background = false, focusSelected = false;
-        bool safe() => focusSelected && safetyFailure() == null &&
-            (background ? GatherBackgroundFocus.Current(hwnd) == GatherBackgroundFocus.State.OtherApplication &&
-                          GatherBackgroundFocus.TryClientOrigin(hwnd, out _, out _)
-                        : ClickAimInput.GameForeground(hwnd)) &&
-            ClickAimInput.ClientSize(hwnd, out int width, out int height) && width == ui.Width && height == ui.Height;
+        string lastSafetyFailure = "no safety check recorded";
+        string? SafetyIssue()
+        {
+            if (!focusSelected) return "input focus mode not selected";
+            string? issue = safetyFailure();
+            if (issue != null) return issue;
+            if (background)
+            {
+                if (GatherBackgroundFocus.Current(hwnd) != GatherBackgroundFocus.State.OtherApplication)
+                    return "background focus changed or unavailable";
+                if (!GatherBackgroundFocus.TryClientOrigin(hwnd, out _, out _))
+                    return "background game window minimized or geometry unavailable";
+            }
+            else if (!ClickAimInput.GameForeground(hwnd)) return "game is no longer foreground";
+            if (!ClickAimInput.ClientSize(hwnd, out int width, out int height)) return "client size unavailable";
+            if (width != ui.Width || height != ui.Height) return "client size changed from calibration";
+            return null;
+        }
+        bool safe()
+        {
+            string? issue = SafetyIssue();
+            if (issue != null) { lastSafetyFailure = issue; return false; }
+            return true;
+        }
+        // A click cannot change modes mid-input. During the following idle
+        // delay, however, the user can safely focus or unfocus the game; choose
+        // the correct guarded mode again before typing any characters.
+        string? TabWaitCheck()
+        {
+            string? issue = safetyFailure();
+            if (issue != null) return issue;
+            if (!GatherBackgroundFocus.TryClientOrigin(hwnd, out _, out _)) return "game window minimized or geometry unavailable";
+            bool nextBackground;
+            if (ClickAimInput.GameForeground(hwnd)) nextBackground = false;
+            else if (GatherBackgroundFocus.Current(hwnd) == GatherBackgroundFocus.State.OtherApplication) nextBackground = true;
+            else return "focus state unavailable or another game window focused";
+            if (background != nextBackground)
+            {
+                background = nextBackground;
+                Logging.Write("[Mail] focus changed during tab wait; using " + (background ? "background" : "foreground") +
+                    " mode after revalidation. Recipient focus remains unverified.");
+            }
+            return safe() ? null : lastSafetyFailure;
+        }
         try
         {
             if (!WowBMailUiCalibration.Valid(ui) || ui.Player != player.ToString())
@@ -68,7 +107,7 @@ internal static class WowBExperimentalMail
             else { Logging.Write("[Mail] preflight: focus state unavailable or another game window focused; no input sent."); return false; }
             focusSelected = true;
             Logging.Write("[Mail] input mode: " + (background ? "background (experimental)" : "foreground") +
-                "; switching between game and background interrupts mail. Recipient focus remains unverified.");
+                "; focus changes are rechecked during the tab wait and can interrupt other inputs. Recipient focus remains unverified.");
             // Only before any input, allow a short grace period for a held
             // physical button. No click or send is automatically retried.
             string? issue = safetyFailure();
@@ -102,8 +141,8 @@ internal static class WowBExperimentalMail
             if (!Left(hwnd, ui.TabX, ui.TabY, w, h, background, safe, out string tabReason))
             { Logging.Write("[Mail] tab click withheld or uncertain: " + tabReason + "; no send input on this trip."); return false; }
             Logging.Write("[Mail] Send Mail tab click messages posted; tab opening and field focus are not verified.");
-            if (!Wait(1000, safe))
-            { Logging.Write("[Mail] safety changed during the one-second tab wait; no recipient or send input on this trip."); return false; }
+            if (!WowBMailTabWait.Wait(TabWaitCheck, ClickAimAbort.Wait, () => Environment.TickCount64, out string waitReason))
+            { Logging.Write("[Mail] tab wait interrupted: " + waitReason + "; no recipient or send input on this trip."); return false; }
             int generation = ClickAimAbort.Generation;
             foreach (char c in recipient)
             {

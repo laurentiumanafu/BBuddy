@@ -30,11 +30,21 @@ inconsistencies or uncertain button release still stop the current trip. No Lua
 is used.
 
 Foreground and non-minimized background modes use game-window messages; focus,
-frame and message acceptance are unverified. Combat, STOP, death, identity, map,
-client dimensions and saved grid checks remain. Failure or completion returns
-to the profile hotspot or profile-free pre-vendor position when safe; a failed
-return or STOP does not replay the attempt. Cross-map return is unsupported.
-The Windows build and live workflow have not been tested here.
+frame and message acceptance are unverified. During the one-second tab wait, a
+foreground/background change is revalidated and the input mode updated before
+recipient entry; a held physical mouse button may clear within three seconds.
+Combat, STOP, death, identity, map, client dimensions and saved grid checks remain;
+other unsafe states interrupt the attempt with a specific logged reason.
+Failure or completion returns to the profile hotspot or profile-free pre-vendor
+position when safe; a failed return or STOP does not replay the attempt.
+Cross-map return is unsupported. The Windows build and live workflow have not
+been tested here.
+
+In `2026-11-16_1144_15244.log`, the mailbox and tab click messages were posted,
+then a generic safety check failed about 0.4 seconds into the tab wait. The log
+did not identify which check failed; STOP occurred about ten seconds later. It
+does not prove that focus, a mouse button or any particular check caused the
+interruption. The more specific reason is captured at the point of failure now.
 
 The historical notes below describe past research, not the current workflow.
 

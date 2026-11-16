@@ -1,0 +1,29 @@
+using System;
+using Styx.Logic.Pathing;
+static class Fixture
+{
+    static void Check(bool ok, string why) { if (!ok) throw new Exception(why); }
+    static void Main()
+    {
+        long clock = 0; int waits = 0; string reason;
+        bool Step(int ms) { clock += ms; waits++; return false; }
+        bool result = WowBMailTabWait.Wait(() => null, Step, () => clock, out reason);
+        Check(result && clock == 1000 && waits == 10, "full one second");
+        clock = 0; waits = 0;
+        result = WowBMailTabWait.Wait(() => clock < 1500 ? WowBMailTabWait.HeldButton : null, Step, () => clock, out reason);
+        Check(result && clock == 1500, "held button settles without input");
+        clock = 0; waits = 0;
+        result = WowBMailTabWait.Wait(() => WowBMailTabWait.HeldButton, Step, () => clock, out reason);
+        Check(!result && clock == 3000 && reason.Contains("held"), "held button times out");
+        clock = 0; waits = 0;
+        result = WowBMailTabWait.Wait(() => clock >= 400 ? "combat active" : null, Step, () => clock, out reason);
+        Check(!result && clock == 400 && reason == "combat active", "combat interrupts immediately");
+        clock = 0; waits = 0;
+        result = WowBMailTabWait.Wait(() => null, ms => { clock += ms; return clock >= 200; }, () => clock, out reason);
+        Check(!result && clock == 200 && reason.Contains("STOP"), "stop interrupts immediately");
+        clock = 0; waits = 0;
+        result = WowBMailTabWait.Wait(() => clock >= 300 ? "client size changed from calibration" : null, Step, () => clock, out reason);
+        Check(!result && reason.Contains("client size"), "specific error preserved");
+        Console.WriteLine("Synthetic tab-wait checks passed; no game or UI interaction tested.");
+    }
+}

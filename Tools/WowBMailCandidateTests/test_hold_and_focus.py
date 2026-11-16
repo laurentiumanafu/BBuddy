@@ -18,7 +18,7 @@ class Wiring(unittest.TestCase):
  def test_one_send_and_requested_sequence(self):
   start = m.index('ConfirmedRightClick(hwnd, ui.MailboxX')
   tab = m.index('Left(hwnd, ui.TabX', start)
-  wait = m.index('Wait(1000, safe)', tab)
+  wait = m.index('WowBMailTabWait.Wait(TabWaitCheck', tab)
   recipient = m.index('foreach (char c in recipient)', wait)
   item = m.index('ConfirmedRightClick(hwnd, x, y', recipient)
   send = m.index('Left(hwnd, ui.SendX', item)
@@ -32,6 +32,19 @@ class Wiring(unittest.TestCase):
   self.assertIn('outcome unknown and treated as a failed trip', m[send:])
   self.assertIn('WowBMailSendObservation.CountMissing', m[send:])
   self.assertNotIn('WowBMailCandidateReader.TryRead', m)
+ def test_tab_wait_focus_switch_and_diagnostic(self):
+  tab = m[m.index('string? TabWaitCheck()'):m.index('        try\n        {')]
+  for text in ('safetyFailure()', 'TryClientOrigin', 'GameForeground(hwnd)',
+               'GatherBackgroundFocus.State.OtherApplication', 'background = nextBackground',
+               'return safe() ? null : lastSafetyFailure'):
+   self.assertIn(text, tab)
+  self.assertIn('WowBMailTabWait.Wait(TabWaitCheck, ClickAimAbort.Wait', m)
+  self.assertIn('tab wait interrupted: " + waitReason', m)
+  delay = (p / 'WowBMailTabWait.cs').read_text()
+  for text in ('DelayMs = 1000', 'HeldButtonGraceMs = 3000',
+               'issue != HeldButton', 'issue == null && elapsed >= DelayMs', 'wait(100)'):
+   self.assertIn(text, delay)
+  self.assertNotIn('ClickAimInput.', delay)
  def test_focus_modes_and_safety(self):
   for v in ('ClickAimInput.GameForeground(hwnd)', 'GatherBackgroundFocus.State.OtherApplication',
             'GatherBackgroundFocus.TryClientOrigin', 'BackgroundMailRecipientChar',
