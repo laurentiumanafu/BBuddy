@@ -18,7 +18,7 @@ class Wiring(unittest.TestCase):
  def test_batch_sequence_and_retyped_recipient(self):
   start = m.index('ConfirmedRightClick(hwnd, ui.MailboxX')
   tab = m.index('Left(hwnd, ui.TabX', start)
-  wait = m.index('WowBMailTabWait.Wait(TabWaitCheck', tab)
+  wait = m.index('WowBMailTabWait.Wait(ReSelectFocus', tab)
   recipient = m.index('foreach (char c in recipient)', wait)
   item = m.index('ConfirmedRightClick(hwnd, x, y', recipient)
   send = m.index('Left(hwnd, ui.SendX', item)
@@ -41,12 +41,18 @@ class Wiring(unittest.TestCase):
   self.assertLess(m.index('Wait(1000, safe)', send), m.index('if (!progressed)', send))
   self.assertEqual(m.count('foreach (char c in recipient)'), 1)
  def test_tab_wait_focus_switch_and_diagnostic(self):
-  tab = m[m.index('string? TabWaitCheck()'):m.index('        try\n        {')]
+  tab = m[m.index('string? ReSelectFocus()'):m.index('        try\n        {')]
   for text in ('safetyFailure()', 'TryClientOrigin', 'GameForeground(hwnd)',
                'GatherBackgroundFocus.State.OtherApplication', 'background = nextBackground',
                'return safe() ? null : lastSafetyFailure'):
    self.assertIn(text, tab)
-  self.assertIn('WowBMailTabWait.Wait(TabWaitCheck, ClickAimAbort.Wait', m)
+  self.assertIn('WowBMailTabWait.Wait(ReSelectFocus, ClickAimAbort.Wait', m)
+  # the same guarded re-selection runs between item clicks: watching the game
+  # must not end a trip with items attached and Send unpressed
+  items = m[m.index('foreach (var slot in selected)'):m.index('if (expected.Count >= 12) break;\n                    if (!WowBMailGridLookup.TryPreviewExcluding')]
+  self.assertIn('string? focusIssue = ReSelectFocus();', items)
+  self.assertIn('item clicks stopped after ', items)
+  self.assertIn('Nothing already clicked is sent automatically', items)
   self.assertIn('tab wait interrupted: " + waitReason', m)
   delay = (p / 'WowBMailTabWait.cs').read_text()
   for text in ('DelayMs = 1000', 'HeldButtonGraceMs = 3000',

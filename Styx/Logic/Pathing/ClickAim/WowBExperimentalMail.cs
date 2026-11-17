@@ -70,10 +70,13 @@ internal static class WowBExperimentalMail
             if (issue != null) { lastSafetyFailure = issue; return false; }
             return true;
         }
-        // A click cannot change modes mid-input. During the following idle
-        // delay, however, the user can safely focus or unfocus the game; choose
-        // the correct guarded mode again before typing any characters.
-        string? TabWaitCheck()
+        // A click cannot change modes mid-input. Between inputs, however, the
+        // user is allowed to focus or unfocus the game - watching the mail window
+        // is the whole point of an experiment nobody has verified yet - so the
+        // correct guarded mode is chosen again here and revalidated. Staying in
+        // the mode chosen before the tab wait is what ended a trip with items
+        // attached, a recipient typed and Send never pressed.
+        string? ReSelectFocus()
         {
             string? issue = safetyFailure();
             if (issue != null) return issue;
@@ -85,7 +88,7 @@ internal static class WowBExperimentalMail
             if (background != nextBackground)
             {
                 background = nextBackground;
-                Logging.Write("[Mail] focus changed during tab wait; using " + (background ? "background" : "foreground") +
+                Logging.Write("[Mail] focus changed between mail inputs; using " + (background ? "background" : "foreground") +
                     " mode after revalidation. Recipient focus remains unverified.");
             }
             return safe() ? null : lastSafetyFailure;
@@ -141,7 +144,7 @@ internal static class WowBExperimentalMail
             if (!Left(hwnd, ui.TabX, ui.TabY, w, h, background, safe, out string tabReason))
             { Logging.Write("[Mail] tab click withheld or uncertain: " + tabReason + "; no send input on this trip."); return false; }
             Logging.Write("[Mail] Send Mail tab click messages posted; tab opening and field focus are not verified.");
-            if (!WowBMailTabWait.Wait(TabWaitCheck, ClickAimAbort.Wait, () => Environment.TickCount64, out string waitReason))
+            if (!WowBMailTabWait.Wait(ReSelectFocus, ClickAimAbort.Wait, () => Environment.TickCount64, out string waitReason))
             { Logging.Write("[Mail] tab wait interrupted: " + waitReason + "; no recipient or send input on this trip."); return false; }
             var skipped = new HashSet<WowBGuid>();
             var attempted = new HashSet<WowBGuid>(); // do not re-click the same item in this trip
@@ -162,6 +165,8 @@ internal static class WowBExperimentalMail
                         ". No further recipient or send input; bags and delivery remain unverified.");
                     return true;
                 }
+                Logging.Write("[Mail] batch " + (batch + 1) + ": " + count + " unattempted nonzero candidate item(s) observed; clicking at most " +
+                    WowBMailBatchPolicy.BatchLimit + " of them, then Send once. A nonzero candidate is an observation, not proof that the item is mailable.");
                 if (batch > 0)
                     Logging.Write("[Mail] observed progress and one-second post-send wait complete; retyping recipient directly for batch " +
                         (batch + 1) + " without clicking the tab again. Field focus and contents are unverified.");
@@ -182,8 +187,30 @@ internal static class WowBExperimentalMail
                     foreach (var slot in selected)
                     {
                         if (expected.Count >= 12) break;
-                        if (!ReadBags(memory, reader, player, out var current) || current == null || !WowBMailGridLookup.Same(bags, current))
-                        { Logging.Write("[Mail] bag observations changed before an item click; no send input this trip."); return false; }
+                        // Between two clicks, not during one: if the user brought the game
+                        // forward to watch, the mode is re-chosen here instead of ending the
+                        // trip with items attached and Send unpressed.
+                        string? focusIssue = ReSelectFocus();
+                        if (focusIssue != null)
+                        {
+                            Logging.Write("[Mail] item clicks stopped after " + expected.Count + " posted item click(s): " + focusIssue +
+                                "; no send input this trip. Nothing already clicked is sent automatically; inspect the open mail window.");
+                            return false;
+                        }
+                        if (!ReadBags(memory, reader, player, out var current) || current == null)
+                        { Logging.Write("[Mail] active bag observations unreadable before an item click; no send input this trip."); return false; }
+                        /* An item that attaches to the mail leaves its own bag slot, so the
+                         * observation is expected to differ from the batch's first read as
+                         * soon as one click worked. What has to keep holding is that the saved
+                         * grid still describes these bags - same bag identities, same slot
+                         * counts - because a change there moves every pixel below it. Requiring
+                         * the whole snapshot to equal the first read ended the trip right after
+                         * the first successful attachment, which is one way Send never got
+                         * pressed. The slot about to be clicked is still checked against the
+                         * live read below. */
+                        if (!WowBMailGridLookup.Same(bags, current) &&
+                            !WowBMailGridLookup.Validate(grid, player.ToString(), w, h, current))
+                        { Logging.Write("[Mail] bag identity or slot count changed before an item click; no send input this trip."); return false; }
                         var bag = current[slot.Candidate];
                         if (bag.Candidate != slot.Candidate || bag.Unknown || slot.Slot < 0 || slot.Slot >= bag.Slots.Length ||
                             bag.Slots[slot.Slot] != slot.Item || attempted.Contains(slot.Item))
@@ -192,21 +219,40 @@ internal static class WowBExperimentalMail
                         int x = (int)Math.Round(slot.X), y = (int)Math.Round(slot.Y);
                         if (!Move(hwnd, x, y, w, h, safe))
                         {
-                            if (!safe()) return false;
+                            if (!safe())
+                            {
+                                Logging.Write("[Mail] item move stopped after " + expected.Count + " posted item click(s): " + lastSafetyFailure +
+                                    "; no send input this trip. Nothing already clicked is sent automatically; inspect the open mail window.");
+                                return false;
+                            }
                             skipped.Add(slot.Item);
                             Logging.Write("[Mail] item move not posted; skipping this item for the trip.");
                             continue;
                         }
                         if (!ClickAimInput.ConfirmedRightClick(hwnd, x, y, w, h, safe, out string clickReason))
                         {
-                            if (!safe()) return false;
+                            if (!safe())
+                            {
+                                Logging.Write("[Mail] item click stopped after " + expected.Count + " posted item click(s): " + lastSafetyFailure +
+                                    "; no send input this trip. Nothing already clicked is sent automatically; inspect the open mail window.");
+                                return false;
+                            }
                             skipped.Add(slot.Item);
                             Logging.Write("[Mail] item click not posted: " + clickReason + "; skipping this item for the trip.");
                             continue;
                         }
                         if (clickReason != "right-button messages posted" || !safe())
-                        { Logging.Write("[Mail] item button release or state uncertain; no send input this trip."); return false; }
+                        {
+                            Logging.Write("[Mail] item button release or state uncertain (" + (safe() ? clickReason : lastSafetyFailure) +
+                                "); no send input this trip. Nothing already clicked is sent automatically.");
+                            return false;
+                        }
                         expected.Add(new WowBMailCandidateTable.Expected(slot.Item, bag.Identity));
+                        // A posted right-click is not an attachment: a soulbound item, a stack
+                        // the client refuses or a mis-aimed pixel all look the same here.
+                        Logging.Write("[Mail] item click posted for candidate " + slot.Candidate + " slot " + slot.Slot +
+                            " at (" + x + "," + y + "); " + expected.Count + " of at most " + WowBMailBatchPolicy.BatchLimit +
+                            " clicked in batch " + (batch + 1) + ". Attachment, mailability and identity are unverified.");
                     }
                     if (expected.Count >= 12) break;
                     if (!WowBMailGridLookup.TryPreviewExcluding(grid, player.ToString(), w, h, bags, attempted,
@@ -215,9 +261,21 @@ internal static class WowBExperimentalMail
                 }
                 if (expected.Count == 0)
                 { Logging.Write("[Mail] no item click was posted; skipped=" + skipped.Count + "; no send input this trip."); return false; }
-                if (!safe() || !ReadBags(memory, reader, player, out var beforeSend) || beforeSend == null ||
-                    !WowBMailGridLookup.Same(bags, beforeSend))
-                { Logging.Write("[Mail] final bag observations or safety changed; no send input this trip."); return false; }
+                if (!safe())
+                {
+                    Logging.Write("[Mail] safety changed before Send after " + expected.Count + " posted item click(s): " + lastSafetyFailure +
+                        "; no send input this trip. Nothing already clicked is sent automatically; inspect the open mail window.");
+                    return false;
+                }
+                /* Stable, not identical: attaching items is meant to change the bags, so the
+                 * pre-send check is two consecutive reads agreeing and the saved grid still
+                 * describing them. Equality with the batch's first read is what stopped Send
+                 * from ever being pressed once an attachment was observed. */
+                if (!ReadBags(memory, reader, player, out var beforeSend) || beforeSend == null ||
+                    !ReadBags(memory, reader, player, out var beforeSendAgain) || beforeSendAgain == null ||
+                    !WowBMailGridLookup.Same(beforeSend, beforeSendAgain) ||
+                    !WowBMailGridLookup.Validate(grid, player.ToString(), w, h, beforeSend))
+                { Logging.Write("[Mail] final bag observations unstable or no longer described by the saved grid; no send input this trip. Nothing already clicked is sent automatically."); return false; }
                 if (!Left(hwnd, ui.SendX, ui.SendY, w, h, background, safe, out string sendReason))
                 { Logging.Write("[Mail] send input withheld or uncertain: " + sendReason + "; no retry. Inspect manually."); return false; }
                 Logging.Write("[Mail] Send button messages posted once for batch " + (batch + 1) +

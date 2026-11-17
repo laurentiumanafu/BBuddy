@@ -215,3 +215,47 @@ Two user screenshots `img1backpackopen.png` and `itemsattached.png` are 1919×10
 We still need mailbox object/frame/Send tab, input and recipient verification, attachment and accepted/rejected send observations, plus reliable combined-bag GUI-to-slot mapping. If necessary, while stopped use a disposable item and a verified recipient to record a manually rejected send as well as a successful one; avoid valuable items. Preserve the existing sell plan carefully: it can sell an item intended for mail if the user recorded that click. Logs and screenshots can contain sensitive information.
 
 Further implementation needs an evidence-backed 70938 UI/state reader or explicit calibration with verification, stable per-slot identity and screen mapping, safe text entry/readback, bounded batching/retry state, and synthetic and live tests before attaching or sending items automatically.
+
+### 2026-11-17: batch 1 stopped between the items and Send
+
+In `2026-11-17_1118_22188.log` the trip reached the Send Mail tab, typed the
+recipient (`recipient characters posted for batch 1` at 11:40:03.334) and then,
+1.6 s later, the caller logged `experiment interrupted or uncertain` - with
+**no line at all in between**. The user watched items attach and others fail to
+attach, and Send was never pressed.
+
+Working backwards from the code, every path between those two log lines writes
+a line except two: the branches that abort an item move or an item click when
+`safe()` has gone false. So the trip died on a safety check during the
+attachment loop, and the log could not say which one. The likely candidates in
+background mode are a focus change (someone brings the game forward to watch)
+and a physical mouse button held; the reader-side checks (combat, ghost,
+identity, position) are the others. The fix is that the log now has to say
+which.
+
+Three changes:
+
+1. **Every stop before Send now names the reason and the count.** The two
+   silent aborts log `lastSafetyFailure` and how many item clicks were already
+   posted, and say that nothing already clicked is sent automatically. A
+   posted item click is logged too (candidate, slot, pixel, ordinal), so
+   "attached some, failed to attach others" is readable from the log - a
+   posted right-click is not an attachment and never was: a soulbound item, a
+   stack the client refuses and a mis-aimed pixel look identical here.
+2. **Focus is re-selected between item clicks, not only during the tab wait.**
+   `TabWaitCheck` became `ReSelectFocus` and is now also called at the top of
+   every item iteration. Watching the game used to end the trip with a
+   recipient typed, items attached and Send unpressed; the guarded mode is now
+   re-chosen and revalidated between inputs, never during one.
+3. **An attached item is not a changed bag.** Both bag checks compared the
+   live read with the batch's first read and treated any difference as fatal -
+   but attaching an item empties the slot it came from, so the first successful
+   attachment ended the batch and Send never got pressed. The in-loop check now
+   falls back to `Validate` (same bag identities, same slot counts - what
+   actually moves every pixel below it) and still checks the slot about to be
+   clicked against the live read; the pre-send check is now two consecutive
+   reads agreeing plus `Validate`, which is what "stable" should have meant.
+
+Static tests in `Tools/WowBMailCandidateTests/` cover the new logging, the
+re-selection and both relaxed comparisons. As always, none of this proves an
+attachment, a recipient or a delivery.
