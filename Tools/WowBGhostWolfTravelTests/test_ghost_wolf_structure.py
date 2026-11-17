@@ -22,7 +22,7 @@ class Integration(unittest.TestCase):
   self.assertIn('MissedFormMs = 60000', c)
   self.assertIn('ExpectedWhileTravelling(reason)', c)
   self.assertIn('if (!nowActive) { _nextAttempt = attemptedAt + MissedFormMs; _nextCheck = _nextAttempt; }', c)
-  for text in ('IsExperimental70938','ExperimentalGrindActive','TraceIdentity70707',
+  for text in ('Uses70938Features','ExperimentalGrindActive','TraceIdentity70707',
                'first == null || second == null','first.GhostWolf70938Active() != second.GhostWolf70938Active()',
                'TryReadGhostFlagCandidate','TryReadGatherCombat','fields.PlayerPowerTypeCandidate != 0',
                'WowBGatherCastResearch.Observation.Idle',
@@ -39,6 +39,6 @@ class Integration(unittest.TestCase):
   self.assertIn('ghostWolfTravel.TryEnsure(hwnd, mover, TravelFormSafe)',d)
   self.assertIn('ghostWolfTravel.ShouldPauseTravel(hwnd, TravelFormSafe)',d)
   self.assertIn('if (formInterrupt)',d)
-  self.assertIn('reader.IsExperimental70938 && (action.Id == 2645 || action.Id == 1238640)',b)
+  self.assertIn('reader.Uses70938Features && (action.Id == 2645 || action.Id == 1238640)',b)
   self.assertIn('action.Id == 2645 || action.Id == 1238640',b)
 if __name__=='__main__':unittest.main()

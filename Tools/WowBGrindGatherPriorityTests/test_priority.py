@@ -8,9 +8,9 @@ class Priority(unittest.TestCase):
  def test_100_yard_start_and_separate_continuation(self):
   s = g[g.index('    private static bool GatherAreaSafe()'):g.index('    // Gather uses the Grind rotation')]
   self.assertIn('GatherAreaSafeCore(true)',s); self.assertIn('GatherAreaSafeCore(false)',s)
-  self.assertIn('reader.IsExperimental70938 ? SearchYd : GatherPullPriorityYd',s)
+  self.assertIn('reader.Uses70938Features ? SearchYd : GatherPullPriorityYd',s)
   self.assertIn('if (!checkNearby) return',s)
-  self.assertIn('pullRadius, reader.IsExperimental70938',s)
+  self.assertIn('pullRadius, reader.Uses70938Features',s)
   self.assertIn('return blockAllLiving ||',g)
   for guard in ('CheckDeathCheckpoint(trackerOnly: true)', 'ExperimentalSessionPlayerCurrent', 'PlayerCombatFlagCandidate', 'RouteRunner.StopRequested', 'VendorDue()'):
    self.assertIn(guard,s)

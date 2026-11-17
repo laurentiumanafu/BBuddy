@@ -9,7 +9,7 @@ class ReleaseStructure(unittest.TestCase):
         source = (ROOT / 'Styx/Logic/Pathing/ClickAim/WowBCorpseRecovery.cs').read_text()
         transition = source[source.index('        if (sentRelease)'):source.index('        if (ReadState(memory, reader, hwnd, checkpoint, running, out WoWPoint ghostPos)')]
         self.assertIn('TryDialogClick(memory, reader, hwnd, checkpoint, running, true, true', transition)
-        self.assertIn('TransitionWaitMs, reader.IsExperimental70938', transition)
+        self.assertIn('TransitionWaitMs, reader.Uses70938Features', transition)
         click = source[source.index('    private static bool TryDialogClick('):source.index('    internal static bool TryRecover(')]
         for guard in ('State.Dead', 'SuitableForClick(away, release', 'SuitableForClick(again, release', 'ConfirmedLeftClick', 'FinalCheck', 'Safety()'):
             self.assertIn(guard, click)

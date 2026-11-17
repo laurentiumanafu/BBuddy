@@ -26,7 +26,7 @@ class PlayerStateTests(unittest.TestCase):
         begin = recorder.index('byte[]?[] playerBytes = ReadWindow')
         end = recorder.index('output.WriteLine(WowBPlayerState70938.Format', begin)
         self.assertIn('if (!StableWithBar', recorder[begin:end])
-        self.assertIn('if (reader.IsExperimental70938)', recorder[end-45:end])
+        self.assertIn('if (reader.Uses70938Features)', recorder[end-45:end])
         self.assertIn('not proof of getter equivalence', recorder)
         users = [p.name for p in (ROOT / 'Styx').rglob('*.cs')
                  if 'WowBPlayerState70938.' in p.read_text()]

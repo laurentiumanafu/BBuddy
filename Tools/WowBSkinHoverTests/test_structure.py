@@ -32,7 +32,7 @@ class Skin70938(unittest.TestCase):
   self.assertLess(engage.index('if (combatNow)'),engage.index('TrySkinNearby(hwnd)'))
   click=G[G.index('private static bool TryClickUnit(IntPtr hwnd, WowBObservedUnit unit, double px, double py,\n                                     bool mustSelect, out string how, out bool pixelConfirmed, Func<bool>? safeToClick,'):G.index('/// <summary>\n    /// Finds the screen pixel')]
   self.assertLess(click.index('FindCorpseHover'),click.index('FindUnitPixel'))
-  hover=click[click.index('if (strictClick && clickReader?.IsExperimental70938 == true'):click.index('if (strictClick && clickReader != null && clickReader.ReadTargetGuid()')]
+  hover=click[click.index('if (strictClick && clickReader?.Uses70938Features == true'):click.index('if (strictClick && clickReader != null && clickReader.ReadTargetGuid()')]
   self.assertIn('safeToClick != null',hover)
   self.assertNotIn('WowBSkinning.IsConfirmed',hover)
   self.assertIn('return false;',hover)

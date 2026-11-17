@@ -20,7 +20,7 @@ class Maelstrom(unittest.TestCase):
                      'duration == 30000', 'remaining > 0 && remaining <= 30000',
                      'ids.Count == count', '!ids.Add(id)', 'External70938MaxSlots',
                      'count == BitConverter.ToUInt32(after, 0)', 'ReadExternalCandidate(memory',
-                     'unchecked(lastClock - firstClock) <= 1000', '!reader.IsExperimental70938',
+                     'unchecked(lastClock - firstClock) <= 1000', '!reader.Uses70938Features',
                      'AttemptBackoffMs = 5000'):
             self.assertIn(text, READ)
     def test_rotation_excludes_bolt_from_ordinary_paths(self):

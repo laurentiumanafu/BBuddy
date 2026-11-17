@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Diagnostics;
 using System.Collections.Generic;
 using System.Globalization;
@@ -236,11 +236,11 @@ internal static class WowBCombatResearch
             Memory? memory = ObjectManager.Wow;
             WowBReader? reader = ObjectManager.WowB;
             if (memory == null || reader == null || !memory.Is64BitTarget || !reader.IsExperimental70707)
-                return "Attach to a 70707, 70755, 70790, 70862, 70888 or 70938 client and enter the world first.";
+                return "Attach to a 70707, 70755, 70790, 70862, 70888, 70938 or 70959 client and enter the world first.";
             if (includeExternalArray && !reader.Uses70862Features)
-                return "External aura research is currently limited to 70862/70888/70938; uncheck it for other builds.";
-            if (includeCooldownCandidate && !reader.IsExperimental70938)
-                return "Cooldown candidate research is limited to 70938; uncheck it for other builds.";
+                return "External aura research is currently limited to 70862/70888/70938/70959; uncheck it for other builds.";
+            if (includeCooldownCandidate && !reader.Uses70938Features)
+                return "Cooldown candidate research is limited to 70938/70959; uncheck it for other builds.";
             using var uncached = memory.TemporaryCacheState(false);
             if (!WowBGrindFactions.TraceBuild70707(memory, reader) ||
                 !reader.TryCaptureWorldSnapshot(out WowBWorldSnapshot? snapshot) || snapshot == null ||
@@ -276,7 +276,7 @@ internal static class WowBCombatResearch
                     : "Target-tracked mode: selection changes end the capture.");
                 output.WriteLine("Player and optional selected NPC: unit+0x0000..0x27FF; 256-byte chunks; baseline hex bytes or 32-bit LE changes; unreadable != zero.");
                 output.WriteLine("Reads are non-atomic; game events, effects and other causes can change fields. No keyboard, mouse, Lua or game writes were used.");
-                if (reader.IsExperimental70938)
+                if (reader.Uses70938Features)
                     output.WriteLine("70938 supplied-offset candidates are read from the pool-derived player unit, not the supplied getter; their base equivalence, build and semantics are unverified. Health sanity/reread is not proof of getter equivalence. Qwords are not full GUID128 values. No gameplay decisions use these observations.");
                 if (includeExternalArray)
                     output.WriteLine("External candidate enabled: bounded read-only pointer at player+0x5F0; length, capacity and stride are unverified. Raw data may be sensitive.");
@@ -295,12 +295,12 @@ internal static class WowBCombatResearch
                     { reason = "state changed before read (" + why + "); last sample discarded"; break; }
                     long started = watch.ElapsedMilliseconds;
                     byte[]?[] playerBytes = ReadWindow(memory, player.UnitAddress);
-                    byte[]? healthCheck = reader.IsExperimental70938
+                    byte[]? healthCheck = reader.Uses70938Features
                         ? memory.ReadBytes64(player.UnitAddress + Styx.Offsets.Wow70707Offsets.HealthCandidateOffset, 16) : null;
                     byte[]?[]? targetBytes = target.HasValue ? ReadWindow(memory, target.Value.UnitAddress) : null;
                     string externalReason = "";
                     ExternalCandidateSample? external = includeExternalArray && !cancel.IsCancellationRequested
-                        ? ReadExternalCandidate(memory, player.UnitAddress, out externalReason, reader.Uses70888Features, reader.IsExperimental70938) : null;
+                        ? ReadExternalCandidate(memory, player.UnitAddress, out externalReason, reader.Uses70888Features, reader.Uses70938Features) : null;
                     string? cooldown = includeCooldownCandidate && !cancel.IsCancellationRequested
                         ? WowBCooldownResearch.Capture(memory, cancel) : null;
                     if (cancel.IsCancellationRequested) { reason = "cancelled during read; last sample discarded"; break; }
@@ -309,7 +309,7 @@ internal static class WowBCombatResearch
                     output.WriteLine("sample=" + i.ToString(CultureInfo.InvariantCulture) + " startMs=" + started.ToString(CultureInfo.InvariantCulture) +
                         " endMs=" + watch.ElapsedMilliseconds.ToString(CultureInfo.InvariantCulture) + " utc=" + DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
                     output.Write(Diff(priorPlayer, playerBytes, "player"));
-                    if (reader.IsExperimental70938) output.WriteLine(WowBPlayerState70938.Format(playerBytes, healthCheck));
+                    if (reader.Uses70938Features) output.WriteLine(WowBPlayerState70938.Format(playerBytes, healthCheck));
                     if (targetBytes != null) output.Write(Diff(priorTarget, targetBytes, "target"));
                     if (cooldown != null) output.WriteLine(cooldown);
                     if (includeExternalArray)

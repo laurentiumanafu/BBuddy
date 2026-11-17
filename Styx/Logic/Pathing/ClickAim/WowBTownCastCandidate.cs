@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using GreenMagic;
 using Styx.WoWInternals;
 
@@ -33,7 +33,7 @@ internal static class WowBTownCastCandidate
         start = end = clock = 0;
         try
         {
-            if (!reader.IsExperimental70938 || !reader.ExperimentalGrindActive ||
+            if (!reader.Uses70938Features || !reader.ExperimentalGrindActive ||
                 ObjectManager.Wow != memory || ObjectManager.WowB != reader ||
                 player.UnitAddress < 0x10000 || player.UnitAddress > Limit - ClockOffset - 4) return State.Unknown;
             using var uncached = memory.TemporaryCacheState(false);

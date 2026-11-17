@@ -48,16 +48,16 @@ class MovementLootSafety(unittest.TestCase):
 
     def test_70938_melee_does_not_use_projected_right_click(self):
         melee = section(G, '/* ---- in melee: swing, do not steer ----', '/* The melee half of the bar')
-        self.assertIn('else if (!reader.IsExperimental70938 && !keyOneMacro', melee)
+        self.assertIn('else if (!reader.Uses70938Features && !keyOneMacro', melee)
         self.assertIn('TryClickUnit(hwnd, target', melee)
-        self.assertIn('reader.IsExperimental70938 ||', melee)
+        self.assertIn('reader.Uses70938Features ||', melee)
         self.assertIn('unverified melee right-click withheld', melee)
         self.assertIn('if (!keyOneMacro && auto != null)', melee)
         self.assertIn('MayPressConservativeAttack', melee)
 
     def test_recent_70938_hover_only_and_click_checks(self):
         click = section(G, 'using var uncachedClick =', 'if (strictClick && clickReader != null && clickReader.ReadTargetGuid()')
-        self.assertIn('clickReader?.IsExperimental70938 == true && clickMemory != null && safeToClick != null', click)
+        self.assertIn('clickReader?.Uses70938Features == true && clickMemory != null && safeToClick != null', click)
         self.assertNotIn('GatherSettings.Skinning', click)
         self.assertIn('FindCorpseHover', click)
         self.assertIn('hoverSafe()', click)
@@ -66,7 +66,7 @@ class MovementLootSafety(unittest.TestCase):
         self.assertIn('return false;', click)
         self.assertIn('return true;', click)
         loot = section(G, 'private static int TryLootOne(', 'private static bool FindCorpseHover(')
-        self.assertIn('!lootReader.IsExperimental70938', loot)
+        self.assertIn('!lootReader.Uses70938Features', loot)
         self.assertIn('!lootClicked && fastRecentProbe && searchExhausted', loot)
         self.assertIn('recentSafe()', loot)
         self.assertIn('RecentLootInReach(afterTurnCorpse', loot)

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Threading;
@@ -341,7 +341,7 @@ internal static class GatherRunner
     private static ClickAimAction? FindMovementAction(WowBReader reader, int slot)
     {
         foreach (ClickAimAction candidate in ClickAimCombat.ReadBar(reader))
-            if (GatherMovementSkill.IsSupported(candidate, slot, reader.IsExperimental70938)) return candidate;
+            if (GatherMovementSkill.IsSupported(candidate, slot, reader.Uses70938Features)) return candidate;
         return null;
     }
 
@@ -353,7 +353,7 @@ internal static class GatherRunner
         GreenMagic.Memory? memory = ObjectManager.Wow;
         WowBReader? reader = ObjectManager.WowB;
         if (memory == null || reader == null || hwnd == IntPtr.Zero) return false;
-        if (reader.IsExperimental70938)
+        if (reader.Uses70938Features)
         {
             ClickAimAction? slotAction;
             try { slotAction = FindMovementAction(reader, _movementSlot); }
@@ -370,7 +370,7 @@ internal static class GatherRunner
         if (!reader.Uses70862Features || _movementSlot < 1 || _movementSlot > 12)
         {
             _movementAttempted = true;
-            Logging.Write("[Gather] movement skill requires 70862/70888/70938 and a configured first-bar slot 1–12; no key sent");
+            Logging.Write("[Gather] movement skill requires 70862/70888/70938/70959 and a configured first-bar slot 1–12; no key sent");
             return false;
         }
         try
@@ -612,23 +612,23 @@ internal static class GatherRunner
         }
         int cursorRecoveries = 0, angleAttempts = 0;
         var triedBearings = new List<double>();
-        int searchLimit = initialReader?.IsExperimental70938 == true ? ClassicGatherAttempts : MaxGatherAttempts;
-        for (int attempt = 1; attempt <= searchLimit + (initialReader?.IsExperimental70938 == true ? 6 : 0) && !_stop && !ClickAimAbort.Requested; attempt++)
+        int searchLimit = initialReader?.Uses70938Features == true ? ClassicGatherAttempts : MaxGatherAttempts;
+        for (int attempt = 1; attempt <= searchLimit + (initialReader?.Uses70938Features == true ? 6 : 0) && !_stop && !ClickAimAbort.Requested; attempt++)
         {
             bool fighting;
             if ((extraSafety != null && !extraSafety()) || (standaloneGuard && !StandaloneSafety())) { _pending = node; return; }
             if (!GrindRunner.TryReadGatherCombat(out fighting)) { _pending = node; return; }
             if (fighting) { DeferForCombat(true); return; }
-            Logging.Write("[Gather] hover search attempt " + attempt + (initialReader?.IsExperimental70938 == true ? "" : "/" + searchLimit)
+            Logging.Write("[Gather] hover search attempt " + attempt + (initialReader?.Uses70938Features == true ? "" : "/" + searchLimit)
                           + "; background mouse movement allowed, foreground interruptions retry automatically");
             if (!MapStillCurrent()) return;
-            bool mining70938 = initialReader?.IsExperimental70938 == true && !node.IsHerb;
+            bool mining70938 = initialReader?.Uses70938Features == true && !node.IsHerb;
             WowBObservedUnit castPlayer = default;
             bool castReady = mining70938 && WowBGatherCastResearch.TryBegin(initialMemory, initialReader, out castPlayer) &&
                 initialMemory != null && initialReader != null &&
                 WowBGatherCastResearch.Observe(initialMemory, initialReader, castPlayer) == WowBGatherCastResearch.Observation.Idle;
             bool clicked = GatherInteraction.TryInteract(hwnd, node, candidate => MapStillCurrent() && Ready(candidate) &&
-                (extraSafety == null || initialReader?.IsExperimental70938 != true || candidate.Guid == node.Guid), extraSafety, out GatherNodeScanner.Node clickedNode,
+                (extraSafety == null || initialReader?.Uses70938Features != true || candidate.Guid == node.Guid), extraSafety, out GatherNodeScanner.Node clickedNode,
                                                           out string reason, out bool hoverMiss, out bool cursorMoved,
                                                           standaloneGuard ? StandaloneSafety : null);
             // A node interaction may have broken a movement form; one new
@@ -643,7 +643,7 @@ internal static class GatherRunner
                 angleAttempts = 0; triedBearings.Clear();
                 // A substituted herb/ore is not the same pre-click observation.
                 castReady = false;
-                mining70938 = initialReader?.IsExperimental70938 == true && !node.IsHerb;
+                mining70938 = initialReader?.Uses70938Features == true && !node.IsHerb;
             }
             Logging.Write(clicked ? "[Gather] node interaction: " + reason
                                   : "[Gather] no right-button down sent: " + reason);
@@ -675,7 +675,7 @@ internal static class GatherRunner
                 Logging.Write("[Gather] repeated mouse interruptions; yielding briefly before another search");
                 return;
             }
-            if (!clicked && hoverMiss && initialReader?.IsExperimental70938 == true)
+            if (!clicked && hoverMiss && initialReader?.Uses70938Features == true)
             {
                 if (angleAttempts >= 3)
                 {
@@ -773,7 +773,7 @@ internal static class GatherRunner
             // A posted click is not proof that a cast or loot succeeded. Only
             // count it after an uninterrupted wait and a successful scan still
             // observing the same GUID. Cursor/hover misses do not count as casts.
-            if (clicked && initialReader?.IsExperimental70938 == true)
+            if (clicked && initialReader?.Uses70938Features == true)
             {
                 if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested || ObjectManager.WowB != initialReader ||
                     ObjectManager.Wow != initialMemory || !MapStillCurrent() || (extraSafety != null && !extraSafety()) ||
@@ -824,7 +824,7 @@ internal static class GatherRunner
             if (!Ready(node)) return;
             // An unposted click for a reason other than a confirmed hover miss
             // is unknown, not permission to repeatedly interact from this state.
-            if (!clicked && initialReader?.IsExperimental70938 == true && !hoverMiss)
+            if (!clicked && initialReader?.Uses70938Features == true && !hoverMiss)
             {
                 Retry[node.Guid] = unchecked(Environment.TickCount + InteractionRetryMs);
                 Logging.Write("[Gather] interaction was not posted; deferring without a cast or hover failure count");
@@ -985,7 +985,7 @@ internal static class GatherRunner
                 }
                 return false;
             }
-            if (ObjectManager.WowB?.IsExperimental70938 == true)
+            if (ObjectManager.WowB?.Uses70938Features == true)
             {
                 _grindCommitted = node; _grindMissingScans = _grindApproachFailures = 0; _grindReportAt = 0;
                 committed = true;

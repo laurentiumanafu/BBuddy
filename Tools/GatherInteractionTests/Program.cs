@@ -1,4 +1,4 @@
-#if GATHER_INTERACTION_TESTS
+﻿#if GATHER_INTERACTION_TESTS
 using System;
 using System.Collections.Generic;
 using GreenMagic;
@@ -181,6 +181,7 @@ namespace Styx.WoWInternals
         public static int ReadCount;
         public static Func<int, WowBGuid>? OnRead;
         public bool IsExperimental70707 => true;
+        public bool Uses70938Features => IsExperimental70938;
         public bool IsExperimental70938 { get; set; }
         public int ExperimentalBuildNumber => 70707;
         public ulong MouseoverGuidCandidateRva => 1;

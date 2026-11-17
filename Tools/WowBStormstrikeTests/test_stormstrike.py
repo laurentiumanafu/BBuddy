@@ -19,8 +19,8 @@ class Stormstrike(unittest.TestCase):
                      'Shock and auto attack stay enabled'):
             self.assertIn(text, TEST)
     def test_melee_cast_rechecks_every_guard_and_separate_timer(self):
-        self.assertIn('ClickAimClassRotation.Build(ClickAimSettings.RotationClass, bar, reader.IsExperimental70938)', FIGHT)
-        self.assertIn('shockAutoPlan || (reader.IsExperimental70938 && meleeHit != null && meleeHit.Id == ClickAimClassRotation.StormstrikeId && meleeHit.IsDamage)', FIGHT)
+        self.assertIn('ClickAimClassRotation.Build(ClickAimSettings.RotationClass, bar, reader.Uses70938Features)', FIGHT)
+        self.assertIn('shockAutoPlan || (reader.Uses70938Features && meleeHit != null && meleeHit.Id == ClickAimClassRotation.StormstrikeId && meleeHit.IsDamage)', FIGHT)
         start=FIGHT.index('bool stormstrike70938 ='); end=FIGHT.index('/* Nothing was sent this pass',start)
         s=FIGHT[start:end]
         for text in ('ClickAimClassRotation.Ready(_rotationCooldowns, rotation.MeleeGroup',
@@ -50,7 +50,7 @@ class Stormstrike(unittest.TestCase):
                      'IsCommittedReadableRange64', 'visited.Add(node)', 'watch.ElapsedMilliseconds > BudgetMs'):
             self.assertIn(text, research)
         guard = FIGHT[FIGHT.index('private static bool TryStormstrikeCandidate'):FIGHT.index('private static string Fight(')]
-        for text in ('reader.IsExperimental70938', 'reader.ExperimentalGrindActive', 'ObjectManager.Wow != memory',
+        for text in ('reader.Uses70938Features', 'reader.ExperimentalGrindActive', 'ObjectManager.Wow != memory',
                      'beforeMap != map', 'afterMap != map', 'TraceIdentity70707', 'ClickAimAbort.Requested',
                      'RouteRunner.StopRequested', 'TryReadStormstrike'):
             self.assertIn(text, guard)

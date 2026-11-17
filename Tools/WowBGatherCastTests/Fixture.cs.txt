@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using GreenMagic;
 using Styx.WoWInternals;
 using Styx.Logic.Pathing;
@@ -27,6 +27,7 @@ namespace Styx.WoWInternals
     public class WowBReader
     {
         public bool IsExperimental70938=true, ExperimentalGrindActive=true, PlayerReadable=true;
+        public bool Uses70938Features => IsExperimental70938;
         public bool TryRead70888RecoveryPlayer(out WowBObservedUnit p,out uint hp,out uint max)
         { p = new WowBObservedUnit { UnitAddress=0x100000 }; hp=max=100; return PlayerReadable; }
     }

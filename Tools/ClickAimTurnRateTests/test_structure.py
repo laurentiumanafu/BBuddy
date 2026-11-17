@@ -24,7 +24,7 @@ class TurnRateStructure(unittest.TestCase):
             self.assertIn(s, P)
     def test_steer_uses_only_in_place_70938_samples(self):
         steer = section(S, 'public static bool Steer(', 'public static bool Face(')
-        for s in ('sampleReader?.IsExperimental70938 == true', 'sampleMemory.WindowHandle == hwnd && !_keyDown',
+        for s in ('sampleReader?.Uses70938Features == true', 'sampleMemory.WindowHandle == hwnd && !_keyDown',
                   'ClickAimAbort.Generation', 'turnLearning!.Bind(', 'turnLearning.Rate(turnUp, rate)',
                   'StableTurnSample(sampleReader!, samplePlayer', 'StableTurnSample(sampleReader, endPlayer',
                   'ObjectManager.WowB == sampleReader', 'ObjectManager.Wow == sampleMemory',

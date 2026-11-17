@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using Styx.WoWInternals;
@@ -10,6 +10,7 @@ namespace Styx.WoWInternals
     sealed class WowBReader
     {
         public bool IsExperimental70938, Uses70862Features;
+        public bool Uses70938Features => IsExperimental70938;
         public bool MapReadable = true; public uint Map = 1;
         public bool TryReadMapId(out uint map) { map = Map; return MapReadable; }
     }

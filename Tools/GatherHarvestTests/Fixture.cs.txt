@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using Styx.WoWInternals;
 using Styx.Helpers;
@@ -17,6 +17,7 @@ namespace Styx.WoWInternals
     public sealed class WowBReader
     {
         public bool IsExperimental70938=true, IsExperimental70707=true;
+        public bool Uses70938Features => IsExperimental70938;
         public bool TryRead70888RecoveryPlayer(out WowBObservedUnit p, out uint h, out uint m) { p=default;h=m=100;return true; }
     }
     public static class ObjectManager { public static WowBReader? WowB; public static GreenMagic.Memory? Wow; }

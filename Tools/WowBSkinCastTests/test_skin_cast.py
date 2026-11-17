@@ -8,7 +8,7 @@ P = (R/'Styx/Logic/Pathing/ClickAim/WowBSkinCastProgress.cs').read_text(encoding
 class SkinCast(unittest.TestCase):
     def test_trace_candidate_is_narrow(self):
         for text in ('first == 10768U', 'second == first', 'unchecked(end - start) == 3000U',
-                     'Observation.Skinning', 'reader.IsExperimental70938', 'reader.ExperimentalGrindActive',
+                     'Observation.Skinning', 'reader.Uses70938Features', 'reader.ExperimentalGrindActive',
                      'start1 != start2 || end1 != end2', 'TraceIdentity70707(memory, reader, player, true)'):
             self.assertIn(text,C)
         self.assertIn('first == 3564U',C)

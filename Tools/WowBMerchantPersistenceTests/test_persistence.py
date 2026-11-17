@@ -12,7 +12,7 @@ class MerchantPersistence(unittest.TestCase):
   self.assertIn('points[i].MerchantGuids.Count == 0',g)
  def test_candidate_is_build_and_town_scoped_ambiguous_fail_closed(self):
   s=g[g.index('private static bool TryFindVendorNpc('):g.index('private static bool VendorCandidateStillValid(')]
-  for x in ('point.TownMap != map', 'reader.IsExperimental70938', 'Same70938HighCandidate', 'fallbackCount++', '!exactObserved && fallbackCount == 1', 'townDistance > ClickAimSettings.VendorSearchYd', 'fallbackYd <= ClickAimSettings.VendorSearchYd', 'Math.Abs(candidate.Location.Z - point.Z) > 5.0', 'IsRecordedLive(point, fallback, memory, reader, true)', 'if (exactObserved) return false;',
+  for x in ('point.TownMap != map', 'reader.Uses70938Features', 'Same70938HighCandidate', 'fallbackCount++', '!exactObserved && fallbackCount == 1', 'townDistance > ClickAimSettings.VendorSearchYd', 'fallbackYd <= ClickAimSettings.VendorSearchYd', 'Math.Abs(candidate.Location.Z - point.Z) > 5.0', 'IsRecordedLive(point, fallback, memory, reader, true)', 'if (exactObserved) return false;',
    'NearestAcceptable(sticky)', 'TryFindNearestNpc(snap, ClickAimSettings.VendorSearchYd, out WowBObservedUnit nearest, out double nearestYd, NearestAcceptable)',
    '_vendorNearestGuid = nearest.Guid;'):
    self.assertIn(x,s)

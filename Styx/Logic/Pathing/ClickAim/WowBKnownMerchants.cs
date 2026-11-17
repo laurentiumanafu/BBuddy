@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Globalization;
 using GreenMagic;
 using Styx.WoWInternals;
@@ -95,7 +95,7 @@ internal static class WowBKnownMerchants
     {
         if (memory == null || reader == null ||
             (!point.MerchantGuids.Contains(unit.Guid.ToString()) &&
-             !(allow70938Candidate && reader.IsExperimental70938 && Same70938HighCandidate(point, unit.Guid)))) return false;
+             !(allow70938Candidate && reader.Uses70938Features && Same70938HighCandidate(point, unit.Guid)))) return false;
         return IsLivingObservedNpc(memory, reader, unit);
     }
 

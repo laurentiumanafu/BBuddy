@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using GreenMagic;
 using Styx.Helpers;
 using Styx.WoWInternals;
@@ -37,7 +37,7 @@ internal sealed class WowBGhostWolfTravel
     {
         try
         {
-            if (!_enabled || reader?.IsExperimental70938 != true) return false;
+            if (!_enabled || reader?.Uses70938Features != true) return false;
             if (FindSlot(reader) != null) return true;
             Report("configured first-bar slot is not a readable Ghost Wolf spell; no form key sent");
             return false;
@@ -81,7 +81,7 @@ internal sealed class WowBGhostWolfTravel
         try
         {
             if (!_enabled) { reason = "travel form disabled"; return false; }
-            if (memory == null || reader == null || !reader.IsExperimental70938) { reason = "reader unavailable"; return false; }
+            if (memory == null || reader == null || !reader.Uses70938Features) { reason = "reader unavailable"; return false; }
             if (!reader.ExperimentalGrindActive) { reason = "no active Grind session"; return false; }
             if (hwnd == IntPtr.Zero || memory.WindowHandle != hwnd) { reason = "game window handle changed"; return false; }
             if (ClickAimAbort.Requested || RouteRunner.StopRequested) { reason = "STOP requested"; return false; }

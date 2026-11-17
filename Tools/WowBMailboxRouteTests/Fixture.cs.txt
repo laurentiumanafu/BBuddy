@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 namespace GreenMagic { sealed class Memory {} }
 namespace Styx.WoWInternals
@@ -9,6 +9,7 @@ namespace Styx.WoWInternals
     sealed class WowBReader
     {
         public bool IsExperimental70938 = true, ExperimentalGrindActive = true;
+        public bool Uses70938Features => IsExperimental70938;
         public uint Map = 1, Hp = 100; public WowBObservedUnit Player = new() { Guid = new WowBGuid { Value = 7 }, Location = new Point { X = 10, Y = 20, Z = 5 } };
         public bool TryReadMapId(out uint map) { map = Map; return true; }
         public bool TryReadTraceLocalGuid(out WowBGuid guid) { guid=Player.Guid; return true; }

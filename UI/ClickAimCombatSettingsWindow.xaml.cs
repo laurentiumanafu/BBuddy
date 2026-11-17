@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Threading;
@@ -219,7 +219,7 @@ namespace CopilotBuddy.UI
         {
             sample = null;
             if (ClickAimUi.Running || ClickAimUi.Paused || ObjectManager.Wow != memory || ObjectManager.WowB != reader ||
-                memory.WindowHandle != hwnd || !reader.IsExperimental70938 || !ClickAimInput.GameForeground(hwnd) ||
+                memory.WindowHandle != hwnd || !reader.Uses70938Features || !ClickAimInput.GameForeground(hwnd) ||
                 !ClickAimInput.ClientSize(hwnd, out int w, out int h) || w != width || h != height ||
                 !ClickAimInput.TryCursorFraction(hwnd, out double fx, out double fy)) return false;
             try
@@ -263,7 +263,7 @@ namespace CopilotBuddy.UI
             if (mailbox && _mailHoverAway == null) { lblMailHoverStatus.Text = "Record the away observation first."; return; }
             GreenMagic.Memory? memory = ObjectManager.Wow; WowBReader? reader = ObjectManager.WowB;
             IntPtr hwnd = memory?.WindowHandle ?? IntPtr.Zero;
-            if (ClickAimUi.Running || ClickAimUi.Paused || reader?.IsExperimental70938 != true || memory == null ||
+            if (ClickAimUi.Running || ClickAimUi.Paused || reader?.Uses70938Features != true || memory == null ||
                 hwnd == IntPtr.Zero || !ClickAimInput.ClientSize(hwnd, out int width, out int height))
             { _mailHoverAway = null; _mailHoverBox = null; btnMailClickTest.IsEnabled = false; lblMailHoverStatus.Text = "Stop the bot and attach to the 70938 game window first."; return; }
             if (!mailbox) _mailHoverAway = null;
@@ -360,7 +360,7 @@ namespace CopilotBuddy.UI
             if (_mailHoverBusy) return;
             GreenMagic.Memory? memory = ObjectManager.Wow; WowBReader? reader = ObjectManager.WowB;
             IntPtr hwnd = memory?.WindowHandle ?? IntPtr.Zero;
-            if (ClickAimUi.Running || ClickAimUi.Paused || reader?.IsExperimental70938 != true || memory == null ||
+            if (ClickAimUi.Running || ClickAimUi.Paused || reader?.Uses70938Features != true || memory == null ||
                 hwnd == IntPtr.Zero || !ClickAimInput.ClientSize(hwnd, out int width, out int height))
             { lblMailHoverStatus.Text = "Stop the bot and attach to 70938 before the tab test."; return; }
             if (System.Windows.MessageBox.Show("Only proceed if the mailbox window is open and the Send Mail TAB is visible. This will post ONE left-click exactly where you hover after three seconds. Do NOT hover the Send button. It cannot detect the tab or mailbox window. Continue?",
@@ -413,7 +413,7 @@ namespace CopilotBuddy.UI
             { lblMailHoverStatus.Text = "Enter a nonempty recipient of up to 64 letters and hyphens for this test; no text was sent."; return; }
             GreenMagic.Memory? memory = ObjectManager.Wow; WowBReader? reader = ObjectManager.WowB;
             IntPtr hwnd = memory?.WindowHandle ?? IntPtr.Zero;
-            if (ClickAimUi.Running || ClickAimUi.Paused || reader?.IsExperimental70938 != true || memory == null ||
+            if (ClickAimUi.Running || ClickAimUi.Paused || reader?.Uses70938Features != true || memory == null ||
                 hwnd == IntPtr.Zero || !ClickAimInput.ClientSize(hwnd, out int width, out int height))
             { lblMailHoverStatus.Text = "Stop the bot and attach to 70938 before the recipient test."; return; }
             if (System.Windows.MessageBox.Show("Before starting, open Send Mail in the game and ensure its recipient field is empty and focused. The tab may focus it automatically. The test posts the name after you return to the game. It cannot verify which field has focus; text may go elsewhere. It never presses Enter or Send. Continue?",
@@ -485,7 +485,7 @@ namespace CopilotBuddy.UI
             if (_mailHoverBusy || _mailGridBusy) return;
             GreenMagic.Memory? memory = ObjectManager.Wow; WowBReader? reader = ObjectManager.WowB;
             IntPtr hwnd = memory?.WindowHandle ?? IntPtr.Zero;
-            if (ClickAimUi.Running || ClickAimUi.Paused || reader?.IsExperimental70938 != true || memory == null ||
+            if (ClickAimUi.Running || ClickAimUi.Paused || reader?.Uses70938Features != true || memory == null ||
                 hwnd == IntPtr.Zero || !ClickAimInput.ClientSize(hwnd, out int width, out int height))
             { lblMailHoverStatus.Text = "Stop the bot and attach to 70938 before the attachment test."; return; }
             if (System.Windows.MessageBox.Show("Only proceed with Send Mail and the calibrated combined backpack open, no attachments, and the same UI layout. Choose ONE disposable item in equipped candidate 0–3. The test posts one right-click where you hover after three seconds. It cannot verify the window, the item or whether it is mailable. No mail is sent. Continue?",
@@ -546,7 +546,7 @@ namespace CopilotBuddy.UI
             { lblMailGridStatus.Text = "Stop the bot and wait for any calibration or research test to finish."; return; }
             GreenMagic.Memory? memory = ObjectManager.Wow; WowBReader? reader = ObjectManager.WowB;
             IntPtr hwnd = memory?.WindowHandle ?? IntPtr.Zero;
-            if (memory == null || reader?.IsExperimental70938 != true || hwnd == IntPtr.Zero ||
+            if (memory == null || reader?.Uses70938Features != true || hwnd == IntPtr.Zero ||
                 !ClickAimInput.ClientSize(hwnd, out int width, out int height))
             { lblMailGridStatus.Text = "Attach to the 70938 game window first."; return; }
             int generation = ClickAimAbort.Generation;
@@ -611,7 +611,7 @@ namespace CopilotBuddy.UI
         private bool _mailGridBusy;
 
         private bool MailGridContextCurrent()
-            => !_mailGridBusy && !ClickAimUi.Running && !ClickAimUi.Paused && _mailGridReader?.IsExperimental70938 == true &&
+            => !_mailGridBusy && !ClickAimUi.Running && !ClickAimUi.Paused && _mailGridReader?.Uses70938Features == true &&
                _mailGridMemory != null && ObjectManager.Wow == _mailGridMemory && ObjectManager.WowB == _mailGridReader &&
                _mailGridMemory.WindowHandle == _mailGridHwnd && _mailGridHwnd != IntPtr.Zero &&
                ClickAimInput.ClientSize(_mailGridHwnd, out int width, out int height) && width == _mailGridWidth && height == _mailGridHeight;
@@ -638,7 +638,7 @@ namespace CopilotBuddy.UI
             { lblMailGridStatus.Text = "Stop the bot and routes first."; return; }
             GreenMagic.Memory? memory = ObjectManager.Wow; WowBReader? reader = ObjectManager.WowB;
             IntPtr hwnd = memory?.WindowHandle ?? IntPtr.Zero;
-            if (reader?.IsExperimental70938 != true || memory == null || hwnd == IntPtr.Zero ||
+            if (reader?.Uses70938Features != true || memory == null || hwnd == IntPtr.Zero ||
                 !ClickAimInput.ClientSize(hwnd, out int width, out int height))
             { lblMailGridStatus.Text = "Attach to 70938 and open the game window before calibrating."; return; }
             _mailGridBusy = true; btnMailGridStart.IsEnabled = false; btnMailGridRecord.IsEnabled = false; btnMailGridSave.IsEnabled = false;
@@ -835,7 +835,7 @@ namespace CopilotBuddy.UI
             { lblMailControlsStatus.Text = "Stop the bot and wait for other mail research."; return; }
             GreenMagic.Memory? memory = ObjectManager.Wow; WowBReader? reader = ObjectManager.WowB;
             IntPtr hwnd = memory?.WindowHandle ?? IntPtr.Zero;
-            if (memory == null || reader?.IsExperimental70938 != true || hwnd == IntPtr.Zero ||
+            if (memory == null || reader?.Uses70938Features != true || hwnd == IntPtr.Zero ||
                 !ClickAimInput.ClientSize(hwnd, out int width, out int height))
             { lblMailControlsStatus.Text = "Attach to 70938 first."; return; }
             if (kind != 0 && _mailControlObject == null)

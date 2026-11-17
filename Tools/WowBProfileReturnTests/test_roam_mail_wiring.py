@@ -12,7 +12,7 @@ class ProfileFreeMail(unittest.TestCase):
   run = s[s.index('private static void Run(List<ProfileGrindArea>'):s.index('private static bool VendorDue(')]
   self.assertIn('_roamSession = roam != null; ClearRoamMailReturn();',run)
   self.assertIn('roamMapAgain != _profileSessionMap || !roam.MapCurrent()',run)
-  self.assertIn('else if (trialReader?.IsExperimental70938 == true)',run)
+  self.assertIn('else if (trialReader?.Uses70938Features == true)',run)
   self.assertIn('profile-free mesh roaming',run)
  def test_return_capture_is_before_cast_and_vendor_path(self):
   capture = s[s.index('private static bool CaptureRoamMailReturn()'):s.index('private static bool VendorTrip(')]

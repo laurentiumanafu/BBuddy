@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using GreenMagic;
 using Styx.Helpers;
@@ -209,7 +209,7 @@ internal static class GatherInteraction
         reason = "hover-away GUID could not be read";
         if (!ReadHover(memory, reader, out WowBGuid away)) return false;
         reason = "hover-away GUID remained on the node";
-        if (away == node.Guid) { hoverMiss = reader.IsExperimental70938; return false; }
+        if (away == node.Guid) { hoverMiss = reader.Uses70938Features; return false; }
         // Two interleaved grids cover gaps in the first pass. They still cannot guarantee
         // a hit on a small/occluded node, so a miss is reported rather than clicked blindly.
         List<(double X, double Y)> points = SearchPoints(node, width, height,

@@ -14,12 +14,12 @@ class RemoteFallbackWiring(unittest.TestCase):
                       'currentTarget.RecordAddress != firstTarget.RecordAddress', '!TryReadGatherCombat',
                       'Experimental70707BarSafe', 'currentTarget.IsLocalPlayer', 'currentTarget.HasPlayerVtable',
                       'Unreachable(currentTarget.Guid)', 'distance > maxDistance',
-                      'selectedRemoteFallback && (!reader.IsExperimental70938 || distance <= GatherDefenceRadius)',
+                      'selectedRemoteFallback && (!reader.Uses70938Features || distance <= GatherDefenceRadius)',
                       'RemoteDefenceBlocked(reader, snap, currentPlayer, currentTarget, selectedRemoteFallback)'):
             self.assertIn(guard, select)
     def test_priorities_and_bounded_chase(self):
         defend = part('    private static string DefendNearby(', '    // Out-of-melee combat fallback.')
-        self.assertLess(defend.index('preferred = PreferredDefenceCandidates'), defend.index('_nearDefenceExhausted && reader.IsExperimental70938'))
+        self.assertLess(defend.index('preferred = PreferredDefenceCandidates'), defend.index('_nearDefenceExhausted && reader.Uses70938Features'))
         self.assertIn('TAB-selected remote fallback', defend)
         self.assertIn('attacker unknown', defend)
         self.assertIn('DefendRemote(hwnd, reader, remoteSnap, remotePlayer, out engaged, true)', defend)

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using GreenMagic;
 using Styx.WoWInternals;
 
@@ -47,7 +47,7 @@ internal static class WowBGatherCastResearch
         player = default;
         try
         {
-            return memory != null && reader?.IsExperimental70938 == true && reader.ExperimentalGrindActive &&
+            return memory != null && reader?.Uses70938Features == true && reader.ExperimentalGrindActive &&
                 ObjectManager.Wow == memory && ObjectManager.WowB == reader &&
                 reader.TryRead70888RecoveryPlayer(out player, out _, out _) &&
                 ObjectManager.Wow == memory && ObjectManager.WowB == reader;
@@ -84,7 +84,7 @@ internal static class WowBGatherCastResearch
         start = end = 0;
         try
         {
-            if (!reader.IsExperimental70938 || !reader.ExperimentalGrindActive ||
+            if (!reader.Uses70938Features || !reader.ExperimentalGrindActive ||
                 ObjectManager.Wow != memory || ObjectManager.WowB != reader ||
                 player.UnitAddress < 0x10000UL || player.UnitAddress > UserLimit - WindowOffset - WindowSize) return Observation.Unknown;
             using var uncached = memory.TemporaryCacheState(false);

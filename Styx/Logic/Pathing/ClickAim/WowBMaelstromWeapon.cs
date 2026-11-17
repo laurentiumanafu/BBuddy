@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using GreenMagic;
 using Styx.WoWInternals;
@@ -53,7 +53,7 @@ internal static class WowBMaelstromWeapon
     // withhold Bolt; none of them establish absence of the real buff.
     internal static bool ReadFive(Memory memory, WowBReader reader, WowBObservedUnit player)
     {
-        if (!reader.IsExperimental70938 || player.Guid.IsEmpty || player.UnitAddress < 0x10000 ||
+        if (!reader.Uses70938Features || player.Guid.IsEmpty || player.UnitAddress < 0x10000 ||
             player.UnitAddress > 0x00007FFFFFFFFFFFUL - (ulong)(ClockOffset + 4)) return false;
         try
         {

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Threading;
@@ -981,13 +981,13 @@ internal static class GrindRunner
             { Logging.Write("[Grind] profile map unreadable or changed; refusing to authorize profile pulls"); return; }
             ActivateProfileArea(area);
         }
-        else if (trialReader?.IsExperimental70938 == true)
+        else if (trialReader?.Uses70938Features == true)
         {
             if (ObjectManager.WowB != trialReader || !trialReader.TryReadMapId(out _profileSessionMap) || _profileSessionMap == uint.MaxValue ||
                 !trialReader.TryReadMapId(out uint roamMapAgain) || roamMapAgain != _profileSessionMap || !roam.MapCurrent())
             { Logging.Write("[Grind] roaming map unreadable or changed; stopping before movement."); return; }
         }
-        if (trialReader?.IsExperimental70938 == true)
+        if (trialReader?.Uses70938Features == true)
             Logging.Write("[Mail] experimental post-sell option " + (ClickAimSettings.ExperimentalAutoMail ? "ON" : "OFF") +
                 "; recipient " + (WowBMailRecipientText.ValidForTest(ClickAimSettings.MailRecipient) ? "configured" : "missing or invalid") +
                 "; selected vendor must have its own mailbox and matching controls. Sending and sales are unverified.");
@@ -1113,7 +1113,7 @@ internal static class GrindRunner
                 // Prioritize 70938 nearby beasts before rest, new gathering and
                 // voluntary pulls, but never interrupt a committed gathering
                 // procedure, active combat, pending selling or recent loot.
-                if (trialReader?.IsExperimental70938 == true && !_vendorDue && !AutoVendorPending() &&
+                if (trialReader?.Uses70938Features == true && !_vendorDue && !AutoVendorPending() &&
                     !VendorDue() && !RecentLootRetryPending() && TrySkinNearby(hwnd)) continue;
 
                 /* No recovery step: healing needs a cast, a cast needs the action bar, and
@@ -1237,7 +1237,7 @@ internal static class GrindRunner
                     => !_stop && !ClickAimAbort.Requested && !RouteRunner.StopRequested && !_vendorDue && !AutoVendorPending() &&
                        !CheckDeathCheckpoint() && (roam != null ? roam.MapCurrent() : ProfileMapCurrent()) &&
                        !FightNeeded(hwnd, SearchYd);
-                if (trialReader?.IsExperimental70938 == true && ghostWolfTravel.Handles(trialReader) &&
+                if (trialReader?.Uses70938Features == true && ghostWolfTravel.Handles(trialReader) &&
                     ClickAimPositions.TryRead(out double travelX, out double travelY) &&
                     ClickAimMath.Len(next.X - travelX, next.Y - travelY) > 5.0)
                 {
@@ -1361,7 +1361,7 @@ internal static class GrindRunner
                         next.X, next.Y, dead));
                     if (dead >= MaxDeadHotspots)
                     {
-                        if (trialReader?.IsExperimental70938 == true && _deathCheckpoint != null)
+                        if (trialReader?.Uses70938Features == true && _deathCheckpoint != null)
                         {
                             watchCancelled = !WatchDeathAfterHotspotFailures(mover, trialReader, started, budgetMs,
                                 () => roam != null ? roam.MapCurrent() : ProfileMapCurrent());
@@ -1758,7 +1758,7 @@ internal static class GrindRunner
 
         // Hotspot dwell also reaches this method directly. On 70938, process
         // nearby beasts after combat/vendor/recent loot but before a new pull.
-        if (trialReader?.IsExperimental70938 == true && TrySkinNearby(hwnd))
+        if (trialReader?.Uses70938Features == true && TrySkinNearby(hwnd))
         { _poolApproachHandled = true; return false; }
 
         // Defence always takes precedence above. Mana users wait at the configured
@@ -3464,7 +3464,7 @@ internal static class GrindRunner
     private static bool CaptureRoamMailReturn()
     {
         WowBReader? reader = ObjectManager.WowB; GreenMagic.Memory? memory = ObjectManager.Wow;
-        if (reader == null || memory == null || !reader.IsExperimental70938 || !reader.ExperimentalGrindActive) return false;
+        if (reader == null || memory == null || !reader.Uses70938Features || !reader.ExperimentalGrindActive) return false;
         if (_roamMailReturn != null)
             return _roamMailReader == reader && _roamMailMemory == memory &&
                 AutoVendorIdentityMatches(reader, memory, _roamMailPlayer) &&
@@ -3548,7 +3548,7 @@ internal static class GrindRunner
             return false;
         }
 
-        if (_roamSession && ClickAimSettings.ExperimentalAutoMail && ObjectManager.WowB?.IsExperimental70938 == true && !_townTransit &&
+        if (_roamSession && ClickAimSettings.ExperimentalAutoMail && ObjectManager.WowB?.Uses70938Features == true && !_townTransit &&
             !CaptureRoamMailReturn())
         {
             _vendorRetryAt = unchecked(Environment.TickCount + VendorRetryAfterFightMs);
@@ -3590,7 +3590,7 @@ internal static class GrindRunner
             return false;
         }
         VendorFile.VendorPoint point = points[at];
-        if (vendorReader.IsExperimental70938)
+        if (vendorReader.Uses70938Features)
             Logging.Write("[Mail] selected sell plan " + point.Name + ": option " + (ClickAimSettings.ExperimentalAutoMail ? "ON" : "OFF") +
                 "; mailbox " + (point.Mailbox == null ? "not recorded for this plan" : "recorded for this plan") +
                 "; recipient " + (WowBMailRecipientText.ValidForTest(ClickAimSettings.MailRecipient) ? "configured" : "missing or invalid") + ".");
@@ -3737,7 +3737,7 @@ internal static class GrindRunner
             + "are not verified; this does not confirm a sale.", sent, point.Steps.Count, _sellClicks));
         // A profile return is deliberately separate from the sell stage so combat
         // or a temporary read failure cannot cause the clicks to be replayed.
-        if (vendorReader.IsExperimental70938 && (_activeProfileArea != null || (_roamSession && _roamMailReturn != null)))
+        if (vendorReader.Uses70938Features && (_activeProfileArea != null || (_roamSession && _roamMailReturn != null)))
         {
             if (!vendorReader.TryReadTraceLocalGuid(out WowBGuid player) || player.IsEmpty ||
                 !AutoVendorIdentityMatches(vendorReader, vendorMemory, player) ||
@@ -3785,7 +3785,7 @@ internal static class GrindRunner
             else Logging.Write("[Grind] vendor clicks replayed (sales unverified); experimental mail is off.");
             return WalkBackToProfile(mover);
         }
-        if (vendorReader.IsExperimental70938 && _roamSession && !ClickAimSettings.ExperimentalAutoMail)
+        if (vendorReader.Uses70938Features && _roamSession && !ClickAimSettings.ExperimentalAutoMail)
             Logging.Write("[Mail] experimental post-sell option is OFF; no mailbox trip will be attempted.");
         if (_townTransit)
         {
@@ -3833,7 +3833,7 @@ internal static class GrindRunner
     {
         WowBReader? reader = ObjectManager.WowB;
         GreenMagic.Memory? memory = ObjectManager.Wow;
-        if (reader?.IsExperimental70938 != true || memory == null || memory.WindowHandle != hwnd)
+        if (reader?.Uses70938Features != true || memory == null || memory.WindowHandle != hwnd)
         { Logging.Write("[Town return] recall is supported only on 70938 Grind; stopping."); Stop(); return false; }
         bool hasPlan = false;
         foreach (VendorFile.VendorPoint point in points)
@@ -4054,7 +4054,7 @@ internal static class GrindRunner
         WowBReader? reader = _vendorMailboxReader;
         GreenMagic.Memory? memory = _vendorMailboxMemory;
         WowBGuid playerGuid = _vendorMailboxPlayer;
-        if (mailbox == null || reader == null || memory == null || !reader.IsExperimental70938)
+        if (mailbox == null || reader == null || memory == null || !reader.Uses70938Features)
         { Logging.Write("[Mailbox] missing session data; stopping without moving."); Stop(); return false; }
         if (ObjectManager.Wow != memory || ObjectManager.WowB != reader)
         { Logging.Write("[Mailbox] attachment changed; stopping without moving."); Stop(); return false; }
@@ -4270,7 +4270,7 @@ internal static class GrindRunner
                 { npc = candidate; yards = d; }
                 continue;
             }
-            if (!reader.IsExperimental70938 || !WowBKnownMerchants.Same70938HighCandidate(point, candidate.Guid)) continue;
+            if (!reader.Uses70938Features || !WowBKnownMerchants.Same70938HighCandidate(point, candidate.Guid)) continue;
             double townDistance = ClickAimMath.Len(candidate.Location.X - point.X, candidate.Location.Y - point.Y);
             if (!double.IsFinite(townDistance) || townDistance > ClickAimSettings.VendorSearchYd ||
                 !double.IsFinite(candidate.Location.Z) || Math.Abs(candidate.Location.Z - point.Z) > 5.0) continue;
@@ -4478,7 +4478,7 @@ internal static class GrindRunner
         // Older builds may need the selected beast cleared before a selection
         // probe. 70938 recent corpses use hover and do not need this F1 input.
         GreenMagic.Memory? lootMemory = ObjectManager.Wow;
-        if (_running && GatherSettings.Skinning && lootReader != null && !lootReader.IsExperimental70938 && lootMemory != null &&
+        if (_running && GatherSettings.Skinning && lootReader != null && !lootReader.Uses70938Features && lootMemory != null &&
             WowBSkinning.IsConfirmed(lootReader.IsExperimental70707, corpse.Guid) &&
             lootReader.ReadTargetGuid() == corpse.Guid &&
             Capture(out WowBWorldSnapshot? preLoot) && preLoot != null && preLoot.TryGetLocalPlayer(out WowBObservedUnit lootPlayer) &&
@@ -4893,7 +4893,7 @@ internal static class GrindRunner
         // second skinning interaction on a body the other already attempted.
         if (!nearby && NearbySkinAttempts.Contains(original, map)) return;
         if (!nearby && !NearbySkinAttempts.Remember(original, map)) return;
-        if (reader.IsExperimental70938)
+        if (reader.Uses70938Features)
         {
             TrySkin70938(hwnd, reader, memory, original, playerGuid, map, nearby, out bool anySent);
             if (!anySent && (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested || _vendorDue ||
@@ -5231,7 +5231,7 @@ internal static class GrindRunner
         try
         {
             using var uncached = memory.TemporaryCacheState(false);
-            if (reader.IsExperimental70938 && (CheckDeathCheckpoint(trackerOnly: true) ||
+            if (reader.Uses70938Features && (CheckDeathCheckpoint(trackerOnly: true) ||
                 !WowBGrindFactions.ExperimentalSessionPlayerCurrent(memory, reader))) return false;
             if (!Capture(out WowBWorldSnapshot? snap) || snap == null
                 || !snap.TryGetLocalPlayer(out WowBObservedUnit player)
@@ -5240,7 +5240,7 @@ internal static class GrindRunner
                    (self.UnitFlags & PlayerCombatFlagCandidate) != 0) return false;
             if (!checkNearby) return !_stop && !ClickAimAbort.Requested && !RouteRunner.StopRequested && !_vendorDue &&
                 ObjectManager.Wow == memory && ObjectManager.WowB == reader;
-            double pullRadius = reader.IsExperimental70938 ? SearchYd : GatherPullPriorityYd;
+            double pullRadius = reader.Uses70938Features ? SearchYd : GatherPullPriorityYd;
             foreach (WowBObservedUnit unit in snap.Units)
             {
                 if (unit.IsLocalPlayer || unit.HasPlayerVtable) continue;
@@ -5250,7 +5250,7 @@ internal static class GrindRunner
                 bool unknown = false;
                 bool eligible = readable && fields.Health > 0 && LevelViable(fields.Level, (int)self.Level) &&
                     WowBGrindFactions.AllowsPull(reader, unit, out unknown);
-                if (GatherUnitBlocks(unit.IsLocalPlayer, unit.HasPlayerVtable, distance, readable, readable ? fields.Health : 0, eligible, unknown, pullRadius, reader.IsExperimental70938))
+                if (GatherUnitBlocks(unit.IsLocalPlayer, unit.HasPlayerVtable, distance, readable, readable ? fields.Health : 0, eligible, unknown, pullRadius, reader.Uses70938Features))
                     return false;
             }
             return !_stop && !ClickAimAbort.Requested && !_vendorDue && ObjectManager.Wow == memory && ObjectManager.WowB == reader;
@@ -5394,7 +5394,7 @@ internal static class GrindRunner
         // NPC may be considered even with other *readable*, non-preferred NPCs
         // nearby. They could still be attackers: selection is not proof. A new
         // preferred or unreadable nearby NPC cancels this fallback.
-        if (selectedFallback && reader.IsExperimental70938)
+        if (selectedFallback && reader.Uses70938Features)
         {
             foreach (WowBObservedUnit unit in snap.Units)
             {
@@ -5467,7 +5467,7 @@ internal static class GrindRunner
                     (preferredOnly && !DefencePreferred(reader, currentTarget))) return false;
                 double distance = ClickAimMath.Len(currentTarget.Location.X - currentPlayer.Location.X, currentTarget.Location.Y - currentPlayer.Location.Y);
                 if (!double.IsFinite(distance) || distance > maxDistance ||
-                    (selectedRemoteFallback && (!reader.IsExperimental70938 || distance <= GatherDefenceRadius)) ||
+                    (selectedRemoteFallback && (!reader.Uses70938Features || distance <= GatherDefenceRadius)) ||
                     (distance > GatherDefenceRadius && (Unreachable(currentTarget.Guid) || RemoteDefenceBlocked(reader, snap, currentPlayer, currentTarget, selectedRemoteFallback)))) return false;
                 if (pass == 0) { firstPlayer = currentPlayer; firstTarget = currentTarget; }
                 else if (currentPlayer.Guid != firstPlayer.Guid || currentPlayer.UnitAddress != firstPlayer.UnitAddress ||
@@ -5664,7 +5664,7 @@ internal static class GrindRunner
             { engaged = true; return selectedReport; }
             // If a previous nearby pass failed, preserve a currently selected
             // ranged target before another TAB can replace it with nothing.
-            if (_nearDefenceExhausted && reader.IsExperimental70938 &&
+            if (_nearDefenceExhausted && reader.Uses70938Features &&
                 TryFightSelectedNearby(hwnd, reader, grindMode, "already-selected remote fallback", out selectedReport,
                     RemoteDefenceRadius, false, true))
             { engaged = true; return selectedReport; }
@@ -5692,13 +5692,13 @@ internal static class GrindRunner
         {
             // A current selection is a weaker signal than attacker identity,
             // but need not depend on the optional normal-pull faction filter.
-            if (reader.IsExperimental70938 && TryFightSelectedNearby(hwnd, reader, grindMode, "already-selected remote fallback",
+            if (reader.Uses70938Features && TryFightSelectedNearby(hwnd, reader, grindMode, "already-selected remote fallback",
                 out selectedReport, RemoteDefenceRadius, false, true))
             { engaged = true; return selectedReport; }
             // The client does not expose a verified attacker GUID. Only attempt
             // the bounded remote heuristic when no live or unreadable NPC is
             // nearby, with the same build-specific defence policy and selection checks.
-            if (grindMode && (GrindFactionSettings.Rules.Enabled || reader.IsExperimental70938) && !HasNearbyOtherNpc(snap, player, default, reader))
+            if (grindMode && (GrindFactionSettings.Rules.Enabled || reader.Uses70938Features) && !HasNearbyOtherNpc(snap, player, default, reader))
             {
                 string remote = DefendRemote(hwnd, reader, snap, player, out engaged);
                 if (remote.Length != 0) return remote;
@@ -5766,13 +5766,13 @@ internal static class GrindRunner
         // TAB may have selected the ranged NPC while the nearby entries were
         // being checked. Validate that actual selection twice; never walk to a
         // guessed pool entry or replay a stale target.
-        if (reader.IsExperimental70938 && TryFightSelectedNearby(hwnd, reader, grindMode, "TAB-selected remote fallback",
+        if (reader.Uses70938Features && TryFightSelectedNearby(hwnd, reader, grindMode, "TAB-selected remote fallback",
             out selectedReport, RemoteDefenceRadius, false, true))
         { engaged = true; return selectedReport; }
         // If TAB selected nothing nearby, probe a bounded set of remote pool
         // entries. A pool entry only guides facing: a fresh TAB must select that
         // exact live unit before any attack or mesh movement is allowed.
-        if (reader.IsExperimental70938 && grindMode && Capture(out WowBWorldSnapshot? remoteSnap) &&
+        if (reader.Uses70938Features && grindMode && Capture(out WowBWorldSnapshot? remoteSnap) &&
             remoteSnap != null && remoteSnap.TryGetLocalPlayer(out WowBObservedUnit remotePlayer))
         {
             string remoteReport = DefendRemote(hwnd, reader, remoteSnap, remotePlayer, out engaged, true);
@@ -5789,7 +5789,7 @@ internal static class GrindRunner
                                        WowBObservedUnit player, out bool engaged, bool selectedRemoteFallback = false)
     {
         engaged = false;
-        if (selectedRemoteFallback && !reader.IsExperimental70938) return "remote fallback unavailable on this build";
+        if (selectedRemoteFallback && !reader.Uses70938Features) return "remote fallback unavailable on this build";
         GreenMagic.Memory? memory = ObjectManager.Wow;
         if (memory == null || ObjectManager.WowB != reader) return "attachment unavailable; remote defence withheld";
         var candidates = new List<WowBObservedUnit>();
@@ -6095,7 +6095,7 @@ internal static class GrindRunner
         // This also preserves the existing hover-only path for confirmed beasts.
         // A failed or interrupted hover search never falls through to left-click
         // probes: those can select nearby totems or other unintended units.
-        if (strictClick && clickReader?.IsExperimental70938 == true && clickMemory != null && safeToClick != null)
+        if (strictClick && clickReader?.Uses70938Features == true && clickMemory != null && safeToClick != null)
         {
             if (!FindCorpseHover(hwnd, clickReader, clickMemory, unit, px, py, safeToClick, maxProbes,
                 out int hx, out int hy, out int hw, out int hh, out searchExhausted, out how, out Func<bool>? hoverSafe) || hoverSafe == null)
@@ -6655,7 +6655,7 @@ internal static class GrindRunner
         try
         {
             using var uncached = memory.TemporaryCacheState(false);
-            if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested || !reader.IsExperimental70938 ||
+            if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested || !reader.Uses70938Features ||
                 !reader.ExperimentalGrindActive || ObjectManager.Wow != memory || ObjectManager.WowB != reader ||
                 !reader.TryReadMapId(out uint beforeMap) || beforeMap != map ||
                 !WowBGrindFactions.TraceIdentity70707(memory, reader, player, true) ||
@@ -6681,7 +6681,7 @@ internal static class GrindRunner
         {
             using var uncached = memory.TemporaryCacheState(false);
             if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested || _vendorDue || hwnd == IntPtr.Zero ||
-                memory.WindowHandle != hwnd || !reader.IsExperimental70938 || !reader.ExperimentalGrindActive ||
+                memory.WindowHandle != hwnd || !reader.Uses70938Features || !reader.ExperimentalGrindActive ||
                 map == uint.MaxValue || ObjectManager.Wow != memory || ObjectManager.WowB != reader ||
                 !bolt.IsDamage || bolt.KeyVk == 0 || !ClickAimClassRotation.IsLightningBolt(bolt) ||
                 !reader.TryReadMapId(out uint mapBefore) || mapBefore != map ||
@@ -6753,7 +6753,7 @@ internal static class GrindRunner
         out uint freshMana)
     {
         freshMana = 0;
-        if (!reader.IsExperimental70938 || hwnd == IntPtr.Zero || expectedMap == uint.MaxValue ||
+        if (!reader.Uses70938Features || hwnd == IntPtr.Zero || expectedMap == uint.MaxValue ||
             expectedPlayer.Guid.IsEmpty || expectedTarget.Guid.IsEmpty || requiredMana == 0 ||
             !spell.IsDamage || spell.IsDot || spell.IsMelee || spell.KeyVk == 0 || spell.RangeYd <= minimumDistance ||
             ClickAimClassRotation.IsAnyShock(spell) || ClickAimClassRotation.IsLightningBolt(spell) ||
@@ -6934,9 +6934,9 @@ internal static class GrindRunner
         Func<bool>? defensiveMovement = defenceOnly && remoteDefence
             ? () => RemoteDefenceMovementAllowed(reader, fightMemory, expectedPull, selectedRemoteFallback) : null;
         List<ClickAimAction> bar = ClickAimCombat.ReadBar(reader);
-        ClickAimRotationPlan rotation = ClickAimClassRotation.Build(ClickAimSettings.RotationClass, bar, reader.IsExperimental70938);
+        ClickAimRotationPlan rotation = ClickAimClassRotation.Build(ClickAimSettings.RotationClass, bar, reader.Uses70938Features);
         uint retryMap = uint.MaxValue;
-        if (reader.IsExperimental70938 && reader.TryReadMapId(out uint startRetryMap)) retryMap = startRetryMap;
+        if (reader.Uses70938Features && reader.TryReadMapId(out uint startRetryMap)) retryMap = startRetryMap;
         ClickAimAction? damage = rotation.Damage;
         ClickAimAction? heal = rotation.Heal;
         ClickAimAction? auto = ClickAimCombat.AutoAttack(bar);          // Attack (6603)
@@ -7620,7 +7620,7 @@ internal static class GrindRunner
             // per Fight and never retry merely because damage is quiet.
             // Stormstrike also relies on keeping the existing swing on: Attack
             // is a toggle, so never retry it solely because damage is quiet.
-            if (shockAutoPlan || (reader.IsExperimental70938 && meleeHit != null && meleeHit.Id == ClickAimClassRotation.StormstrikeId && meleeHit.IsDamage))
+            if (shockAutoPlan || (reader.Uses70938Features && meleeHit != null && meleeHit.Id == ClickAimClassRotation.StormstrikeId && meleeHit.IsDamage))
                 conservativeShockAttack = true;
             if (!keyOneMacro && ClickAimClassRotation.MayPressConservativeAttack(shockAutoPlan, attackPressed, false, false, d, AttackRangeYd))
             {
@@ -7770,7 +7770,7 @@ internal static class GrindRunner
             bool retryClass = rotation.Class == ClickAimRotationClass.Druid || rotation.Class == ClickAimRotationClass.Mage ||
                 rotation.Class == ClickAimRotationClass.Priest || rotation.Class == ClickAimRotationClass.Warlock;
             double retryMinimum = MeleeEngageYd + 1.0;
-            bool retryCast = reader.IsExperimental70938 && retryClass && melee && !maelstromCast && !supplemental &&
+            bool retryCast = reader.Uses70938Features && retryClass && melee && !maelstromCast && !supplemental &&
                 !keyOneMacro && !ClickAimSettings.UseKeyOneStartAttackMacro && !attackPressed && !meleeSwinging &&
                 lastAttackPressMs == 0 && lastMeleeClickMs == 0 && !preserveAttackAfterHeal && !unmeasuredRage &&
                 damage != null && castDamage == damage && damage.IsDamage && !damage.IsDot && !damage.IsMelee &&
@@ -8180,7 +8180,7 @@ internal static class GrindRunner
                                 + "something stops it; pressing it again would turn it off)");
                 }
             }
-            else if (!reader.IsExperimental70938 && !keyOneMacro && !swinging && !pressPending && !preserveAttackAfterHeal
+            else if (!reader.Uses70938Features && !keyOneMacro && !swinging && !pressPending && !preserveAttackAfterHeal
                      && !((!defenceOnly || defenceFactionFilter || reader.Uses70862Features) && GrindFactionSettings.Rules.Enabled)
                      && unchecked(Environment.TickCount - lastMeleeClickMs) >= MeleeClickMs)
             {
@@ -8195,7 +8195,7 @@ internal static class GrindRunner
             }
 
             if (!keyOneMacro && auto == null && !noSafeAutoLogged &&
-                (reader.IsExperimental70938 || ((!defenceOnly || defenceFactionFilter || reader.Uses70862Features) && GrindFactionSettings.Rules.Enabled)))
+                (reader.Uses70938Features || ((!defenceOnly || defenceFactionFilter || reader.Uses70862Features) && GrindFactionSettings.Rules.Enabled)))
             {
                 noSafeAutoLogged = true;
                 Logging.Write("[Grind] unverified melee right-click withheld; put Attack on an action bar or configure the repeat-safe key 1 macro to start auto-attack");
@@ -8204,7 +8204,7 @@ internal static class GrindRunner
             /* The melee half of the bar is only used at arm's length. On 70707,
              * candidate rage has no validated amount; withhold resource-dependent
              * abilities rather than repeatedly pressing them at unknown rage. */
-            bool stormstrike70938 = reader.IsExperimental70938 && meleeHit?.Id == ClickAimClassRotation.StormstrikeId;
+            bool stormstrike70938 = reader.Uses70938Features && meleeHit?.Id == ClickAimClassRotation.StormstrikeId;
             uint meleePower = stormstrike70938
                 ? Math.Max(PowerForCast(meleeHit, 10), ClickAimClassRotation.StormstrikePowerFloor70938)
                 : PowerForCast(meleeHit, 10);

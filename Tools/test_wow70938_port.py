@@ -13,10 +13,10 @@ class Port70938(unittest.TestCase):
         policy = text('Styx/WoWInternals/ClientAttachPolicy.cs')
         reader = text('Styx/WoWInternals/WowBReader.cs')
         self.assertIn('ExperimentalBuild70938 = 70938', policy)
-        self.assertIn('ExperimentalBuild70888, ExperimentalBuild70938 }', policy)
-        self.assertIn('Uses70888Features => IsExperimental70888 || IsExperimental70938', reader)
-        self.assertIn('Uses70862Features => IsExperimental70862 || IsExperimental70888 || IsExperimental70938', reader)
-        self.assertIn('(experimental70938 ? 1 : 0) > 1', reader)
+        self.assertIn('ExperimentalBuild70938, ExperimentalBuild70959 }', policy)
+        self.assertIn('Uses70888Features => IsExperimental70888 || IsExperimental70938 || IsExperimental70959', reader)
+        self.assertIn('Uses70862Features => IsExperimental70862 || IsExperimental70888 || IsExperimental70938 || IsExperimental70959', reader)
+        self.assertIn('(experimental70938 ? 1 : 0) + (experimental70959 ? 1 : 0) > 1', reader)
         for field in ('PlayerGuid', 'PlayerNamePrimary', 'PlayerTargetGuid', 'MouseoverGuidCandidate',
                       'ObjectManager', 'HandlePools', 'MapRoot', 'CameraWorldFrameGlobal',
                       'PlayerVtable', 'UnitVtable', 'GameObjectVtableCandidate', 'StoredActionArrayCandidate'):

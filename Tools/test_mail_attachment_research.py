@@ -12,7 +12,7 @@ class ResearchSourceTests(unittest.TestCase):
                          'TemporaryCacheState(false)', 'IsCommittedReadableRange64',
                          'TraceBuild70707', 'TraceIdentity70707', 'ClickAimAbort.Generation',
                          'Equal(first, second)', 'ObjectManager.Wow == memory',
-                         'IsExperimental70938', '!ClickAimUi.Running', '!ClickAimUi.Paused'):
+                         'Uses70938Features', '!ClickAimUi.Running', '!ClickAimUi.Paused'):
             self.assertIn(required, source)
         for forbidden in ('WriteBytes', 'PostMessage', 'ClickAimInput.', 'Lua.', 'SendObserved', 'WowBMailSequence'):
             self.assertNotIn(forbidden, source)

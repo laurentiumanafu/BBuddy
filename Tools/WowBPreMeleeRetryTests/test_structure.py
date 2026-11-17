@@ -29,7 +29,7 @@ class PreMeleeRetry(unittest.TestCase):
         part = section(g, 'bool retryClass =', 'if (!canCast && !melee')
         for x in ('ClickAimRotationClass.Druid', 'ClickAimRotationClass.Mage',
                   'ClickAimRotationClass.Priest', 'ClickAimRotationClass.Warlock',
-                  'reader.IsExperimental70938', '!keyOneMacro', '!attackPressed',
+                  'reader.Uses70938Features', '!keyOneMacro', '!attackPressed',
                   '!meleeSwinging', 'lastAttackPressMs == 0', 'lastMeleeClickMs == 0',
                   '!unmeasuredRage', '!maelstromCast', '!supplemental',
                   '!ClickAimClassRotation.IsAnyShock(damage)', '!ClickAimClassRotation.IsLightningBolt(damage)',

@@ -36,7 +36,7 @@ class MacroWiring(unittest.TestCase):
         self.assertIn('decoded.RemoveAll(action => action.Slot == 1)', bar)
         self.assertIn('postHealStartKey = 0;', G)
         self.assertIn('if (!keyOneMacro && auto != null)', G)
-        self.assertIn('else if (!reader.IsExperimental70938 && !keyOneMacro && !swinging && !pressPending', G)
+        self.assertIn('else if (!reader.Uses70938Features && !keyOneMacro && !swinging && !pressPending', G)
         self.assertIn('if (!keyOneMacro && ClickAimClassRotation.MayPressConservativeAttack', G)
 
     def test_safe_guard_and_identity(self):

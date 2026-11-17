@@ -6,7 +6,7 @@ c=(root/'Styx/Logic/Pathing/ClickAim/WowBGatherCastResearch.cs').read_text(encod
 g=(root/'Styx/Logic/Pathing/ClickAim/GatherRunner.cs').read_text(encoding='utf-8-sig')
 class CastDiagnostic(unittest.TestCase):
  def test_strict_identity_and_double_read(self):
-  for x in ('reader.IsExperimental70938','reader.ExperimentalGrindActive','ObjectManager.Wow != memory',
+  for x in ('reader.Uses70938Features','reader.ExperimentalGrindActive','ObjectManager.Wow != memory',
             'ObjectManager.WowB != reader','TraceIdentity70707(memory, reader, player, true)',
             'first == 3564U','second == first','unchecked(end - start) == 3200U',
             'start1 != start2 || end1 != end2','Observation.Unknown','Observation.Idle','Observation.Mining'):

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using Bots.Gatherbuddy;
 using GreenMagic;
@@ -184,7 +184,7 @@ internal static class GatherNodeScanner
                         reader.IsExperimental70707 ? reader.GameObjectVtableCandidateRva : null)
                     || entryAfter != entry || !reader.IsPoolRecordCurrent(record)) { stats.Changed++; continue; }
                 found.Add(record.Guid);
-                nodes.Add(new Node(record.Guid, kind, herb, new WoWPoint(x, y, z), distance, reader.IsExperimental70938));
+                nodes.Add(new Node(record.Guid, kind, herb, new WoWPoint(x, y, z), distance, reader.Uses70938Features));
             }
             if (ObjectManager.Wow != memory || ObjectManager.WowB != reader)
             {

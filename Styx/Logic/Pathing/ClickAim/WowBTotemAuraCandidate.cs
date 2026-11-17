@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using GreenMagic;
 using Styx.WoWInternals;
@@ -121,13 +121,13 @@ internal sealed class WowBTotemAuraCandidate
                 inlineReason = "inline candidate empty";
             }
             byte[]? before = memory.ReadBytes64(player.UnitAddress + ActiveCountOffset, 4);
-            WowBCombatResearch.ExternalCandidateSample? sample = WowBCombatResearch.ReadExternalCandidate(memory, player.UnitAddress, out string externalReason, reader.Uses70888Features, reader.IsExperimental70938);
+            WowBCombatResearch.ExternalCandidateSample? sample = WowBCombatResearch.ReadExternalCandidate(memory, player.UnitAddress, out string externalReason, reader.Uses70888Features, reader.Uses70938Features);
             byte[]? after = memory.ReadBytes64(player.UnitAddress + ActiveCountOffset, 4);
             reason = inlineReason + "; external " + (sample == null ? externalReason : "count/slot validation failed");
             if (before == null || after == null || before.Length != 4 || after.Length != 4 || sample == null) return null;
             uint count = BitConverter.ToUInt32(before, 0);
             if (count != BitConverter.ToUInt32(after, 0)) { reason = "external active count changed during read"; return null; }
-            WowBTotemAuraCandidate? result = FromBytes(sample.Bytes, count, reader.Uses70888Features, reader.IsExperimental70938);
+            WowBTotemAuraCandidate? result = FromBytes(sample.Bytes, count, reader.Uses70888Features, reader.Uses70938Features);
             if (result != null) reason = "external candidate";
             else reason = "external candidate " + (sample.Bytes.Length / WowBCombatResearch.ExternalCandidateStride) +
                 " slots, count " + count + "; empty, duplicate or count/slot mismatch";

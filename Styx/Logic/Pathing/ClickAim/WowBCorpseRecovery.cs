@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Numerics;
@@ -540,7 +540,7 @@ internal static class WowBCorpseRecovery
         }
         // Give the 70938 resurrection dialog a longer posted button-down. This
         // is an unverified delivery mitigation, not a physical mouse click.
-        int holdMs = !release && reader.IsExperimental70938 ? 100 : 35;
+        int holdMs = !release && reader.Uses70938Features ? 100 : 35;
         bool posted = ClickAimInput.ConfirmedLeftClick(hwnd, x, y, width, height, background, FinalCheck, out string reason, holdMs);
         problem = reason;
         if (posted) Logging.Write("[Corpse] " + (release ? "release" : "resurrection") + " dialog click (" +
@@ -604,7 +604,7 @@ internal static class WowBCorpseRecovery
             }
             released = WowBReleaseTransition.Wait(ObserveRelease, RetryRelease,
                 () => Allowed(memory, reader, hwnd, running), ClickAimAbort.Wait, () => Environment.TickCount,
-                Logging.Write, releasePostReason, TransitionWaitMs, reader.IsExperimental70938);
+                Logging.Write, releasePostReason, TransitionWaitMs, reader.Uses70938Features);
         }
         if (!released) { Logging.Write("[Corpse] ghost transition not confirmed; stopping without corpse movement"); return false; }
         if (ReadState(memory, reader, hwnd, checkpoint, running, out WoWPoint ghostPos) != State.Ghost ||
@@ -659,8 +659,8 @@ internal static class WowBCorpseRecovery
             if (!sentResurrect) { Logging.Write("[Corpse] resurrection dialog not confirmed; stopping"); return false; }
             started = Environment.TickCount;
             int aliveReads = 0;
-            var retry = new WowBResurrectionRetry(reader.IsExperimental70938, resurrectPostReason, started);
-            if (reader.IsExperimental70938 && resurrectPostReason != WowBReleaseTransition.CleanPost)
+            var retry = new WowBResurrectionRetry(reader.Uses70938Features, resurrectPostReason, started);
+            if (reader.Uses70938Features && resurrectPostReason != WowBReleaseTransition.CleanPost)
                 Logging.Write("[Corpse] resurrection button-up was not confirmed posted; retries disabled");
             while (unchecked(Environment.TickCount - started) < TransitionWaitMs && Allowed(memory, reader, hwnd, running))
             {

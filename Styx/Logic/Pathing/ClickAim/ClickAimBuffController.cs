@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using GreenMagic;
 using Styx.Helpers;
@@ -248,7 +248,7 @@ internal sealed class ClickAimBuffController
         string text = !state.HasValue ? "unavailable; combat cast withheld" : state.Value < 0 ? "absent" : "present";
         if (_reportedAuraState.TryGetValue(action.Id, out string? old) && old == text) return;
         _reportedAuraState[action.Id] = text;
-        Logging.Write("[Buff] 70862/70888/70938 experimental Lightning Shield candidate: " + text + " (rank " + WowBLightningShield.Rank(action.Id) + "; not verified)");
+        Logging.Write("[Buff] 70862/70888/70938/70959 experimental Lightning Shield candidate: " + text + " (rank " + WowBLightningShield.Rank(action.Id) + "; not verified)");
     }
 
     private static bool TotemSupported(WowBReader reader, ClickAimAction action)
@@ -273,7 +273,7 @@ internal sealed class ClickAimBuffController
         string state = !active.HasValue ? "unavailable; cast withheld" : active.Value ? "active" : "absent; retry limited to 10 seconds";
         if (_reportedAuraState.TryGetValue(action.Id, out string? old) && old == state) return;
         _reportedAuraState[action.Id] = state;
-        Logging.Write("[Buff] 70862/70888/70938 experimental totem effect " + action.Name + ": " + state + " (player effect, not totem existence)");
+        Logging.Write("[Buff] 70862/70888/70938/70959 experimental totem effect " + action.Name + ": " + state + " (player effect, not totem existence)");
     }
 
     private static bool SameSlot(ClickAimAction action, List<ClickAimAction> bar)
@@ -538,7 +538,7 @@ internal sealed class ClickAimBuffController
             if (WowBSealOfTheCrusader.Rank(action.Id) != 0) continue;
             // On 70938 this toggle-like form belongs exclusively to the
             // movement checkbox, never the unrelated 30-minute buff timer.
-            if (reader.IsExperimental70938 && (action.Id == 2645 || action.Id == 1238640)) continue;
+            if (reader.Uses70938Features && (action.Id == 2645 || action.Id == 1238640)) continue;
             // These exact totem spells are combat-only, even when their
             // role was manually set to Buff. Never fall back to the quiet timer.
             if (WowBTotemAuraCandidate.EffectForCast(action.Id) != 0) continue;
@@ -571,7 +571,7 @@ internal sealed class ClickAimBuffController
                 // Re-read between keys; unknown inline candidates retain their
                 // existing timer fallback. Totems remain combat-only.
                 if (WowBTotemAuraCandidate.EffectForCast(action.Id) != 0) continue;
-                if (reader.IsExperimental70938 && (action.Id == 2645 || action.Id == 1238640)) continue;
+                if (reader.Uses70938Features && (action.Id == 2645 || action.Id == 1238640)) continue;
                 aura = reader.IsExperimental70707 && WowBInlineAuraCandidate.Supported(action.Id)
                     ? WowBInlineAuraCandidate.Capture(memory, player) : null;
                 int? remaining = ShieldSupported(reader, action.Id) ? ReadShield(memory, reader, player) : aura?.Remaining(action.Id);

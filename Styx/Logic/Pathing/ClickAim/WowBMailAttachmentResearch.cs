@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Text;
 using GreenMagic;
@@ -11,8 +11,14 @@ namespace Styx.Logic.Pathing;
 // 70938 HasSendMailItem/GetSendMailItem code, not live validation.
 internal static class WowBMailAttachmentResearch
 {
-    private const ulong TableRva = 0x4E6CA90, MarkerRva = 0x26B4F78;
-    private const string Marker = "FFC883F8107338488D0C80488D05067B7B02488D04C84885C0";
+    // 70938 leads. 70959 has its own image-relative pair, derived the same way.
+    private const ulong TableRva70938 = 0x4E6CA90, MarkerRva70938 = 0x26B4F78;
+    private const string Marker70938 = "FFC883F8107338488D0C80488D05067B7B02488D04C84885C0";
+    private const ulong TableRva70959 = 0x4D66A60, MarkerRva70959 = 0x25B1AA8;
+    private const string Marker70959 = "FFC883F8107338488D0C80488D05A64F7B02488D04C84885C0";
+    private static ulong TableRva(WowBReader reader) => reader.IsExperimental70959 ? TableRva70959 : TableRva70938;
+    private static ulong MarkerRva(WowBReader reader) => reader.IsExperimental70959 ? MarkerRva70959 : MarkerRva70938;
+    private static string Marker(WowBReader reader) => reader.IsExperimental70959 ? Marker70959 : Marker70938;
     private const int Count = 16, Stride = 40;
     private static bool Equal(byte[]? a, byte[]? b)
     {
@@ -68,7 +74,7 @@ internal static class WowBMailAttachmentResearch
         int generation = ClickAimAbort.Generation;
         bool sameSession() => !ClickAimUi.Running && !ClickAimUi.Paused && ClickAimAbort.Generation == generation &&
             ObjectManager.Wow == memory && ObjectManager.WowB == reader;
-        if (memory == null || reader?.IsExperimental70938 != true || !memory.Is64BitTarget || !sameSession())
+        if (memory == null || reader?.Uses70938Features != true || !memory.Is64BitTarget || !sameSession())
             return "Stop the bot and attach to build 70938 before the mail candidate snapshot.";
         try
         {
@@ -78,9 +84,9 @@ internal static class WowBMailAttachmentResearch
                 !world.TryGetLocalPlayer(out WowBObservedUnit player) ||
                 !WowBGrindFactions.TraceIdentity70707(memory, reader, player, true) || !sameSession())
                 return "Build, player or stopped-session identity unavailable; no mail candidate snapshot.";
-            ulong marker = memory.GetAbsolute64(MarkerRva), table = memory.GetAbsolute64(TableRva);
-            byte[]? signature = memory.ReadBytes64(marker, Marker.Length / 2);
-            if (signature == null || Convert.ToHexString(signature) != Marker ||
+            ulong marker = memory.GetAbsolute64(MarkerRva(reader)), table = memory.GetAbsolute64(TableRva(reader));
+            byte[]? signature = memory.ReadBytes64(marker, Marker(reader).Length / 2);
+            if (signature == null || Convert.ToHexString(signature) != Marker(reader) ||
                 !memory.IsCommittedReadableRange64(table, Count * Stride))
                 return "Mail code marker or candidate table unreadable/mismatched; no snapshot.";
             bool haveFirstBags = WowBInventoryProbe.TryReadMailCandidateBags(out WowBGuid firstPlayer, out var firstBags) &&
@@ -91,7 +97,7 @@ internal static class WowBMailAttachmentResearch
                 secondPlayer == player.Guid && secondBags != null && sameSession();
             byte[]? last = memory.ReadBytes64(table, Count * Stride);
             if (first == null || first.Length != Count * Stride || !Equal(first, second) || !Equal(first, last) ||
-                !Equal(signature, memory.ReadBytes64(marker, Marker.Length / 2)) || !sameSession() ||
+                !Equal(signature, memory.ReadBytes64(marker, Marker(reader).Length / 2)) || !sameSession() ||
                 !WowBGrindFactions.TraceBuild70707(memory, reader) ||
                 !WowBGrindFactions.TraceIdentity70707(memory, reader, player, true) || !sameSession())
                 return "Mail candidate bytes or session changed/unreadable; no snapshot.";

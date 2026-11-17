@@ -12,7 +12,7 @@ class GatheringWiring(unittest.TestCase):
   self.assertEqual(found,{1731:1,1732:65,1733:75,1735:125,1734:155,2040:175,2047:230,165658:230,324:245,175404:275})
   self.assertIn('_ => fallback',table)
   self.assertIn('classic70938 && !isHerb ? Classic70938MiningSkill(kind.Entry, kind.RequiredSkill) : kind.RequiredSkill', SCANNER)
-  self.assertIn('distance, reader.IsExperimental70938)', SCANNER)
+  self.assertIn('distance, reader.Uses70938Features)', SCANNER)
   self.assertIn('node.RequiredSkill <= miningSkill', SCANNER)
   self.assertIn('node.RequiredSkill <= herbalismSkill', SCANNER)
  def test_blacklist_is_session_scoped_and_post_click(self):
@@ -30,8 +30,8 @@ class GatheringWiring(unittest.TestCase):
   hover=gather[gather.index('if (!clicked && hoverMiss'):gather.index('// Keep the old fallback')]
   for x in ('angleAttempts >= 3','TryHoverAngle','stillPresent','!GrindRunner.TryReadGatherCombat(out fighting)'):
    self.assertIn(x,hover)
-  self.assertIn('if (clicked && initialReader?.IsExperimental70938 == true)',gather)
-  gate=gather[gather.index('if (clicked && initialReader?.IsExperimental70938 == true)'):gather.index('if (observedAttempts >= ClassicGatherAttempts)')]
+  self.assertIn('if (clicked && initialReader?.Uses70938Features == true)',gather)
+  gate=gather[gather.index('if (clicked && initialReader?.Uses70938Features == true)'):gather.index('if (observedAttempts >= ClassicGatherAttempts)')]
   for x in ('ClickAimAbort.Requested','RouteRunner.StopRequested','ObjectManager.WowB != initialReader',
             'ObjectManager.Wow != initialMemory', '!MapStillCurrent()', '!extraSafety()',
             '!GrindRunner.TryReadGatherCombat(out fighting)', 'if (fighting)'):

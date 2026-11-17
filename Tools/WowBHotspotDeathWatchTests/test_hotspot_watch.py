@@ -16,7 +16,7 @@ class HotspotDeathWatch(unittest.TestCase):
             self.assertIn(text, hold)
         self.assertNotIn('TapKey(', hold)
         route = s[s.index('if (dead >= MaxDeadHotspots)'):s.index('            } while (recovered', s.index('if (dead >= MaxDeadHotspots)'))]
-        self.assertIn('trialReader?.IsExperimental70938 == true', route)
+        self.assertIn('trialReader?.Uses70938Features == true', route)
         self.assertLess(route.index('WatchDeathAfterHotspotFailures'), route.index('RecoverIfPending(mover)'))
         self.assertIn('watchCancelled = !WatchDeathAfterHotspotFailures', route)
         self.assertIn('roam.MapCurrent() : ProfileMapCurrent()', route)

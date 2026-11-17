@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Globalization;
 using System.Threading;
 using GreenMagic;
@@ -655,7 +655,7 @@ internal static class ClickAimKeySteer
             var sampleReader = ObjectManager.WowB;
             var sampleMemory = ObjectManager.Wow;
             int sampleGeneration = ClickAimAbort.Generation;
-            bool sampleContext = turnLearning != null && sampleReader?.IsExperimental70938 == true &&
+            bool sampleContext = turnLearning != null && sampleReader?.Uses70938Features == true &&
                 sampleMemory != null && sampleMemory.WindowHandle == hwnd && !_keyDown;
             using var sampleUncached = sampleContext ? sampleMemory?.TemporaryCacheState(false) : null;
             WowBReader.WowBPoolObject samplePlayer = default;

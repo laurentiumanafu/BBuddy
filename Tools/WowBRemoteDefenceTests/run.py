@@ -34,7 +34,7 @@ assert '(!TryReadGatherCombat(out bool fighting) || !fighting)' in fight
 assert 'grindMode && !reader.Uses70862Features, remoteDefence, selectedRemoteFallback' in g
 assert 'RemoteDefenceMovementAllowed(reader, fightMemory, expectedPull, selectedRemoteFallback)' in fight
 assert 'RemoteDefenceBlocked(reader, snap, me, target, selectedRemoteFallback)' in fight
-assert '_nearDefenceExhausted && reader.IsExperimental70938' in defend
+assert '_nearDefenceExhausted && reader.Uses70938Features' in defend
 assert 'out selectedReport, RemoteDefenceRadius, false, true' in defend
 assert 'FactionPullStillAllowed(ObjectManager.WowB, expectedPull, target)' in fight
 assert 'FactionPullStillAllowed(reader, expectedPull, target)' in fight

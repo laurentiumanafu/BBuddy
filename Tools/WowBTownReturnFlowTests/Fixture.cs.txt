@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using Styx.WoWInternals;
 using Styx.Logic.Pathing;
@@ -11,6 +11,7 @@ namespace Styx.WoWInternals
     sealed class WowBReader
     {
         public bool IsExperimental70938 = true, ExperimentalGrindActive = true;
+        public bool Uses70938Features => IsExperimental70938;
         public bool TryReadMapId(out uint map) { map = Fixture.Teleported ? 2u : 1u; return true; }
         public bool TryRead70888RecoveryPlayer(out WowBObservedUnit p, out uint hp, out uint max)
         { p=new WowBObservedUnit { Guid = new WowBGuid { Value=7 }, Location = new Point { X=Fixture.Teleported ? 1000 : 0 } }; hp=max=100; return true; }

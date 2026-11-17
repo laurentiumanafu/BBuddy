@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using GreenMagic;
 using Styx.WoWInternals;
@@ -29,6 +29,7 @@ namespace Styx.WoWInternals
     {
         public struct WowBUnitFields { public uint Health,MaxHealth,Power; public int PlayerPowerTypeCandidate; }
         public bool IsExperimental70938=true, ExperimentalGrindActive=true, Readable=true; public uint Power=200;
+        public bool Uses70938Features => IsExperimental70938;
         public WowBObservedUnit Player=new(){Guid=new WowBGuid(1), UnitAddress=0x20000, RecordAddress=0x30000};
         public bool TryReadMapId(out uint map){map=1;return Readable;}
         public bool TryCaptureWorldSnapshot(out WowBWorldSnapshot? snap){snap=Readable?new WowBWorldSnapshot{Player=Player}:null;return Readable;}
