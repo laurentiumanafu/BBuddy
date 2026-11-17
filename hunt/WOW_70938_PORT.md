@@ -532,3 +532,35 @@ Separately, the corpse in this log was 1344 yd away in a pocket the navmesh
 cannot reach - the same spot where every path query had already failed before
 the character died - so twenty tries would still not have reached it. More
 tries fix the fences; they do not fix an unreachable corpse.
+
+### 2026-11-17: the heal's 1.8 s, and priority under half health
+
+The user asked where the 1.8 s before a heal retry came from, and said that
+under 50 % health with enough mana the heal should have priority.
+
+The 1.8 s is `ClickAimCombat.CastSettleMs` - the client's global cooldown - and
+it used to be noted for **every** combat key, not just spells. Auto-attack,
+Start Attack and the key-1 macro follow-up therefore pushed the heal 1.8 s into
+the future even though none of them occupies the action bar. Two clocks now:
+
+- `NoteSpellKey()` -> `lastCombatKeyMs` -> `CastSettleMs` (1800 ms): the heal,
+  the Shock/DoT, the cast, Stoneclaw, in-combat buffs and the melee ability.
+- `NoteCombatInput()` -> `lastInputKeyMs` -> `KeySettleMs` (250 ms): auto-attack,
+  Start Attack and the key-1 macro - the time the client needs to have processed
+  the keypress, nothing more.
+
+`GlobalCooldownClear()` requires both gaps, so a plain keypress can no longer
+cost the heal a whole cooldown.
+
+Priority: at or under `ClickAimCombat.HealUrgentPercent` (50 %) **with power to
+pay for it**, the heal outranks `HealRetryMs` (4000 ms) and the next attempt
+waits only for the cooldown; above that line the fight keeps going and only the
+cooldown is waited out, as before. While the heal waits, no Shock, cast or
+melee key is sent - spending the cooldown on damage is what pushed the heal
+back another 1.8 s in the 21:27 log. The wait is bounded, rechecks STOP,
+attachment, combat and target every 120 ms, and sends nothing.
+
+This never holds the heal: the gates stay the configured health line, the power
+gate, the spacing and the cooldown. `Tools/WowBHealPriorityTests/` checks the
+wiring statically; whether the client's cooldown is really 1.8 s for these
+spells is still unverified.

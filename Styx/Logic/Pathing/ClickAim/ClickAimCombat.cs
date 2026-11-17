@@ -112,8 +112,24 @@ internal static class ClickAimCombat
     /// </summary>
     public const int CastSettleMs = 1800;
 
+    /// <summary>
+    /// Auto-attack and Start Attack are not spells and do not start that cooldown. They
+    /// only need the client to have processed the keypress, so they delay the next key by
+    /// this much and never by <see cref="CastSettleMs"/> - otherwise a heal under the line
+    /// would wait 1.8 s behind a key that never occupied the bar.
+    /// </summary>
+    public const int KeySettleMs = 250;
+
     /// <summary>Singular heals at <c>HealthPercent &lt;= 60</c>. The number is theirs.</summary>
     public const double HealBelowPercent = 60.0;
+
+    /// <summary>
+    /// At or under this health percent, with power to pay for it, healing outranks the
+    /// normal gap between heals: the next attempt waits only for the cooldown
+    /// (<see cref="CastSettleMs"/>) instead of <see cref="HealRetryMs"/>. It never applies
+    /// above the configured heal line, and it never holds the heal back.
+    /// </summary>
+    public const double HealUrgentPercent = 50.0;
 
     /// <summary>Do not self-heal again this soon: Healing Touch has a 1.5 s cast and mana cost.</summary>
     public const int HealRetryMs = 4000;
