@@ -52,14 +52,23 @@ internal static class WowBCorpseDialogPattern
         internal readonly bool ReleaseText, ResurrectText, AcceptText;
         internal readonly int ReleaseX, ReleaseY, ResurrectX, ResurrectY, AcceptX, AcceptY;
         internal readonly bool ReleaseUnique, ResurrectUnique, AcceptUnique, ReleaseButtonRed, AcceptButtonRed;
+        // True when the label was only found outside the band the supplied
+        // screenshots were matched in, by the wider fallback search below.
+        internal readonly bool ReleaseExtended, ResurrectExtended, AcceptExtended;
         internal Result(bool release, bool resurrect, bool accept,
                         int rx, int ry, int tx, int ty, int ax, int ay,
-                        bool ru, bool tu, bool au, bool releaseRed, bool acceptRed)
+                        bool ru, bool tu, bool au, bool releaseRed, bool acceptRed,
+                        bool rx2, bool tx2, bool ax2)
         { ReleaseText = release; ResurrectText = resurrect; AcceptText = accept;
           ReleaseX = rx; ReleaseY = ry; ResurrectX = tx; ResurrectY = ty; AcceptX = ax; AcceptY = ay;
           ReleaseUnique = ru; ResurrectUnique = tu; AcceptUnique = au;
-          ReleaseButtonRed = releaseRed; AcceptButtonRed = acceptRed; }
+          ReleaseButtonRed = releaseRed; AcceptButtonRed = acceptRed;
+          ReleaseExtended = rx2; ResurrectExtended = tx2; AcceptExtended = ax2; }
     }
+
+    // Which search found the label the caller is about to act on.
+    internal static bool UsedExtendedSearch(Result result, bool release)
+        => release ? result.ReleaseExtended : result.ResurrectExtended || result.AcceptExtended;
 
     private sealed class Pattern
     {
@@ -103,18 +112,37 @@ internal static class WowBCorpseDialogPattern
         return result;
     }
 
+    /* The band the supplied screenshots were matched in. Every label ever found
+     * is still looked for here first, and the wider search only runs when this
+     * one found nothing, so a known-good location cannot move or change verdict.
+     *
+     * A second PC put the same dialogs somewhere else: another resolution, a
+     * window that is not full screen, a different UI placement or a different
+     * aspect ratio moves a centred popup out of this band. The fallback below
+     * therefore sweeps the whole client. It is reported in the result, and it is
+     * still not permission to click: uniqueness, the red button, the resurrection
+     * heading above Accept, the state guards and the hover response all apply. */
+    private static void PrimaryBand(int width, int height, out int xStart, out int xEnd, out int yStart, out int yEnd)
+    {
+        xStart = width / 5; xEnd = width * 4 / 5;
+        yStart = height / 20; yEnd = height * 3 / 10;
+    }
+
+    private static void ExtendedBand(int width, int height, out int xStart, out int xEnd, out int yStart, out int yEnd)
+    { xStart = 0; xEnd = width; yStart = 0; yEnd = height; }
+
     // Input is top-down 32-bit BGRA. No window read, input, or filesystem access.
     internal static Result Inspect(byte[] bgra, int width, int height, int stride)
     {
         if (bgra == null || width < 320 || height < 240 || width > 8192 || height > 8192 ||
             stride < width * 4 || (long)stride * height > bgra.Length)
             return default;
-        bool release = FindButton(bgra, width, height, stride, ReleasePatterns, out int rx, out int ry, out bool ru);
-        bool resurrect = Find(bgra, width, height, stride, ResurrectPatterns, 0, out int tx, out int ty, out bool tu);
-        bool accept = FindButton(bgra, width, height, stride, AcceptPatterns, out int ax, out int ay, out bool au);
+        bool release = FindButton(bgra, width, height, stride, ReleasePatterns, out int rx, out int ry, out bool ru, out bool rx2);
+        bool resurrect = FindText(bgra, width, height, stride, ResurrectPatterns, 0, out int tx, out int ty, out bool tu, out bool tx2);
+        bool accept = FindButton(bgra, width, height, stride, AcceptPatterns, out int ax, out int ay, out bool au, out bool ax2);
         return new Result(release, resurrect, accept, rx, ry, tx, ty, ax, ay, ru, tu, au,
                           release && RedButton(bgra, width, height, stride, rx, ry),
-                          accept && RedButton(bgra, width, height, stride, ax, ay));
+                          accept && RedButton(bgra, width, height, stride, ax, ay), rx2, tx2, ax2);
     }
 
     // A text match alone never authorizes input: require one uniquely located
@@ -179,15 +207,27 @@ internal static class WowBCorpseDialogPattern
     }
 
     private static bool FindButton(byte[] pixels, int width, int height, int stride, Pattern[] patterns,
-                                   out int x, out int y, out bool unique)
+                                   out int x, out int y, out bool unique, out bool extended)
+    {
+        // The recorded band first: whatever matched before keeps matching there.
+        if (FindButtonIn(pixels, width, height, stride, patterns, false, out x, out y, out unique))
+        { extended = false; return true; }
+        // Nothing there. Sweep the whole client before giving up, and say so.
+        if (FindButtonIn(pixels, width, height, stride, patterns, true, out x, out y, out unique))
+        { extended = true; return true; }
+        extended = false; x = y = 0; unique = true; return false;
+    }
+
+    private static bool FindButtonIn(byte[] pixels, int width, int height, int stride, Pattern[] patterns,
+                                     bool extendedBand, out int x, out int y, out bool unique)
     {
         // Keep the original yellow search independent of the brighter hover
         // search so white neighboring text cannot invalidate an existing match.
-        bool yellow = Find(pixels, width, height, stride, patterns, 1, out int yx, out int yy, out bool yu);
-        bool white = Find(pixels, width, height, stride, patterns, 0, out int wx, out int wy, out bool wu);
-        bool hovered = Find(pixels, width, height, stride, patterns, 3, out int hx, out int hy, out bool hu);
+        bool yellow = Find(pixels, width, height, stride, patterns, 1, extendedBand, out int yx, out int yy, out bool yu);
+        bool white = Find(pixels, width, height, stride, patterns, 0, extendedBand, out int wx, out int wy, out bool wu);
+        bool hovered = Find(pixels, width, height, stride, patterns, 3, extendedBand, out int hx, out int hy, out bool hu);
         if (!yellow && !white && !hovered)
-            return Find(pixels, width, height, stride, patterns, 2, out x, out y, out unique);
+            return Find(pixels, width, height, stride, patterns, 2, extendedBand, out x, out y, out unique);
         x = yellow ? yx : white ? wx : hx; y = yellow ? yy : white ? wy : hy;
         unique = (!yellow || yu) && (!white || wu) && (!hovered || hu) &&
                  (!yellow || (Math.Abs(yx - x) <= 3 && Math.Abs(yy - y) <= 3)) &&
@@ -196,36 +236,53 @@ internal static class WowBCorpseDialogPattern
         return true;
     }
 
+    private static bool FindText(byte[] pixels, int width, int height, int stride, Pattern[] patterns, int palette,
+                                 out int foundX, out int foundY, out bool unique, out bool extended)
+    {
+        if (Find(pixels, width, height, stride, patterns, palette, false, out foundX, out foundY, out unique))
+        { extended = false; return true; }
+        if (Find(pixels, width, height, stride, patterns, palette, true, out foundX, out foundY, out unique))
+        { extended = true; return true; }
+        extended = false; foundX = foundY = 0; unique = true; return false;
+    }
+
     private static bool Find(byte[] pixels, int width, int height, int stride, Pattern[] patterns, int palette,
-                             out int foundX, out int foundY, out bool unique)
+                             bool extendedBand, out int foundX, out int foundY, out bool unique)
     {
         foundX = foundY = 0;
         unique = true;
         bool found = false;
-        // Only look in the central upper UI area. This is intentionally a
-        // bounded diagnostic based on two screenshots, not general OCR.
-        int xStart = width / 5, xEnd = width * 4 / 5;
-        int yStart = height / 20, yEnd = height * 3 / 10;
+        // The recorded band is a bounded diagnostic based on two screenshots,
+        // not general OCR; the wider sweep is a fallback for another machine.
+        int xStart, xEnd, yStart, yEnd;
+        if (extendedBand) ExtendedBand(width, height, out xStart, out xEnd, out yStart, out yEnd);
+        else PrimaryBand(width, height, out xStart, out xEnd, out yStart, out yEnd);
+        xStart = Math.Max(0, xStart); yStart = Math.Max(0, yStart);
+        xEnd = Math.Min(width, xEnd); yEnd = Math.Min(height, yEnd);
         foreach (Pattern pattern in patterns)
         {
             for (int y = yStart; y <= yEnd - pattern.Height; y++)
             for (int x = xStart; x <= xEnd - pattern.Width; x++)
             {
-                int matchedAnchors = 0;
+                int needed = (pattern.Anchors.Length * 3 + 3) / 4;
+                int matchedAnchors = 0, remaining = pattern.Anchors.Length;
                 foreach (int anchor in pattern.Anchors)
                 {
                     int row = anchor / pattern.Width, col = anchor % pattern.Width;
                     if (InkAt(pixels, (y + row) * stride + (x + col) * 4, palette)) matchedAnchors++;
+                    // Stop as soon as the remaining anchors cannot reach the
+                    // threshold: the wider sweep is only affordable this way.
+                    if (matchedAnchors + --remaining < needed) { matchedAnchors = -1; break; }
                 }
                 if (matchedAnchors * 4 < pattern.Anchors.Length * 3) continue;
                 int blankHits = 0;
                 foreach (int anchor in pattern.BlankAnchors)
                 {
                     int row = anchor / pattern.Width, col = anchor % pattern.Width;
-                    if (InkAt(pixels, (y + row) * stride + (x + col) * 4, palette)) blankHits++;
+                    if (InkAt(pixels, (y + row) * stride + (x + col) * 4, palette) && ++blankHits * 4 > pattern.BlankAnchors.Length) break;
                 }
                 if (blankHits * 4 > pattern.BlankAnchors.Length) continue;
-                int hits = 0, extras = 0;
+                int hits = 0, extras = 0, blank = pattern.Pixels.Length - pattern.Ink;
                 for (int row = 0; row < pattern.Height; row++)
                 for (int col = 0; col < pattern.Width; col++)
                 {
@@ -233,7 +290,6 @@ internal static class WowBCorpseDialogPattern
                     if (pattern.Pixels[row * pattern.Width + col]) { if (actual) hits++; }
                     else if (actual) extras++;
                 }
-                int blank = pattern.Pixels.Length - pattern.Ink;
                 if (hits * 100 < pattern.Ink * 85 || extras * 100 > blank * 8) continue;
                 int centreX = x + pattern.Width / 2, centreY = y + pattern.Height / 2;
                 if (!found) { found = true; foundX = centreX; foundY = centreY; }

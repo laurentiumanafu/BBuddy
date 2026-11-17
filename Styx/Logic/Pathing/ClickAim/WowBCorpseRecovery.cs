@@ -457,6 +457,10 @@ internal static class WowBCorpseRecovery
         return false;
     }
 
+    // Where a label was matched, so a machine that puts the dialog somewhere
+    // else says where instead of only saying that nothing was found.
+    private static string LabelWhere(bool found, int x, int y) => found ? "(" + x + "," + y + ")" : "not found";
+
     private static bool TryDialogClick(Memory memory, WowBReader reader, IntPtr hwnd,
         WowBDeathCheckpoint.Candidate checkpoint, Func<bool> running, bool release, bool requireNpcClearance, out string problem,
         bool recoverHoveredButton = false)
@@ -473,9 +477,13 @@ internal static class WowBCorpseRecovery
                 out var dialog, out _, out bool background, out int width, out int height, out problem)) return false;
         if (!WowBCorpseDialogPattern.SuitableForClick(dialog, release, out int x, out int y))
         {
-            problem = (background ? "background" : "foreground") + " image did not meet button checks (release=" +
-                dialog.ReleaseText + ", releaseUnique=" + dialog.ReleaseUnique + ", releaseRed=" + dialog.ReleaseButtonRed +
-                ", heading=" + dialog.ResurrectText + ", accept=" + dialog.AcceptText + ", acceptRed=" + dialog.AcceptButtonRed + ")";
+            problem = (background ? "background" : "foreground") + " image did not meet button checks (client " +
+                width + "x" + height + "; release=" + dialog.ReleaseText + " at " + LabelWhere(dialog.ReleaseText, dialog.ReleaseX, dialog.ReleaseY) +
+                ", releaseUnique=" + dialog.ReleaseUnique + ", releaseRed=" + dialog.ReleaseButtonRed +
+                "; heading=" + dialog.ResurrectText + " at " + LabelWhere(dialog.ResurrectText, dialog.ResurrectX, dialog.ResurrectY) +
+                "; accept=" + dialog.AcceptText + " at " + LabelWhere(dialog.AcceptText, dialog.AcceptX, dialog.AcceptY) +
+                ", acceptUnique=" + dialog.AcceptUnique + ", acceptRed=" + dialog.AcceptButtonRed +
+                "; widerSearchOnly=" + WowBCorpseDialogPattern.UsedExtendedSearch(dialog, release) + ")";
             // A previous posted hover can leave the button highlighted. For a
             // guarded retry only, clear it and inspect a fresh image; never
             // treat the highlighted or missing image as permission to click.
@@ -487,6 +495,14 @@ internal static class WowBCorpseRecovery
                 !WowBCorpseDialogPattern.SuitableForClick(dialog, release, out x, out y))
             { problem = "fresh dialog unavailable or unsuitable after clearing prior hover"; return false; }
         }
+        /* Only the wider fallback sweep found this label, so the dialog sits outside
+         * the band the supplied screenshots were matched in - what another resolution,
+         * window or UI placement on another PC does. Nothing is relaxed: uniqueness,
+         * the red button, the heading above Accept, the state guards and the hover
+         * response still decide. Say where it was found so the band can be corrected. */
+        if (WowBCorpseDialogPattern.UsedExtendedSearch(dialog, release))
+            Logging.Write("[Corpse] " + (release ? "Release Spirit" : "Accept") + " label matched only in the wider search area at (" +
+                x + "," + y + ") of a " + width + "x" + height + " client; uniqueness, red button, heading position, state and hover checks still apply");
         // First clear a previous hover and obtain a fresh pre-hover image. The
         // background mode additionally requires a visible response to our hover.
         problem = "state or hover-away move failed";

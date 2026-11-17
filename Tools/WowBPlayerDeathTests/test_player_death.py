@@ -66,4 +66,41 @@ class PlayerDeathRecovery(unittest.TestCase):
         self.assertIn('heal player identity unavailable or changed', heal)
         self.assertIn('heal player vitals unreadable', heal)
 
+    def test_wider_dialog_search_keeps_the_recorded_band(self):
+        """Another PC put the same dialogs outside the recorded band.
+
+        2026-11-17_1055_16264.log ran from C:\\bbuddy on another machine and
+        logged `release not clicked: background image did not meet button checks
+        (release=False, ... heading=False, accept=False ...)` on every attempt, so
+        no Release or Accept was ever pressed. The fallback sweep looks at the
+        whole client, but only after the recorded band found nothing.
+        """
+        pattern = read('Styx/Logic/Pathing/ClickAim/WowBCorpseDialogPattern.cs')
+        recovery = read('Styx/Logic/Pathing/ClickAim/WowBCorpseRecovery.cs')
+        # The recorded band is unchanged and still searched first.
+        band = section(pattern, 'private static void PrimaryBand(', 'private static void ExtendedBand(')
+        self.assertIn('xStart = width / 5; xEnd = width * 4 / 5;', band)
+        self.assertIn('yStart = height / 20; yEnd = height * 3 / 10;', band)
+        wide = section(pattern, 'private static void ExtendedBand(', '// Input is top-down')
+        self.assertIn('{ xStart = 0; xEnd = width; yStart = 0; yEnd = height; }', wide)
+        # Recorded band first, whole client only as the fallback, and reported.
+        self.assertIn('if (FindButtonIn(pixels, width, height, stride, patterns, false, out x, out y, out unique))\n        { extended = false; return true; }', pattern)
+        self.assertIn('if (FindButtonIn(pixels, width, height, stride, patterns, true, out x, out y, out unique))\n        { extended = true; return true; }', pattern)
+        self.assertIn('out bool extended)', pattern)
+        self.assertIn('ReleaseExtended, ResurrectExtended, AcceptExtended', pattern)
+        self.assertIn('internal static bool UsedExtendedSearch(Result result, bool release)', pattern)
+        self.assertIn('rx2, tx2, ax2)', pattern)
+        # The sweep only runs when nothing was found, so a known-good match cannot move.
+        self.assertIn('if (extendedBand) ExtendedBand(width, height, out xStart, out xEnd, out yStart, out yEnd);\n        else PrimaryBand(width, height, out xStart, out xEnd, out yStart, out yEnd);', pattern)
+        # A wider search relaxes nothing: every authorization check still applies.
+        suitable = section(pattern, 'internal static bool SuitableForClick(', '// Background capture is accepted')
+        for guard in ('!result.ReleaseUnique', '!result.ReleaseButtonRed', '!result.AcceptUnique',
+                      '!result.AcceptButtonRed', 'Math.Abs(result.ResurrectX - result.AcceptX) > 15',
+                      'result.AcceptY - result.ResurrectY < 15', 'result.AcceptY - result.ResurrectY > 45'):
+            self.assertIn(guard, suitable)
+        # And the log says where the label was, and when the wider sweep found it.
+        self.assertIn('LabelWhere(dialog.ReleaseText, dialog.ReleaseX, dialog.ReleaseY)', recovery)
+        self.assertIn('widerSearchOnly=" + WowBCorpseDialogPattern.UsedExtendedSearch(dialog, release)', recovery)
+        self.assertIn('label matched only in the wider search area at (', recovery)
+
 if __name__ == '__main__': unittest.main()

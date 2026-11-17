@@ -53,3 +53,48 @@ The exact two input screenshots match their respective patterns and reject the o
 ## Remaining validation
 
 The user confirmed both live diagnostic classifications and subsequently reported successful corpse recovery at their current UI settings. The updated highlighted-button matcher has been checked offline on the supplied screenshot. The four-direction scout and crowded-position fallback have synthetic coverage only; their mesh routing, prompt availability, moving units, click and revival have **not** been tested end to end. Scaling, localization or rendering changes can prevent detection. The stopped-bot recorder still provides read-only 25-second memory traces for investigation; it never calls client functions or uses Lua. The experimental recovery path should be watched in game and its logs retained if a step fails.
+
+### 2026-11-17: a wider search area for the Release and Accept labels
+
+`2026-11-17_1055_16264.log` is the first run from another PC (C:\bbuddy, not
+F:\...). Every recovery attempt ended with
+
+    [Corpse] release not clicked: background image did not meet button checks
+             (release=False, releaseUnique=True, releaseRed=False, heading=False,
+              accept=False, acceptRed=False)
+
+and then `ghost transition not confirmed; stopping without corpse movement`, so
+no Release and no Accept was ever pressed. The capture itself was working: the
+failure is the matcher not finding the labels anywhere in the band the supplied
+screenshots were matched in - the central three fifths of the width and the top
+three tenths of the height.
+
+Another resolution, a window that is not full screen, a different aspect ratio
+or a different UI placement moves a centred popup out of that band. The matcher
+now searches in two stages:
+
+1. **The recorded band, exactly as before, first.** Every label that has ever
+   been found is still found there, so a known-good location cannot move or
+   change verdict.
+2. **The whole client, only when the recorded band found nothing.** The wider
+   sweep is reported in the result (`ReleaseExtended`, `ResurrectExtended`,
+   `AcceptExtended`) and in the log (`widerSearchOnly=`), so a second machine
+   says whether and where the dialog was found outside the recorded band.
+
+Nothing is relaxed by the wider sweep. Uniqueness of the match, the red button
+under the label, the resurrection heading above Accept within its 15-45 px
+band, the player state and map guards, the hover-away and the hover response all
+still decide, exactly as before; a bare label has never authorized a click.
+
+The failure line now also prints the **client size** and where each label was
+matched (`release=False at not found`, `accept=True at (x,y)`), which is what
+distinguishes "the dialog is somewhere else" from "the glyphs do not match at
+all". The second case would mean UI scale, DPI or font rendering rather than
+position: the patterns deliberately support only the native glyph size of the
+supplied screenshots, so a different UI scale still produces false negatives and
+would need new masks, not a wider search.
+
+The wider sweep costs a second pass over the whole client, so the anchor test in
+the matcher now stops as soon as the remaining anchors cannot reach the
+threshold; without that, the fallback would have tripled the cost of every
+failing inspection.

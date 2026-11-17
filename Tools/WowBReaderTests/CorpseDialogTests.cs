@@ -49,8 +49,13 @@ internal static class CorpseDialogTests
             throw new Exception("Dialog pattern positive/cross-label fixture failed");
         var empty = WowBCorpseDialogPattern.Inspect(new byte[stride * height], width, height, stride);
         var invalid = WowBCorpseDialogPattern.Inspect(new byte[1], width, height, stride);
+        // Outside the recorded band the label is found only by the wider fallback
+        // sweep, is reported as such, and still never authorizes a click by itself.
         var outside = WowBCorpseDialogPattern.Inspect(Draw(Pattern("ReleaseText"), true, 250, 350, width, height), width, height, stride);
-        if (empty.ReleaseText || empty.ResurrectText || invalid.ReleaseText || invalid.ResurrectText || outside.ReleaseText)
+        if (empty.ReleaseText || empty.ResurrectText || invalid.ReleaseText || invalid.ResurrectText ||
+            !outside.ReleaseText || !outside.ReleaseExtended ||
+            WowBCorpseDialogPattern.SuitableForClick(outside, true, out _, out _) ||
+            a.ReleaseExtended || b.ResurrectExtended)
             throw new Exception("Dialog pattern blank/invalid/outside-area fixture failed");
         Array.Fill<byte>(release, 255);
         var solid = WowBCorpseDialogPattern.Inspect(release, width, height, stride);
@@ -67,6 +72,9 @@ internal static class CorpseDialogTests
         var releaseResult = WowBCorpseDialogPattern.Inspect(releaseButton, width, height, stride);
         if (!WowBCorpseDialogPattern.SuitableForClick(releaseResult, true, out int rx, out _) || Math.Abs(rx - cx) > 1)
             throw new Exception("Unique release button was not located");
+        // A button inside the recorded band must not be reported as a fallback match.
+        if (releaseResult.ReleaseExtended)
+            throw new Exception("A button inside the recorded band was matched only by the wider search");
         // Raster derived from the user's hovered-button screenshot, not a
         // recording of the game screen. Its red-tinted glyphs differ from the
         // original yellow mask and from neutral white.
