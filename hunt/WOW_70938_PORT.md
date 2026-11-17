@@ -505,3 +505,30 @@ confirmed ghost and corpse-range checks remain in force. If no safe candidate
 exists, or budgets or the deadline are exhausted, recovery still stops rather
 than walking blindly. This change is not proof that the route or resurrection
 will succeed; live testing is required.
+
+### 2026-11-17: twenty ghost relocations and a hop, not five
+
+In `2026-11-17_0843_1256.log` the corpse route was given up after five
+relocations in 40 s. Two things were wrong for the graveyard the character
+released into, which is fenced in:
+
+- five tries is too few to find the one way out of a fenced pocket, and the
+  per-area counter could be spent by two tries in one area and three in
+  another;
+- nothing the router does can cross a fence, because a fence is not in the
+  mesh, and the earlier tries simply walked into it again.
+
+The corpse run now allows **20** relocation tries in total (Gather keeps its
+five: it is standing at its destination, not 1300 yd away), counts a sampling
+failure as one of the tries instead of stopping, and grows the area list to 24
+so the tries cannot be cut short by the area cap. Before each try after a
+failure the ghost **steers toward the next validated location and jumps**:
+forward is held for 250 ms, one space press is posted, steering continues for
+another 350 ms, then the keys are always released. The hop is logged and
+unverified; the ghost state, attachment and STOP are rechecked every 50 ms of
+it, and the walk that follows still uses only complete, mesh-validated paths.
+
+Separately, the corpse in this log was 1344 yd away in a pocket the navmesh
+cannot reach - the same spot where every path query had already failed before
+the character died - so twenty tries would still not have reached it. More
+tries fix the fences; they do not fix an unreachable corpse.

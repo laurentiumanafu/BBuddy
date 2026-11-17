@@ -8,7 +8,11 @@ namespace Styx.Logic.Pathing;
 // Revisiting an area restores its original attempt budget instead of resetting it.
 internal sealed class WowBCorpseRelocationRegions
 {
-    internal const int MaxRegions = 12;
+    /* One area per try, at least: a relocation can walk the ghost up to 50 yd, which is
+     * past the 40 yd anchor radius below, so twenty tries can visit twenty areas. The
+     * relocation count in WowBCorpseRecovery is the real budget; this list only keeps
+     * tried points and per-area counters from being reused across distant anchors. */
+    internal const int MaxRegions = 24;
     internal const double RegionRadiusYd = 40.0; // below MeshRelocate's 50 yd anchor radius
 
     internal sealed class Region

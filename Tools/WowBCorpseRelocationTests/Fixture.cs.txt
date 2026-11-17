@@ -43,11 +43,13 @@ namespace Styx.Logic.Pathing
     internal static class WowBCorpseRecovery
     {
         private enum State { Unknown, Ghost }
-        private const int RouteLimitMs = 15 * 60 * 1000;
+        // RECOVERY_CONSTANTS
         internal static WoWPoint Position;
         internal static bool Active, Ghost;
         internal static readonly Queue<(string Kind, bool Arrived, float X, float Y, bool Stop)> Walks = new();
         internal static int WalkCount;
+        internal static int Jumps;
+        internal static (double X, double Y) LastJump;
         private static bool Allowed(Memory m, WowBReader r, IntPtr h, Func<bool> running) => running() && Active;
         private static State ReadState(Memory m, WowBReader r, IntPtr h, WowBDeathCheckpoint.Candidate c, Func<bool> running, out WoWPoint p)
         { p = Position; return Active && Ghost && running() ? State.Ghost : State.Unknown; }
@@ -63,8 +65,11 @@ namespace Styx.Logic.Pathing
             return step.Arrived;
         }
         // RELOCATION_METHOD
+        private static void JumpToward(Memory m, WowBReader r, IntPtr h, ClickAimMover mover,
+            WowBDeathCheckpoint.Candidate c, Func<bool> running, RoutePoint goal)
+        { if (running() && Active && Ghost) { Jumps++; LastJump = (goal.X, goal.Y); } }
         private static void Check(bool ok, string name) { if (!ok) throw new Exception(name); }
-        private static void Reset() { Position = new WoWPoint(0,0); Active = Ghost = true; WalkCount = 0; Walks.Clear(); MeshRelocate.Picks.Clear(); }
+        private static void Reset() { Position = new WoWPoint(0,0); Active = Ghost = true; WalkCount = Jumps = 0; LastJump = (0,0); Walks.Clear(); MeshRelocate.Picks.Clear(); }
         private static bool Run(int started) => WalkGhostWithRelocation(new Memory(), new WowBReader(), IntPtr.Zero,
             new WowBDeathCheckpoint.Candidate(new WoWPoint(1000,0)), () => Active, new ClickAimMover(),
             new RoutePoint { X = 1000, Kind = "Corpse" }, started);
@@ -80,8 +85,10 @@ namespace Styx.Logic.Pathing
             Check(Run(Environment.TickCount), "long corpse route uses a new local anchor");
             Check(MeshRelocate.Picks.Count == 3 && MeshRelocate.Picks[0].X == 0 && MeshRelocate.Picks[1].Tried == 1 &&
                 MeshRelocate.Picks[2].X == 600 && MeshRelocate.Picks[2].Tried == 0, "new area has fresh local budget");
+            Check(Jumps == MeshRelocate.Picks.Count, "every relocated try is preceded by one hop");
             Reset(); Check(!Run(Environment.TickCount), "stationary failure eventually ends");
-            Check(MeshRelocate.Picks.Count == 5 && WalkCount == 6, "five failures per local area");
+            Check(MeshRelocate.Picks.Count == 20 && WalkCount == 21, "twenty failures before the run is given up");
+            Check(Jumps == 20 && LastJump == (0 + 6 + 19 * 6d, 0d), "a hop is sent before every try after a failure");
             Reset(); Walks.Enqueue(("Corpse", false, 0, 0, false)); Walks.Enqueue(("Relocate", false, 0, 0, true));
             Check(!Run(Environment.TickCount) && MeshRelocate.Picks.Count == 1, "STOP after relocation");
             Reset(); Ghost = false; Check(!Run(Environment.TickCount) && MeshRelocate.Picks.Count == 0, "unknown ghost prevents relocation");

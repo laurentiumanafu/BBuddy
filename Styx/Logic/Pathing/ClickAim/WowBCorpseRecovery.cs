@@ -15,6 +15,15 @@ internal static class WowBCorpseRecovery
     private enum State { Unknown, Alive, Dead, Ghost }
     private const int PromptWaitMs = 45000, TransitionWaitMs = 30000, RouteLimitMs = 15 * 60 * 1000;
     private const double MaxGhostDistance = 3000.0;
+    /* A graveyard surrounded by fences swallows a ghost: one way in is blocked, and the
+     * next try from two yards to the left is a different try. The user asked for twenty,
+     * not five, before the run is given up. Every location is still mesh-validated and the
+     * route limit, an unreadable ghost and STOP still end it earlier. */
+    private const int CorpseRelocationAttempts = 20;
+    /* Space, the client's default jump key. A fence is not in the mesh, so no mesh route
+     * can go around one; the hop is unverified, like every other press this build sends. */
+    private const int JumpVk = 0x20;
+    private const int JumpSteerMs = 250, JumpSettleMs = 350, JumpTickMs = 50;
 
     private static bool Allowed(Memory memory, WowBReader reader, IntPtr hwnd, Func<bool> running)
         => running() && !ClickAimAbort.Requested && !RouteRunner.StopRequested &&
@@ -174,10 +183,55 @@ internal static class WowBCorpseRecovery
                ReadState(memory, reader, hwnd, checkpoint, running, out _) == State.Ghost;
     }
 
+    /* A fence, post or lip is not in the mesh, so no mesh route can go around it: the
+     * router can only see polygons. Steer toward the next location and jump once, which
+     * is what a player does at a fence. The press and its effect are unverified, the
+     * steering stops as soon as the ghost state, attachment or STOP changes, and the
+     * keys are always released. */
+    private static void JumpToward(Memory memory, WowBReader reader, IntPtr hwnd, ClickAimMover mover,
+        WowBDeathCheckpoint.Candidate checkpoint, Func<bool> running, RoutePoint goal)
+    {
+        if (hwnd == IntPtr.Zero || !Allowed(memory, reader, hwnd, running)) return;
+        bool quiet = mover.QuietKeyStop;
+        bool oldRequireFacing = mover.RequireFacingForKeyMode;
+        try
+        {
+            mover.QuietKeyStop = true;
+            mover.RequireFacingForKeyMode = true;
+            bool jumped = false;
+            for (int waited = 0; waited < JumpSteerMs + JumpSettleMs; waited += JumpTickMs)
+            {
+                if (!Allowed(memory, reader, hwnd, running) ||
+                    ReadState(memory, reader, hwnd, checkpoint, running, out _) != State.Ghost) return;
+                mover.MoveTowards(goal.ToWoWPoint());
+                if (!jumped && waited >= JumpSteerMs)
+                {
+                    jumped = true;
+                    ClickAimInput.TapKey(hwnd, JumpVk, 40);
+                    Logging.Write(string.Format(CultureInfo.InvariantCulture,
+                        "[Corpse] jumped while steering toward ({0:F1}, {1:F1}); a fence is not in the mesh, so this hop is unverified",
+                        goal.X, goal.Y));
+                }
+                if (ClickAimAbort.Wait(JumpTickMs)) return;
+            }
+        }
+        catch (Exception ex) { Logging.Write("[Corpse] the jump could not be sent: " + ex.Message); }
+        finally
+        {
+            try { mover.MoveStop(); } catch { }
+            ClickAimKeySteer.ReleaseHeld();
+            try { mover.ClearBlock(); } catch { }
+            mover.RequireFacingForKeyMode = oldRequireFacing;
+            mover.QuietKeyStop = quiet;
+        }
+    }
+
     // The five-location recovery was previously used only by Gather hotspots.
     // After a failed corpse leg, try bounded, mesh-validated positions around
     // the current ghost and re-plan toward the corpse from each one. A failed
     // route is not proof of a physical obstacle; no ground is blacklisted here.
+    // The corpse run gets twenty of these, not five: a fenced graveyard needs
+    // more than one way in tried before a body is written off.
     private static bool WalkGhostWithRelocation(Memory memory, WowBReader reader, IntPtr hwnd,
         WowBDeathCheckpoint.Candidate checkpoint, Func<bool> running, ClickAimMover mover, RoutePoint goal, int started)
     {
@@ -190,12 +244,19 @@ internal static class WowBCorpseRecovery
         if (WowBCorpseSpotPolicy.InRange(origin, checkpoint.Position, WowBCorpseSpotPolicy.ArrivalRadius)) return true;
 
         var regions = new WowBCorpseRelocationRegions();
-        Logging.Write("[Corpse] corpse leg did not complete; trying up to " + MeshRelocate.Attempts +
-            " alternate mesh locations per stuck area before retrying the route (no obstacle is assumed)");
+        int attempts = 0;
+        bool stuck = true;             // the corpse leg above did not complete
+        Logging.Write("[Corpse] corpse leg did not complete; trying up to " + CorpseRelocationAttempts +
+            " alternate mesh locations before giving up, hopping once before each try after a failure (no obstacle is assumed)");
         while (true)
         {
             if (Interrupted() || ReadState(memory, reader, hwnd, checkpoint, running, out WoWPoint current) != State.Ghost) return false;
             if (WowBCorpseSpotPolicy.InRange(current, checkpoint.Position, WowBCorpseSpotPolicy.ArrivalRadius)) return true;
+            if (attempts >= CorpseRelocationAttempts)
+            {
+                Logging.Write("[Corpse] " + CorpseRelocationAttempts + " alternate mesh locations were tried without reaching the corpse; stopping");
+                return false;
+            }
             if (!regions.TrySelect(current.X, current.Y, out WowBCorpseRelocationRegions.Region? region, out bool changed, out bool created) || region == null)
             {
                 Logging.Write("[Corpse] stuck-area limit reached or ghost position invalid; stopping rather than retrying indefinitely");
@@ -203,25 +264,32 @@ internal static class WowBCorpseRecovery
             }
             if (changed)
                 Logging.Write(string.Format(CultureInfo.InvariantCulture,
-                    "[Corpse] {0} stuck area {1}/{2} around ({3:F1}, {4:F1}); {5}/{6} local relocations already tried",
+                    "[Corpse] {0} stuck area {1}/{2} around ({3:F1}, {4:F1}); {5} relocation(s) already tried here, {6}/{7} in total",
                     created ? "new" : "revisited", region.Number, WowBCorpseRelocationRegions.MaxRegions,
-                    region.X, region.Y, region.Attempts, MeshRelocate.Attempts));
-            if (region.Attempts >= MeshRelocate.Attempts)
-            {
-                Logging.Write("[Corpse] this stuck area's alternate mesh locations were exhausted; stopping");
-                return false;
-            }
+                    region.X, region.Y, region.Attempts, attempts, CorpseRelocationAttempts));
             if (!MeshRelocate.TryPick(checkpoint.Map, region.X, region.Y, region.Tried, (_, _) => false, Interrupted, out RoutePoint alternate))
             {
-                if (!Interrupted()) Logging.Write("[Corpse] no additional alternate location could be validated on the mesh");
-                return false;
+                if (Interrupted()) return false;
+                /* Nothing validated from here. That is a statement about this bounded
+                 * sampling, not about the terrain, so it counts as one of the tries and
+                 * the loop looks again: the ghost may have shifted, and the sampling is
+                 * random within the radius. */
+                attempts++;
+                region.Attempts++;
+                Logging.Write("[Corpse] no additional alternate location could be validated on the mesh (" +
+                    attempts + "/" + CorpseRelocationAttempts + ")");
+                continue;
             }
             if (Interrupted()) return false;
             region.Tried.Add(alternate);
-            int attempt = ++region.Attempts;
+            region.Attempts++;
+            int attempt = ++attempts;
+            // A fence is not in the mesh, so a mesh route cannot be planned around it.
+            // Hop before the walk when the last attempt did not get through.
+            if (stuck) JumpToward(memory, reader, hwnd, mover, checkpoint, running, alternate);
             Logging.Write(string.Format(CultureInfo.InvariantCulture,
                 "[Corpse] relocation {0}/{1}: walking to ({2:F1}, {3:F1}) on the mesh",
-                attempt, MeshRelocate.Attempts, alternate.X, alternate.Y));
+                attempt, CorpseRelocationAttempts, alternate.X, alternate.Y));
             bool arrived = WalkGhostTo(memory, reader, hwnd, checkpoint, running, mover, alternate, started, true);
             if (Interrupted() || ReadState(memory, reader, hwnd, checkpoint, running, out WoWPoint position) != State.Ghost) return false;
             // The alternate walk is interrupted as soon as the ghost enters the
@@ -229,11 +297,13 @@ internal static class WowBCorpseRecovery
             if (WowBCorpseSpotPolicy.InRange(position, checkpoint.Position, WowBCorpseSpotPolicy.ArrivalRadius)) return true;
             if (!arrived)
             {
-                Logging.Write("[Corpse] relocation " + attempt + "/" + MeshRelocate.Attempts + ": did not arrive; trying another location");
+                Logging.Write("[Corpse] relocation " + attempt + "/" + CorpseRelocationAttempts + ": did not arrive; trying another location");
+                stuck = true;
                 continue;
             }
-            Logging.Write("[Corpse] relocation " + attempt + "/" + MeshRelocate.Attempts + ": arrived; retrying the corpse route");
+            Logging.Write("[Corpse] relocation " + attempt + "/" + CorpseRelocationAttempts + ": arrived; retrying the corpse route");
             if (WalkGhostTo(memory, reader, hwnd, checkpoint, running, mover, goal, started, true)) return true;
+            stuck = true;
         }
     }
 
