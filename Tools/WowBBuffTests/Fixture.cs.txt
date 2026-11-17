@@ -730,8 +730,14 @@ namespace Styx.Logic.Pathing
             WowBCombatResearch.Data = thirty; ObjectManager.Wow!.TotemCount = 2;
             Check(WowBTotemAuraCandidate.Capture(ObjectManager.Wow, ObjectManager.WowB, combatPlayer)?.ManaSpringActive() == true,
                 "70938 slot 30 Mana Spring present");
-            Check(WowBTotemAuraCandidate.CaptureForGhostWolf(ObjectManager.Wow, ObjectManager.WowB, combatPlayer) == null,
-                "70938 slot 30 remains unknown for Ghost Wolf");
+            // The Ghost Wolf read carries the same bounds as every other aura read
+            // now: an expired 29-slot limit is a feature switch, not a safety check.
+            Check(WowBTotemAuraCandidate.CaptureForGhostWolf(ObjectManager.Wow, ObjectManager.WowB, combatPlayer)?.GhostWolf70938Active() == false,
+                "70938 slot 30 reads an absent Ghost Wolf instead of staying unknown");
+            BitConverter.GetBytes(1238640U).CopyTo(thirty, 29 * 0x128 + 0xE8);
+            Check(WowBTotemAuraCandidate.CaptureForGhostWolf(ObjectManager.Wow, ObjectManager.WowB, combatPlayer)?.GhostWolf70938Active() == true,
+                "70938 slot 30 reads a present Ghost Wolf beyond the old 29-slot bound");
+            BitConverter.GetBytes(10491U).CopyTo(thirty, 29 * 0x128 + 0xE8);
             Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "30-slot present Mana Spring suppresses macro");
             BitConverter.GetBytes(777U).CopyTo(thirty, 29 * 0x128 + 0xE8);
             Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "30-slot duplicate withholds macro");
@@ -760,7 +766,8 @@ namespace Styx.Logic.Pathing
             BitConverter.GetBytes(10491U).CopyTo(thirtyTwo, 31 * 0x128 + 0xE8);
             WowBCombatResearch.Data = thirtyTwo; ObjectManager.Wow!.TotemCount = 2;
             Check(WowBTotemAuraCandidate.Capture(ObjectManager.Wow, ObjectManager.WowB, combatPlayer)?.ManaSpringActive() == true, "32-slot final effect detected");
-            Check(WowBTotemAuraCandidate.CaptureForGhostWolf(ObjectManager.Wow, ObjectManager.WowB, combatPlayer) == null, "32-slot Ghost Wolf stays unknown");
+            Check(WowBTotemAuraCandidate.CaptureForGhostWolf(ObjectManager.Wow, ObjectManager.WowB, combatPlayer)?.GhostWolf70938Active() == false,
+                "32-slot Ghost Wolf reads absent instead of staying unknown");
             Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "32-slot present effect suppresses macro");
             BitConverter.GetBytes(777U).CopyTo(thirtyTwo, 31 * 0x128 + 0xE8);
             Check(!controller.TryApplyInCombat(new IntPtr(7), stopped, combatPlayer, targetSafe), "32-slot duplicate withholds macro");

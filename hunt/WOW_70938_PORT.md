@@ -564,3 +564,36 @@ This never holds the heal: the gates stay the configured health line, the power
 gate, the spacing and the cooldown. `Tools/WowBHealPriorityTests/` checks the
 wiring statically; whether the client's cooldown is really 1.8 s for these
 spells is still unverified.
+
+### 2026-11-17: Ghost Wolf stopped at an expired 29-slot bound
+
+`2026-11-17_1158_17392.log` prints one travel line for the whole run:
+
+    [Travel] 70938 Ghost Wolf aura candidate: unavailable; no form key sent
+
+and no `attempted Ghost Wolf in slot 9` at any point. Seconds earlier the same
+aura reader gave the combat-buff path a verdict (`Lightning Shield candidate:
+absent`), so the read itself was working: the only difference between the two
+paths was a hard-coded bound. `WowBTotemAuraCandidate.CaptureForGhostWolf`
+rejected any external candidate longer than 29 slots, because Ghost Wolf is a
+form and a wrong "absent" verdict would press the key and toggle the form off.
+
+The container grows as auras accumulate - 28, 29, 30, 31, 32, 33 in successive
+logs - so that bound expired, exactly as the 30- and 32-slot limits did for the
+combat buffs on 2026-11-15 and 2026-11-16. An expired bound is not a safety
+check, it is a feature switch nobody can see, and it silently switched Ghost
+Wolf off. Ghost Wolf now uses the same bounds as every other aura read - the
+container's own capacity, itself capped - and keeps what actually protects the
+form: two reads that must agree, and a separate active count that must match
+the unique nonzero ids. Neither is proof that the layout holds at every size.
+
+The form's own risk is now bounded the other way round: a key attempt that does
+not produce an observed active form is retried after 60 s instead of 15 s, so a
+reader that keeps saying "absent" cannot be pressed against every fifteen
+seconds for a whole trip.
+
+`ReadState` also names its reason now. "unavailable" covered about twenty
+different refusals - combat, ghost, stale bar, unstable identity, an unreadable
+candidate - and none of them could be told apart in a log. Each refusal is
+reported at most once a minute, and the ordinary travel interruptions (a fight,
+a ghost, STOP, an active mining or skinning cast) are not logged at all.
