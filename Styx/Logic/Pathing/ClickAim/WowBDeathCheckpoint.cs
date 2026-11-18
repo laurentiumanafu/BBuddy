@@ -22,6 +22,83 @@ internal sealed class WowBDeathCheckpoint
     // Diagnostic only; never authorizes recovery or input.
     internal string LastObservation { get; private set; } = "not sampled";
 
+    // Stable per-install location of the last death, so a bot that is stopped
+    // and restarted while dead/ghost still knows where the corpse is. The
+    // timestamped log in Save() is only a record; this file is what a restart
+    // reads back. It is cleared once the corpse is recovered.
+    internal static string PersistedPath => Path.Combine(
+        Path.GetDirectoryName(ClickAimCalibration.DefaultPath) ?? "Settings",
+        "clickaim-death-location.txt");
+
+    internal static bool TryLoadPersisted(out Candidate candidate)
+    {
+        candidate = default;
+        try
+        {
+            var file = new FileInfo(PersistedPath);
+            if (!file.Exists || file.Length < 2 || file.Length > 4096) return false;
+            string lowText = "", highText = "", mapText = "", xText = "", yText = "", zText = "";
+            foreach (string line in File.ReadAllLines(PersistedPath))
+            {
+                if (line.StartsWith("playerLow=", StringComparison.Ordinal)) lowText = line.Substring(10).Trim();
+                else if (line.StartsWith("playerHigh=", StringComparison.Ordinal)) highText = line.Substring(11).Trim();
+                else if (line.StartsWith("map=", StringComparison.Ordinal)) mapText = line.Substring(4).Trim();
+                else if (line.StartsWith("x=", StringComparison.Ordinal)) xText = line.Substring(2).Trim();
+                else if (line.StartsWith("y=", StringComparison.Ordinal)) yText = line.Substring(2).Trim();
+                else if (line.StartsWith("z=", StringComparison.Ordinal)) zText = line.Substring(2).Trim();
+            }
+            if (!ulong.TryParse(lowText, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out ulong low) ||
+                !ulong.TryParse(highText, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out ulong high))
+                return false;
+            if (!uint.TryParse(mapText, NumberStyles.Integer, CultureInfo.InvariantCulture, out uint map))
+                return false;
+            if (!double.TryParse(xText, NumberStyles.Float, CultureInfo.InvariantCulture, out double x) ||
+                !double.TryParse(yText, NumberStyles.Float, CultureInfo.InvariantCulture, out double y) ||
+                !double.TryParse(zText, NumberStyles.Float, CultureInfo.InvariantCulture, out double z))
+                return false;
+            if (!double.IsFinite(x) || !double.IsFinite(y) || !double.IsFinite(z) ||
+                Math.Abs(x) >= 100000 || Math.Abs(y) >= 100000 || Math.Abs(z) >= 100000)
+                return false;
+            candidate = new Candidate(new WowBGuid(low, high), map, new WoWPoint(x, y, z));
+            return true;
+        }
+        catch { return false; }
+    }
+
+    internal static void ClearPersisted()
+    {
+        try { if (File.Exists(PersistedPath)) File.Delete(PersistedPath); } catch { }
+    }
+
+    // Adopt a persisted death location from a previous session (bot stopped
+    // and restarted while dead/ghost). Only when the current player matches
+    // the saved one and is currently at zero health.
+    internal bool TryAdoptPersisted()
+    {
+        if (Recorded.HasValue) return true;
+        if (!TryLoadPersisted(out Candidate candidate)) return false;
+        Memory? memory = ObjectManager.Wow;
+        WowBReader? reader = ObjectManager.WowB;
+        if (memory == null || reader == null) return false;
+        try
+        {
+            using var uncached = memory.TemporaryCacheState(false);
+            if (!ReadRecoveryPlayer(reader, out WowBObservedUnit player, out uint health, out uint maxHealth, out _) ||
+                player.Guid.IsEmpty || maxHealth == 0 || health != 0 || player.Guid != candidate.Player ||
+                !reader.TryReadMapId(out uint map) || map != candidate.Map)
+                return false;
+            Recorded = candidate;
+            _saved = true;
+            _aliveGuid = player.Guid; _aliveMap = map; _hasAlive = false;
+            LastObservation = "persisted death location adopted after restart";
+            Logging.Write("[Corpse] adopted persisted death location (" + candidate.Position.X.ToString("F1", CultureInfo.InvariantCulture)
+                + ", " + candidate.Position.Y.ToString("F1", CultureInfo.InvariantCulture) + ", "
+                + candidate.Position.Z.ToString("F1", CultureInfo.InvariantCulture) + ") from a previous session; returning to the corpse");
+            return true;
+        }
+        catch { return false; }
+    }
+
     private WowBGuid _aliveGuid;
     private uint _aliveMap;
     private int _aliveAt;
@@ -185,6 +262,20 @@ internal sealed class WowBDeathCheckpoint
                 "WOWB DEATH CHECKPOINT v1; candidate only, not verified corpse or ghost state",
                 "UTC=" + DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture),
                 "player=" + player, "client=" + (experimentalBuild != 0 ? experimentalBuild.ToString(CultureInfo.InvariantCulture) : "wowb-legacy-offsets"),
+                "map=" + map.ToString(CultureInfo.InvariantCulture),
+                "x=" + position.X.ToString("R", CultureInfo.InvariantCulture),
+                "y=" + position.Y.ToString("R", CultureInfo.InvariantCulture),
+                "z=" + position.Z.ToString("R", CultureInfo.InvariantCulture)
+            });
+            // Also persist to the stable location so a restart while dead/ghost
+            // can return to this corpse. Overwritten by the next death.
+            string persistedDir = Path.GetDirectoryName(PersistedPath) ?? "Settings";
+            Directory.CreateDirectory(persistedDir);
+            File.WriteAllLines(PersistedPath, new[] {
+                "WOWB DEATH LOCATION v1; candidate only, not verified corpse or ghost state",
+                "UTC=" + DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture),
+                "playerLow=" + player.Low.ToString("X16", CultureInfo.InvariantCulture),
+                "playerHigh=" + player.High.ToString("X16", CultureInfo.InvariantCulture),
                 "map=" + map.ToString(CultureInfo.InvariantCulture),
                 "x=" + position.X.ToString("R", CultureInfo.InvariantCulture),
                 "y=" + position.Y.ToString("R", CultureInfo.InvariantCulture),

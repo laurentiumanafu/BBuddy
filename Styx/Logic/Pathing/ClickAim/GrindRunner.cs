@@ -424,6 +424,11 @@ internal static class GrindRunner
 
     private static bool RecoverIfPending(ClickAimMover mover)
     {
+        // No in-session checkpoint: adopt a persisted death location from a
+        // previous session (bot stopped and restarted while dead/ghost) so the
+        // corpse run resumes. Retried each pass until the player is readable.
+        if (_deathCheckpoint != null && !_deathCheckpoint.Recorded.HasValue && _deathCheckpoint.TryAdoptPersisted())
+            _recoveryReady = true;
         WowBDeathCheckpoint.Candidate candidate;
         lock (StartStopGate)
         {
@@ -435,6 +440,7 @@ internal static class GrindRunner
         }
         bool recovered = WowBCorpseRecovery.TryRecover(candidate, mover, () => !_stop && !ClickAimAbort.Requested);
         if (!recovered) { _stop = true; return false; }
+        WowBDeathCheckpoint.ClearPersisted(); // corpse recovered; forget the old location
         _deathCheckpoint = new WowBDeathCheckpoint();
         RecentLoot.Clear();
         _recentLootRetryAt.Clear();

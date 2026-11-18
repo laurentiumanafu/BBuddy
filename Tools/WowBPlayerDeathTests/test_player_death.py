@@ -103,4 +103,18 @@ class PlayerDeathRecovery(unittest.TestCase):
         self.assertIn('widerSearchOnly=" + WowBCorpseDialogPattern.UsedExtendedSearch(dialog, release)', recovery)
         self.assertIn('label matched only in the wider search area at (', recovery)
 
+    def test_death_location_persists_across_restart(self):
+        # A bot stopped and restarted while dead/ghost must return to the
+        # corpse: the death location is persisted to a stable file on save,
+        # adopted on the next run when the player is at zero health, and
+        # cleared once the corpse is recovered.
+        tracker = read('Styx/Logic/Pathing/ClickAim/WowBDeathCheckpoint.cs')
+        for item in ('clickaim-death-location.txt', 'PersistedPath', 'TryLoadPersisted',
+                     'TryAdoptPersisted', 'ClearPersisted', 'playerLow=', 'playerHigh=',
+                     'adopted persisted death location', 'File.WriteAllLines(PersistedPath'):
+            self.assertIn(item, tracker)
+        grind = read('Styx/Logic/Pathing/ClickAim/GrindRunner.cs')
+        self.assertIn('_deathCheckpoint.TryAdoptPersisted()', grind)
+        self.assertIn('WowBDeathCheckpoint.ClearPersisted()', grind)
+
 if __name__ == '__main__': unittest.main()
