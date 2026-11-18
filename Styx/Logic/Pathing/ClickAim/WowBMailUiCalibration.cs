@@ -25,6 +25,10 @@ internal static class WowBMailUiCalibration
         public int TabY { get; set; }
         public int SendX { get; set; }
         public int SendY { get; set; }
+        // Optional second send button (e.g. added by an addon). Zero means
+        // not recorded; the bot only clicks it when a position is recorded.
+        public int ExtraSendX { get; set; }
+        public int ExtraSendY { get; set; }
     }
     internal static string DefaultPath => Path.Combine(Path.GetDirectoryName(ClickAimCalibration.DefaultPath) ?? "Settings", "clickaim-mail-ui.json");
     internal static bool Valid(Result? c)
@@ -36,7 +40,17 @@ internal static class WowBMailUiCalibration
         if (!inside(c.MailboxX, c.MailboxY) || !inside(c.TabX, c.TabY) || !inside(c.SendX, c.SendY)) return false;
         // A mislabeled duplicate control can accidentally send instead of opening the tab.
         long dx = c.TabX - c.SendX, dy = c.TabY - c.SendY;
-        return dx * dx + dy * dy >= 400;
+        if (dx * dx + dy * dy < 400) return false;
+        // The extra send button is optional; when recorded it must be a real
+        // in-client point distinct from the tab and the main send button.
+        if (c.ExtraSendX != 0 || c.ExtraSendY != 0)
+        {
+            if (!inside(c.ExtraSendX, c.ExtraSendY)) return false;
+            long ex = c.ExtraSendX - c.SendX, ey = c.ExtraSendY - c.SendY;
+            long tx = c.ExtraSendX - c.TabX, ty = c.ExtraSendY - c.TabY;
+            if (ex * ex + ey * ey < 400 || tx * tx + ty * ty < 400) return false;
+        }
+        return true;
     }
     internal static bool TryLoad(out Result? result)
     {

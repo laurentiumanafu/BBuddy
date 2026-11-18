@@ -121,6 +121,9 @@ internal static class ClickAimSettings
     // button as items attach, so a smaller, predictable batch keeps the
     // recorded Send position valid.
     public static int MailBatchLimit = 12;
+    // When on, after the main Send the bot also clicks the optional extra
+    // send button recorded in the mail controls (e.g. one added by an addon).
+    public static bool MailExtraSend;
     internal static bool ValidMailRecipient(string value)
     {
         if (value == null || value.Length > 64 || value != value.Trim()) return false;
@@ -206,6 +209,7 @@ internal static class ClickAimSettings
         MailRecipient = "";
         MailSkipRecipient = false;
         MailBatchLimit = 12;
+        MailExtraSend = false;
         SellAfterLoots = 40;
         VendorWaitMs = 2500;
         VendorSearchYd = 25;
@@ -226,6 +230,7 @@ internal static class ClickAimSettings
         MailRecipient = "";
         MailSkipRecipient = false;
         MailBatchLimit = 12;
+        MailExtraSend = false;
         UseShamanTotemMacro = ShamanTotemEarth = ShamanTotemHealing = ShamanTotemMana = ShamanTotemWindfury = false;
         ShamanTotemMacroKey = 2; ShamanTotemMacroPresses = 2;
         string path;
@@ -393,6 +398,11 @@ internal static class ClickAimSettings
             if (hasNumber) MailBatchLimit = number;
             return true;
         }
+        if (string.Equals(key, "MailExtraSend", StringComparison.OrdinalIgnoreCase))
+        {
+            MailExtraSend = flag;
+            return true;
+        }
         if (string.Equals(key, "SellAfterLoots", StringComparison.OrdinalIgnoreCase))
         {
             if (hasNumber) SellAfterLoots = number;
@@ -492,6 +502,8 @@ internal static class ClickAimSettings
         text.AppendLine("MailSkipRecipient = " + (MailSkipRecipient ? "true" : "false"));
         text.AppendLine("# Maximum items attached per mail batch (1-12).");
         text.AppendLine("MailBatchLimit = " + MailBatchLimit.ToString(CultureInfo.InvariantCulture));
+        text.AppendLine("# When true, also click the optional extra send button after Send.");
+        text.AppendLine("MailExtraSend = " + (MailExtraSend ? "true" : "false"));
         text.AppendLine("SellAfterLoots = " + SellAfterLoots.ToString(CultureInfo.InvariantCulture));
         text.AppendLine("VendorWaitMs = " + VendorWaitMs.ToString(CultureInfo.InvariantCulture));
         text.AppendLine("VendorSearchYd = " + VendorSearchYd.ToString(CultureInfo.InvariantCulture));
@@ -589,6 +601,9 @@ internal static class ClickAimSettings
         MailBatchLimit = 150; Clamp(); check(MailBatchLimit == 100, "mailBatchLimitClampHigh");
         MailBatchLimit = 0; Clamp(); check(MailBatchLimit == 1, "mailBatchLimitClampLow");
         MailBatchLimit = 12;
+        check(!MailExtraSend, "mailExtraSendDefaultOff");
+        check(Apply("MailExtraSend", "true") && MailExtraSend, "mailExtraSendOptIn");
+        check(Apply("MailExtraSend", "nonsense") && !MailExtraSend, "mailExtraSendMalformedOff");
         check(Apply("SellAfterLoots", "7") && SellAfterLoots == 7, "applySellAfter");
         check(Apply("VendorWaitMs", "900") && VendorWaitMs == 900, "applyVendorWait");
         check(Apply("VendorSearchYd", "12") && VendorSearchYd == 12, "applyVendorSearch");

@@ -32,6 +32,19 @@ class MailPolicy(unittest.TestCase):
   m=(R/'Styx/Logic/Pathing/ClickAim/WowBExperimentalMail.cs').read_text()
   for part in ('int batchLimit', 'expected.Count < batchLimit', 'expected.Count >= batchLimit',
                'ClickAimSettings.MailBatchLimit'): self.assertIn(part, m + g)
+ def test_extra_send_option(self):
+  for part in ('MailExtraSend', '"MailExtraSend"', '"MailExtraSend = "'): self.assertIn(part,s)
+  self.assertIn('chkMailExtraSend',x)
+  self.assertIn('btnRecordMailExtraSend_Click',x)
+  for part in ('chkMailExtraSend.IsChecked = ClickAimSettings.MailExtraSend',
+               'ClickAimSettings.MailExtraSend = chkMailExtraSend.IsChecked == true',
+               'Stop the bot before changing the extra send option',
+               'ExtraSendX = x == null ? 0', '_mailControlExtraSend = sample'): self.assertIn(part,c)
+  cal=(R/'Styx/Logic/Pathing/ClickAim/WowBMailUiCalibration.cs').read_text()
+  for part in ('ExtraSendX', 'ExtraSendY'): self.assertIn(part,cal)
+  m=(R/'Styx/Logic/Pathing/ClickAim/WowBExperimentalMail.cs').read_text()
+  for part in ('bool extraSend', 'ui.ExtraSendX != 0', 'extra send button messages posted',
+               'ClickAimSettings.MailExtraSend'): self.assertIn(part, m + g)
  def test_policy_limits_and_unknowns(self):
   for part in ('BatchLimit = 100', 'FailureLimit = 3', 'slot.Candidate >= 0 && slot.Candidate <= 4', 'slot.Candidate < 0', '!complete', '!attachmentsClear', 'SendEvidence.Accepted', 'SendEvidence.Rejected', 'Decision.Hold'):
    self.assertIn(part,p)

@@ -242,6 +242,7 @@
                         <TextBlock Text="Max items per mail batch (1-100):" VerticalAlignment="Center" Margin="0,0,8,0"/>
                         <TextBox x:Name="txtMailBatchLimit" Width="60" ToolTip="Caps how many items are attached before Send. Use a smaller value if an addon moves the Send button as items attach."/>
                     </StackPanel>
+                    <CheckBox x:Name="chkMailExtraSend" Margin="0,0,0,4" Content="Also click the extra send button after Send (record it with the mail controls below)"/>
                     <TextBlock Margin="0,0,0,8" TextWrapping="Wrap" FontSize="11" Text="Experimental: enable the checkbox, save a recipient, and record the mailbox on the vendor plan the bot will select. Foreground and non-minimized background mail use game-window messages; background interaction is unverified. The recipient field, UI layout, item eligibility and server delivery cannot be independently verified. Wrong settings can mail the wrong items or recipient. Calibrate grid and controls; test with disposable items. Additional batches require observed bag progress; later trips may retry uncertain outcomes."/>
                 </StackPanel>
 
@@ -278,6 +279,7 @@
                         <Button Content="Record mailbox (3 s)" Click="btnRecordMailObject_Click" Height="24" Padding="8,0" Margin="0,0,5,4"/>
                         <Button Content="Record Send Mail tab (3 s)" Click="btnRecordMailTab_Click" Height="24" Padding="8,0" Margin="0,0,5,4"/>
                         <Button Content="Record Send button (3 s)" Click="btnRecordMailSend_Click" Height="24" Padding="8,0" Margin="0,0,5,4"/>
+                        <Button Content="Record extra send (optional, 3 s)" Click="btnRecordMailExtraSend_Click" Height="24" Padding="8,0" Margin="0,0,5,4"/>
                         <Button Content="Save mail controls" Click="btnSaveMailControls_Click" Height="24" Padding="8,0" Margin="0,0,5,4"/>
                     </WrapPanel>
                     <TextBlock x:Name="lblMailControlsStatus" TextWrapping="Wrap" FontSize="11" Text="Mail controls not recorded in this window."/>

@@ -43,7 +43,7 @@ internal static class WowBExperimentalMail
     // True means no further unattempted candidates were observed this trip;
     // neither this nor bag progress establishes correct recipient or delivery.
     internal static bool Run(IntPtr hwnd, Memory memory, WowBReader reader, WowBGuid player,
-        WowBMailUiCalibration.Result ui, string recipient, bool skipRecipient, int batchLimit, Func<string?> safetyFailure)
+        WowBMailUiCalibration.Result ui, string recipient, bool skipRecipient, int batchLimit, bool extraSend, Func<string?> safetyFailure)
     {
         bool background = false, focusSelected = false;
         string lastSafetyFailure = "no safety check recorded";
@@ -289,6 +289,14 @@ internal static class WowBExperimentalMail
                 { Logging.Write("[Mail] send input withheld or uncertain: " + sendReason + "; no retry. Inspect manually."); return false; }
                 Logging.Write("[Mail] Send button messages posted once for batch " + (batch + 1) +
                     "; recipient and server acceptance are unverified.");
+                // Optional second send button (e.g. added by an addon). Only
+                // clicked when enabled and a position was recorded.
+                if (extraSend && ui.ExtraSendX != 0 && ui.ExtraSendY != 0)
+                {
+                    if (!Left(hwnd, ui.ExtraSendX, ui.ExtraSendY, w, h, background, safe, out string extraReason))
+                    { Logging.Write("[Mail] extra send input withheld or uncertain: " + extraReason + "; no retry. Inspect manually."); return false; }
+                    Logging.Write("[Mail] extra send button messages posted once for batch " + (batch + 1) + "; acceptance is unverified.");
+                }
                 if (!Wait(1000, safe))
                 { Logging.Write("[Mail] safety changed during the one-second post-send wait; outcome unknown. No retry this trip."); return false; }
                 bool observed = false, progressed = false;

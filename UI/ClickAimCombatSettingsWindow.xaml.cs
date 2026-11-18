@@ -823,11 +823,12 @@ namespace CopilotBuddy.UI
             finally { btnInventoryProbe.IsEnabled = true; }
         }
 
-        private MailHoverSample? _mailControlObject, _mailControlTab, _mailControlSend;
+        private MailHoverSample? _mailControlObject, _mailControlTab, _mailControlSend, _mailControlExtraSend;
 
         private async void btnRecordMailObject_Click(object sender, RoutedEventArgs e) => await RecordMailControl(0);
         private async void btnRecordMailTab_Click(object sender, RoutedEventArgs e) => await RecordMailControl(1);
         private async void btnRecordMailSend_Click(object sender, RoutedEventArgs e) => await RecordMailControl(2);
+        private async void btnRecordMailExtraSend_Click(object sender, RoutedEventArgs e) => await RecordMailControl(3);
 
         private async Task RecordMailControl(int kind)
         {
@@ -842,7 +843,7 @@ namespace CopilotBuddy.UI
             { lblMailControlsStatus.Text = "Record the mailbox first, then the tab and Send button without moving."; return; }
             int generation = ClickAimAbort.Generation;
             _mailHoverBusy = true; _mailGridBusy = true;
-            lblMailControlsStatus.Text = "Focus the game and hover " + (kind == 0 ? "the mailbox with the window closed" : kind == 1 ? "the Send Mail TAB" : "the Send button") + "; keep still for 3 seconds. No input is sent.";
+            lblMailControlsStatus.Text = "Focus the game and hover " + (kind == 0 ? "the mailbox with the window closed" : kind == 1 ? "the Send Mail TAB" : kind == 2 ? "the Send button" : "the extra send button") + "; keep still for 3 seconds. No input is sent.";
             try
             {
                 await Task.Delay(3000);
@@ -862,13 +863,15 @@ namespace CopilotBuddy.UI
                 MailHoverSample sample = pair.sample;
                 if (kind == 0)
                 {
-                    _mailControlObject = sample; _mailControlTab = null; _mailControlSend = null;
+                    _mailControlObject = sample; _mailControlTab = null; _mailControlSend = null; _mailControlExtraSend = null;
                 }
                 else
                 {
                     if (_mailControlObject == null || !MailHoverSameSession(_mailControlObject, sample))
                     { lblMailControlsStatus.Text = "Player, standing point or game session changed; record mailbox again."; return; }
-                    if (kind == 1) _mailControlTab = sample; else _mailControlSend = sample;
+                    if (kind == 1) _mailControlTab = sample;
+                    else if (kind == 2) _mailControlSend = sample;
+                    else _mailControlExtraSend = sample;
                 }
                 lblMailControlsStatus.Text = "Point recorded. Continue with the remaining controls; Save mail controls when finished.";
             }
@@ -883,12 +886,13 @@ namespace CopilotBuddy.UI
                 !MailHoverSameSession(_mailControlObject, _mailControlTab) || !MailHoverSameSession(_mailControlObject, _mailControlSend) ||
                 ObjectManager.Wow != _mailControlObject.Memory || ObjectManager.WowB != _mailControlObject.Reader)
             { lblMailControlsStatus.Text = "Record all three controls in the same stopped session first."; return; }
-            var o = _mailControlObject; var t = _mailControlTab; var s = _mailControlSend;
+            var o = _mailControlObject; var t = _mailControlTab; var s = _mailControlSend; var x = _mailControlExtraSend;
             var value = new WowBMailUiCalibration.Result { Player = o.Player.ToString(), MailboxHover = o.Hover.ToString(), Map = o.Map,
                 Width = o.Width, Height = o.Height, X = o.X, Y = o.Y, Z = o.Z,
                 MailboxX = (int)Math.Round(o.CursorX), MailboxY = (int)Math.Round(o.CursorY),
                 TabX = (int)Math.Round(t.CursorX), TabY = (int)Math.Round(t.CursorY),
-                SendX = (int)Math.Round(s.CursorX), SendY = (int)Math.Round(s.CursorY) };
+                SendX = (int)Math.Round(s.CursorX), SendY = (int)Math.Round(s.CursorY),
+                ExtraSendX = x == null ? 0 : (int)Math.Round(x.CursorX), ExtraSendY = x == null ? 0 : (int)Math.Round(x.CursorY) };
             try { WowBMailUiCalibration.Save(value); lblMailControlsStatus.Text = "Mail controls saved; screen geometry and UI state are not independently verified."; }
             catch (Exception ex) { lblMailControlsStatus.Text = "Could not save controls: " + ex.Message; }
         }
@@ -965,6 +969,7 @@ namespace CopilotBuddy.UI
             txtMailRecipient.Text = ClickAimSettings.MailRecipient;
             chkMailSkipRecipient.IsChecked = ClickAimSettings.MailSkipRecipient;
             txtMailBatchLimit.Text = Text(ClickAimSettings.MailBatchLimit);
+            chkMailExtraSend.IsChecked = ClickAimSettings.MailExtraSend;
             txtSellAfter.Text = Text(ClickAimSettings.SellAfterLoots);
             txtVendorWait.Text = Text(ClickAimSettings.VendorWaitMs);
             txtVendorSearch.Text = Text(ClickAimSettings.VendorSearchYd);
@@ -1040,6 +1045,8 @@ namespace CopilotBuddy.UI
             { System.Windows.MessageBox.Show("Stop the bot before changing experimental mail.", "Combat settings", MessageBoxButton.OK, MessageBoxImage.Warning); return false; }
             if ((ClickAimUi.Running || ClickAimUi.Paused) && (chkMailSkipRecipient.IsChecked == true) != ClickAimSettings.MailSkipRecipient)
             { System.Windows.MessageBox.Show("Stop the bot before changing the mail recipient typing option.", "Combat settings", MessageBoxButton.OK, MessageBoxImage.Warning); return false; }
+            if ((ClickAimUi.Running || ClickAimUi.Paused) && (chkMailExtraSend.IsChecked == true) != ClickAimSettings.MailExtraSend)
+            { System.Windows.MessageBox.Show("Stop the bot before changing the extra send option.", "Combat settings", MessageBoxButton.OK, MessageBoxImage.Warning); return false; }
             string mailRecipient = (txtMailRecipient.Text ?? string.Empty).Trim();
             bool mailSkipRecipient = chkMailSkipRecipient.IsChecked == true;
             if (chkExperimentalAutoMail.IsChecked == true && !mailSkipRecipient && !WowBMailRecipientText.ValidForTest(mailRecipient))
@@ -1079,6 +1086,7 @@ namespace CopilotBuddy.UI
             ClickAimSettings.MailRecipient = mailRecipient;
             ClickAimSettings.MailSkipRecipient = mailSkipRecipient;
             ClickAimSettings.MailBatchLimit = mailBatchLimit;
+            ClickAimSettings.MailExtraSend = chkMailExtraSend.IsChecked == true;
             ClickAimSettings.SellAfterLoots = sellAfter;
             ClickAimSettings.VendorWaitMs = vendorWait;
             ClickAimSettings.VendorSearchYd = vendorSearch;
