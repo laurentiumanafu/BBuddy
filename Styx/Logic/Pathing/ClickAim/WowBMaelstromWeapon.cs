@@ -52,7 +52,11 @@ internal static class WowBMaelstromWeapon
             if (!ids.Add(id)) return false;
             if (id == CandidateId)
             {
-                stack = BitConverter.ToUInt32(bytes, i + StackOffset);
+                // Only the low byte is the stack count; the upper bytes of
+                // this word hold unrelated data (a large float/timestamp in
+                // the live read), so the full word is garbage. Masking to the
+                // low byte recovers the count the research traces showed.
+                stack = BitConverter.ToUInt32(bytes, i + StackOffset) & 0xFF;
                 duration = BitConverter.ToUInt32(bytes, i + DurationOffset);
                 expiry = BitConverter.ToUInt32(bytes, i + ExpiryOffset);
             }
@@ -94,7 +98,7 @@ internal static class WowBMaelstromWeapon
                 {
                     found = true;
                     slotIndex = i / stride;
-                    stack = BitConverter.ToUInt32(sample.Bytes, i + StackOffset);
+                    stack = BitConverter.ToUInt32(sample.Bytes, i + StackOffset) & 0xFF;
                     duration = BitConverter.ToUInt32(sample.Bytes, i + DurationOffset);
                     expiry = BitConverter.ToUInt32(sample.Bytes, i + ExpiryOffset);
                 }
