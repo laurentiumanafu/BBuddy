@@ -989,7 +989,7 @@ internal static class GrindRunner
         }
         if (trialReader?.Uses70938Features == true)
             Logging.Write("[Mail] experimental post-sell option " + (ClickAimSettings.ExperimentalAutoMail ? "ON" : "OFF") +
-                "; recipient " + (WowBMailRecipientText.ValidForTest(ClickAimSettings.MailRecipient) ? "configured" : "missing or invalid") +
+                "; recipient " + (ClickAimSettings.MailSkipRecipient ? "typing off" : (WowBMailRecipientText.ValidForTest(ClickAimSettings.MailRecipient) ? "configured" : "missing or invalid")) +
                 "; selected vendor must have its own mailbox and matching controls. Sending and sales are unverified.");
         // On 70755/70790, avoid a fresh pull or roam leg while initial full-bag
         // observations are being confirmed. A bounded wait never treats an
@@ -3593,7 +3593,7 @@ internal static class GrindRunner
         if (vendorReader.Uses70938Features)
             Logging.Write("[Mail] selected sell plan " + point.Name + ": option " + (ClickAimSettings.ExperimentalAutoMail ? "ON" : "OFF") +
                 "; mailbox " + (point.Mailbox == null ? "not recorded for this plan" : "recorded for this plan") +
-                "; recipient " + (WowBMailRecipientText.ValidForTest(ClickAimSettings.MailRecipient) ? "configured" : "missing or invalid") + ".");
+                "; recipient " + (ClickAimSettings.MailSkipRecipient ? "typing off" : (WowBMailRecipientText.ValidForTest(ClickAimSettings.MailRecipient) ? "configured" : "missing or invalid")) + ".");
         Logging.Write(string.Format(CultureInfo.InvariantCulture,
             "[Grind] selling first, before the next hotspot: {0} is {1:F0} yd away and has {2} recorded "
             + "step(s); {3} kill(s) and {4} looted bodie(s) since the last trip", point,
@@ -3769,7 +3769,7 @@ internal static class GrindRunner
             if (ClickAimSettings.ExperimentalAutoMail)
             {
                 VendorFile.MailboxPoint? mailbox = point.Mailbox;
-                if (mailbox != null && mailbox.Map == returnMap && WowBMailRecipientText.ValidForTest(ClickAimSettings.MailRecipient) &&
+                if (mailbox != null && mailbox.Map == returnMap && (ClickAimSettings.MailSkipRecipient || WowBMailRecipientText.ValidForTest(ClickAimSettings.MailRecipient)) &&
                     WowBMailUiCalibration.TryLoad(out var controls) && controls != null && controls.Map == mailbox.Map &&
                     controls.Player == player.ToString() && ClickAimMath.Len(controls.X - mailbox.X, controls.Y - mailbox.Y) <= 3.0 &&
                     Math.Abs(controls.Z - mailbox.Z) <= 5.0)
