@@ -104,7 +104,7 @@ internal static class RotationTests
         Check(ClickAimClassRotation.Build(ClickAimRotationClass.Shaman, bar, true).MaelstromBolt == null, "Ignore suppresses Bolt");
         ClickAimCombat.SetRoleOverride(403, ClickAimSpellRole.Dot);
         var dot = ClickAimClassRotation.Build(ClickAimRotationClass.Generic, bar, true);
-        Check(dot.MaelstromBolt == null && dot.Damage?.Id != 403 && dot.Dot?.Id != 403, "Dot override cannot bypass five-stack gate");
+        Check(dot.MaelstromBolt == null && dot.Damage?.Id != 403 && dot.Dot?.Id != 403, "Dot override cannot bypass Maelstrom stack gate");
         ClickAimCombat.ClearRoleOverrides();
         var unbound = Bar(403); unbound[0].KeyVk = 0;
         Check(ClickAimClassRotation.Build(ClickAimRotationClass.Shaman, unbound, true).MaelstromBolt == null, "unbound Bolt withheld");

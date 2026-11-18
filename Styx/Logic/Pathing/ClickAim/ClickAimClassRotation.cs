@@ -98,7 +98,7 @@ internal static class ClickAimClassRotation
         {
             // Lightning Bolt is no longer the opener/filler on 70938. Keep it
             // separately only when its role is Damage, so Shock/Attack still
-            // work while the five-stack candidate is absent or unreadable.
+            // work while the Maelstrom stack candidate is absent or unreadable.
             plan.MaelstromBolt = Find(bar, new[] { "Lightning Bolt" }, ClickAimSpellRole.Damage);
             var withoutBolt = new List<ClickAimAction>();
             foreach (ClickAimAction action in bar)

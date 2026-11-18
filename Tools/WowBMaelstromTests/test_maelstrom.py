@@ -12,17 +12,31 @@ spec.loader.exec_module(ma)
 READ = (ROOT / 'Styx/Logic/Pathing/ClickAim/WowBMaelstromWeapon.cs').read_text(encoding='utf-8-sig')
 ROT = (ROOT / 'Styx/Logic/Pathing/ClickAim/ClickAimClassRotation.cs').read_text(encoding='utf-8-sig')
 FIGHT = (ROOT / 'Styx/Logic/Pathing/ClickAim/GrindRunner.cs').read_text(encoding='utf-8-sig')
+COMBAT = (ROOT / 'Styx/Logic/Pathing/ClickAim/WowBCombatResearch.cs').read_text(encoding='utf-8-sig')
 
 class Maelstrom(unittest.TestCase):
     def test_reader_fails_closed_and_rechecks(self):
         for text in ('CandidateId = 408505', 'StackOffset = 0x104', 'DurationOffset = 0xF4',
-                     'ExpiryOffset = 0xF8', 'ClockOffset = 0x1C10', 'stack == 5',
-                     'duration == 30000', 'remaining > 0 && remaining <= 30000',
+                     'ExpiryOffset = 0xF8', 'ClockOffset = 0x1C10', 'MinimumStacks = 4',
+                     'stack >= MinimumStacks',
+                     'duration == 30000', 'remaining > 0 && remaining <= (long)duration + ExpirySlackMs',
                      'ids.Count == count', '!ids.Add(id)', 'External70938MaxSlots',
                      'count == BitConverter.ToUInt32(after, 0)', 'ReadExternalCandidate(memory',
                      'unchecked(lastClock - firstClock) <= 1000', '!reader.Uses70938Features',
                      'AttemptBackoffMs = 5000'):
             self.assertIn(text, READ)
+    def test_inline_layout_is_readable(self):
+        # The aura slots live inside the unit struct with few auras; the
+        # external reader must accept that signature instead of rejecting it
+        # on the capacity tag and window overlap, or Bolt never fires.
+        for text in ('InlineDataPointerOffset = 0x608', 'InlineCapacityTag = 0x8000000000000010UL',
+                     'InlineMaxSlots = 16', 'bool inline = address == playerUnit',
+                     'capacity == InlineCapacityTag', 'if (!inline && (length == 0',
+                     'if (!inline && (address > UserLimit'):
+            self.assertIn(text, COMBAT)
+        # The diagnostic reports the observed candidate state on withhold.
+        self.assertIn('internal static string Diagnose(', READ)
+        self.assertIn('candidate saw " +', FIGHT)
     def test_rotation_excludes_bolt_from_ordinary_paths(self):
         self.assertIn('plan.MaelstromBolt = Find(bar, new[] { "Lightning Bolt" }, ClickAimSpellRole.Damage)', ROT)
         self.assertIn('if (!IsLightningBolt(action)) withoutBolt.Add(action)', ROT)
@@ -46,7 +60,7 @@ class Maelstrom(unittest.TestCase):
                      'TraceIdentity70707', 'FightAttackInputAllowed', 'TryGetLocalPlayer',
                      'target.RecordAddress != expectedTarget.RecordAddress', 'self.Power < minimumPower',
                      'TryReadGhostFlagCandidate', 'DefenceFieldsValid', 'distance > bolt.RangeYd',
-                     'WowBMaelstromWeapon.ReadFive', 'current.Raw == bolt.Raw', 'mapAfter == map'):
+                     'WowBMaelstromWeapon.ReadReady', 'current.Raw == bolt.Raw', 'mapAfter == map'):
             self.assertIn(text, guard)
         self.assertGreaterEqual(guard.count('FightAttackInputAllowed'), 2)
     def test_offline_32_slot_header_and_bound(self):

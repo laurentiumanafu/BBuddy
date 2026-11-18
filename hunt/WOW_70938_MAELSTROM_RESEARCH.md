@@ -64,3 +64,27 @@ Rank mana floors use the published [Forever Shaman spell listing](https://warcra
 higher learned estimate. This is not a live cost reader; client changes or
 talents can differ. The candidate and action must be tested locally in game.
 Synthetic fixtures do not prove the actual fields or casting behavior.
+
+## 2026-11-18: why Bolt almost never fired, and the four-stack change
+
+The 2026-11-18 08:00 log (70959) shows 266 "Lightning Bolt withheld" against
+6 attempts. The candidate was developed only from external-mode recordings
+(length 18-33, capacity 24-36). With few auras the slots live **inline** in
+the unit struct at player+0x608 with the capacity word tagged
+`0x8000000000000010`; `ReadExternalCandidate` rejected that signature on the
+capacity cap and the window-overlap guard, so the read returned null and Bolt
+was withheld. `WowBTotemAuraCandidate` already tried the inline layout first;
+the Maelstrom read did not. `ReadExternalCandidate` now accepts the exact
+inline signature (pointer == player+0x608, capacity tag, length 1-16) and
+reads it from the same pointer with the same stability checks; the slot
+stride and +0xE8 ID position are shared, so parsing is unchanged.
+
+Two further defects were fixed in the same pass. The expiry check required
+`remaining <= 30000`, but the recordings show 30082 at the five-stack
+transition (non-atomic sample/clock), so a just-refreshed buff was withheld in
+exactly that window; it now allows `duration + 2000` ms of slack. The spend
+threshold is now four stacks (`MinimumStacks = 4`) instead of five, at the
+user's request. The withheld log line now appends a `Diagnose` readout
+(storage mode, count, unique IDs, duplicates, found stack/duration/remaining)
+so a future silent withhold is visible. None of this proves a cast in game;
+the user still needs to watch Bolt fire at four and five stacks.

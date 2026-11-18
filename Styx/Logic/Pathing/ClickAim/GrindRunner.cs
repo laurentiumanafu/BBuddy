@@ -6699,7 +6699,7 @@ internal static class GrindRunner
             double dx = target.Location.X - player.Location.X, dy = target.Location.Y - player.Location.Y, dz = target.Location.Z - player.Location.Z;
             double distance = Math.Sqrt(dx * dx + dy * dy + dz * dz);
             if (!double.IsFinite(distance) || bolt.RangeYd <= 0 || distance > bolt.RangeYd ||
-                !WowBMaelstromWeapon.ReadFive(memory, reader, player)) return false;
+                !WowBMaelstromWeapon.ReadReady(memory, reader, player)) return false;
             bool slotCurrent = false;
             foreach (ClickAimAction current in ClickAimCombat.ReadBar(reader))
                 if (current.Slot == bolt.Slot && current.Raw == bolt.Raw && current.Id == bolt.Id && current.KeyVk == bolt.KeyVk && current.IsDamage)
@@ -6973,7 +6973,7 @@ internal static class GrindRunner
         Logging.Write("[Grind] hotbar rotation: " + rotation.Class + " (requested " + ClickAimSettings.RotationClass
             + "); damage=" + (damage?.Name ?? "none") + ", extra=" + (rotation.Supplemental?.Name ?? "none")
             + ", DoT=" + (dot?.Name ?? "none") + ", melee=" + (meleeHit?.Name ?? "none")
-            + ", heal=" + (heal?.Name ?? "none") + ", five-stack Bolt=" + (rotation.MaelstromBolt?.Name ?? "none")
+            + ", heal=" + (heal?.Name ?? "none") + ", stack Bolt=" + (rotation.MaelstromBolt?.Name ?? "none")
             + ". Cooldowns and DoT duration are estimates; 70938 Stormstrike and Maelstrom use experimental candidates.");
 
         /* How far the damage spell actually reaches. Every spell used to be treated as a 28 yd
@@ -7753,7 +7753,8 @@ internal static class GrindRunner
                 if (!maelstromCast && maelstromNow >= nextMaelstromReport)
                 {
                     nextMaelstromReport = maelstromNow + 15000;
-                    Logging.Write("[Grind] Lightning Bolt withheld: five-stack candidate or fight safety not confirmed (unknown is not absence)");
+                    Logging.Write("[Grind] Lightning Bolt withheld: Maelstrom stack candidate or fight safety not confirmed (unknown is not absence); candidate saw " +
+                        WowBMaelstromWeapon.Diagnose(fightMemory, reader, maelstromPlayer));
                 }
             }
             ClickAimAction? castDamage = maelstromCast ? bolt : optional ?? damage;
@@ -7895,7 +7896,7 @@ internal static class GrindRunner
                 ClickAimInput.TapKey(hwnd, castDamage!.KeyVk, 40);
                 NoteSpellKey();
                 if (maelstromCast)
-                    Logging.Write("[Grind] attempted Lightning Bolt with experimental Maelstrom five-stack candidate; cast and proc consumption unverified");
+                    Logging.Write("[Grind] attempted Lightning Bolt with experimental Maelstrom stack candidate; cast and proc consumption unverified");
                 else
                     ClickAimClassRotation.Defer(_rotationCooldowns,
                         supplemental ? rotation.SupplementalGroup : rotation.DamageGroup,

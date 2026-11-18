@@ -143,6 +143,13 @@ internal static class WowBCombatResearch
     private const int ExternalHeaderOffset = 0x5F0, ExternalHeaderSize = 24;
     internal const int ExternalCandidateStride = 0x128, ExternalMaxSlots = 24, External70888MaxSlots = 64, External70938MaxSlots = 64;
     private const ulong ExternalMaxCapacity = 32, External70888MaxCapacity = 64;
+    // Inline layout: with few auras the slots live inside the unit struct at
+    // player+0x608, the header pointer equals that address, and the capacity
+    // word is a fixed tag rather than a size. The slot stride and the +0xE8 ID
+    // position match the grown array, so the same parsing applies; only the
+    // external bounds (capacity cap, window-overlap rejection) do not.
+    private const int InlineDataPointerOffset = 0x608, InlineMaxSlots = 16;
+    private const ulong InlineCapacityTag = 0x8000000000000010UL;
 
     internal sealed class ExternalCandidateSample
     {
@@ -174,15 +181,22 @@ internal static class WowBCombatResearch
             ulong address = BitConverter.ToUInt64(header1, 0);
             ulong length = BitConverter.ToUInt64(header1, 8);
             ulong capacity = BitConverter.ToUInt64(header1, 16);
+            // Inline storage is identified by the exact pointer/capacity-tag
+            // signature, not by size. It is read from the same pointer with the
+            // same stability checks; only the external capacity cap and the
+            // window-overlap rejection are skipped, because the inline region
+            // is inside the unit window by design.
+            bool inline = address == playerUnit + (ulong)InlineDataPointerOffset &&
+                capacity == InlineCapacityTag && length >= 1 && length <= (ulong)InlineMaxSlots;
             ulong maxSlots = (ulong)(allow70938Extended ? External70938MaxSlots : allow70888Extended ? External70888MaxSlots : ExternalMaxSlots);
             ulong maxCapacity = allow70888Extended || allow70938Extended ? External70888MaxCapacity : ExternalMaxCapacity;
             reason = "candidate header outside external research bounds (length=" + length.ToString(CultureInfo.InvariantCulture) +
                 ", capacity=" + capacity.ToString(CultureInfo.InvariantCulture) + ", maximum=" + maxSlots.ToString(CultureInfo.InvariantCulture) + ")";
-            if (length == 0 || length > maxSlots || capacity == 0 || capacity > maxCapacity ||
-                length > capacity || address < 0x10000 || (address & 7) != 0) return null;
+            if (!inline && (length == 0 || length > maxSlots || capacity == 0 || capacity > maxCapacity ||
+                length > capacity || address < 0x10000 || (address & 7) != 0)) return null;
             int size = (int)length * ExternalCandidateStride;
-            if (address > UserLimit - (ulong)size ||
-                (address < playerUnit + WindowSize && address + (ulong)size > playerUnit)) return null;
+            if (!inline && (address > UserLimit - (ulong)size ||
+                (address < playerUnit + WindowSize && address + (ulong)size > playerUnit))) return null;
             reason = "candidate region not wholly committed and readable";
             if (!memory.IsCommittedReadableRange64(address, size)) return null;
             reason = "candidate data unreadable or unstable";
