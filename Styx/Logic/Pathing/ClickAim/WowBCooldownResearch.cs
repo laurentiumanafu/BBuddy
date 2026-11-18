@@ -44,6 +44,37 @@ internal static class WowBCooldownResearch
         catch { return "cooldown candidate unknown: read exception"; }
     }
 
+    // True when the spell is NOT on cooldown (ready to cast), false when it
+    // is on cooldown, null when the cooldown state cannot be read reliably.
+    // The node carries spell ID at +0x10, start at +0x1C, duration at +0x20;
+    // the spell is on cooldown while start + duration exceeds the game clock.
+    // Callers fall back to their timed estimate when this returns null.
+    internal static bool? IsSpellReady(Memory memory, WowBReader reader, int spellId)
+    {
+        ulong rva = CandidateRva(reader);
+        if (rva == 0) return null;
+        try
+        {
+            if (memory.ImageBase64 < 0x10000 || memory.ImageBase64 > UserLimit - rva - 2 * Stride) return null;
+            using var uncached = memory.TemporaryCacheState(false);
+            var watch = Stopwatch.StartNew();
+            var nodes = new List<WowBStormstrikeReset.Node>();
+            string? first = ReadPass(memory, rva, CancellationToken.None, watch, nodes, spellId);
+            // (spellId passed positionally to ReadPass)
+            string? second = first == null ? null : ReadPass(memory, rva, CancellationToken.None, watch);
+            if (first == null || second == null || first != second || watch.ElapsedMilliseconds > BudgetMs) return null;
+            if (nodes.Count == 0) return true; // no cooldown node: spell is ready
+            // If any node for this spell has start + duration in the future, it
+            // is on cooldown. The game clock is read from the latest start.
+            uint now = 0;
+            foreach (var n in nodes) if (n.Start > now) now = n.Start;
+            foreach (var n in nodes)
+                if (n.Duration != 0 && n.Start + n.Duration > now) return false;
+            return true;
+        }
+        catch { return null; }
+    }
+
     // Same bounded double-read as the recorder; an empty successful result is
     // not a readiness claim. Callers must separately validate player/session/map.
     internal static bool TryReadStormstrike(Memory memory, WowBReader reader, CancellationToken cancel, out List<WowBStormstrikeReset.Node> nodes)
@@ -66,7 +97,7 @@ internal static class WowBCooldownResearch
         catch { return false; }
     }
 
-    private static string? ReadPass(Memory memory, ulong rva, CancellationToken cancel, Stopwatch watch, List<WowBStormstrikeReset.Node>? stormNodes = null)
+    private static string? ReadPass(Memory memory, ulong rva, CancellationToken cancel, Stopwatch watch, List<WowBStormstrikeReset.Node>? stormNodes = null, int spellId = 17364)
     {
         var text = new StringBuilder();
         for (int state = 0; state < 2; state++)
@@ -87,7 +118,7 @@ internal static class WowBCooldownResearch
                     !memory.IsCommittedReadableRange64(node, NodeSize)) return null;
                 byte[]? bytes = memory.ReadBytes64(node, NodeSize);
                 if (bytes == null || bytes.Length != NodeSize) return null;
-                if (stormNodes != null && BitConverter.ToUInt32(bytes, 0x10) == 17364)
+                if (stormNodes != null && BitConverter.ToUInt32(bytes, 0x10) == spellId)
                     stormNodes.Add(new WowBStormstrikeReset.Node(state, node, bytes));
                 text.Append(" [0x").Append(node.ToString("X", CultureInfo.InvariantCulture));
                 for (int offset = 0x10; offset <= 0x40; offset += 4)

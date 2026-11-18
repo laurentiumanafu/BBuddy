@@ -6676,6 +6676,10 @@ internal static class GrindRunner
                 _stop || ClickAimAbort.Requested || RouteRunner.StopRequested || ObjectManager.Wow != memory || ObjectManager.WowB != reader ||
                 !reader.TryReadMapId(out uint finalMap) || finalMap != map || _profileSessionMap != map ||
                 _activeProfileArea != area || area.Factions != factionText || Environment.TickCount64 < _consecrationNextAttempt) return false;
+            // Cast only when Consecration is actually off cooldown (read from
+            // the game), not on a timed estimate. Unknown falls back to the
+            // retry window below.
+            if (WowBCooldownResearch.IsSpellReady(memory, reader, action.Id) == false) return false;
             // Reserve before sending: TapKey cannot prove delivery and might
             // fail after key-down. The retry window covers the 8 s cooldown.
             _consecrationNextAttempt = Environment.TickCount64 + WowBConsecrationPolicy.RetryMs;
@@ -6726,6 +6730,10 @@ internal static class GrindRunner
                 _stop || ClickAimAbort.Requested || RouteRunner.StopRequested || ObjectManager.Wow != memory || ObjectManager.WowB != reader ||
                 !reader.TryReadMapId(out uint finalMap) || finalMap != map || _profileSessionMap != map ||
                 _activeProfileArea != area || area.Factions != factionText || Environment.TickCount64 < _farseerNextAttempt) return false;
+            // Cast only when Rage of the Farseer is actually off cooldown
+            // (read from the game), not on a timed estimate. Unknown falls
+            // back to the retry window below.
+            if (WowBCooldownResearch.IsSpellReady(memory, reader, action.Id) == false) return false;
             // Reserve before sending: TapKey cannot prove delivery and might
             // fail after key-down. The retry window covers the 180 s cooldown.
             _farseerNextAttempt = Environment.TickCount64 + WowBFarseerPolicy.RetryMs;

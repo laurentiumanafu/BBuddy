@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using GreenMagic;
 using Styx.Helpers;
@@ -244,7 +244,7 @@ internal sealed class ClickAimBuffController
         if (_reportedAuraState.TryGetValue(action.Id, out string? old) && old == state) return;
         _reportedAuraState[action.Id] = state;
         string timing = remaining.HasValue && remaining.Value >= 0 ? "; approximately " + (remaining.Value / 1000) + " seconds remain" : "";
-        Logging.Write("[Buff] 70707 experimental Seal of the Crusader candidate: " + state + timing +
+        Logging.Write("[Buff] 70707 experimental " + action.Name + " candidate: " + state + timing +
             " (rank " + WowBSealOfCommand.ManagedRank(action.Id) + "; not verified)");
     }
 
