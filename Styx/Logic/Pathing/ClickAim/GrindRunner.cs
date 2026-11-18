@@ -6676,7 +6676,7 @@ internal static class GrindRunner
                 !reader.TryReadMapId(out uint finalMap) || finalMap != map || _profileSessionMap != map ||
                 _activeProfileArea != area || area.Factions != factionText || Environment.TickCount64 < _consecrationNextAttempt) return false;
             // Reserve before sending: TapKey cannot prove delivery and might
-            // fail after key-down. The retry window covers the 10 s cooldown.
+            // fail after key-down. The retry window covers the 8 s cooldown.
             _consecrationNextAttempt = Environment.TickCount64 + WowBConsecrationPolicy.RetryMs;
             ClickAimInput.TapKey(hwnd, action.KeyVk, 40);
             Logging.Write("[Grind] attempted " + action.Name + " (slot " + action.Slot +
@@ -7672,7 +7672,7 @@ internal static class GrindRunner
 
             // Consecration mirrors Stoneclaw for Paladins: cast in combat only
             // when two Grind-profile-faction NPCs are close, respecting its
-            // 10 s cooldown via the retry window.
+            // 8 s cooldown via the retry window.
             if (reader.Uses70862Features && rotation.Class == ClickAimRotationClass.Paladin &&
                 unchecked(Environment.TickCount - lastConsecrationCheckMs) >= 1000 &&
                 (lastCastMs == 0 || unchecked(Environment.TickCount - lastCastMs) >= ClickAimCombat.CastSettleMs) &&

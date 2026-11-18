@@ -13,10 +13,10 @@ namespace Styx.Logic.Pathing;
 internal static class WowBConsecrationPolicy
 {
     internal const double RadiusYd = 10.0;
-    // Consecration's cooldown is 10 s; the retry reserves that window so a
+    // Consecration's cooldown is 8 s; the retry reserves that window so a
     // failed or on-cooldown press is not spammed. Slightly above the cooldown
     // so the next attempt lands after the spell is usable again.
-    internal const long RetryMs = 10_500;
+    internal const long RetryMs = 8_500;
     // Public Forever rank costs; candidate power and actual costs are unverified.
     internal static uint ManaEstimate(int id) => id switch
     {

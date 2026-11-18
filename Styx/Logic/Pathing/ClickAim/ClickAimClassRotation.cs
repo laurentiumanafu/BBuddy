@@ -88,6 +88,7 @@ internal static class ClickAimClassRotation
     // A separate experimental transition check may allow an early retry, but
     // is not a complete readable per-spell cooldown.
     internal const int StormstrikeId = 17364, StormstrikeInterval70938Ms = 8000;
+    internal const int HolyStrikeId = 1866;
     internal const uint StormstrikePowerFloor70938 = 125;
     internal const string StormstrikeCooldownGroup70938 = "Stormstrike-70938";
 
@@ -121,7 +122,9 @@ internal static class ClickAimClassRotation
         if (plan.Melee != null && (plan.Class == ClickAimRotationClass.Hunter || plan.Class == ClickAimRotationClass.Paladin))
         {
             plan.MeleeGroup = ClickAimCombat.NameOf(plan.Melee.Id);
-            plan.MeleeIntervalMs = plan.Class == ClickAimRotationClass.Hunter ? 9000 : 6000;
+            // Holy Strike has a 10 s cooldown; Crusader Strike has 6 s.
+            plan.MeleeIntervalMs = plan.Class == ClickAimRotationClass.Hunter ? 9000 :
+                plan.Melee.Id == HolyStrikeId ? 10000 : 6000;
         }
         plan.Dot = Find(bar, def.Dot, ClickAimSpellRole.Dot);
         plan.Heal = Find(bar, def.Heal, ClickAimSpellRole.Heal);
