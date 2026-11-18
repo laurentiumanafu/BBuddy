@@ -327,16 +327,30 @@ public static class ClickAimPilot
         {
             // No mesh-validated escape segment: the player may be off-mesh or
             // the mesh broken here, so every segment fails validation. Rather
-            // than stop, fall back to the first untried escape direction
-            // unvalidated, with a jump -- the classic way to clear a lip. This
-            // is only used when there is no validated option at all.
-            if (haveUntried)
+            // than stop, fall back to an unvalidated jump -- the classic way to
+            // clear a lip. This is only used when there is no validated option.
+            // The first unstuck attempt is a forward jump step toward the goal:
+            // most stuck characters clear with a simple forward hop. Later
+            // attempts use the sidestep directions (side, left, right, back).
+            if (attempt == 1)
+            {
+                double fdx = goal.X - px, fdy = goal.Y - py;
+                double flen = Math.Sqrt(fdx * fdx + fdy * fdy);
+                if (double.IsFinite(flen) && flen > 0.5)
+                {
+                    double step = Math.Min(7.0, flen);
+                    to = new WoWPoint((float)(px + fdx / flen * step), (float)(py + fdy / flen * step), (float)z);
+                    found = true;
+                    validated = false;
+                }
+            }
+            if (!found && haveUntried)
             {
                 to = firstUntried;
                 found = true;
                 validated = false;
             }
-            else
+            if (!found)
             {
                 report = "sidestep " + attempt + " withheld: none of " + checkedCount +
                     " bounded escape segments was validated on the current mesh";
