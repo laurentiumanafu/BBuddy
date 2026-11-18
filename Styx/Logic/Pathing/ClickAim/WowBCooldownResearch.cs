@@ -14,10 +14,12 @@ namespace Styx.Logic.Pathing;
 // Stormstrike transition and falls back to its estimate on uncertainty.
 internal static class WowBCooldownResearch
 {
-    // 70938 cooldown candidate head RVA. The 70959 equivalent has not been
-    // determined from the 70959 image; until it is, 70959 reports unknown.
+    // Cooldown candidate state-array RVA per build. 70938: 0x48EC7E0.
+    // 70959: 0x47E6790 (indexed state array, index * 0xB8; the list-traversal
+    // code is anchored at 0x1E56C94 in the 70959 image). Cross-verified by
+    // the 70959 port markers; see hunt/WOW_70959_PORT.md.
     private const ulong CandidateRva70938 = 0x48EC7E0;
-    private const ulong CandidateRva70959 = 0; // TODO: determine from 70959 image
+    private const ulong CandidateRva70959 = 0x47E6790;
     private const ulong UserLimit = 0x00007FFFFFFFFFFFUL;
     private const int Stride = 0xB8, NodeSize = 0x44, MaxNodes = 64, BudgetMs = 100;
 
