@@ -7787,6 +7787,7 @@ internal static class GrindRunner
             if (ClickAimSettings.UseBuffs && ClickAimSettings.UseBuffsInCombat && closingShockTarget)
                 Buffs.ReportMacroState("optional buffs deferred while closing on damaged Shock/Attack target");
             if (!closingShockTarget && ClickAimSettings.UseBuffsInCombat && unchecked(Environment.TickCount - lastCombatBuffCheckMs) >= 1000 &&
+                GlobalCooldownClear() &&
                 (lastCastMs == 0 || unchecked(Environment.TickCount - lastCastMs) >= ClickAimCombat.CastSettleMs))
             {
                 lastCombatBuffCheckMs = Environment.TickCount;
@@ -8465,7 +8466,7 @@ internal static class GrindRunner
                 }
                 ClickAimInput.TapKey(hwnd, meleeHit.KeyVk, 40);
                 NoteSpellKey();
-                if (stormstrike70938) lastCastMs = Environment.TickCount;
+                lastCastMs = Environment.TickCount;
                 ClickAimClassRotation.Defer(_rotationCooldowns, rotation.MeleeGroup, rotation.MeleeIntervalMs, Environment.TickCount);
                 if (stormstrike70938)
                 {
