@@ -37,8 +37,9 @@ def read(path):
             previous = key
 
     with Path(path).open(encoding='utf-8-sig') as stream:
-        if not stream.readline().startswith('70938 COMBAT RESEARCH v1:'):
-            raise ValueError('not a 70938 combat research trace')
+        header = stream.readline()
+        if not (header.startswith('70938 COMBAT RESEARCH v1:') or header.startswith('70959 COMBAT RESEARCH v1:')):
+            raise ValueError('not a 70938/70959 combat research trace')
         for line in stream:
             line = line.rstrip('\r\n')
             m = SAMPLE.match(line)

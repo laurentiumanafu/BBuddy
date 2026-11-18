@@ -5,6 +5,7 @@ using System.Globalization;
 using System.Text;
 using System.Threading;
 using GreenMagic;
+using Styx.WoWInternals;
 
 namespace Styx.Logic.Pathing;
 
@@ -13,18 +14,27 @@ namespace Styx.Logic.Pathing;
 // Stormstrike transition and falls back to its estimate on uncertainty.
 internal static class WowBCooldownResearch
 {
-    private const ulong CandidateRva = 0x48EC7E0, UserLimit = 0x00007FFFFFFFFFFFUL;
+    // 70938 cooldown candidate head RVA. The 70959 equivalent has not been
+    // determined from the 70959 image; until it is, 70959 reports unknown.
+    private const ulong CandidateRva70938 = 0x48EC7E0;
+    private const ulong CandidateRva70959 = 0; // TODO: determine from 70959 image
+    private const ulong UserLimit = 0x00007FFFFFFFFFFFUL;
     private const int Stride = 0xB8, NodeSize = 0x44, MaxNodes = 64, BudgetMs = 100;
 
-    internal static string Capture(Memory memory, CancellationToken cancel)
+    private static ulong CandidateRva(WowBReader reader)
+        => reader.IsExperimental70959 ? CandidateRva70959 : CandidateRva70938;
+
+    internal static string Capture(Memory memory, WowBReader reader, CancellationToken cancel)
     {
+        ulong rva = CandidateRva(reader);
+        if (rva == 0) return "cooldown candidate unknown: 70959 RVA not yet determined";
         try
         {
             var watch = Stopwatch.StartNew();
-            if (memory.ImageBase64 < 0x10000 || memory.ImageBase64 > UserLimit - CandidateRva - 2 * Stride)
+            if (memory.ImageBase64 < 0x10000 || memory.ImageBase64 > UserLimit - rva - 2 * Stride)
                 return "cooldown candidate unknown: invalid image base";
-            string? first = ReadPass(memory, cancel, watch);
-            string? second = first == null ? null : ReadPass(memory, cancel, watch);
+            string? first = ReadPass(memory, rva, cancel, watch);
+            string? second = first == null ? null : ReadPass(memory, rva, cancel, watch);
             if (first == null || second == null || first != second)
                 return "cooldown candidate unknown: unreadable, changing, incomplete, cancelled or time limit";
             return "cooldown candidate stable (research only; not readiness): " + first;
@@ -34,17 +44,19 @@ internal static class WowBCooldownResearch
 
     // Same bounded double-read as the recorder; an empty successful result is
     // not a readiness claim. Callers must separately validate player/session/map.
-    internal static bool TryReadStormstrike(Memory memory, CancellationToken cancel, out List<WowBStormstrikeReset.Node> nodes)
+    internal static bool TryReadStormstrike(Memory memory, WowBReader reader, CancellationToken cancel, out List<WowBStormstrikeReset.Node> nodes)
     {
         nodes = new List<WowBStormstrikeReset.Node>();
+        ulong rva = CandidateRva(reader);
+        if (rva == 0) return false;
         try
         {
-            if (memory.ImageBase64 < 0x10000 || memory.ImageBase64 > UserLimit - CandidateRva - 2 * Stride) return false;
+            if (memory.ImageBase64 < 0x10000 || memory.ImageBase64 > UserLimit - rva - 2 * Stride) return false;
             using var uncached = memory.TemporaryCacheState(false);
             var watch = Stopwatch.StartNew();
             var firstNodes = new List<WowBStormstrikeReset.Node>();
-            string? first = ReadPass(memory, cancel, watch, firstNodes);
-            string? second = first == null ? null : ReadPass(memory, cancel, watch);
+            string? first = ReadPass(memory, rva, cancel, watch, firstNodes);
+            string? second = first == null ? null : ReadPass(memory, rva, cancel, watch);
             if (first == null || second == null || first != second || cancel.IsCancellationRequested || watch.ElapsedMilliseconds > BudgetMs) return false;
             nodes = firstNodes;
             return true;
@@ -52,13 +64,13 @@ internal static class WowBCooldownResearch
         catch { return false; }
     }
 
-    private static string? ReadPass(Memory memory, CancellationToken cancel, Stopwatch watch, List<WowBStormstrikeReset.Node>? stormNodes = null)
+    private static string? ReadPass(Memory memory, ulong rva, CancellationToken cancel, Stopwatch watch, List<WowBStormstrikeReset.Node>? stormNodes = null)
     {
         var text = new StringBuilder();
         for (int state = 0; state < 2; state++)
         {
             if (cancel.IsCancellationRequested || watch.ElapsedMilliseconds > BudgetMs) return null;
-            ulong headAddress = memory.ImageBase64 + CandidateRva + (ulong)(state * Stride + 0x10);
+            ulong headAddress = memory.ImageBase64 + rva + (ulong)(state * Stride + 0x10);
             if (!memory.IsCommittedReadableRange64(headAddress, 8)) return null;
             byte[]? head = memory.ReadBytes64(headAddress, 8);
             if (head == null || head.Length != 8) return null;

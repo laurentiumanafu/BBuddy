@@ -6795,7 +6795,7 @@ internal static class GrindRunner
                 !reader.ExperimentalGrindActive || ObjectManager.Wow != memory || ObjectManager.WowB != reader ||
                 !reader.TryReadMapId(out uint beforeMap) || beforeMap != map ||
                 !WowBGrindFactions.TraceIdentity70707(memory, reader, player, true) ||
-                !WowBCooldownResearch.TryReadStormstrike(memory, CancellationToken.None, out nodes) ||
+                !WowBCooldownResearch.TryReadStormstrike(memory, reader, CancellationToken.None, out nodes) ||
                 !WowBGrindFactions.TraceIdentity70707(memory, reader, player, true) ||
                 !reader.TryReadMapId(out uint afterMap) || afterMap != map ||
                 _stop || ClickAimAbort.Requested || RouteRunner.StopRequested || !reader.ExperimentalGrindActive ||

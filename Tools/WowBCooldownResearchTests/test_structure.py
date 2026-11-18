@@ -12,7 +12,7 @@ class Structure(unittest.TestCase):
   ui = (R/'UI/ClickAimCombatSettingsWindow.xaml.cs').read_text()
   self.assertIn('includeCooldownCandidate: includeCooldownCandidate', ui)
   rec = (R/'Styx/Logic/Pathing/ClickAim/WowBCombatResearch.cs').read_text()
-  for s in ['bool includeCooldownCandidate = false', '!reader.Uses70938Features', 'WowBCooldownResearch.Capture(memory, cancel)', 'StableWithBar(memory, reader, player, target']:
+  for s in ['bool includeCooldownCandidate = false', '!reader.Uses70938Features', 'WowBCooldownResearch.Capture(memory, reader, cancel)', 'StableWithBar(memory, reader, player, target']:
    self.assertIn(s, rec)
  def test_candidate_safety(self):
   text=(R/'Styx/Logic/Pathing/ClickAim/WowBCooldownResearch.cs').read_text()

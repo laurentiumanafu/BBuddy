@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Diagnostics;
 using System.Collections.Generic;
 using System.Globalization;
@@ -291,11 +291,11 @@ internal static class WowBCombatResearch
                 output.WriteLine("Player and optional selected NPC: unit+0x0000..0x27FF; 256-byte chunks; baseline hex bytes or 32-bit LE changes; unreadable != zero.");
                 output.WriteLine("Reads are non-atomic; game events, effects and other causes can change fields. No keyboard, mouse, Lua or game writes were used.");
                 if (reader.Uses70938Features)
-                    output.WriteLine("70938 supplied-offset candidates are read from the pool-derived player unit, not the supplied getter; their base equivalence, build and semantics are unverified. Health sanity/reread is not proof of getter equivalence. Qwords are not full GUID128 values. No gameplay decisions use these observations.");
+                    output.WriteLine(reader.ExperimentalBuildNumber + " supplied-offset candidates are read from the pool-derived player unit, not the supplied getter; their base equivalence, build and semantics are unverified. Health sanity/reread is not proof of getter equivalence. Qwords are not full GUID128 values. No gameplay decisions use these observations.");
                 if (includeExternalArray)
                     output.WriteLine("External candidate enabled: bounded read-only pointer at player+0x5F0; length, capacity and stride are unverified. Raw data may be sensitive.");
                 if (includeCooldownCandidate)
-                    output.WriteLine("Cooldown candidate enabled: two hypothesized 70938 lists, bounded and double-read; not a readiness or complete cooldown result. Raw data may be sensitive.");
+                    output.WriteLine("Cooldown candidate enabled: two hypothesized " + reader.ExperimentalBuildNumber + " lists, bounded and double-read; not a readiness or complete cooldown result. Raw data may be sensitive.");
                 foreach (var slot in bar)
                     output.WriteLine("bar slot=" + slot.Index.ToString(CultureInfo.InvariantCulture) + " raw=0x" + slot.Raw.ToString("X16", CultureInfo.InvariantCulture));
                 var watch = Stopwatch.StartNew();
@@ -316,7 +316,7 @@ internal static class WowBCombatResearch
                     ExternalCandidateSample? external = includeExternalArray && !cancel.IsCancellationRequested
                         ? ReadExternalCandidate(memory, player.UnitAddress, out externalReason, reader.Uses70888Features, reader.Uses70938Features) : null;
                     string? cooldown = includeCooldownCandidate && !cancel.IsCancellationRequested
-                        ? WowBCooldownResearch.Capture(memory, cancel) : null;
+                        ? WowBCooldownResearch.Capture(memory, reader, cancel) : null;
                     if (cancel.IsCancellationRequested) { reason = "cancelled during read; last sample discarded"; break; }
                     if (!StableWithBar(memory, reader, player, target, snapshot.TargetGuid, bar, out why, playerOnly))
                     { reason = "state changed during read (" + why + "); last sample discarded"; break; }

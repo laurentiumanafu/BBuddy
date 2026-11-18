@@ -37,10 +37,10 @@ def read_trace(path):
             max_slots, max_capacity = MAX_SLOTS, 32
         elif header.startswith('70888 COMBAT RESEARCH v1:'):
             max_slots, max_capacity = MAX_SLOTS_70888, 36
-        elif header.startswith('70938 COMBAT RESEARCH v1:'):
+        elif header.startswith('70938 COMBAT RESEARCH v1:') or header.startswith('70959 COMBAT RESEARCH v1:'):
             max_slots, max_capacity = MAX_SLOTS_70938, 36
         else:
-            raise ValueError('not a 70862/70888/70938 Combat Research v1 trace')
+            raise ValueError('not a 70862/70888/70938/70959 Combat Research v1 trace')
         for line in f:
             line = line.rstrip('\r\n')
             m = SAMPLE.match(line)

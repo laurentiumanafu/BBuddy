@@ -18,7 +18,7 @@ def read_trace(path, spell_id=None):
     status = "no end status"
     count = 0
     with Path(path).open(encoding="utf-8-sig") as stream:
-        if not re.match(r"^(70707|70755|70790|70862|70888|70938) COMBAT RESEARCH v1:", stream.readline()):
+        if not re.match(r"^(70707|70755|70790|70862|70888|70938|70959) COMBAT RESEARCH v1:", stream.readline()):
             raise ValueError("not a supported CombatResearch v1 file")
         for line in stream:
             line = line.rstrip("\r\n")
