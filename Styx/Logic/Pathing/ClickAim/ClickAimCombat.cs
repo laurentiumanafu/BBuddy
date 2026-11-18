@@ -306,6 +306,11 @@ internal static class ClickAimCombat
         { 21082, "Seal of the Crusader" }, { 20162, "Seal of the Crusader" },
         { 20305, "Seal of the Crusader" }, { 20306, "Seal of the Crusader" },
         { 20307, "Seal of the Crusader" }, { 20308, "Seal of the Crusader" },
+        // Seal of Command is managed exactly like Seal of the Crusader.
+        { 20375, "Seal of Command" }, { 20376, "Seal of Command" },
+        { 20377, "Seal of Command" }, { 20378, "Seal of Command" },
+        { 20379, "Seal of Command" }, { 20380, "Seal of Command" },
+        { 20381, "Seal of Command" }, { 20382, "Seal of Command" },
         { 20271, "Judgement" }, { 853, "Hammer of Justice" }, { 465, "Devotion Aura" },
         { 35395, "Crusader Strike" }, { 1866, "Holy Strike" }, { 26573, "Consecration" },
 
@@ -420,6 +425,7 @@ internal static class ClickAimCombat
         { "Rage of the Farseer", ClickAimSpellRole.Buff },
         { "Devotion Aura", ClickAimSpellRole.Buff }, { "Seal of Righteousness", ClickAimSpellRole.Buff },
         { "Seal of the Crusader", ClickAimSpellRole.Buff },
+        { "Seal of Command", ClickAimSpellRole.Buff },
         { "Aspect of the Hawk", ClickAimSpellRole.Buff }, { "Endurance", ClickAimSpellRole.Buff },
         { "Nature Resistance", ClickAimSpellRole.Buff },
 
