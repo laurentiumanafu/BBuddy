@@ -4020,32 +4020,43 @@ internal static class GrindRunner
         var previousInterrupt = RouteRunner.ShouldInterrupt;
         bool previousPoll = RouteRunner.PollInterruptDuringWalk;
         bool previousRequireMesh = RouteRunner.RequireMeshDuringSession;
-        RouteRunner.ShouldInterrupt = () => !Safe();
-        RouteRunner.PollInterruptDuringWalk = true;
-        RouteRunner.RequireMeshDuringSession = true;
+        // A failed route is usually a bad path or a stuck spot, not a reason
+        // to stop: re-plan from the current position and try again, the same
+        // thing a restart does. Only stop after the retries are spent.
         bool arrived = false;
-        try { arrived = RouteRunner.RunWithinSession(mover, new List<RoutePoint> { hotspot }, 1); }
-        catch (Exception ex) { Logging.Write("[Grind] profile return mesh route failed: " + ex.Message); }
-        finally
+        for (int attempt = 0; attempt < 3 && !arrived; attempt++)
         {
-            RouteRunner.ShouldInterrupt = previousInterrupt;
-            RouteRunner.PollInterruptDuringWalk = previousPoll;
-            RouteRunner.RequireMeshDuringSession = previousRequireMesh;
-            ClickAimKeySteer.ReleaseHeld();
-        }
-        if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested) return false;
-        if (RouteRunner.LastRunInterrupted || !Safe())
-        {
-            _vendorRetryAt = unchecked(Environment.TickCount + 500);
-            Logging.Write("[Grind] profile return interrupted; it remains pending without repeating vendor clicks.");
-            return false;
+            if (attempt > 0)
+            {
+                if (!Safe()) break;
+                Logging.Write("[Grind] profile return retry " + (attempt + 1) + "/3; re-planning the route to the hotspot.");
+            }
+            RouteRunner.ShouldInterrupt = () => !Safe();
+            RouteRunner.PollInterruptDuringWalk = true;
+            RouteRunner.RequireMeshDuringSession = true;
+            try { arrived = RouteRunner.RunWithinSession(mover, new List<RoutePoint> { hotspot }, 1); }
+            catch (Exception ex) { Logging.Write("[Grind] profile return mesh route failed: " + ex.Message); }
+            finally
+            {
+                RouteRunner.ShouldInterrupt = previousInterrupt;
+                RouteRunner.PollInterruptDuringWalk = previousPoll;
+                RouteRunner.RequireMeshDuringSession = previousRequireMesh;
+                ClickAimKeySteer.ReleaseHeld();
+            }
+            if (_stop || ClickAimAbort.Requested || RouteRunner.StopRequested) return false;
+            if (RouteRunner.LastRunInterrupted || !Safe())
+            {
+                _vendorRetryAt = unchecked(Environment.TickCount + 500);
+                Logging.Write("[Grind] profile return interrupted; it remains pending without repeating vendor clicks.");
+                return false;
+            }
         }
         if (!arrived || !reader.TryRead70888RecoveryPlayer(out WowBObservedUnit finalPlayer, out uint finalHp, out uint finalMax) ||
             finalPlayer.Guid != playerGuid || finalHp == 0 || finalMax == 0 || finalHp > finalMax ||
             !double.IsFinite(finalPlayer.Location.X) || !double.IsFinite(finalPlayer.Location.Y) || !double.IsFinite(finalPlayer.Location.Z) ||
             ClickAimMath.Len(finalPlayer.Location.X - hotspot.X, finalPlayer.Location.Y - hotspot.Y) > 3.0 ||
             Math.Abs(finalPlayer.Location.Z - hotspot.Z) > 5.0 || !Safe())
-        { Logging.Write("[Grind] no complete mesh route or confirmed arrival at the profile hotspot; stopping without repeating the sale."); Stop(); return false; }
+        { Logging.Write("[Grind] no complete mesh route or confirmed arrival at the profile hotspot after retries; stopping without repeating the sale."); Stop(); return false; }
         _vendorReturnHotspot = null; _vendorReturnReader = null; _vendorReturnMemory = null; _vendorReturnPlayer = default;
         ClearRoamMailReturn();
         _townTransit = false; _townReader = null; _townMemory = null; _townPlayer = default;
