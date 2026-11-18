@@ -290,6 +290,9 @@ internal static class ClickAimCombat
         { 5730, "Stoneclaw Totem" }, { 6390, "Stoneclaw Totem" }, { 6391, "Stoneclaw Totem" },
         { 6392, "Stoneclaw Totem" }, { 10427, "Stoneclaw Totem" }, { 10428, "Stoneclaw Totem" },
         { 17364, "Stormstrike" },
+        // Public Forever custom Shaman buff; cast on the Stoneclaw proximity
+        // trigger, not by the rotation or the buff controller.
+        { 424824, "Rage of the Farseer" },
 
         /* --- Paladin --- */
         { 635, "Holy Light" }, { 639, "Holy Light" }, { 647, "Holy Light" },
@@ -414,6 +417,7 @@ internal static class ClickAimCombat
         { "Rockbiter Weapon", ClickAimSpellRole.Buff }, { "Battle Shout", ClickAimSpellRole.Buff },
         { "Strength of Earth Totem", ClickAimSpellRole.Buff }, { "Healing Stream Totem", ClickAimSpellRole.Buff }, { "Mana Spring Totem", ClickAimSpellRole.Buff },
         { "Windfury Totem", ClickAimSpellRole.Buff },
+        { "Rage of the Farseer", ClickAimSpellRole.Buff },
         { "Devotion Aura", ClickAimSpellRole.Buff }, { "Seal of Righteousness", ClickAimSpellRole.Buff },
         { "Seal of the Crusader", ClickAimSpellRole.Buff },
         { "Aspect of the Hawk", ClickAimSpellRole.Buff }, { "Endurance", ClickAimSpellRole.Buff },

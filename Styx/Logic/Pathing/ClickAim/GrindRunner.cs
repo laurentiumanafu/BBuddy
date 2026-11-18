@@ -1450,7 +1450,7 @@ internal static class GrindRunner
         _dotUntil = 0;
         _manaPeak = 0;
         _healthPeak = 0;
-        Buffs.Reset(); _stoneclawNextAttempt = 0; _consecrationNextAttempt = 0;
+        Buffs.Reset(); _stoneclawNextAttempt = 0; _consecrationNextAttempt = 0; _farseerNextAttempt = 0;
         _healCostGuess = 0;
         _healCostSpellId = 0;
         _castCosts.Clear();
@@ -5296,7 +5296,7 @@ internal static class GrindRunner
         _remoteDefenceAttempted = false; _nearDefenceAttempted = false; _nearDefenceExhausted = false; _remoteDefenceCursor = 0; _nearDefenceCursor = 0; _preferredDefenceCursor = 0; _damagedVoluntaryTarget = default;
         _gaveUpAt = 0;
         ClickAimSettings.Load();
-        Buffs.Reset(); _stoneclawNextAttempt = 0; _consecrationNextAttempt = 0;
+        Buffs.Reset(); _stoneclawNextAttempt = 0; _consecrationNextAttempt = 0; _farseerNextAttempt = 0;
         ClickAimBuffController.ReportMacroSettings();
         _manaPeak = 0;
         _healthPeak = 0;
@@ -6552,6 +6552,7 @@ internal static class GrindRunner
     // Shared across successive fights in the session, not a client cooldown.
     private static long _stoneclawNextAttempt;
     private static long _consecrationNextAttempt;
+    private static long _farseerNextAttempt;
 
     // Judgement requires an active Seal buff. The aura read is cached briefly
     // so the per-iteration canCast check does not re-read player memory on
@@ -6690,6 +6691,56 @@ internal static class GrindRunner
     {
         foreach (ClickAimAction current in ClickAimCombat.ReadBar(reader))
             if (WowBConsecrationPolicy.Eligible(current) && current.Slot == action.Slot && current.Raw == action.Raw &&
+                current.Id == action.Id && current.KeyVk == action.KeyVk) return true;
+        return false;
+    }
+
+    // Rage of the Farseer mirrors Stoneclaw for Shamans: cast in combat only
+    // when two NPCs from the active Grind profile factions are close to the
+    // character. The 180 s spell cooldown is respected via the retry window.
+    // Never changes selection or runs during travel.
+    private static bool TryFarseer(IntPtr hwnd, WowBReader reader, GreenMagic.Memory memory,
+        WowBObservedUnit expectedPlayer, WowBObservedUnit expectedTarget, Func<bool> targetSafe)
+    {
+        if (!reader.Uses70862Features || _stop || ClickAimAbort.Requested || RouteRunner.StopRequested ||
+            Environment.TickCount64 < _farseerNextAttempt) return false;
+        ProfileGrindArea? area = _activeProfileArea;
+        if (area == null || !GrindFactionRules.TryCreate(GrindFactionMode.Allow, area.Factions, "",
+                out GrindFactionRules factions, out _)) return false;
+        string factionText = area.Factions;
+        try
+        {
+            using var uncached = memory.TemporaryCacheState(false);
+            ClickAimAction? action = null;
+            foreach (ClickAimAction candidate in ClickAimCombat.ReadBar(reader))
+                if (WowBFarseerPolicy.Eligible(candidate)) { action = candidate; break; }
+            if (action == null || !reader.TryReadMapId(out uint map) || map == uint.MaxValue || map != _profileSessionMap ||
+                !StoneclawSnapshot(reader, memory, hwnd, expectedPlayer, expectedTarget, map,
+                    WowBFarseerPolicy.ManaEstimate(action.Id), targetSafe, out WowBWorldSnapshot? first, out WowBObservedUnit player) ||
+                first == null || !WowBFarseerPolicy.FindPair(reader, first, player, factions, out WowBObservedUnit a, out WowBObservedUnit b)) return false;
+            ClickAimKeySteer.ReleaseHeld(); // do not walk past the target during the cast wait
+            if (!StoneclawSnapshot(reader, memory, hwnd, expectedPlayer, expectedTarget, map,
+                    WowBFarseerPolicy.ManaEstimate(action.Id), targetSafe, out WowBWorldSnapshot? second, out player) ||
+                second == null || !WowBFarseerPolicy.SamePairStillNear(reader, second, player, a, b, factions) ||
+                !FarseerSlotCurrent(reader, action) || !targetSafe() || !TryReadGatherCombat(out bool fighting) || !fighting ||
+                _stop || ClickAimAbort.Requested || RouteRunner.StopRequested || ObjectManager.Wow != memory || ObjectManager.WowB != reader ||
+                !reader.TryReadMapId(out uint finalMap) || finalMap != map || _profileSessionMap != map ||
+                _activeProfileArea != area || area.Factions != factionText || Environment.TickCount64 < _farseerNextAttempt) return false;
+            // Reserve before sending: TapKey cannot prove delivery and might
+            // fail after key-down. The retry window covers the 180 s cooldown.
+            _farseerNextAttempt = Environment.TickCount64 + WowBFarseerPolicy.RetryMs;
+            ClickAimInput.TapKey(hwnd, action.KeyVk, 40);
+            Logging.Write("[Grind] attempted " + action.Name + " (slot " + action.Slot +
+                ") because two NPC candidates less than 10 yd away matched active Grind profile faction keys; attacker identity, hostility and cast success are unverified");
+            return true;
+        }
+        catch { return false; }
+    }
+
+    private static bool FarseerSlotCurrent(WowBReader reader, ClickAimAction action)
+    {
+        foreach (ClickAimAction current in ClickAimCombat.ReadBar(reader))
+            if (WowBFarseerPolicy.Eligible(current) && current.Slot == action.Slot && current.Raw == action.Raw &&
                 current.Id == action.Id && current.KeyVk == action.KeyVk) return true;
         return false;
     }
@@ -6913,6 +6964,7 @@ internal static class GrindRunner
         int lastCombatBuffCheckMs = unchecked(started - 1000);
         int lastStoneclawCheckMs = unchecked(started - 1000);
         int lastConsecrationCheckMs = unchecked(started - 1000);
+        int lastFarseerCheckMs = unchecked(started - 1000);
         int quietRounds = 0;
         int faceFailures = 0;
         bool meleeOnce = false;
@@ -7680,6 +7732,27 @@ internal static class GrindRunner
             {
                 lastConsecrationCheckMs = Environment.TickCount;
                 if (TryConsecration(hwnd, reader, fightMemory, me, expectedPull,
+                    () => FightAttackInputAllowed(reader, fightMemory, defenceTarget, expectedPull,
+                        !defenceOnly || defenceFactionFilter, true, !defenceOnly)))
+                {
+                    presses++; _presses++;
+                    lastCastMs = Environment.TickCount;
+                    NoteSpellKey();
+                    if (ClickAimAbort.Wait(ClickAimCombat.CastSettleMs)) return "stopped";
+                    continue;
+                }
+            }
+
+            // Rage of the Farseer mirrors Stoneclaw for Shamans: cast in combat
+            // only when two Grind-profile-faction NPCs are close, respecting
+            // its 180 s cooldown via the retry window.
+            if (reader.Uses70862Features && rotation.Class == ClickAimRotationClass.Shaman &&
+                unchecked(Environment.TickCount - lastFarseerCheckMs) >= 1000 &&
+                (lastCastMs == 0 || unchecked(Environment.TickCount - lastCastMs) >= ClickAimCombat.CastSettleMs) &&
+                (lastHealMs == 0 || unchecked(Environment.TickCount - lastHealMs) >= ClickAimCombat.CastSettleMs))
+            {
+                lastFarseerCheckMs = Environment.TickCount;
+                if (TryFarseer(hwnd, reader, fightMemory, me, expectedPull,
                     () => FightAttackInputAllowed(reader, fightMemory, defenceTarget, expectedPull,
                         !defenceOnly || defenceFactionFilter, true, !defenceOnly)))
                 {
