@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Threading;
@@ -7896,7 +7896,8 @@ internal static class GrindRunner
                 ClickAimInput.TapKey(hwnd, castDamage!.KeyVk, 40);
                 NoteSpellKey();
                 if (maelstromCast)
-                    Logging.Write("[Grind] attempted Lightning Bolt with experimental Maelstrom stack candidate; cast and proc consumption unverified");
+                    Logging.Write("[Grind] attempted Lightning Bolt with experimental Maelstrom stack candidate; cast and proc consumption unverified; candidate saw " +
+                        WowBMaelstromWeapon.Diagnose(fightMemory, reader, maelstromPlayer));
                 else
                     ClickAimClassRotation.Defer(_rotationCooldowns,
                         supplemental ? rotation.SupplementalGroup : rotation.DamageGroup,

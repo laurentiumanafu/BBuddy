@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using GreenMagic;
 using Styx.WoWInternals;
@@ -78,7 +78,7 @@ internal static class WowBMaelstromWeapon
             var ids = new HashSet<uint>();
             uint stack = 0, duration = 0, expiry = 0;
             bool found = false;
-            int duplicates = 0;
+            int duplicates = 0, slotIndex = -1;
             for (int i = 0; i + stride <= sample.Bytes.Length; i += stride)
             {
                 uint id = BitConverter.ToUInt32(sample.Bytes, i + IdOffset);
@@ -87,6 +87,7 @@ internal static class WowBMaelstromWeapon
                 if (id == CandidateId)
                 {
                     found = true;
+                    slotIndex = i / stride;
                     stack = BitConverter.ToUInt32(sample.Bytes, i + StackOffset);
                     duration = BitConverter.ToUInt32(sample.Bytes, i + DurationOffset);
                     expiry = BitConverter.ToUInt32(sample.Bytes, i + ExpiryOffset);
@@ -96,7 +97,7 @@ internal static class WowBMaelstromWeapon
             int remaining = unchecked((int)(expiry - now));
             return "mode=" + (inline ? "inline" : "external") + " slots=" + (sample.Bytes.Length / stride) +
                 " count=" + count + " uniqueIds=" + ids.Count + " duplicates=" + duplicates +
-                " maelstromFound=" + found + " stack=" + stack + " duration=" + duration +
+                " maelstromFound=" + found + " slot=" + slotIndex + " stack=" + stack + " duration=" + duration +
                 " remaining=" + remaining + " ready=" + IsReady(sample.Bytes, count, now);
         }
         catch { return "diagnostic read failed"; }
