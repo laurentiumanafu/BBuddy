@@ -17,6 +17,12 @@ internal static class WowBMaelstromWeapon
     // Lightning Bolt is spent at four stacks as well as five: the proc is
     // consumed either way, and waiting for the fifth stack wastes the window.
     internal const uint MinimumStacks = 4;
+    // Maelstrom Weapon caps at five stacks. The stack word is only a count
+    // for this aura; for other auras the same offset holds an unrelated float
+    // (a large value), and a torn read can surface that float here too. A
+    // value above the cap is therefore not a stack count and must not fire:
+    // without this bound a garbage float (>= 4) would spend the Bolt early.
+    internal const uint MaximumStacks = 5;
     // The expiry word is stamped from the client clock when a stack lands, but
     // the sample and the clock are read non-atomically, so a just-refreshed
     // buff can read a little over its duration (30082 was recorded at the
@@ -54,7 +60,7 @@ internal static class WowBMaelstromWeapon
         // The two recordings showed a 30000 duration and a future expiry
         // relative to player+0x1C10; these semantics remain experimental.
         int remaining = unchecked((int)(expiry - clock));
-        return ids.Count == count && stack >= MinimumStacks && duration == 30000 &&
+        return ids.Count == count && stack >= MinimumStacks && stack <= MaximumStacks && duration == 30000 &&
             remaining > 0 && remaining <= (long)duration + ExpirySlackMs;
     }
 

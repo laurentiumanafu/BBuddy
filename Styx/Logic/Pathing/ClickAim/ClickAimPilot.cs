@@ -306,6 +306,9 @@ public static class ClickAimPilot
         var candidates = ClickAimEscape.Candidates(px, py, goal.X, goal.Y, (float)z, attempt);
         WoWPoint to = default;
         bool found = false;
+        bool validated = false;
+        WoWPoint firstUntried = default;
+        bool haveUntried = false;
         int checkedCount = 0;
         foreach (WoWPoint candidate in candidates)
         {
@@ -315,22 +318,38 @@ public static class ClickAimPilot
             foreach (WoWPoint prior in attemptedEscapes)
                 if (ClickAimMath.Len(candidate.X - prior.X, candidate.Y - prior.Y) < 0.75) { tried = true; break; }
             if (tried) continue;
+            if (!haveUntried) { firstUntried = candidate; haveUntried = true; }
             checkedCount++;
             if (!RouteRunner.RequireMeshDuringSession || RouteRunner.ValidateGatherSidestep(px, py, candidate))
-            { to = candidate; found = true; break; }
+            { to = candidate; found = true; validated = RouteRunner.RequireMeshDuringSession; break; }
         }
         if (!found)
         {
-            report = "sidestep " + attempt + " withheld: none of " + checkedCount +
-                " bounded escape segments was validated on the current mesh";
-            return false;
+            // No mesh-validated escape segment: the player may be off-mesh or
+            // the mesh broken here, so every segment fails validation. Rather
+            // than stop, fall back to the first untried escape direction
+            // unvalidated, with a jump -- the classic way to clear a lip. This
+            // is only used when there is no validated option at all.
+            if (haveUntried)
+            {
+                to = firstUntried;
+                found = true;
+                validated = false;
+            }
+            else
+            {
+                report = "sidestep " + attempt + " withheld: none of " + checkedCount +
+                    " bounded escape segments was validated on the current mesh";
+                return false;
+            }
         }
         // The owner callback can take time. Do not use a ray from an old
-        // position, an altered map/session, or a cancelled walk.
+        // position, an altered map/session, or a cancelled walk. An unvalidated
+        // fallback has no ray to re-check, so only the position is re-read.
         if (ClickAimAbort.Requested || RouteRunner.StopRequested || SessionChanged() || (interrupt != null && interrupt()) ||
             !ClickAimPositions.TryRead(out double nowX, out double nowY) ||
             ClickAimMath.Len(nowX - px, nowY - py) > 0.5 ||
-            (RouteRunner.RequireMeshDuringSession && !RouteRunner.ValidateGatherSidestep(nowX, nowY, to)))
+            (validated && !RouteRunner.ValidateGatherSidestep(nowX, nowY, to)))
         { report = "sidestep withheld: session, position or mesh validation changed"; return false; }
         if (ClickAimAbort.Requested || RouteRunner.StopRequested || SessionChanged() || (interrupt != null && interrupt()))
         { report = "sidestep interrupted after mesh validation"; return false; }
@@ -365,10 +384,11 @@ public static class ClickAimPilot
                 }
                 if (!ClickAimPositions.TryRead(out double sx, out double sy))
                 { mover.MoveStop(); report = "sidestep stopped: player position unreadable"; return false; }
-                if (RouteRunner.RequireMeshDuringSession)
+                if (validated)
                 {
                     // A validated ray is not a license to follow an arbitrary
                     // steering arc. Stop if the actual path leaves its corridor.
+                    // An unvalidated fallback has no corridor to stay inside.
                     double cross = Math.Abs((sx - px) * (to.Y - py) - (sy - py) * (to.X - px)) / requested;
                     if (!double.IsFinite(cross) || cross > 0.75)
                     { report = "sidestep stopped: movement deviated from the validated segment"; return false; }
@@ -403,7 +423,7 @@ public static class ClickAimPilot
         mover.ClearBlock();
         report = string.Format(CultureInfo.InvariantCulture,
             "sidestep {0}: {1} candidate ({2:F1}, {3:F1}), requested {4:F1} yd, moved {5:F1} yd; physical clearance is unverified",
-            attempt, RouteRunner.RequireMeshDuringSession ? "mesh-validated" : "unvalidated", to.X, to.Y, requested, moved);
+            attempt, validated ? "mesh-validated" : "unvalidated", to.X, to.Y, requested, moved);
         return double.IsFinite(moved) && moved >= 0.75;
     }
 

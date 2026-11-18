@@ -18,7 +18,7 @@ class Maelstrom(unittest.TestCase):
     def test_reader_fails_closed_and_rechecks(self):
         for text in ('CandidateId = 408505', 'StackOffset = 0x104', 'DurationOffset = 0xF4',
                      'ExpiryOffset = 0xF8', 'ClockOffset = 0x1C10', 'MinimumStacks = 4',
-                     'stack >= MinimumStacks',
+                     'MaximumStacks = 5', 'stack >= MinimumStacks', 'stack <= MaximumStacks',
                      'duration == 30000', 'remaining > 0 && remaining <= (long)duration + ExpirySlackMs',
                      'ids.Count == count', '!ids.Add(id)', 'External70938MaxSlots',
                      'count == BitConverter.ToUInt32(after, 0)', 'ReadExternalCandidate(memory',

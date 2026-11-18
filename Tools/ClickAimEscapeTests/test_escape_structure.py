@@ -32,6 +32,13 @@ class EscapeWiring(unittest.TestCase):
         self.assertLess(method.index('ValidateGatherSidestep(nowX, nowY, to)'), method.index('mover.MoveTowards(to)'))
         self.assertLess(method.index('mover.MoveTowards(to)'), method.index('ClickAimKeySteer.KeyDown'))
         self.assertIn('sidesteps >= MaxSidesteps', pilot)
+        # When no segment validates (off-mesh or broken mesh), the sidestep
+        # falls back to the first untried escape direction unvalidated with a
+        # jump, instead of withholding and stopping the walk.
+        for item in ('firstUntried', 'haveUntried', 'validated = false',
+                     'fall back to the first untried escape direction'):
+            self.assertIn(item, method)
+        self.assertLess(method.index('haveUntried'), method.index('mover.MoveTowards(to)'))
         route = read('Styx/Logic/Pathing/ClickAim/RouteRunner.cs')
         self.assertIn('if (mover.KeyMode || mover.Clicks == 0)', route)
         self.assertIn('no polygon blacklisted. Returning to the route owner for recovery', route)
