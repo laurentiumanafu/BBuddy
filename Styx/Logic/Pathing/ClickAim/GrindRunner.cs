@@ -1450,7 +1450,7 @@ internal static class GrindRunner
         _dotUntil = 0;
         _manaPeak = 0;
         _healthPeak = 0;
-        Buffs.Reset(); _stoneclawNextAttempt = 0;
+        Buffs.Reset(); _stoneclawNextAttempt = 0; _consecrationNextAttempt = 0;
         _healCostGuess = 0;
         _healCostSpellId = 0;
         _castCosts.Clear();
@@ -5296,7 +5296,7 @@ internal static class GrindRunner
         _remoteDefenceAttempted = false; _nearDefenceAttempted = false; _nearDefenceExhausted = false; _remoteDefenceCursor = 0; _nearDefenceCursor = 0; _preferredDefenceCursor = 0; _damagedVoluntaryTarget = default;
         _gaveUpAt = 0;
         ClickAimSettings.Load();
-        Buffs.Reset(); _stoneclawNextAttempt = 0;
+        Buffs.Reset(); _stoneclawNextAttempt = 0; _consecrationNextAttempt = 0;
         ClickAimBuffController.ReportMacroSettings();
         _manaPeak = 0;
         _healthPeak = 0;
@@ -6551,6 +6551,24 @@ internal static class GrindRunner
 
     // Shared across successive fights in the session, not a client cooldown.
     private static long _stoneclawNextAttempt;
+    private static long _consecrationNextAttempt;
+
+    // Judgement requires an active Seal buff. The aura read is cached briefly
+    // so the per-iteration canCast check does not re-read player memory on
+    // every fight-loop tick; a Seal lasts 30 s, far longer than this window.
+    private static bool _sealActiveCache;
+    private static long _sealActiveCacheMs;
+
+    private static bool SealActiveCached(GreenMagic.Memory memory, WowBReader reader, WowBObservedUnit player)
+    {
+        long now = Environment.TickCount64;
+        if (now - _sealActiveCacheMs >= 500)
+        {
+            _sealActiveCache = Buffs.IsSealActive(memory, reader, player);
+            _sealActiveCacheMs = now;
+        }
+        return _sealActiveCache;
+    }
 
     private static bool StoneclawSlotCurrent(WowBReader reader, ClickAimAction action)
     {
@@ -6624,6 +6642,56 @@ internal static class GrindRunner
             return true;
         }
         catch { return false; }
+    }
+
+    // Consecration mirrors Stoneclaw: cast in combat only when two NPCs from
+    // the active Grind profile factions are close to the character. The 10 s
+    // spell cooldown is respected via the retry window. Never changes
+    // selection or runs during travel.
+    private static bool TryConsecration(IntPtr hwnd, WowBReader reader, GreenMagic.Memory memory,
+        WowBObservedUnit expectedPlayer, WowBObservedUnit expectedTarget, Func<bool> targetSafe)
+    {
+        if (!reader.Uses70862Features || _stop || ClickAimAbort.Requested || RouteRunner.StopRequested ||
+            Environment.TickCount64 < _consecrationNextAttempt) return false;
+        ProfileGrindArea? area = _activeProfileArea;
+        if (area == null || !GrindFactionRules.TryCreate(GrindFactionMode.Allow, area.Factions, "",
+                out GrindFactionRules factions, out _)) return false;
+        string factionText = area.Factions;
+        try
+        {
+            using var uncached = memory.TemporaryCacheState(false);
+            ClickAimAction? action = null;
+            foreach (ClickAimAction candidate in ClickAimCombat.ReadBar(reader))
+                if (WowBConsecrationPolicy.Eligible(candidate)) { action = candidate; break; }
+            if (action == null || !reader.TryReadMapId(out uint map) || map == uint.MaxValue || map != _profileSessionMap ||
+                !StoneclawSnapshot(reader, memory, hwnd, expectedPlayer, expectedTarget, map,
+                    WowBConsecrationPolicy.ManaEstimate(action.Id), targetSafe, out WowBWorldSnapshot? first, out WowBObservedUnit player) ||
+                first == null || !WowBConsecrationPolicy.FindPair(reader, first, player, factions, out WowBObservedUnit a, out WowBObservedUnit b)) return false;
+            ClickAimKeySteer.ReleaseHeld(); // do not walk past the target during the cast wait
+            if (!StoneclawSnapshot(reader, memory, hwnd, expectedPlayer, expectedTarget, map,
+                    WowBConsecrationPolicy.ManaEstimate(action.Id), targetSafe, out WowBWorldSnapshot? second, out player) ||
+                second == null || !WowBConsecrationPolicy.SamePairStillNear(reader, second, player, a, b, factions) ||
+                !ConsecrationSlotCurrent(reader, action) || !targetSafe() || !TryReadGatherCombat(out bool fighting) || !fighting ||
+                _stop || ClickAimAbort.Requested || RouteRunner.StopRequested || ObjectManager.Wow != memory || ObjectManager.WowB != reader ||
+                !reader.TryReadMapId(out uint finalMap) || finalMap != map || _profileSessionMap != map ||
+                _activeProfileArea != area || area.Factions != factionText || Environment.TickCount64 < _consecrationNextAttempt) return false;
+            // Reserve before sending: TapKey cannot prove delivery and might
+            // fail after key-down. The retry window covers the 10 s cooldown.
+            _consecrationNextAttempt = Environment.TickCount64 + WowBConsecrationPolicy.RetryMs;
+            ClickAimInput.TapKey(hwnd, action.KeyVk, 40);
+            Logging.Write("[Grind] attempted " + action.Name + " (slot " + action.Slot +
+                ") because two NPC candidates less than 10 yd away matched active Grind profile faction keys; attacker identity, hostility and cast success are unverified");
+            return true;
+        }
+        catch { return false; }
+    }
+
+    private static bool ConsecrationSlotCurrent(WowBReader reader, ClickAimAction action)
+    {
+        foreach (ClickAimAction current in ClickAimCombat.ReadBar(reader))
+            if (WowBConsecrationPolicy.Eligible(current) && current.Slot == action.Slot && current.Raw == action.Raw &&
+                current.Id == action.Id && current.KeyVk == action.KeyVk) return true;
+        return false;
     }
 
     // Key 1 is an explicit, user-tested non-toggle macro, not a decoded spell.
@@ -6844,6 +6912,7 @@ internal static class GrindRunner
         int lastInputKeyMs = 0;             // when this fight last sent any combat key at all
         int lastCombatBuffCheckMs = unchecked(started - 1000);
         int lastStoneclawCheckMs = unchecked(started - 1000);
+        int lastConsecrationCheckMs = unchecked(started - 1000);
         int quietRounds = 0;
         int faceFailures = 0;
         bool meleeOnce = false;
@@ -7601,6 +7670,27 @@ internal static class GrindRunner
                 }
             }
 
+            // Consecration mirrors Stoneclaw for Paladins: cast in combat only
+            // when two Grind-profile-faction NPCs are close, respecting its
+            // 10 s cooldown via the retry window.
+            if (reader.Uses70862Features && rotation.Class == ClickAimRotationClass.Paladin &&
+                unchecked(Environment.TickCount - lastConsecrationCheckMs) >= 1000 &&
+                (lastCastMs == 0 || unchecked(Environment.TickCount - lastCastMs) >= ClickAimCombat.CastSettleMs) &&
+                (lastHealMs == 0 || unchecked(Environment.TickCount - lastHealMs) >= ClickAimCombat.CastSettleMs))
+            {
+                lastConsecrationCheckMs = Environment.TickCount;
+                if (TryConsecration(hwnd, reader, fightMemory, me, expectedPull,
+                    () => FightAttackInputAllowed(reader, fightMemory, defenceTarget, expectedPull,
+                        !defenceOnly || defenceFactionFilter, true, !defenceOnly)))
+                {
+                    presses++; _presses++;
+                    lastCastMs = Environment.TickCount;
+                    NoteSpellKey();
+                    if (ClickAimAbort.Wait(ClickAimCombat.CastSettleMs)) return "stopped";
+                    continue;
+                }
+            }
+
             // A Shock/Attack shaman with a damaged ranged target needs to
             // close to swing. Defer optional buffs until melee rather than
             // stopping for a multi-key totem burst at the pull location.
@@ -7798,7 +7888,11 @@ internal static class GrindRunner
                 (lastCastMs == 0 || unchecked(Environment.TickCount - lastCastMs) >= ClickAimCombat.CastSettleMs) &&
                 (lastHealMs == 0 || unchecked(Environment.TickCount - lastHealMs) >= ClickAimCombat.CastSettleMs) &&
                 preMeleeRetry.MayTry(Environment.TickCount64, d, retryMinimum, damage.RangeYd, myMana, needForCast);
-            bool canCast = (maelstromCast || (!melee && !shockMelee) || retryCast) && castDamage != null && !castDamage.IsMelee && !hunterTooClose && myMana >= needForCast;
+            // Judgement is only cast while a Seal buff is active (user rule).
+            // Without a Seal the Paladin falls through to melee instead.
+            bool judgementSealOk = castDamage == null || castDamage.Id != 20271 ||
+                SealActiveCached(fightMemory, reader, me);
+            bool canCast = (maelstromCast || (!melee && !shockMelee) || retryCast) && castDamage != null && !castDamage.IsMelee && !hunterTooClose && myMana >= needForCast && judgementSealOk;
 
             if (!canCast && !melee && damage != null && !damage.IsMelee && myMana < PowerForCast(damage, 10)
                 && !powerShortLogged)

@@ -19,6 +19,7 @@ internal sealed class ClickAimBuffController
     private static uint CombatManaEstimate(int spellId) => spellId == 168 ? 80U :
         spellId == 8160 ? 65U : spellId == 5394 ? 40U : spellId == 5675 ? 40U :
         WowBSealOfTheCrusader.ManaEstimate(spellId) != 0 ? WowBSealOfTheCrusader.ManaEstimate(spellId) :
+        WowBSealOfCommand.ManaEstimate(spellId) != 0 ? WowBSealOfCommand.ManaEstimate(spellId) :
         WowBWindfuryTotem.ManaEstimate(spellId) != 0 ? WowBWindfuryTotem.ManaEstimate(spellId) :
         WowBLightningShield.ManaEstimate(spellId);
     private readonly ClickAimBuffSchedule _schedule = new ClickAimBuffSchedule();
@@ -141,7 +142,7 @@ internal sealed class ClickAimBuffController
     {
         int best = 0;
         foreach (ClickAimAction action in bar)
-            if (Eligible(action) && WowBSealOfTheCrusader.Rank(action.Id) > WowBSealOfTheCrusader.Rank(best)) best = action.Id;
+            if (Eligible(action) && WowBSealOfCommand.ManagedRank(action.Id) > WowBSealOfCommand.ManagedRank(best)) best = action.Id;
         return best;
     }
 
@@ -165,7 +166,7 @@ internal sealed class ClickAimBuffController
         {
             if (id == 0 || id > int.MaxValue) continue;
             int other = (int)id;
-            if (WowBSealOfTheCrusader.Rank(other) != 0 || !WowBSealOfTheCrusader.OtherSeal(other)) continue;
+            if (WowBSealOfCommand.ManagedRank(other) != 0 || !WowBSealOfTheCrusader.OtherSeal(other)) continue;
             if (bar.Exists(action => Eligible(action) && action.Id == other)) return false;
         }
         return true;
@@ -211,9 +212,28 @@ internal sealed class ClickAimBuffController
         if (inline != null) return inline.Remaining(spellId);
         if (activeIds == null) return null;
         foreach (uint id in activeIds)
-            if (id != 0 && id <= int.MaxValue && WowBSealOfTheCrusader.Rank((int)id) != 0)
+            if (id != 0 && id <= int.MaxValue && WowBSealOfCommand.ManagedRank((int)id) != 0)
                 return ClickAimBuffSchedule.RefreshBeforeMs + 1;
         return -1;
+    }
+
+    // True when any managed Seal (Crusader or Command) is present in the
+    // player's active auras. Used to gate Judgement: the user requires a Seal
+    // buff to be active before Judgement is cast. An unreadable aura is not
+    // proof of a Seal, so it answers false (unknown never authorizes a cast).
+    internal bool IsSealActive(Memory memory, WowBReader reader, WowBObservedUnit player)
+    {
+        try
+        {
+            WowBInlineAuraCandidate? inline = WowBInlineAuraCandidate.Capture(memory, player);
+            HashSet<uint>? ids = inline != null ? IdsOf(inline)
+                : ActiveAuraIds(memory, reader, player, out _, out inline);
+            if (ids == null) return false;
+            foreach (uint id in ids)
+                if (id != 0 && id <= int.MaxValue && WowBSealOfCommand.ManagedRank((int)id) != 0) return true;
+            return false;
+        }
+        catch { return false; }
     }
 
     private void ReportSeal(ClickAimAction action, int? remaining, bool blocked, string reason)
@@ -225,7 +245,7 @@ internal sealed class ClickAimBuffController
         _reportedAuraState[action.Id] = state;
         string timing = remaining.HasValue && remaining.Value >= 0 ? "; approximately " + (remaining.Value / 1000) + " seconds remain" : "";
         Logging.Write("[Buff] 70707 experimental Seal of the Crusader candidate: " + state + timing +
-            " (rank " + WowBSealOfTheCrusader.Rank(action.Id) + "; not verified)");
+            " (rank " + WowBSealOfCommand.ManagedRank(action.Id) + "; not verified)");
     }
 
     // Presence only; no claim about remaining charges or duration. Unknown
@@ -423,7 +443,7 @@ internal sealed class ClickAimBuffController
             HashSet<uint>? sealIds = null;
             WowBInlineAuraCandidate? sealInline = aura;
             string sealReason = "";
-            if (bar.Exists(action => Eligible(action) && WowBSealOfTheCrusader.Rank(action.Id) != 0))
+            if (bar.Exists(action => Eligible(action) && WowBSealOfCommand.ManagedRank(action.Id) != 0))
             {
                 if (aura != null) { sealIds = IdsOf(aura); sealReason = "inline candidate"; }
                 else sealIds = ActiveAuraIds(memory, reader, expectedPlayer, out sealReason, out sealInline);
@@ -455,7 +475,7 @@ internal sealed class ClickAimBuffController
                         _schedule.PastAttemptBackoff(action.Id, _clock(), CombatRetryMs)) { buff = action; break; }
                     continue;
                 }
-                if (WowBSealOfTheCrusader.Rank(action.Id) != 0)
+                if (WowBSealOfCommand.ManagedRank(action.Id) != 0)
                 {
                     if (action.Id != preferredSeal) continue;
                     // A Seal is combat-only: it lasts 30 seconds and any other
@@ -481,7 +501,7 @@ internal sealed class ClickAimBuffController
                 !SameSlot(buff, ClickAimCombat.ReadBar(reader)) || !targetSafe()) return false;
             bool totem = TotemSupported(reader, buff);
             bool shieldAction = ShieldSupported(reader, buff.Id);
-            bool sealAction = WowBSealOfTheCrusader.Rank(buff.Id) != 0;
+            bool sealAction = WowBSealOfCommand.ManagedRank(buff.Id) != 0;
             WowBInlineAuraCandidate? inlineNow = sealAction || (!totem && !shieldAction)
                 ? WowBInlineAuraCandidate.Capture(memory, expectedPlayer) : null;
             HashSet<uint>? sealIdsNow = null;
@@ -535,7 +555,7 @@ internal sealed class ClickAimBuffController
             // Seals are combat-only, like the observed ground totems: a
             // 30-second buff refreshed by melee strikes has no meaning on the
             // quiet 30-minute timer outside a fight.
-            if (WowBSealOfTheCrusader.Rank(action.Id) != 0) continue;
+            if (WowBSealOfCommand.ManagedRank(action.Id) != 0) continue;
             // On 70938 this toggle-like form belongs exclusively to the
             // movement checkbox, never the unrelated 30-minute buff timer.
             if (reader.Uses70938Features && (action.Id == 2645 || action.Id == 1238640)) continue;
@@ -618,7 +638,7 @@ internal sealed class WowBInlineAuraCandidate
 
     // Only the exact action/aura IDs observed in the traces. Other ranks and
     // weapon enchants use the timer, not an assumed matching player aura ID.
-    internal static bool Supported(int id) => id == 168 || id == 1459 || id == 324 || WowBSealOfTheCrusader.Rank(id) != 0;
+    internal static bool Supported(int id) => id == 168 || id == 1459 || id == 324 || WowBSealOfCommand.ManagedRank(id) != 0;
 
     internal static WowBInlineAuraCandidate? Capture(Memory memory, WowBObservedUnit player)
         => Capture(memory, player, out _);
@@ -695,10 +715,10 @@ internal sealed class WowBInlineAuraCandidate
         // Only one Seal can be active on a Paladin, so any Crusader rank
         // counts as present and a different rank on the bar does not fight
         // the active one.
-        if (WowBSealOfTheCrusader.Rank(spellId) != 0)
+        if (WowBSealOfCommand.ManagedRank(spellId) != 0)
         {
             for (int i = 0; i < _id.Length; i++)
-                if (_id[i] != 0 && _id[i] <= int.MaxValue && WowBSealOfTheCrusader.Rank((int)_id[i]) != 0) return Timing(i);
+                if (_id[i] != 0 && _id[i] <= int.MaxValue && WowBSealOfCommand.ManagedRank((int)_id[i]) != 0) return Timing(i);
             return -1;
         }
         if (!Supported(spellId)) return null;
@@ -740,10 +760,32 @@ internal static class WowBSealOfTheCrusader
         20154 or 20287 or 20288 or 20289 or 20290 or 20291 or 20292 or 20293 or 21084 => true,
         // Seal of Justice, Seal of Light and Seal of Wisdom
         20164 or 20165 or 20347 or 20348 or 20349 or 20166 or 20356 or 20357 => true,
-        // Seal of Command and Seal of Martyrdom
-        20375 or 20915 or 20918 or 20919 or 20920 or 407798 => true,
+        // Seal of Martyrdom (Seal of Command is managed, see below)
+        20915 or 20918 or 20919 or 20920 or 407798 => true,
         _ => false
     };
+}
+
+// Seal of Command is managed exactly like Seal of the Crusader when it is on
+// the bar: the buff controller casts and maintains it, and Judgement is only
+// cast while a seal buff is active. Ranks from the published WoW Forever
+// tables; costs are estimates.
+internal static class WowBSealOfCommand
+{
+    internal static int Rank(int id) => id switch
+    {
+        20375 => 1, 20376 => 2, 20377 => 3, 20378 => 4,
+        20379 => 5, 20380 => 6, 20381 => 7, 20382 => 8, _ => 0
+    };
+    internal static uint ManaEstimate(int id) => Rank(id) switch
+    {
+        1 => 25U, 2 => 40U, 3 => 65U, 4 => 90U,
+        5 => 125U, 6 => 160U, 7 => 200U, 8 => 245U, _ => 0U
+    };
+    // A seal this controller manages (either Crusader or Command).
+    internal static int ManagedRank(int id)
+        => WowBSealOfTheCrusader.Rank(id) != 0 ? WowBSealOfTheCrusader.Rank(id) : Rank(id);
+    internal static bool IsManagedSeal(int id) => ManagedRank(id) != 0;
 }
 
 // Known 1.60 shield ranks. The user's traces observed IDs 324 and 905;

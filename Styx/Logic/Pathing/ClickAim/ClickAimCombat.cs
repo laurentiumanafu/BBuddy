@@ -304,7 +304,7 @@ internal static class ClickAimCombat
         { 20305, "Seal of the Crusader" }, { 20306, "Seal of the Crusader" },
         { 20307, "Seal of the Crusader" }, { 20308, "Seal of the Crusader" },
         { 20271, "Judgement" }, { 853, "Hammer of Justice" }, { 465, "Devotion Aura" },
-        { 35395, "Crusader Strike" },
+        { 35395, "Crusader Strike" }, { 1866, "Holy Strike" }, { 26573, "Consecration" },
 
         /* --- Warrior --- */
         { 78, "Heroic Strike" }, { 284, "Heroic Strike" }, { 285, "Heroic Strike" },
@@ -387,6 +387,7 @@ internal static class ClickAimCombat
         { "Garrote", ClickAimSpellRole.Damage }, { "Kidney Shot", ClickAimSpellRole.Damage },
         { "Expose Armor", ClickAimSpellRole.Damage }, { "Shiv", ClickAimSpellRole.Damage },
         { "Crusader Strike", ClickAimSpellRole.Damage }, { "Stormstrike", ClickAimSpellRole.Damage },
+        { "Holy Strike", ClickAimSpellRole.Damage }, { "Consecration", ClickAimSpellRole.Damage },
 
         /* Damage over time: applied once per target and refreshed on a timer, not spammed. */
         { "Moonfire", ClickAimSpellRole.Dot }, { "Insect Swarm", ClickAimSpellRole.Dot },
@@ -467,7 +468,8 @@ internal static class ClickAimCombat
         { "Claw", MeleeRangeYd }, { "Maul", MeleeRangeYd }, { "Swipe", MeleeRangeYd },
         { "Shred", MeleeRangeYd }, { "Rake", MeleeRangeYd }, { "Rip", MeleeRangeYd },
         { "Ferocious Bite", MeleeRangeYd }, { "Mangle", MeleeRangeYd },
-        { "Crusader Strike", MeleeRangeYd }, { "Stormstrike", MeleeRangeYd },
+        { "Crusader Strike", MeleeRangeYd }, { "Stormstrike", MeleeRangeYd }, { "Holy Strike", MeleeRangeYd },
+        { "Consecration", MeleeRangeYd },
         { "Raptor Strike", MeleeRangeYd }, { "Mongoose Bite", MeleeRangeYd },
         { "War Stomp", MeleeRangeYd },
 
