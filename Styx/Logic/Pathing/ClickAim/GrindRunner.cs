@@ -4141,7 +4141,7 @@ internal static class GrindRunner
                 Math.Abs(currentPlayer.Location.Z - controls.Z) > 5.0) return "player no longer at the calibrated control position";
             return null;
         }
-        bool completed = WowBExperimentalMail.Run(hwnd, memory, reader, playerGuid, controls, ClickAimSettings.MailRecipient, ClickAimSettings.MailSkipRecipient, InputSafetyFailure);
+        bool completed = WowBExperimentalMail.Run(hwnd, memory, reader, playerGuid, controls, ClickAimSettings.MailRecipient, ClickAimSettings.MailSkipRecipient, ClickAimSettings.MailBatchLimit, InputSafetyFailure);
         if (!completed)
             return ReturnWithoutMail("experiment interrupted or uncertain; no automatic resend");
         return ReturnWithoutMail("mail trip finished; skipped or additional items may remain, and delivery is unverified");

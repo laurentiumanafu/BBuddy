@@ -43,7 +43,7 @@ internal static class WowBExperimentalMail
     // True means no further unattempted candidates were observed this trip;
     // neither this nor bag progress establishes correct recipient or delivery.
     internal static bool Run(IntPtr hwnd, Memory memory, WowBReader reader, WowBGuid player,
-        WowBMailUiCalibration.Result ui, string recipient, bool skipRecipient, Func<string?> safetyFailure)
+        WowBMailUiCalibration.Result ui, string recipient, bool skipRecipient, int batchLimit, Func<string?> safetyFailure)
     {
         bool background = false, focusSelected = false;
         string lastSafetyFailure = "no safety check recorded";
@@ -168,7 +168,7 @@ internal static class WowBExperimentalMail
                     return true;
                 }
                 Logging.Write("[Mail] batch " + (batch + 1) + ": " + count + " unattempted nonzero candidate item(s) observed; clicking at most " +
-                    WowBMailBatchPolicy.BatchLimit + " of them, then Send once. A nonzero candidate is an observation, not proof that the item is mailable.");
+                    batchLimit + " of them, then Send once. A nonzero candidate is an observation, not proof that the item is mailable.");
                 if (batch > 0)
                     Logging.Write("[Mail] observed progress and one-second post-send wait complete; retyping recipient directly for batch " +
                         (batch + 1) + " without clicking the tab again. Field focus and contents are unverified.");
@@ -191,11 +191,11 @@ internal static class WowBExperimentalMail
                 // Candidate IDs represent item clicks, not proof that the UI
                 // attached them. Do not depend on the experimental mail table.
                 var expected = new List<WowBMailCandidateTable.Expected>();
-                while (selected.Count > 0 && expected.Count < 12)
+                while (selected.Count > 0 && expected.Count < batchLimit)
                 {
                     foreach (var slot in selected)
                     {
-                        if (expected.Count >= 12) break;
+                        if (expected.Count >= batchLimit) break;
                         // Between two clicks, not during one: if the user brought the game
                         // forward to watch, the mode is re-chosen here instead of ending the
                         // trip with items attached and Send unpressed.
@@ -260,10 +260,10 @@ internal static class WowBExperimentalMail
                         // A posted right-click is not an attachment: a soulbound item, a stack
                         // the client refuses or a mis-aimed pixel all look the same here.
                         Logging.Write("[Mail] item click posted for candidate " + slot.Candidate + " slot " + slot.Slot +
-                            " at (" + x + "," + y + "); " + expected.Count + " of at most " + WowBMailBatchPolicy.BatchLimit +
+                            " at (" + x + "," + y + "); " + expected.Count + " of at most " + batchLimit +
                             " clicked in batch " + (batch + 1) + ". Attachment, mailability and identity are unverified.");
                     }
-                    if (expected.Count >= 12) break;
+                    if (expected.Count >= batchLimit) break;
                     if (!WowBMailGridLookup.TryPreviewExcluding(grid, player.ToString(), w, h, bags, attempted,
                         out selected, out count, out unknownPrimary, out unknownFifth) || unknownPrimary)
                     { Logging.Write("[Mail] next candidate group unavailable; no send input this trip."); return false; }

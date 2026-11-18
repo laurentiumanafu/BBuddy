@@ -117,6 +117,10 @@ internal static class ClickAimSettings
     // When on, the mail trip does not type the recipient name at all (the
     // field is left as-is). When off, the saved recipient is typed per batch.
     public static bool MailSkipRecipient;
+    // Maximum items attached per mail batch (1-12). Some addons move the Send
+    // button as items attach, so a smaller, predictable batch keeps the
+    // recorded Send position valid.
+    public static int MailBatchLimit = 12;
     internal static bool ValidMailRecipient(string value)
     {
         if (value == null || value.Length > 64 || value != value.Trim()) return false;
@@ -201,6 +205,7 @@ internal static class ClickAimSettings
         ExperimentalAutoMail = false;
         MailRecipient = "";
         MailSkipRecipient = false;
+        MailBatchLimit = 12;
         SellAfterLoots = 40;
         VendorWaitMs = 2500;
         VendorSearchYd = 25;
@@ -220,6 +225,7 @@ internal static class ClickAimSettings
         ExperimentalAutoMail = false;
         MailRecipient = "";
         MailSkipRecipient = false;
+        MailBatchLimit = 12;
         UseShamanTotemMacro = ShamanTotemEarth = ShamanTotemHealing = ShamanTotemMana = ShamanTotemWindfury = false;
         ShamanTotemMacroKey = 2; ShamanTotemMacroPresses = 2;
         string path;
@@ -382,6 +388,11 @@ internal static class ClickAimSettings
             MailSkipRecipient = flag;
             return true;
         }
+        if (string.Equals(key, "MailBatchLimit", StringComparison.OrdinalIgnoreCase))
+        {
+            if (hasNumber) MailBatchLimit = number;
+            return true;
+        }
         if (string.Equals(key, "SellAfterLoots", StringComparison.OrdinalIgnoreCase))
         {
             if (hasNumber) SellAfterLoots = number;
@@ -419,6 +430,7 @@ internal static class ClickAimSettings
         DotRefreshSeconds = Math.Max(4, Math.Min(60, DotRefreshSeconds));
         RestMs = Math.Max(1000, Math.Min(60000, RestMs));
         SellAfterLoots = Math.Max(0, Math.Min(500, SellAfterLoots));
+        MailBatchLimit = Math.Max(1, Math.Min(12, MailBatchLimit));
         VendorWaitMs = Math.Max(500, Math.Min(30000, VendorWaitMs));
         VendorSearchYd = Math.Max(5, Math.Min(100, VendorSearchYd));
     }
@@ -478,6 +490,8 @@ internal static class ClickAimSettings
         text.AppendLine("MailRecipient = " + (ValidMailRecipient(MailRecipient) ? MailRecipient : ""));
         text.AppendLine("# When true, the mail trip does not type the recipient name at all.");
         text.AppendLine("MailSkipRecipient = " + (MailSkipRecipient ? "true" : "false"));
+        text.AppendLine("# Maximum items attached per mail batch (1-12).");
+        text.AppendLine("MailBatchLimit = " + MailBatchLimit.ToString(CultureInfo.InvariantCulture));
         text.AppendLine("SellAfterLoots = " + SellAfterLoots.ToString(CultureInfo.InvariantCulture));
         text.AppendLine("VendorWaitMs = " + VendorWaitMs.ToString(CultureInfo.InvariantCulture));
         text.AppendLine("VendorSearchYd = " + VendorSearchYd.ToString(CultureInfo.InvariantCulture));
@@ -569,6 +583,11 @@ internal static class ClickAimSettings
         check(!MailSkipRecipient, "mailSkipRecipientDefaultOff");
         check(Apply("MailSkipRecipient", "true") && MailSkipRecipient, "mailSkipRecipientOptIn");
         check(Apply("MailSkipRecipient", "nonsense") && !MailSkipRecipient, "mailSkipRecipientMalformedOff");
+        check(MailBatchLimit == 12, "mailBatchLimitDefault");
+        check(Apply("MailBatchLimit", "5") && MailBatchLimit == 5, "mailBatchLimitApply");
+        MailBatchLimit = 99; Clamp(); check(MailBatchLimit == 12, "mailBatchLimitClampHigh");
+        MailBatchLimit = 0; Clamp(); check(MailBatchLimit == 1, "mailBatchLimitClampLow");
+        MailBatchLimit = 12;
         check(Apply("SellAfterLoots", "7") && SellAfterLoots == 7, "applySellAfter");
         check(Apply("VendorWaitMs", "900") && VendorWaitMs == 900, "applyVendorWait");
         check(Apply("VendorSearchYd", "12") && VendorSearchYd == 12, "applyVendorSearch");

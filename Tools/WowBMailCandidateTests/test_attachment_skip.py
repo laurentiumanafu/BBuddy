@@ -15,12 +15,12 @@ class SkipWiring(unittest.TestCase):
                'skipping this item for the trip',
                'TryPreviewExcluding(grid, player.ToString(), w, h, bags, attempted'):
    self.assertIn(text,m)
-  self.assertIn('expected.Count >= 12',m)
+  self.assertIn('expected.Count >= batchLimit',m)
   self.assertIn('no item click was posted',m)
  def test_every_stop_before_send_says_why_and_what_was_clicked(self):
   # 2026-11-17 11:40: the trip died 1.6 s after the recipient was typed with no
   # line at all between "recipient characters posted" and the caller's abort.
-  body = m[m.index('foreach (var slot in selected)'):m.index('if (expected.Count >= 12) break;\n                    if (!WowBMailGridLookup.TryPreviewExcluding')]
+  body = m[m.index('foreach (var slot in selected)'):m.index('if (expected.Count >= batchLimit) break;\n                    if (!WowBMailGridLookup.TryPreviewExcluding')]
   self.assertEqual(body.count('lastSafetyFailure +'), 2)   # move and click aborts
   for text in ('item move stopped after ', 'item click stopped after ',
                'item button release or state uncertain ('):

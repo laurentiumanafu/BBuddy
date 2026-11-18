@@ -26,7 +26,7 @@ class Wiring(unittest.TestCase):
   self.assertLess(recipient, item); self.assertLess(item, send)
   self.assertEqual(m.count('Left(hwnd, ui.SendX'), 1)
   self.assertEqual(m.count('Left(hwnd, ui.TabX'), 1)
-  self.assertIn('expected.Count >= 12', m)
+  self.assertIn('expected.Count >= batchLimit', m)
   self.assertIn('Wait(1000, safe)', m[send:])
   self.assertIn('no clicked item candidates disappeared', m[send:])
   self.assertIn('outcome unknown and treated as a failed trip', m[send:])
@@ -49,7 +49,7 @@ class Wiring(unittest.TestCase):
   self.assertIn('WowBMailTabWait.Wait(ReSelectFocus, ClickAimAbort.Wait', m)
   # the same guarded re-selection runs between item clicks: watching the game
   # must not end a trip with items attached and Send unpressed
-  items = m[m.index('foreach (var slot in selected)'):m.index('if (expected.Count >= 12) break;\n                    if (!WowBMailGridLookup.TryPreviewExcluding')]
+  items = m[m.index('foreach (var slot in selected)'):m.index('if (expected.Count >= batchLimit) break;\n                    if (!WowBMailGridLookup.TryPreviewExcluding')]
   self.assertIn('string? focusIssue = ReSelectFocus();', items)
   self.assertIn('item clicks stopped after ', items)
   self.assertIn('Nothing already clicked is sent automatically', items)

@@ -24,6 +24,14 @@ class MailPolicy(unittest.TestCase):
   # The trip-scheduling gate must also honor the skip option, or a trip with
   # typing off and no valid recipient is dropped before the mailbox walk.
   self.assertIn('(ClickAimSettings.MailSkipRecipient || WowBMailRecipientText.ValidForTest(ClickAimSettings.MailRecipient))', g)
+ def test_batch_limit_option(self):
+  for part in ('MailBatchLimit', '"MailBatchLimit"', '"MailBatchLimit = "'): self.assertIn(part,s)
+  self.assertIn('txtMailBatchLimit',x)
+  for part in ('txtMailBatchLimit.Text = Text(ClickAimSettings.MailBatchLimit)',
+               'ClickAimSettings.MailBatchLimit = mailBatchLimit'): self.assertIn(part,c)
+  m=(R/'Styx/Logic/Pathing/ClickAim/WowBExperimentalMail.cs').read_text()
+  for part in ('int batchLimit', 'expected.Count < batchLimit', 'expected.Count >= batchLimit',
+               'ClickAimSettings.MailBatchLimit'): self.assertIn(part, m + g)
  def test_policy_limits_and_unknowns(self):
   for part in ('BatchLimit = 12', 'FailureLimit = 3', 'slot.Candidate >= 0 && slot.Candidate <= 4', 'slot.Candidate < 0', '!complete', '!attachmentsClear', 'SendEvidence.Accepted', 'SendEvidence.Rejected', 'Decision.Hold'):
    self.assertIn(part,p)

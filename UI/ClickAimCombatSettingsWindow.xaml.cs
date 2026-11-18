@@ -964,6 +964,7 @@ namespace CopilotBuddy.UI
             chkExperimentalAutoMail.IsChecked = ClickAimSettings.ExperimentalAutoMail;
             txtMailRecipient.Text = ClickAimSettings.MailRecipient;
             chkMailSkipRecipient.IsChecked = ClickAimSettings.MailSkipRecipient;
+            txtMailBatchLimit.Text = Text(ClickAimSettings.MailBatchLimit);
             txtSellAfter.Text = Text(ClickAimSettings.SellAfterLoots);
             txtVendorWait.Text = Text(ClickAimSettings.VendorWaitMs);
             txtVendorSearch.Text = Text(ClickAimSettings.VendorSearchYd);
@@ -993,10 +994,11 @@ namespace CopilotBuddy.UI
             if (!TryRead(txtDrinkSlot, "Drink slot", out drinkSlot)) return false;
             if (!TryRead(txtRestMs, "Rest time", out restMs)) return false;
 
-            int sellAfter, vendorWait, vendorSearch;
+            int sellAfter, vendorWait, vendorSearch, mailBatchLimit;
             if (!TryRead(txtSellAfter, "Sell after looted bodies", out sellAfter)) return false;
             if (!TryRead(txtVendorWait, "Merchant window wait", out vendorWait)) return false;
             if (!TryRead(txtVendorSearch, "Vendor search radius", out vendorSearch)) return false;
+            if (!TryRead(txtMailBatchLimit, "Max items per mail batch", out mailBatchLimit)) return false;
 
             int preferredStartAttack = cmbPostHealStartAttack.SelectedIndex >= 0 && cmbPostHealStartAttack.SelectedIndex < 5
                 ? 0x75 + cmbPostHealStartAttack.SelectedIndex : 0;
@@ -1076,6 +1078,7 @@ namespace CopilotBuddy.UI
             ClickAimSettings.ExperimentalAutoMail = chkExperimentalAutoMail.IsChecked == true;
             ClickAimSettings.MailRecipient = mailRecipient;
             ClickAimSettings.MailSkipRecipient = mailSkipRecipient;
+            ClickAimSettings.MailBatchLimit = mailBatchLimit;
             ClickAimSettings.SellAfterLoots = sellAfter;
             ClickAimSettings.VendorWaitMs = vendorWait;
             ClickAimSettings.VendorSearchYd = vendorSearch;

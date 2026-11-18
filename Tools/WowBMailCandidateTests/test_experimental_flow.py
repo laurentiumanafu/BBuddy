@@ -14,7 +14,7 @@ class Flow(unittest.TestCase):
   self.assertIn('"ExperimentalAutoMail"',s)
   self.assertIn('chkExperimentalAutoMail.IsChecked == true',u)
  def test_send_per_batch_and_observation(self):
-  for v in ('WowBMailGridLookup.TryPreview', 'unknownPrimary', 'expected.Count >= 12',
+  for v in ('WowBMailGridLookup.TryPreview', 'unknownPrimary', 'expected.Count >= batchLimit',
             'WowBMailGridLookup.Same(beforeSend, beforeSendAgain)', 'Wait(1000, safe)',
             'DiagnosticRecipientChar', 'No retry this trip', 'backpack contents, recipient and delivery remain unverified'):
    self.assertIn(v,r)
