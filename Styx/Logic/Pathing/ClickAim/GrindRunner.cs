@@ -4024,12 +4024,12 @@ internal static class GrindRunner
         // to stop: re-plan from the current position and try again, the same
         // thing a restart does. Only stop after the retries are spent.
         bool arrived = false;
-        for (int attempt = 0; attempt < 3 && !arrived; attempt++)
+        for (int attempt = 0; attempt < 10 && !arrived; attempt++)
         {
             if (attempt > 0)
             {
                 if (!Safe()) break;
-                Logging.Write("[Grind] profile return retry " + (attempt + 1) + "/3; re-planning the route to the hotspot.");
+                Logging.Write("[Grind] profile return retry " + (attempt + 1) + "/10; re-planning the route to the hotspot.");
             }
             RouteRunner.ShouldInterrupt = () => !Safe();
             RouteRunner.PollInterruptDuringWalk = true;
