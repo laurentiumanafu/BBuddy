@@ -33,6 +33,6 @@ class MailPolicy(unittest.TestCase):
   for part in ('int batchLimit', 'expected.Count < batchLimit', 'expected.Count >= batchLimit',
                'ClickAimSettings.MailBatchLimit'): self.assertIn(part, m + g)
  def test_policy_limits_and_unknowns(self):
-  for part in ('BatchLimit = 12', 'FailureLimit = 3', 'slot.Candidate >= 0 && slot.Candidate <= 4', 'slot.Candidate < 0', '!complete', '!attachmentsClear', 'SendEvidence.Accepted', 'SendEvidence.Rejected', 'Decision.Hold'):
+  for part in ('BatchLimit = 100', 'FailureLimit = 3', 'slot.Candidate >= 0 && slot.Candidate <= 4', 'slot.Candidate < 0', '!complete', '!attachmentsClear', 'SendEvidence.Accepted', 'SendEvidence.Rejected', 'Decision.Hold'):
    self.assertIn(part,p)
 if __name__=='__main__': unittest.main()

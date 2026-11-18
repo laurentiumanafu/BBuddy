@@ -117,7 +117,7 @@ internal static class ClickAimSettings
     // When on, the mail trip does not type the recipient name at all (the
     // field is left as-is). When off, the saved recipient is typed per batch.
     public static bool MailSkipRecipient;
-    // Maximum items attached per mail batch (1-12). Some addons move the Send
+    // Maximum items attached per mail batch (1-100). Some addons move the Send
     // button as items attach, so a smaller, predictable batch keeps the
     // recorded Send position valid.
     public static int MailBatchLimit = 12;
@@ -430,7 +430,7 @@ internal static class ClickAimSettings
         DotRefreshSeconds = Math.Max(4, Math.Min(60, DotRefreshSeconds));
         RestMs = Math.Max(1000, Math.Min(60000, RestMs));
         SellAfterLoots = Math.Max(0, Math.Min(500, SellAfterLoots));
-        MailBatchLimit = Math.Max(1, Math.Min(12, MailBatchLimit));
+        MailBatchLimit = Math.Max(1, Math.Min(100, MailBatchLimit));
         VendorWaitMs = Math.Max(500, Math.Min(30000, VendorWaitMs));
         VendorSearchYd = Math.Max(5, Math.Min(100, VendorSearchYd));
     }
@@ -585,7 +585,8 @@ internal static class ClickAimSettings
         check(Apply("MailSkipRecipient", "nonsense") && !MailSkipRecipient, "mailSkipRecipientMalformedOff");
         check(MailBatchLimit == 12, "mailBatchLimitDefault");
         check(Apply("MailBatchLimit", "5") && MailBatchLimit == 5, "mailBatchLimitApply");
-        MailBatchLimit = 99; Clamp(); check(MailBatchLimit == 12, "mailBatchLimitClampHigh");
+        check(Apply("MailBatchLimit", "100") && MailBatchLimit == 100, "mailBatchLimitApplyHigh");
+        MailBatchLimit = 150; Clamp(); check(MailBatchLimit == 100, "mailBatchLimitClampHigh");
         MailBatchLimit = 0; Clamp(); check(MailBatchLimit == 1, "mailBatchLimitClampLow");
         MailBatchLimit = 12;
         check(Apply("SellAfterLoots", "7") && SellAfterLoots == 7, "applySellAfter");

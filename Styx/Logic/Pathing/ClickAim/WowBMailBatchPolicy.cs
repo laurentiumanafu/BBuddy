@@ -10,7 +10,7 @@ namespace Styx.Logic.Pathing;
 // server acknowledgement. Candidate numbers are NOT verified on-screen bags.
 internal static class WowBMailBatchPolicy
 {
-    internal const int BatchLimit = 12;
+    internal const int BatchLimit = 100;
     internal const int FailureLimit = 3;
     internal enum Selection { Unknown, Empty, Batch }
     internal enum SendEvidence { Unknown, Accepted, Rejected }
