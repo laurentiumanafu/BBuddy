@@ -7973,7 +7973,12 @@ internal static class GrindRunner
             // Without a Seal the Paladin falls through to melee instead.
             bool judgementSealOk = castDamage == null || castDamage.Id != 20271 ||
                 SealActiveCached(fightMemory, reader, me);
-            bool canCast = (maelstromCast || (!melee && !shockMelee) || retryCast) && castDamage != null && !castDamage.IsMelee && !hunterTooClose && myMana >= needForCast && judgementSealOk;
+            // Judgement is cast only when it is actually off cooldown (read
+            // from the game), not on a timed estimate. Unknown falls back to
+            // the timed estimate.
+            bool judgementCdOk = castDamage == null || castDamage.Id != 20271 ||
+                WowBCooldownResearch.IsSpellReady(fightMemory, reader, castDamage.Id) != false;
+            bool canCast = (maelstromCast || (!melee && !shockMelee) || retryCast) && castDamage != null && !castDamage.IsMelee && !hunterTooClose && myMana >= needForCast && judgementSealOk && judgementCdOk;
 
             if (!canCast && !melee && damage != null && !damage.IsMelee && myMana < PowerForCast(damage, 10)
                 && !powerShortLogged)
@@ -8399,12 +8404,18 @@ internal static class GrindRunner
              * candidate rage has no validated amount; withhold resource-dependent
              * abilities rather than repeatedly pressing them at unknown rage. */
             bool stormstrike70938 = reader.Uses70938Features && meleeHit?.Id == ClickAimClassRotation.StormstrikeId;
+            // Holy Strike is cast only when it is actually off cooldown (read
+            // from the game), not on a timed estimate. Unknown falls back to
+            // the timed estimate.
+            bool holyStrikeCdOk = meleeHit == null || meleeHit.Id != 1866 ||
+                WowBCooldownResearch.IsSpellReady(fightMemory, reader, meleeHit.Id) != false;
             uint meleePower = stormstrike70938
                 ? Math.Max(PowerForCast(meleeHit, 10), ClickAimClassRotation.StormstrikePowerFloor70938)
                 : PowerForCast(meleeHit, 10);
             if (meleeHit != null && !unmeasuredRage && (stormstrike70938 || !swinging || sinceDamageMs >= MeleePressMs)
                 && (ClickAimClassRotation.Ready(_rotationCooldowns, rotation.MeleeGroup, Environment.TickCount) ||
                     (stormstrike70938 && StormResetReady()))
+                && holyStrikeCdOk
                 && (rotation.MeleeIntervalMs == 0 || myMana >= meleePower)
                 && (!stormstrike70938 || (meleeHit.KeyVk != 0 &&
                     rotation.MeleeIntervalMs == ClickAimClassRotation.StormstrikeInterval70938Ms &&
