@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Threading;
@@ -963,6 +963,7 @@ namespace CopilotBuddy.UI
             chkTownReturn.IsChecked = ClickAimSettings.UseTownReturn;
             chkExperimentalAutoMail.IsChecked = ClickAimSettings.ExperimentalAutoMail;
             txtMailRecipient.Text = ClickAimSettings.MailRecipient;
+            chkMailSkipRecipient.IsChecked = ClickAimSettings.MailSkipRecipient;
             txtSellAfter.Text = Text(ClickAimSettings.SellAfterLoots);
             txtVendorWait.Text = Text(ClickAimSettings.VendorWaitMs);
             txtVendorSearch.Text = Text(ClickAimSettings.VendorSearchYd);
@@ -1035,9 +1036,12 @@ namespace CopilotBuddy.UI
             }
             if ((ClickAimUi.Running || ClickAimUi.Paused) && (chkExperimentalAutoMail.IsChecked == true) != ClickAimSettings.ExperimentalAutoMail)
             { System.Windows.MessageBox.Show("Stop the bot before changing experimental mail.", "Combat settings", MessageBoxButton.OK, MessageBoxImage.Warning); return false; }
+            if ((ClickAimUi.Running || ClickAimUi.Paused) && (chkMailSkipRecipient.IsChecked == true) != ClickAimSettings.MailSkipRecipient)
+            { System.Windows.MessageBox.Show("Stop the bot before changing the mail recipient typing option.", "Combat settings", MessageBoxButton.OK, MessageBoxImage.Warning); return false; }
             string mailRecipient = (txtMailRecipient.Text ?? string.Empty).Trim();
-            if (chkExperimentalAutoMail.IsChecked == true && !WowBMailRecipientText.ValidForTest(mailRecipient))
-            { System.Windows.MessageBox.Show("Experimental mail requires a recipient containing only letters and hyphens.", "Combat settings", MessageBoxButton.OK, MessageBoxImage.Warning); return false; }
+            bool mailSkipRecipient = chkMailSkipRecipient.IsChecked == true;
+            if (chkExperimentalAutoMail.IsChecked == true && !mailSkipRecipient && !WowBMailRecipientText.ValidForTest(mailRecipient))
+            { System.Windows.MessageBox.Show("Experimental mail requires a recipient containing only letters and hyphens, unless recipient typing is disabled.", "Combat settings", MessageBoxButton.OK, MessageBoxImage.Warning); return false; }
             if (!ClickAimSettings.ValidMailRecipient(mailRecipient))
             {
                 System.Windows.MessageBox.Show("Mail recipient must be at most 64 characters and cannot contain control characters, # or =.", "Combat settings", MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -1071,6 +1075,7 @@ namespace CopilotBuddy.UI
             ClickAimSettings.UseTownReturn = chkTownReturn.IsChecked == true;
             ClickAimSettings.ExperimentalAutoMail = chkExperimentalAutoMail.IsChecked == true;
             ClickAimSettings.MailRecipient = mailRecipient;
+            ClickAimSettings.MailSkipRecipient = mailSkipRecipient;
             ClickAimSettings.SellAfterLoots = sellAfter;
             ClickAimSettings.VendorWaitMs = vendorWait;
             ClickAimSettings.VendorSearchYd = vendorSearch;

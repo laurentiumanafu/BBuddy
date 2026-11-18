@@ -237,6 +237,7 @@
                         <TextBlock Text="Mail recipient:" VerticalAlignment="Center" Margin="0,0,8,0"/>
                         <TextBox x:Name="txtMailRecipient" Width="180" MaxLength="64" ToolTip="Saved recipient for experimental mailing; sending requires the separate opt-in."/>
                     </StackPanel>
+                    <CheckBox x:Name="chkMailSkipRecipient" Margin="0,0,0,4" Content="Do not type the recipient name when mailing (leave the field as-is)"/>
                     <TextBlock Margin="0,0,0,8" TextWrapping="Wrap" FontSize="11" Text="Experimental: enable the checkbox, save a recipient, and record the mailbox on the vendor plan the bot will select. Foreground and non-minimized background mail use game-window messages; background interaction is unverified. The recipient field, UI layout, item eligibility and server delivery cannot be independently verified. Wrong settings can mail the wrong items or recipient. Calibrate grid and controls; test with disposable items. Additional batches require observed bag progress; later trips may retry uncertain outcomes."/>
                 </StackPanel>
 

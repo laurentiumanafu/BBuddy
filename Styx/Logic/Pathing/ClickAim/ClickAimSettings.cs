@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Globalization;
 using System.IO;
 using System.Text;
@@ -114,6 +114,9 @@ internal static class ClickAimSettings
     // Explicit experimental opt-in; saved recipient alone does not enable it.
     public static bool ExperimentalAutoMail;
     public static string MailRecipient = "";
+    // When on, the mail trip does not type the recipient name at all (the
+    // field is left as-is). When off, the saved recipient is typed per batch.
+    public static bool MailSkipRecipient;
     internal static bool ValidMailRecipient(string value)
     {
         if (value == null || value.Length > 64 || value != value.Trim()) return false;
@@ -197,6 +200,7 @@ internal static class ClickAimSettings
         UseTownReturn = false;
         ExperimentalAutoMail = false;
         MailRecipient = "";
+        MailSkipRecipient = false;
         SellAfterLoots = 40;
         VendorWaitMs = 2500;
         VendorSearchYd = 25;
@@ -215,6 +219,7 @@ internal static class ClickAimSettings
         UseTownReturn = false;
         ExperimentalAutoMail = false;
         MailRecipient = "";
+        MailSkipRecipient = false;
         UseShamanTotemMacro = ShamanTotemEarth = ShamanTotemHealing = ShamanTotemMana = ShamanTotemWindfury = false;
         ShamanTotemMacroKey = 2; ShamanTotemMacroPresses = 2;
         string path;
@@ -372,6 +377,11 @@ internal static class ClickAimSettings
             MailRecipient = ValidMailRecipient(value) ? value : "";
             return true;
         }
+        if (string.Equals(key, "MailSkipRecipient", StringComparison.OrdinalIgnoreCase))
+        {
+            MailSkipRecipient = flag;
+            return true;
+        }
         if (string.Equals(key, "SellAfterLoots", StringComparison.OrdinalIgnoreCase))
         {
             if (hasNumber) SellAfterLoots = number;
@@ -466,6 +476,8 @@ internal static class ClickAimSettings
         text.AppendLine("# Experimental mailing is opt-in and may mail the wrong items or recipient; inspect and test first.");
         text.AppendLine("ExperimentalAutoMail = " + (ExperimentalAutoMail ? "true" : "false"));
         text.AppendLine("MailRecipient = " + (ValidMailRecipient(MailRecipient) ? MailRecipient : ""));
+        text.AppendLine("# When true, the mail trip does not type the recipient name at all.");
+        text.AppendLine("MailSkipRecipient = " + (MailSkipRecipient ? "true" : "false"));
         text.AppendLine("SellAfterLoots = " + SellAfterLoots.ToString(CultureInfo.InvariantCulture));
         text.AppendLine("VendorWaitMs = " + VendorWaitMs.ToString(CultureInfo.InvariantCulture));
         text.AppendLine("VendorSearchYd = " + VendorSearchYd.ToString(CultureInfo.InvariantCulture));
@@ -554,6 +566,9 @@ internal static class ClickAimSettings
         check(Apply("UseTownReturn", "nonsense") && !UseTownReturn, "townReturnMalformedOff");
         check(MailRecipient == "" && Apply("MailRecipient", "Éowyn-Realm") && MailRecipient == "Éowyn-Realm", "mailRecipient");
         check(Apply("MailRecipient", "x\nAutoSell = true") && MailRecipient == "", "mailRecipientRejectControls");
+        check(!MailSkipRecipient, "mailSkipRecipientDefaultOff");
+        check(Apply("MailSkipRecipient", "true") && MailSkipRecipient, "mailSkipRecipientOptIn");
+        check(Apply("MailSkipRecipient", "nonsense") && !MailSkipRecipient, "mailSkipRecipientMalformedOff");
         check(Apply("SellAfterLoots", "7") && SellAfterLoots == 7, "applySellAfter");
         check(Apply("VendorWaitMs", "900") && VendorWaitMs == 900, "applyVendorWait");
         check(Apply("VendorSearchYd", "12") && VendorSearchYd == 12, "applyVendorSearch");

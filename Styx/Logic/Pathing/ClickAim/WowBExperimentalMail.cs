@@ -43,7 +43,7 @@ internal static class WowBExperimentalMail
     // True means no further unattempted candidates were observed this trip;
     // neither this nor bag progress establishes correct recipient or delivery.
     internal static bool Run(IntPtr hwnd, Memory memory, WowBReader reader, WowBGuid player,
-        WowBMailUiCalibration.Result ui, string recipient, Func<string?> safetyFailure)
+        WowBMailUiCalibration.Result ui, string recipient, bool skipRecipient, Func<string?> safetyFailure)
     {
         bool background = false, focusSelected = false;
         string lastSafetyFailure = "no safety check recorded";
@@ -97,8 +97,10 @@ internal static class WowBExperimentalMail
         {
             if (!WowBMailUiCalibration.Valid(ui) || ui.Player != player.ToString())
             { Logging.Write("[Mail] preflight: controls invalid or for another character; no input sent."); return false; }
-            if (!WowBMailRecipientText.ValidForTest(recipient))
+            if (!skipRecipient && !WowBMailRecipientText.ValidForTest(recipient))
             { Logging.Write("[Mail] preflight: recipient missing or invalid; no input sent."); return false; }
+            if (skipRecipient)
+                Logging.Write("[Mail] recipient typing disabled by setting; the recipient field will be left as-is.");
             if (!ClickAimInput.ClientSize(hwnd, out int w, out int h))
             { Logging.Write("[Mail] preflight: game client size unavailable; no input sent."); return false; }
             if (w != ui.Width || h != ui.Height)
@@ -170,15 +172,22 @@ internal static class WowBExperimentalMail
                 if (batch > 0)
                     Logging.Write("[Mail] observed progress and one-second post-send wait complete; retyping recipient directly for batch " +
                         (batch + 1) + " without clicking the tab again. Field focus and contents are unverified.");
-                int generation = ClickAimAbort.Generation;
-                foreach (char c in recipient)
+                if (skipRecipient)
                 {
-                    if (!(background ? ClickAimInput.BackgroundMailRecipientChar(hwnd, c, generation, safe)
-                                     : ClickAimInput.DiagnosticRecipientChar(hwnd, c, generation, safe)))
-                    { Logging.Write("[Mail] recipient entry interrupted or partial; no send input in this batch."); return false; }
-                    if (ClickAimAbort.Wait(30)) return false;
+                    Logging.Write("[Mail] recipient typing skipped for batch " + (batch + 1) + " by setting; field left as-is.");
                 }
-                Logging.Write("[Mail] recipient characters posted for batch " + (batch + 1) + "; field focus and text are not verified.");
+                else
+                {
+                    int generation = ClickAimAbort.Generation;
+                    foreach (char c in recipient)
+                    {
+                        if (!(background ? ClickAimInput.BackgroundMailRecipientChar(hwnd, c, generation, safe)
+                                         : ClickAimInput.DiagnosticRecipientChar(hwnd, c, generation, safe)))
+                        { Logging.Write("[Mail] recipient entry interrupted or partial; no send input in this batch."); return false; }
+                        if (ClickAimAbort.Wait(30)) return false;
+                    }
+                    Logging.Write("[Mail] recipient characters posted for batch " + (batch + 1) + "; field focus and text are not verified.");
+                }
                 // Candidate IDs represent item clicks, not proof that the UI
                 // attached them. Do not depend on the experimental mail table.
                 var expected = new List<WowBMailCandidateTable.Expected>();
