@@ -29,18 +29,19 @@ class DeathButtonWiring(unittest.TestCase):
         self.assertIn('value.Width != width', p)
 
     def test_recovery_uses_calibration_with_default_fallback(self):
-        # Recovery consults the calibration but keeps pattern matching as the
-        # default when no calibration exists.
+        # Recovery consults the calibration as a primary click source, but
+        # keeps pattern matching as the default when no calibration exists.
         self.assertIn('WowBDeathButtonCalibration.TryLoad', rec)
         self.assertIn('calib.ReleaseX', rec)
         self.assertIn('calib.AcceptX', rec)
-        # Pattern matching still runs first (SuitableForClick) and the
-        # calibrated flag only skips pattern-vs-pattern position checks.
+        # Calibration is loaded before pattern matching and bypasses it.
         self.assertIn('bool calibrated = false', rec)
-        self.assertIn('!calibrated && (Math.Abs(awayX - x) > 2', rec)
-        self.assertIn('!calibrated && (Math.Abs(x2 - x) > 2', rec)
-        # The calibration never bypasses the dialog-state verification.
-        self.assertIn('WowBCorpseDialogPattern.SuitableForClick(dialog, release', rec)
+        self.assertIn('if (!calibrated && !WowBCorpseDialogPattern.SuitableForClick(dialog, release', rec)
+        # Pattern matching is only consulted when no calibration exists.
+        self.assertIn('(!calibrated && (!WowBCorpseDialogPattern.SuitableForClick(away, release', rec)
+        self.assertIn('!calibrated && !WowBCorpseDialogPattern.SuitableForClick(again, release', rec)
+        # The calibration never bypasses the player-state verification.
+        self.assertIn('if (!Safety()) return false;', rec)
 
 if __name__ == '__main__':
     unittest.main()

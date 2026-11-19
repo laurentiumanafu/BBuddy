@@ -475,7 +475,22 @@ internal static class WowBCorpseRecovery
         if (!Safety()) return false;
         if (!WowBCorpseDialogProbe.TryInspectForRecovery(memory, reader, hwnd, Safety,
                 out var dialog, out _, out bool background, out int width, out int height, out problem)) return false;
-        if (!WowBCorpseDialogPattern.SuitableForClick(dialog, release, out int x, out int y))
+        // A recorded death-button calibration is a primary click source, not
+        // just an override: on a PC where pattern matching cannot find the
+        // button, the calibration still supplies the click point. The player
+        // state (dead/ghost) is verified by Safety(); pattern matching is
+        // only consulted when no calibration exists.
+        bool calibrated = false;
+        int x = 0, y = 0;
+        if (WowBDeathButtonCalibration.TryLoad(checkpoint.Player.ToString(), width, height, out var calib) && calib != null)
+        {
+            calibrated = true;
+            x = release ? calib.ReleaseX : calib.AcceptX;
+            y = release ? calib.ReleaseY : calib.AcceptY;
+            Logging.Write("[Corpse] using calibrated " + (release ? "Release Spirit" : "Accept Resurrection") +
+                " button at (" + x + "," + y + ") of a " + width + "x" + height + " client");
+        }
+        if (!calibrated && !WowBCorpseDialogPattern.SuitableForClick(dialog, release, out x, out y))
         {
             problem = (background ? "background" : "foreground") + " image did not meet button checks (client " +
                 width + "x" + height + "; release=" + dialog.ReleaseText + " at " + LabelWhere(dialog.ReleaseText, dialog.ReleaseX, dialog.ReleaseY) +
@@ -495,20 +510,6 @@ internal static class WowBCorpseRecovery
                 !WowBCorpseDialogPattern.SuitableForClick(dialog, release, out x, out y))
             { problem = "fresh dialog unavailable or unsuitable after clearing prior hover"; return false; }
         }
-        // A recorded death-button calibration overrides the pattern-matched
-        // click point. Pattern matching above still verified the dialog
-        // state, uniqueness and button colour; only the click moves. When a
-        // calibration is in use the click point is user-defined, so the
-        // pattern-vs-pattern position stability checks below are skipped.
-        bool calibrated = false;
-        if (WowBDeathButtonCalibration.TryLoad(checkpoint.Player.ToString(), width, height, out var calib) && calib != null)
-        {
-            calibrated = true;
-            x = release ? calib.ReleaseX : calib.AcceptX;
-            y = release ? calib.ReleaseY : calib.AcceptY;
-            Logging.Write("[Corpse] using calibrated " + (release ? "Release Spirit" : "Accept Resurrection") +
-                " button at (" + x + "," + y + ") of a " + width + "x" + height + " client");
-        }
         /* Only the wider fallback sweep found this label, so the dialog sits outside
          * the band the supplied screenshots were matched in - what another resolution,
          * window or UI placement on another PC does. Nothing is relaxed: uniqueness,
@@ -525,8 +526,8 @@ internal static class WowBCorpseRecovery
                 out var away, out byte[]? before, out bool awayBackground, out int awayWidth, out int awayHeight, out problem)) return false;
         problem = "button, focus or client geometry changed after hover-away";
         if (before == null || awayBackground != background || awayWidth != width || awayHeight != height ||
-            !WowBCorpseDialogPattern.SuitableForClick(away, release, out int awayX, out int awayY) ||
-            (!calibrated && (Math.Abs(awayX - x) > 2 || Math.Abs(awayY - y) > 2))) return false;
+            (!calibrated && (!WowBCorpseDialogPattern.SuitableForClick(away, release, out int awayX, out int awayY) ||
+            (Math.Abs(awayX - x) > 2 || Math.Abs(awayY - y) > 2)))) return false;
         string? FinalCheck()
         {
             string lastFailure = "hover response not observed";
@@ -539,7 +540,7 @@ internal static class WowBCorpseRecovery
                         out var again, out byte[]? after, out bool afterBackground, out int w, out int h, out string captureReason))
                     return captureReason;
                 if (after == null || afterBackground != background || w != width || h != height) return "focus mode or client size changed";
-                if (!WowBCorpseDialogPattern.SuitableForClick(again, release, out int x2, out int y2))
+                if (!calibrated && !WowBCorpseDialogPattern.SuitableForClick(again, release, out int x2, out int y2))
                     lastFailure = "after hover: release=" + again.ReleaseText + ", releaseUnique=" + again.ReleaseUnique +
                         ", releaseRed=" + again.ReleaseButtonRed + ", heading=" + again.ResurrectText +
                         ", accept=" + again.AcceptText + ", acceptUnique=" + again.AcceptUnique + ", acceptRed=" + again.AcceptButtonRed;
