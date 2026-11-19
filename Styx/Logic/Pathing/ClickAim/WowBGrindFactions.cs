@@ -101,19 +101,49 @@ internal static class WowBGrindFactions
                 Logging.Write("[" + reader.ExperimentalBuildNumber + "] player power type candidate 1 (rage): value unavailable; mana recovery is skipped and resource-dependent abilities are withheld, but auto-attack is available");
             if (!TryReadGhostFlagCandidate(memory, reader, player, out bool ghostFlag))
             { reason = reader.ExperimentalBuildNumber + " ghost flag candidate unavailable or changed; refusing to start"; return false; }
-            // Allow starting when dead/ghost if there's a persisted death location to recover from.
-            // The recovery code (TryAdoptPersisted) will handle clicking Release and returning to the corpse.
+            // Allow starting when dead/ghost. The recovery code (TryAdoptPersisted) will handle
+            // clicking Release and returning to the corpse. If no persisted death location exists,
+            // create one from the current position (where the character died).
             if (self.Health == 0 || ghostFlag)
             {
                 if (!WowBDeathCheckpoint.TryLoadPersisted(out _))
                 {
-                    reason = reader.ExperimentalBuildNumber + (ghostFlag
-                        ? " ghost flag candidate is set; manually recover before starting"
-                        : " player is dead; manually recover before starting");
-                    return false;
+                    // No persisted death location. Create one from current position so recovery
+                    // can click Release and walk back to where the character died.
+                    if (!reader.TryReadMapId(out uint map))
+                    {
+                        reason = reader.ExperimentalBuildNumber + " player is dead but map ID unavailable; manually recover before starting";
+                        return false;
+                    }
+                    try
+                    {
+                        string persistedDir = System.IO.Path.GetDirectoryName(WowBDeathCheckpoint.PersistedPath) ?? "Settings";
+                        System.IO.Directory.CreateDirectory(persistedDir);
+                        System.IO.File.WriteAllLines(WowBDeathCheckpoint.PersistedPath, new[] {
+                            "WOWB DEATH LOCATION v1; candidate only, not verified corpse or ghost state",
+                            "UTC=" + System.DateTime.UtcNow.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
+                            "playerLow=" + player.Guid.Low.ToString("X16", System.Globalization.CultureInfo.InvariantCulture),
+                            "playerHigh=" + player.Guid.High.ToString("X16", System.Globalization.CultureInfo.InvariantCulture),
+                            "map=" + map.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                            "x=" + player.Location.X.ToString("R", System.Globalization.CultureInfo.InvariantCulture),
+                            "y=" + player.Location.Y.ToString("R", System.Globalization.CultureInfo.InvariantCulture),
+                            "z=" + player.Location.Z.ToString("R", System.Globalization.CultureInfo.InvariantCulture)
+                        });
+                        Logging.Write("[" + reader.ExperimentalBuildNumber + "] player is " + (ghostFlag ? "a ghost" : "dead") +
+                            "; created persisted death location from current position (" + player.Location.X.ToString("F1") + "," +
+                            player.Location.Y.ToString("F1") + "," + player.Location.Z.ToString("F1") + "), allowing start for corpse recovery");
+                    }
+                    catch (System.Exception ex)
+                    {
+                        reason = reader.ExperimentalBuildNumber + " player is dead but could not save death location: " + ex.Message;
+                        return false;
+                    }
                 }
-                Logging.Write("[" + reader.ExperimentalBuildNumber + "] player is " + (ghostFlag ? "a ghost" : "dead") +
-                    "; persisted death location found, allowing start for corpse recovery");
+                else
+                {
+                    Logging.Write("[" + reader.ExperimentalBuildNumber + "] player is " + (ghostFlag ? "a ghost" : "dead") +
+                        "; persisted death location found, allowing start for corpse recovery");
+                }
             }
             _boundMemory = memory; _boundReader = reader; _boundPlayer = player.Guid;
             GrindFactionSettings.Activate(rules);
