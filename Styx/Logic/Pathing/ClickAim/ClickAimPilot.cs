@@ -251,8 +251,8 @@ public static class ClickAimPilot
     /// <summary>How long without two yards of progress before a sidestep is tried.</summary>
     private const int SidestepAfterMs = 8000;
 
-    /// <summary>Three bounded escape searches per walk; exhaustion does not prove a wall.</summary>
-    private const int MaxSidesteps = 3;
+    /// <summary>Six bounded escape searches per walk; exhaustion does not prove a wall.</summary>
+    private const int MaxSidesteps = 6;
 
     /// <summary>How long one sidestep may take before the walk resumes toward the goal.</summary>
     private const int SidestepMs = 5000;
