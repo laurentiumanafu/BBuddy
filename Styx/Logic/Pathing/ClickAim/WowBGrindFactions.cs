@@ -94,15 +94,27 @@ internal static class WowBGrindFactions
             if (!Experimental70707BarSafe(reader))
             { reason = reader.ExperimentalBuildNumber + " action bar changed"; return false; }
             if (!reader.TryReadMapId(out _) || !reader.TryGetPlayerObject(out _) ||
-                !reader.TryGetUnitFields(player.UnitAddress, out WowBReader.WowBUnitFields self) || self.Health == 0 ||
+                !reader.TryGetUnitFields(player.UnitAddress, out WowBReader.WowBUnitFields self) ||
                 ObjectManager.Wow != memory || ObjectManager.WowB != reader)
             { reason = reader.ExperimentalBuildNumber + " candidate map, player or supported power type unavailable"; return false; }
             if (self.PlayerPowerTypeCandidate == 1)
                 Logging.Write("[" + reader.ExperimentalBuildNumber + "] player power type candidate 1 (rage): value unavailable; mana recovery is skipped and resource-dependent abilities are withheld, but auto-attack is available");
             if (!TryReadGhostFlagCandidate(memory, reader, player, out bool ghostFlag))
             { reason = reader.ExperimentalBuildNumber + " ghost flag candidate unavailable or changed; refusing to start"; return false; }
-            if (ghostFlag)
-            { reason = reader.ExperimentalBuildNumber + " ghost flag candidate is set; manually recover before starting"; return false; }
+            // Allow starting when dead/ghost if there's a persisted death location to recover from.
+            // The recovery code (TryAdoptPersisted) will handle clicking Release and returning to the corpse.
+            if (self.Health == 0 || ghostFlag)
+            {
+                if (!WowBDeathCheckpoint.TryLoadPersisted(out _))
+                {
+                    reason = reader.ExperimentalBuildNumber + (ghostFlag
+                        ? " ghost flag candidate is set; manually recover before starting"
+                        : " player is dead; manually recover before starting");
+                    return false;
+                }
+                Logging.Write("[" + reader.ExperimentalBuildNumber + "] player is " + (ghostFlag ? "a ghost" : "dead") +
+                    "; persisted death location found, allowing start for corpse recovery");
+            }
             _boundMemory = memory; _boundReader = reader; _boundPlayer = player.Guid;
             GrindFactionSettings.Activate(rules);
             armed = true;
