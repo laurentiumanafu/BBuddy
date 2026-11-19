@@ -4138,11 +4138,15 @@ internal static class GrindRunner
         {
             return ReturnWithoutMail("mailbox mesh route or arrival could not be confirmed; no mailbox interaction");
         }
-        if (!ClickAimSettings.ExperimentalAutoMail || !WowBMailUiCalibration.TryLoad(out var controls) || controls == null ||
-            controls.Map != mailbox.Map || controls.Player != playerGuid.ToString() ||
-            ClickAimMath.Len(controls.X - finalPlayer.Location.X, controls.Y - finalPlayer.Location.Y) > 3.0 ||
-            Math.Abs(controls.Z - finalPlayer.Location.Z) > 5.0)
-        { return ReturnWithoutMail("control calibration changed or does not match arrival; no mailbox input"); }
+        if (!ClickAimSettings.ExperimentalAutoMail || !WowBMailUiCalibration.TryLoad(out var controls) || controls == null)
+        { return ReturnWithoutMail("mail controls not recorded or experimental mail disabled; no mailbox input"); }
+        if (controls.Map != mailbox.Map)
+        { return ReturnWithoutMail("mail controls are for a different map; no mailbox input"); }
+        if (controls.Player != playerGuid.ToString())
+        { return ReturnWithoutMail("mail controls are for a different character; no mailbox input"); }
+        double controlDistance = ClickAimMath.Len(controls.X - finalPlayer.Location.X, controls.Y - finalPlayer.Location.Y);
+        if (controlDistance > 5.0 || Math.Abs(controls.Z - finalPlayer.Location.Z) > 8.0)
+        { return ReturnWithoutMail("arrival is " + controlDistance.ToString("F1") + " yd from the calibrated mailbox position (limit 5 yd); re-record the mail controls standing where the bot arrives"); }
         IntPtr hwnd = memory.WindowHandle;
         string? InputSafetyFailure()
         {
@@ -4154,8 +4158,8 @@ internal static class GrindRunner
             if (!reader.TryRead70888RecoveryPlayer(out WowBObservedUnit currentPlayer, out uint hp, out uint max) ||
                 currentPlayer.Guid != playerGuid || hp == 0 || max < hp) return "player identity or health unreadable or changed";
             if (!double.IsFinite(currentPlayer.Location.X) || !double.IsFinite(currentPlayer.Location.Y) || !double.IsFinite(currentPlayer.Location.Z) ||
-                ClickAimMath.Len(currentPlayer.Location.X - controls.X, currentPlayer.Location.Y - controls.Y) > 3.0 ||
-                Math.Abs(currentPlayer.Location.Z - controls.Z) > 5.0) return "player no longer at the calibrated control position";
+                ClickAimMath.Len(currentPlayer.Location.X - controls.X, currentPlayer.Location.Y - controls.Y) > 5.0 ||
+                Math.Abs(currentPlayer.Location.Z - controls.Z) > 8.0) return "player no longer at the calibrated control position";
             return null;
         }
         bool completed = WowBExperimentalMail.Run(hwnd, memory, reader, playerGuid, controls, ClickAimSettings.MailRecipient, ClickAimSettings.MailSkipRecipient, ClickAimSettings.MailBatchLimit, ClickAimSettings.MailExtraSend, InputSafetyFailure);
