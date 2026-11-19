@@ -824,6 +824,10 @@ namespace CopilotBuddy.UI
         }
 
         private MailHoverSample? _mailControlObject, _mailControlTab, _mailControlSend, _mailControlExtraSend;
+        private (int X, int Y)? _deathReleasePoint, _deathAcceptPoint;
+        private int _deathWidth, _deathHeight;
+        private WowBGuid _deathPlayer;
+        private bool _deathBusy;
 
         private async void btnRecordMailObject_Click(object sender, RoutedEventArgs e) => await RecordMailControl(0);
         private async void btnRecordMailTab_Click(object sender, RoutedEventArgs e) => await RecordMailControl(1);
@@ -895,6 +899,59 @@ namespace CopilotBuddy.UI
                 ExtraSendX = x == null ? 0 : (int)Math.Round(x.CursorX), ExtraSendY = x == null ? 0 : (int)Math.Round(x.CursorY) };
             try { WowBMailUiCalibration.Save(value); lblMailControlsStatus.Text = "Mail controls saved; screen geometry and UI state are not independently verified."; }
             catch (Exception ex) { lblMailControlsStatus.Text = "Could not save controls: " + ex.Message; }
+        }
+
+        private async void btnRecordDeathRelease_Click(object sender, RoutedEventArgs e) => await RecordDeathButton(true);
+        private async void btnRecordDeathAccept_Click(object sender, RoutedEventArgs e) => await RecordDeathButton(false);
+
+        private async Task RecordDeathButton(bool release)
+        {
+            if (_deathBusy || _mailHoverBusy || _mailGridBusy || ClickAimUi.Running || ClickAimUi.Paused)
+            { lblDeathButtonsStatus.Text = "Stop the bot and wait for other research to finish."; return; }
+            GreenMagic.Memory? memory = ObjectManager.Wow; WowBReader? reader = ObjectManager.WowB;
+            IntPtr hwnd = memory?.WindowHandle ?? IntPtr.Zero;
+            if (memory == null || reader == null || hwnd == IntPtr.Zero ||
+                !ClickAimInput.ClientSize(hwnd, out int width, out int height))
+            { lblDeathButtonsStatus.Text = "Attach to the game first."; return; }
+            if (release) { _deathAcceptPoint = null; }
+            _deathWidth = width; _deathHeight = height; _deathPlayer = reader.PlayerGuid;
+            int generation = ClickAimAbort.Generation;
+            _deathBusy = true;
+            lblDeathButtonsStatus.Text = "Focus the game and hover the " + (release ? "Release Spirit" : "Accept Resurrection") +
+                " button; keep still for 3 seconds. No input is sent.";
+            try
+            {
+                await Task.Delay(3000);
+                if (!IsLoaded || ClickAimAbort.Generation != generation) return;
+                var pair = await Task.Run(() => {
+                    if (!ClickAimInput.TryCursorFraction(hwnd, out double fx1, out double fy1)) return (ok: false, x: 0, y: 0);
+                    Thread.Sleep(150);
+                    if (!ClickAimInput.TryCursorFraction(hwnd, out double fx2, out double fy2)) return (ok: false, x: 0, y: 0);
+                    if (Math.Abs(fx1 - fx2) * width > 3 || Math.Abs(fy1 - fy2) * height > 3) return (ok: false, x: 0, y: 0);
+                    if (ClickAimAbort.Generation != generation) return (ok: false, x: 0, y: 0);
+                    return (ok: true, x: (int)Math.Round(fx2 * width), y: (int)Math.Round(fy2 * height));
+                });
+                if (!IsLoaded) return;
+                if (!pair.ok || ClickAimAbort.Generation != generation)
+                { lblDeathButtonsStatus.Text = "Cursor moved or was unreadable; no point recorded."; return; }
+                if (release) _deathReleasePoint = (pair.x, pair.y); else _deathAcceptPoint = (pair.x, pair.y);
+                lblDeathButtonsStatus.Text = "Point recorded. Record the other button, then Save death buttons.";
+            }
+            catch (Exception ex) { if (IsLoaded) lblDeathButtonsStatus.Text = "Button observation failed: " + ex.Message; }
+            finally { _deathBusy = false; }
+        }
+
+        private void btnSaveDeathButtons_Click(object sender, RoutedEventArgs e)
+        {
+            if (_deathBusy || _mailHoverBusy || _mailGridBusy || ClickAimUi.Running || ClickAimUi.Paused ||
+                _deathReleasePoint == null || _deathAcceptPoint == null)
+            { lblDeathButtonsStatus.Text = "Record both buttons first."; return; }
+            var value = new WowBDeathButtonCalibration.Result { Player = _deathPlayer.ToString(),
+                Width = _deathWidth, Height = _deathHeight,
+                ReleaseX = _deathReleasePoint.Value.X, ReleaseY = _deathReleasePoint.Value.Y,
+                AcceptX = _deathAcceptPoint.Value.X, AcceptY = _deathAcceptPoint.Value.Y };
+            try { WowBDeathButtonCalibration.Save(value); lblDeathButtonsStatus.Text = "Death buttons saved; the bot will click these instead of pattern matching. Recalibrate after changing resolution."; }
+            catch (Exception ex) { lblDeathButtonsStatus.Text = "Could not save death buttons: " + ex.Message; }
         }
 
         private async void btnMailAttachmentResearch_Click(object sender, RoutedEventArgs e)

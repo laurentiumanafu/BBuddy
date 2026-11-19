@@ -1,0 +1,38 @@
+using System;
+using System.IO;
+using Styx.Logic.Pathing;
+using D = Styx.Logic.Pathing.WowBDeathButtonCalibration;
+namespace Styx.Logic.Pathing { static class ClickAimCalibration { public static string DefaultPath => Path.Combine(Path.GetTempPath(), "death-btn-test", "clickaim-cal.txt"); } }
+static class Fixture
+{
+    static void Check(bool b, string why) { if (!b) throw new Exception(why); }
+    static D.Result Good() => new D.Result { Player = "player", Width = 1280, Height = 720,
+        ReleaseX = 640, ReleaseY = 500, AcceptX = 640, AcceptY = 560 };
+    public static void Main()
+    {
+        Check(D.Valid(Good()), "valid calibration accepted");
+        var bad = Good(); bad.Version = 2; Check(!D.Valid(bad), "wrong version rejected");
+        bad = Good(); bad.Player = ""; Check(!D.Valid(bad), "empty player rejected");
+        bad = Good(); bad.Width = 100; Check(!D.Valid(bad), "tiny client rejected");
+        bad = Good(); bad.ReleaseX = 0; Check(!D.Valid(bad), "edge release rejected");
+        bad = Good(); bad.AcceptY = 719; Check(!D.Valid(bad), "edge accept rejected");
+        bad = Good(); bad.AcceptX = 645; bad.AcceptY = 505; Check(!D.Valid(bad), "nearly identical points rejected");
+        bad = Good(); bad.AcceptX = 640; bad.AcceptY = 519; Check(!D.Valid(bad), "points 19px apart rejected");
+        bad = Good(); bad.AcceptX = 640; bad.AcceptY = 520; Check(D.Valid(bad), "points 20px apart accepted");
+        Check(!D.Valid(null), "null rejected");
+
+        string dir = Path.Combine(Path.GetTempPath(), "death-btn-test");
+        if (Directory.Exists(dir)) Directory.Delete(dir, true);
+        Directory.CreateDirectory(dir);
+        Check(!D.TryLoad("player", 1280, 720, out _), "no file -> no calibration");
+        D.Save(Good());
+        Check(D.TryLoad("player", 1280, 720, out var loaded) && loaded != null, "saved calibration loads");
+        Check(loaded!.ReleaseX == 640 && loaded.ReleaseY == 500 && loaded.AcceptX == 640 && loaded.AcceptY == 560, "round-trip preserves points");
+        Check(!D.TryLoad("other", 1280, 720, out _), "different player -> no calibration");
+        Check(!D.TryLoad("player", 1024, 768, out _), "different size -> no calibration");
+        File.WriteAllText(D.DefaultPath, "{ not json");
+        Check(!D.TryLoad("player", 1280, 720, out _), "corrupt file -> no calibration");
+        Directory.Delete(dir, true);
+        Console.WriteLine("death button calibration fixture: pass");
+    }
+}

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Numerics;
@@ -495,6 +495,20 @@ internal static class WowBCorpseRecovery
                 !WowBCorpseDialogPattern.SuitableForClick(dialog, release, out x, out y))
             { problem = "fresh dialog unavailable or unsuitable after clearing prior hover"; return false; }
         }
+        // A recorded death-button calibration overrides the pattern-matched
+        // click point. Pattern matching above still verified the dialog
+        // state, uniqueness and button colour; only the click moves. When a
+        // calibration is in use the click point is user-defined, so the
+        // pattern-vs-pattern position stability checks below are skipped.
+        bool calibrated = false;
+        if (WowBDeathButtonCalibration.TryLoad(checkpoint.Player.ToString(), width, height, out var calib) && calib != null)
+        {
+            calibrated = true;
+            x = release ? calib.ReleaseX : calib.AcceptX;
+            y = release ? calib.ReleaseY : calib.AcceptY;
+            Logging.Write("[Corpse] using calibrated " + (release ? "Release Spirit" : "Accept Resurrection") +
+                " button at (" + x + "," + y + ") of a " + width + "x" + height + " client");
+        }
         /* Only the wider fallback sweep found this label, so the dialog sits outside
          * the band the supplied screenshots were matched in - what another resolution,
          * window or UI placement on another PC does. Nothing is relaxed: uniqueness,
@@ -512,7 +526,7 @@ internal static class WowBCorpseRecovery
         problem = "button, focus or client geometry changed after hover-away";
         if (before == null || awayBackground != background || awayWidth != width || awayHeight != height ||
             !WowBCorpseDialogPattern.SuitableForClick(away, release, out int awayX, out int awayY) ||
-            Math.Abs(awayX - x) > 2 || Math.Abs(awayY - y) > 2) return false;
+            (!calibrated && (Math.Abs(awayX - x) > 2 || Math.Abs(awayY - y) > 2))) return false;
         string? FinalCheck()
         {
             string lastFailure = "hover response not observed";
@@ -529,7 +543,7 @@ internal static class WowBCorpseRecovery
                     lastFailure = "after hover: release=" + again.ReleaseText + ", releaseUnique=" + again.ReleaseUnique +
                         ", releaseRed=" + again.ReleaseButtonRed + ", heading=" + again.ResurrectText +
                         ", accept=" + again.AcceptText + ", acceptUnique=" + again.AcceptUnique + ", acceptRed=" + again.AcceptButtonRed;
-                else if (Math.Abs(x2 - x) > 2 || Math.Abs(y2 - y) > 2)
+                else if (!calibrated && (Math.Abs(x2 - x) > 2 || Math.Abs(y2 - y) > 2))
                     return "button position changed after hover";
                 else if (background && !WowBCorpseDialogPattern.ButtonChanged(before, after, width, height, x, y))
                     lastFailure = "background capture showed no fresh button response to hover; no click";
