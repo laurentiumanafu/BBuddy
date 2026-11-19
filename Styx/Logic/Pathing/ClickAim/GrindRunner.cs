@@ -8417,14 +8417,17 @@ internal static class GrindRunner
             // Stormstrike is likewise gated on the actual cooldown read; a
             // proc reset overrides it, and an unreadable read falls back to
             // the timed estimate.
+            bool? stormstrikeReady = stormstrike70938
+                ? WowBCooldownResearch.IsSpellReady(fightMemory, reader, meleeHit.Id)
+                : null;
             bool stormstrikeCdOk = !stormstrike70938 || StormResetReady() ||
-                WowBCooldownResearch.IsSpellReady(fightMemory, reader, meleeHit.Id) != false;
+                stormstrikeReady != false;
             uint meleePower = stormstrike70938
                 ? Math.Max(PowerForCast(meleeHit, 10), ClickAimClassRotation.StormstrikePowerFloor70938)
                 : PowerForCast(meleeHit, 10);
             if (meleeHit != null && !unmeasuredRage && (stormstrike70938 || !swinging || sinceDamageMs >= MeleePressMs)
                 && (ClickAimClassRotation.Ready(_rotationCooldowns, rotation.MeleeGroup, Environment.TickCount) ||
-                    (stormstrike70938 && StormResetReady()))
+                    (stormstrike70938 && (StormResetReady() || stormstrikeReady == true)))
                 && holyStrikeCdOk
                 && stormstrikeCdOk
                 && (rotation.MeleeIntervalMs == 0 || myMana >= meleePower)
