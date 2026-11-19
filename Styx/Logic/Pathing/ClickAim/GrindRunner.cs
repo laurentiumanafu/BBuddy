@@ -396,17 +396,19 @@ internal static class GrindRunner
     }
 
     // Four failed routes may coincide with death, but are not evidence of it.
-    // Hold without attacks or new movement while the local health/ghost tracker
-    // continues; a confirmed checkpoint returns to the existing guarded recovery.
-    private static bool WatchDeathAfterHotspotFailures(ClickAimMover mover, WowBReader reader, int started, int budgetMs, Func<bool> sessionMapCurrent)
+    // Check once without attacks or new movement: a confirmed checkpoint
+    // returns to the existing guarded recovery; a positively alive sample
+    // means the stuck route is re-planned on the mesh (alive == true).
+    private static bool WatchDeathAfterHotspotFailures(ClickAimMover mover, WowBReader reader, int started, int budgetMs, Func<bool> sessionMapCurrent, out bool alive)
     {
+        alive = false;
         var memory = ObjectManager.Wow;
         bool quiet = mover.QuietKeyStop;
         try { mover.QuietKeyStop = true; mover.MoveStop(); }
         finally { mover.QuietKeyStop = quiet; }
         ClickAimKeySteer.ReleaseHeld();
         ClickAimKeySteer.ReleaseArrows(memory?.WindowHandle ?? IntPtr.Zero);
-        Logging.Write("[Grind] 4 hotspot failures: checking player HP and waiting without movement for a death checkpoint; STOP remains active");
+        Logging.Write("[Grind] 4 hotspot failures: checking player HP once for a death checkpoint; STOP remains active");
         bool Cancelled() => ClickAimAbort.Requested || RouteRunner.StopRequested ||
             (_stop && !_recoveryReady) || ObjectManager.Wow != memory || ObjectManager.WowB != reader ||
             !reader.ExperimentalGrindActive || unchecked(Environment.TickCount - started) >= budgetMs;
@@ -419,7 +421,7 @@ internal static class GrindRunner
                 return (false, "original player or map unavailable or changed");
             return (_recoveryReady, _deathCheckpoint?.LastObservation ?? "checkpoint tracker unavailable");
         }
-        return WowBHotspotDeathWatch.Wait(Poll, Cancelled, ClickAimAbort.Wait, () => Environment.TickCount64, Logging.Write);
+        return WowBHotspotDeathWatch.CheckOnce(Poll, Cancelled, Logging.Write, out alive);
     }
 
     private static bool RecoverIfPending(ClickAimMover mover)
@@ -1369,8 +1371,20 @@ internal static class GrindRunner
                     {
                         if (trialReader?.Uses70938Features == true && _deathCheckpoint != null)
                         {
-                            watchCancelled = !WatchDeathAfterHotspotFailures(mover, trialReader, started, budgetMs,
-                                () => roam != null ? roam.MapCurrent() : ProfileMapCurrent());
+                            bool alive;
+                            bool ready = WatchDeathAfterHotspotFailures(mover, trialReader, started, budgetMs,
+                                () => roam != null ? roam.MapCurrent() : ProfileMapCurrent(), out alive);
+                            if (alive)
+                            {
+                                // Single death check says the character is alive: the
+                                // stuck route is re-planned on the mesh for the next
+                                // hotspot leg instead of holding position. The next
+                                // RunWithinSession reloads the navmesh path.
+                                dead = 0;
+                                Logging.Write("[Grind] hotspot failure death check: character is alive; reloading the mesh and re-planning the route to the next hotspot");
+                                continue;
+                            }
+                            watchCancelled = !ready;
                             // A saved zero-health checkpoint goes through the owner below,
                             // including the fresh release-dialog checks, not blind input.
                             break;

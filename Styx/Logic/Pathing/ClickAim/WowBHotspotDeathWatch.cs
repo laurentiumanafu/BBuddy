@@ -2,30 +2,28 @@ using System;
 
 namespace Styx.Logic.Pathing;
 
-// A failed route is not evidence of death. The owner releases movement first;
-// this watch only samples state until a checkpoint, STOP, expiry or session loss.
+// Four failed hotspot walks may coincide with death, but are not evidence of it.
+// Check once: a confirmed zero-health checkpoint goes to corpse recovery;
+// a positively alive sample means the stuck route should be re-planned on the
+// mesh instead of holding position. Anything else (STOP, session loss, or an
+// unreadable sample) stops without release or travel.
 internal static class WowBHotspotDeathWatch
 {
-    internal static bool Wait(Func<(bool Ready, string Observation)> poll, Func<bool> cancelled,
-        Func<int, bool> wait, Func<long> clock, Action<string> log)
+    internal static bool CheckOnce(Func<(bool Ready, string Observation)> poll, Func<bool> cancelled,
+        Action<string> log, out bool alive)
     {
-        string last = "";
-        long nextReport = 0;
-        while (!cancelled())
+        alive = false;
+        if (cancelled()) return false; // STOP wins even before the single check
+        var sample = poll();
+        if (cancelled()) return false; // STOP wins even if it races a checkpoint
+        if (sample.Ready) return true;
+        if (sample.Observation == "alive candidate")
         {
-            var sample = poll();
-            if (cancelled()) return false; // STOP wins even if it races a checkpoint
-            if (sample.Ready) return true;
-            long now = clock();
-            if (sample.Observation != last || now >= nextReport)
-            {
-                log("[Grind] hotspot failure death watch: " + sample.Observation +
-                    "; holding position and checking again (no release or travel without a checkpoint)");
-                last = sample.Observation;
-                nextReport = now + 15000;
-            }
-            if (wait(500)) return false;
+            alive = true;
+            log("[Grind] hotspot failure death check: alive candidate; reloading the mesh and re-planning the route");
+            return false;
         }
+        log("[Grind] hotspot failure death check: " + sample.Observation + "; stopping without release or travel");
         return false;
     }
 }

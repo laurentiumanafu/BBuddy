@@ -12,13 +12,17 @@ class HotspotDeathWatch(unittest.TestCase):
                      'ClickAimAbort.Requested', 'RouteRunner.StopRequested', 'ObjectManager.Wow != memory',
                      'ObjectManager.WowB != reader', 'reader.ExperimentalGrindActive', '>= budgetMs', 'ExperimentalSessionPlayerCurrent(memory, reader)', '!sessionMapCurrent()',
                      'CheckDeathCheckpoint(trackerOnly: true, deferUnconfirmed: true)',
-                     '_deathCheckpoint?.LastObservation', 'WowBHotspotDeathWatch.Wait'):
+                     '_deathCheckpoint?.LastObservation', 'WowBHotspotDeathWatch.CheckOnce', 'out bool alive'):
             self.assertIn(text, hold)
         self.assertNotIn('TapKey(', hold)
         route = s[s.index('if (dead >= MaxDeadHotspots)'):s.index('            } while (recovered', s.index('if (dead >= MaxDeadHotspots)'))]
         self.assertIn('trialReader?.Uses70938Features == true', route)
         self.assertLess(route.index('WatchDeathAfterHotspotFailures'), route.index('RecoverIfPending(mover)'))
-        self.assertIn('watchCancelled = !WatchDeathAfterHotspotFailures', route)
+        self.assertIn('bool ready = WatchDeathAfterHotspotFailures', route)
+        self.assertIn('watchCancelled = !ready', route)
+        self.assertIn('if (alive)', route)
+        self.assertIn('dead = 0;', route)
+        self.assertIn('reloading the mesh and re-planning', route)
         self.assertIn('roam.MapCurrent() : ProfileMapCurrent()', route)
         self.assertIn('!watchCancelled && _recoveryReady', route)
         self.assertIn('if (recovered) dead = 0;', route)
@@ -28,7 +32,10 @@ class HotspotDeathWatch(unittest.TestCase):
     def test_watch_only_observes_and_stop_wins(self):
         s = read('Styx/Logic/Pathing/ClickAim/WowBHotspotDeathWatch.cs')
         self.assertLess(s.index('if (cancelled()) return false;'), s.index('if (sample.Ready) return true;'))
-        self.assertIn('wait(500)', s)
+        self.assertIn('alive candidate', s)
+        self.assertIn('out bool alive', s)
+        self.assertNotIn('while (!cancelled())', s)
+        self.assertNotIn('wait(500)', s)
         self.assertNotIn('TapKey(', s)
         self.assertNotIn('Click(', s)
 
