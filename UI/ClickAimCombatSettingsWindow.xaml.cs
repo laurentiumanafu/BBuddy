@@ -914,7 +914,7 @@ namespace CopilotBuddy.UI
                 !ClickAimInput.ClientSize(hwnd, out int width, out int height))
             { lblDeathButtonsStatus.Text = "Attach to the game first."; return; }
             if (release) { _deathAcceptPoint = null; }
-            _deathWidth = width; _deathHeight = height; _deathPlayer = reader.PlayerGuid;
+            _deathWidth = width; _deathHeight = height; _deathPlayer = reader.ReadLocalGuid();
             int generation = ClickAimAbort.Generation;
             _deathBusy = true;
             lblDeathButtonsStatus.Text = "Focus the game and hover the " + (release ? "Release Spirit" : "Accept Resurrection") +
