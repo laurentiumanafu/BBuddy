@@ -540,7 +540,8 @@ internal static class WowBCorpseRecovery
                         out var again, out byte[]? after, out bool afterBackground, out int w, out int h, out string captureReason))
                     return captureReason;
                 if (after == null || afterBackground != background || w != width || h != height) return "focus mode or client size changed";
-                if (!calibrated && !WowBCorpseDialogPattern.SuitableForClick(again, release, out int x2, out int y2))
+                int x2 = 0, y2 = 0;
+                if (!calibrated && !WowBCorpseDialogPattern.SuitableForClick(again, release, out x2, out y2))
                     lastFailure = "after hover: release=" + again.ReleaseText + ", releaseUnique=" + again.ReleaseUnique +
                         ", releaseRed=" + again.ReleaseButtonRed + ", heading=" + again.ResurrectText +
                         ", accept=" + again.AcceptText + ", acceptUnique=" + again.AcceptUnique + ", acceptRed=" + again.AcceptButtonRed;
