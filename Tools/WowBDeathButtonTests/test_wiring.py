@@ -42,6 +42,10 @@ class DeathButtonWiring(unittest.TestCase):
         self.assertIn('!calibrated && !WowBCorpseDialogPattern.SuitableForClick(again, release', rec)
         # The calibration never bypasses the player-state verification.
         self.assertIn('if (!Safety()) return false;', rec)
+        # The resurrection spot search also treats a recorded Accept button
+        # as a visible prompt, so Accept works where pattern matching fails.
+        self.assertIn('TryPromptAtSpot', rec)
+        self.assertIn('WowBDeathButtonCalibration.TryLoad(checkpoint.Player.ToString(), width, height, out _)', rec)
 
 if __name__ == '__main__':
     unittest.main()

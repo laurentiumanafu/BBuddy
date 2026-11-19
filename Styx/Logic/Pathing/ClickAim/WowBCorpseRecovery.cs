@@ -111,8 +111,14 @@ internal static class WowBCorpseRecovery
         visible = false;
         bool Safety() => SpotSafe(memory, reader, hwnd, checkpoint, running, requireNpcClearance);
         if (!Safety() || !WowBCorpseDialogProbe.TryInspectForRecovery(memory, reader, hwnd, Safety,
-            out var result, out _, out _, out _, out _, out _) || !Safety()) return false;
-        visible = WowBCorpseDialogPattern.SuitableForClick(result, false, out _, out _);
+            out var result, out _, out _, out int width, out int height, out _) || !Safety()) return false;
+        // A recorded Accept calibration supplies the click point, so the
+        // prompt counts as visible without pattern matching (which may not
+        // find the button on this PC). Player/spot safety is still verified.
+        if (WowBDeathButtonCalibration.TryLoad(checkpoint.Player.ToString(), width, height, out _))
+            visible = true;
+        else
+            visible = WowBCorpseDialogPattern.SuitableForClick(result, false, out _, out _);
         return true;
     }
 
