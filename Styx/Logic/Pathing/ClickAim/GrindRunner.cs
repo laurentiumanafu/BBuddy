@@ -341,6 +341,12 @@ internal static class GrindRunner
         if (deferUnconfirmed && ObjectManager.WowB?.Uses70888Features == true &&
             _deathCheckpoint != null && !_deathCheckpoint.Recorded.HasValue && !_stop && !ClickAimAbort.Requested)
             return false;
+        // Dead start / restart while dead: Poll cannot record a checkpoint
+        // without a recent alive observation, so adopt the persisted death
+        // location here. RecoverIfPending only runs when _recoveryReady is
+        // set, so adoption must happen before that flag is decided.
+        if (_deathCheckpoint != null && !_deathCheckpoint.Recorded.HasValue)
+            _deathCheckpoint.TryAdoptPersisted();
         lock (StartStopGate)
         {
             if (_stop || ClickAimAbort.Requested) return true;
